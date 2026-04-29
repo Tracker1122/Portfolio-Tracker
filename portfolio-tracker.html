@@ -634,6 +634,59 @@
     .trends-section-cols { grid-template-columns: 1fr; }
   }
 
+  /* ── Import Preview ── */
+  .import-section {
+    margin-bottom: 16px; border: 1px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md); overflow: hidden;
+  }
+  .import-section-header {
+    background: var(--color-background-tertiary); padding: 8px 12px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    font-weight: 600; display: flex; align-items: center; gap: 8px;
+  }
+  .import-section-header .count {
+    background: var(--color-background-secondary); padding: 1px 7px;
+    border-radius: 10px; font-size: 9px; color: var(--color-text-secondary);
+  }
+  .import-section.adds .import-section-header { color: var(--color-text-success); }
+  .import-section.matches .import-section-header { color: var(--color-text-info); }
+  .import-section.ambig .import-section-header { color: #fbbf24; }
+  .import-section.removes .import-section-header { color: var(--color-text-danger); }
+  .import-row {
+    padding: 10px 12px; border-top: 1px solid var(--color-border-tertiary);
+    font-size: 11px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .import-row:first-child { border-top: none; }
+  .import-row .ticker {
+    font-weight: 700; min-width: 60px;
+  }
+  .import-row .acct {
+    color: var(--color-text-tertiary); font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.05em; min-width: 60px;
+  }
+  .import-row .detail {
+    flex: 1; min-width: 200px; color: var(--color-text-secondary); font-size: 10px;
+  }
+  .import-row .choice {
+    display: flex; gap: 10px;
+  }
+  .import-row .choice label {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 10px; color: var(--color-text-secondary); cursor: pointer;
+  }
+  .import-row .choice input[type=radio] { cursor: pointer; }
+  .import-row .field-diff {
+    font-size: 9px; color: var(--color-text-tertiary);
+    width: 100%; margin-top: 4px;
+  }
+  .import-row .field-diff .changed {
+    color: var(--color-text-info); font-weight: 600;
+  }
+  .import-empty-note {
+    padding: 12px; font-size: 10px; color: var(--color-text-tertiary);
+    font-style: italic;
+  }
+
   /* Rebalance tab */
   .rebal-controls {
     display: flex; gap: 16px; align-items: center;
@@ -1183,6 +1236,19 @@
 </div>
 
 <div id="save-note">Saved ✓</div>
+
+<!-- Import Preview Modal -->
+<div class="modal-overlay hidden" id="import-modal">
+  <div class="modal" style="max-width:720px;max-height:85vh;display:flex;flex-direction:column">
+    <div class="modal-title">Review Import</div>
+    <div class="modal-subtitle" id="import-modal-subtitle">Review what will change before committing.</div>
+    <div id="import-modal-body" style="overflow-y:auto;flex:1;margin-bottom:16px"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="cancelImport()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmImport()">Apply Import</button>
+    </div>
+  </div>
+</div>
 
 <!-- Sell Thesis Modal -->
 <div class="modal-overlay hidden" id="sell-modal">
@@ -5143,36 +5209,343 @@ function exportData() {
   URL.revokeObjectURL(url);
 }
 
+// ─────────────────────────────────────────────
+// Import — safer flow with preview/confirmation
+//
+// Behavior:
+//   - Parse JSON file
+//   - Categorize: adds (new), clean matches (1:1), ambiguous matches (>1 on either side), removals
+//   - If only adds (no matches, no ambiguity, no removals): import silently
+//   - Otherwise: show preview modal so user can choose per-position what to do
+// ─────────────────────────────────────────────
+
+// Pending import state, populated when user picks a file, consumed on confirm/cancel.
+let pendingImport = null;
+
+function posMatchKey(p) {
+  return `${p.ticker || ''}|${p.account || ''}|${p.dateBought || ''}`;
+}
+
+// Group an array of positions by match key. Returns Map<key, position[]>.
+function groupByKey(arr) {
+  const map = new Map();
+  arr.forEach(p => {
+    const k = posMatchKey(p);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(p);
+  });
+  return map;
+}
+
 function importData(input) {
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = async e => {
+  reader.onload = e => {
+    let data;
     try {
-      const data = JSON.parse(e.target.result);
-      if (!data.positions) { alert('Invalid data file.'); return; }
-      positions = data.positions;
-      nextId = data.nextId || positions.length + 1;
-      if (data.spxLive) spxLive = data.spxLive;
-      if (data.spxLiveDate) spxLiveDate = data.spxLiveDate;
-      if (data.cashBuckets) cashBuckets = data.cashBuckets;
-      if (data.cashLedger) cashLedger = data.cashLedger;
-      if (data.spLots) spLots = data.spLots;
-      if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
-      if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
-      await savePositions();
-      restoreSpxInput();
-      renderAll();
-      renderSpBar();
-      renderSpSummary();
-      renderSleeveBreakdown();
-      renderSleeveRef();
-      alert('✓ Data imported successfully!');
-    } catch(e) {
-      alert('Failed to import — make sure you selected the right file.');
+      data = JSON.parse(e.target.result);
+    } catch(err) {
+      alert('Failed to parse — make sure you selected a valid JSON file.');
+      input.value = '';
+      return;
+    }
+    if (!data || !Array.isArray(data.positions)) {
+      alert('Invalid data file — missing positions array.');
+      input.value = '';
+      return;
+    }
+
+    // Reset the file input so the same file can be re-selected later
+    input.value = '';
+
+    // Analyze: categorize positions into adds, matches, ambiguous, removals.
+    // Compare only OPEN positions (closed positions are historical and shouldn't
+    // get clobbered by an import that only contains current open trades).
+    const currentOpen = positions.filter(p => !p.closed);
+    const fileOpen = data.positions.filter(p => !p.closed);
+
+    const curByKey = groupByKey(currentOpen);
+    const fileByKey = groupByKey(fileOpen);
+    const allKeys = new Set([...curByKey.keys(), ...fileByKey.keys()]);
+
+    const adds = [];          // [{ filePos }]
+    const matches = [];       // [{ key, currentPos, filePos, fields: [...] }]
+    const ambiguous = [];     // [{ key, currentArr, fileArr }]
+    const removals = [];      // [{ currentPos }]
+
+    allKeys.forEach(k => {
+      const cur = curByKey.get(k) || [];
+      const fil = fileByKey.get(k) || [];
+      if (cur.length === 0 && fil.length > 0) {
+        fil.forEach(fp => adds.push({ filePos: fp }));
+      } else if (cur.length > 0 && fil.length === 0) {
+        cur.forEach(cp => removals.push({ currentPos: cp }));
+      } else if (cur.length === 1 && fil.length === 1) {
+        // Clean 1:1 match — compute field-level diff
+        const curP = cur[0], filP = fil[0];
+        const fields = ['shares', 'pricePaid', 'exitPrice', 'spxBuy', 'theme', 'sleeve', 'notes'];
+        const diff = fields.map(f => ({
+          field: f,
+          currentVal: curP[f],
+          fileVal: filP[f],
+          changed: String(curP[f] || '') !== String(filP[f] || '')
+        }));
+        const anyChanged = diff.some(d => d.changed);
+        matches.push({ key: k, currentPos: curP, filePos: filP, diff, anyChanged });
+      } else {
+        // Multiple on at least one side — ambiguous, flag for manual review
+        ambiguous.push({ key: k, currentArr: cur, fileArr: fil });
+      }
+    });
+
+    const onlyAdds = matches.every(m => !m.anyChanged) && ambiguous.length === 0 && removals.length === 0;
+
+    pendingImport = {
+      data, adds, matches, ambiguous, removals,
+      // For each match: 'mine' (keep current) or 'file' (use file). Default: 'mine'
+      // unless nothing changed, in which case it doesn't matter.
+      matchChoices: matches.map(m => 'mine'),
+      // For each removal: 'keep' or 'remove'. Default 'keep' (safe).
+      removalChoices: removals.map(r => 'keep'),
+    };
+
+    if (onlyAdds) {
+      // Silent fast path
+      commitImport();
+    } else {
+      showImportModal();
     }
   };
   reader.readAsText(file);
+}
+
+function showImportModal() {
+  const body = document.getElementById('import-modal-body');
+  const subtitle = document.getElementById('import-modal-subtitle');
+  if (!body || !pendingImport) return;
+
+  const { adds, matches, ambiguous, removals } = pendingImport;
+
+  // Subtitle summary
+  const parts = [];
+  if (adds.length) parts.push(`${adds.length} new`);
+  if (matches.length) parts.push(`${matches.length} match${matches.length === 1 ? '' : 'es'}`);
+  if (ambiguous.length) parts.push(`${ambiguous.length} ambiguous`);
+  if (removals.length) parts.push(`${removals.length} would be removed`);
+  subtitle.textContent = parts.join(' · ');
+
+  let html = '';
+
+  // Adds section
+  if (adds.length > 0) {
+    html += `<div class="import-section adds">
+      <div class="import-section-header">
+        <span>+ New positions to add</span>
+        <span class="count">${adds.length}</span>
+      </div>`;
+    adds.forEach(a => {
+      const p = a.filePos;
+      html += `<div class="import-row">
+        <div class="ticker">${esc(p.ticker)}</div>
+        <div class="acct">${esc(p.account)}</div>
+        <div class="detail">${esc(p.dateBought)} · ${esc(p.shares)} sh @ $${esc(p.pricePaid)}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Matches section
+  if (matches.length > 0) {
+    html += `<div class="import-section matches">
+      <div class="import-section-header">
+        <span>≈ Existing positions in file (choose per-position)</span>
+        <span class="count">${matches.length}</span>
+      </div>`;
+    matches.forEach((m, idx) => {
+      const cp = m.currentPos, fp = m.filePos;
+      let diffSummary = '';
+      if (m.anyChanged) {
+        const changedFields = m.diff.filter(d => d.changed);
+        diffSummary = `<div class="field-diff">${changedFields.map(d =>
+          `<span class="changed">${d.field}</span>: ${esc(d.currentVal || '—')} → ${esc(d.fileVal || '—')}`
+        ).join(' · ')}</div>`;
+      } else {
+        diffSummary = `<div class="field-diff">No field changes — match is informational</div>`;
+      }
+      html += `<div class="import-row">
+        <div class="ticker">${esc(cp.ticker)}</div>
+        <div class="acct">${esc(cp.account)}</div>
+        <div class="detail">${esc(cp.dateBought)} · ${cp.shares} sh @ $${cp.pricePaid}</div>
+        <div class="choice">
+          <label><input type="radio" name="match-${idx}" value="mine" ${m.anyChanged ? '' : 'checked'} onchange="setMatchChoice(${idx},'mine')" ${m.anyChanged ? 'checked' : ''}> Keep mine</label>
+          <label><input type="radio" name="match-${idx}" value="file" onchange="setMatchChoice(${idx},'file')"> Use file</label>
+        </div>
+        ${diffSummary}
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Ambiguous section
+  if (ambiguous.length > 0) {
+    html += `<div class="import-section ambig">
+      <div class="import-section-header">
+        <span>⚠ Same-day duplicates — please review manually after import</span>
+        <span class="count">${ambiguous.length}</span>
+      </div>`;
+    ambiguous.forEach(a => {
+      const cur = a.currentArr, fil = a.fileArr;
+      const sample = (cur[0] || fil[0]);
+      html += `<div class="import-row">
+        <div class="ticker">${esc(sample.ticker)}</div>
+        <div class="acct">${esc(sample.account)}</div>
+        <div class="detail">
+          ${esc(sample.dateBought)} · ${cur.length} in tracker, ${fil.length} in file
+          <div class="field-diff">Ambiguous: I can't tell which row in the file corresponds to which in the tracker. The file rows will be added as new positions; review and dedupe manually after import.</div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Removals section
+  if (removals.length > 0) {
+    html += `<div class="import-section removes">
+      <div class="import-section-header">
+        <span>− Positions in tracker, not in file</span>
+        <span class="count">${removals.length}</span>
+      </div>`;
+    removals.forEach((r, idx) => {
+      const p = r.currentPos;
+      html += `<div class="import-row">
+        <div class="ticker">${esc(p.ticker)}</div>
+        <div class="acct">${esc(p.account)}</div>
+        <div class="detail">${esc(p.dateBought)} · ${p.shares} sh @ $${p.pricePaid}</div>
+        <div class="choice">
+          <label><input type="radio" name="rem-${idx}" value="keep" checked onchange="setRemovalChoice(${idx},'keep')"> Keep</label>
+          <label><input type="radio" name="rem-${idx}" value="remove" onchange="setRemovalChoice(${idx},'remove')"> Remove</label>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  if (!html) {
+    html = `<div class="import-empty-note">Nothing to import — file is empty or matches exactly.</div>`;
+  }
+
+  body.innerHTML = html;
+  document.getElementById('import-modal').classList.remove('hidden');
+}
+
+function setMatchChoice(idx, choice) {
+  if (pendingImport && pendingImport.matchChoices) {
+    pendingImport.matchChoices[idx] = choice;
+  }
+}
+
+function setRemovalChoice(idx, choice) {
+  if (pendingImport && pendingImport.removalChoices) {
+    pendingImport.removalChoices[idx] = choice;
+  }
+}
+
+function cancelImport() {
+  pendingImport = null;
+  document.getElementById('import-modal').classList.add('hidden');
+}
+
+async function commitImport() {
+  if (!pendingImport) return;
+  const { data, adds, matches, ambiguous, removals, matchChoices, removalChoices } = pendingImport;
+
+  // Build the new positions array:
+  //   - Start with all current CLOSED positions (always preserved — closed history is sacred)
+  //   - Add current open positions, but skip any in 'removals' marked 'remove'
+  //   - For matches marked 'file', replace the current position with the file version
+  //   - Add all 'adds' (new positions)
+  //   - Add all positions from ambiguous file-side groups (since we can't auto-merge)
+
+  const closedKeep = positions.filter(p => p.closed);
+
+  // Build a set of keys to remove
+  const removeKeys = new Set();
+  removals.forEach((r, i) => {
+    if (removalChoices[i] === 'remove') {
+      removeKeys.add(posMatchKey(r.currentPos));
+    }
+  });
+
+  // Build a map of match keys where file should replace current
+  const replaceByFile = new Map(); // key -> filePos
+  matches.forEach((m, i) => {
+    if (matchChoices[i] === 'file') {
+      replaceByFile.set(m.key, m.filePos);
+    }
+  });
+
+  // Walk current open positions
+  const openKept = positions.filter(p => !p.closed).map(p => {
+    const k = posMatchKey(p);
+    if (removeKeys.has(k)) return null;
+    if (replaceByFile.has(k)) {
+      const fp = replaceByFile.get(k);
+      // Preserve the existing id so other references remain stable
+      return { ...fp, id: p.id };
+    }
+    return p;
+  }).filter(p => p !== null);
+
+  // Add new positions (assign fresh IDs)
+  const newAdded = adds.map(a => ({ ...a.filePos, id: nextId++ }));
+
+  // Add ambiguous file-side rows as new positions (with fresh IDs).
+  // These will sit alongside the existing same-day duplicates; user resolves manually.
+  const ambigAdded = [];
+  ambiguous.forEach(a => {
+    a.fileArr.forEach(fp => {
+      ambigAdded.push({ ...fp, id: nextId++ });
+    });
+  });
+
+  positions = [...closedKeep, ...openKept, ...newAdded, ...ambigAdded];
+
+  // Apply other top-level fields from the file (preserving existing if file omits)
+  if (data.nextId && data.nextId > nextId) nextId = data.nextId;
+  if (data.spxLive) spxLive = data.spxLive;
+  if (data.spxLiveDate) spxLiveDate = data.spxLiveDate;
+  if (data.cashBuckets) cashBuckets = data.cashBuckets;
+  if (Array.isArray(data.cashLedger)) cashLedger = data.cashLedger;
+  if (Array.isArray(data.spLots)) spLots = data.spLots;
+  if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
+  if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
+
+  pendingImport = null;
+  document.getElementById('import-modal').classList.add('hidden');
+
+  await savePositions();
+  restoreSpxInput();
+  renderAll();
+  renderSpBar();
+  renderSpSummary();
+  renderSleeveBreakdown();
+  renderSleeveRef();
+
+  // Build a friendly summary
+  const summary = [];
+  if (newAdded.length) summary.push(`${newAdded.length} added`);
+  const fileWins = matches.filter((m, i) => matchChoices[i] === 'file').length;
+  if (fileWins) summary.push(`${fileWins} updated from file`);
+  const removed = removals.filter((r, i) => removalChoices[i] === 'remove').length;
+  if (removed) summary.push(`${removed} removed`);
+  if (ambigAdded.length) summary.push(`${ambigAdded.length} added as ambiguous (review manually)`);
+  if (summary.length === 0) summary.push('no changes');
+  alert(`✓ Import complete — ${summary.join(', ')}.`);
+}
+
+function confirmImport() {
+  commitImport();
 }
 
 function clearAll() {
