@@ -2740,14 +2740,14 @@ async function refreshAllPrices() {
     } catch(e) { return { ticker, price: null }; }
   }
 
-  const batchSize = 3;
+  const batchSize = 2;
   const results = [];
   for (let i = 0; i < tickers.length; i += batchSize) {
     const batch = tickers.slice(i, i + batchSize);
     const batchResults = await Promise.all(batch.map(fetchTicker));
     results.push(...batchResults);
     status.textContent = `Updated ${Math.min(i + batchSize, tickers.length)} of ${tickers.length}...`;
-    if (i + batchSize < tickers.length) await new Promise(r => setTimeout(r, 15000));
+    if (i + batchSize < tickers.length) await new Promise(r => setTimeout(r, 25000));
   }
 
   let updated = 0, failed = [];
