@@ -657,6 +657,26 @@
   <span style="font-size:10px;color:var(--color-text-tertiary)">Free account · previous day close</span>
 </div>
 
+<!-- Update Instructions -->
+<div style="background:var(--color-background-secondary);border-bottom:1px solid var(--color-border-tertiary);padding:6px 20px;display:flex;align-items:center;gap:8px">
+  <span style="font-size:9px;color:var(--color-text-tertiary);cursor:pointer;text-decoration:underline" onclick="document.getElementById('update-instructions').style.display=document.getElementById('update-instructions').style.display==='none'?'block':'none'">How to update this tool</span>
+  <div id="update-instructions" style="display:none;position:absolute;top:80px;left:20px;z-index:9999;background:var(--color-background-secondary);border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-lg);padding:16px;max-width:420px;box-shadow:0 8px 24px rgba(0,0,0,0.4)">
+    <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:10px">Updating the tool</div>
+    <div style="font-size:10px;color:var(--color-text-secondary);line-height:1.8">
+      1. Get new file from Claude<br>
+      2. Open it in browser → Command+S to save<br>
+      3. Make sure filename is exactly <span style="color:var(--color-text-info)">portfolio-tracker.html</span><br>
+      4. Go to <span style="color:var(--color-text-info)">github.com/mishafitz/Portfolio-Tracker</span><br>
+      5. Click + → Upload files → drag file in<br>
+      6. Click green Commit changes<br>
+      7. Wait 60 seconds<br>
+      8. Refresh <span style="color:var(--color-text-info)">mishafitz.github.io/Portfolio-Tracker/portfolio-tracker.html</span>
+    </div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:8px">Your data stays — no export/import needed for updates</div>
+    <button onclick="document.getElementById('update-instructions').style.display='none'" style="margin-top:10px;background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-tertiary);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:10px">Close</button>
+  </div>
+</div>
+
 <!-- Instructions -->
 <div class="instructions">
   <div class="step"><span class="step-num">1</span>Enter ticker, buy date, shares, price paid, and current price</div>
@@ -2679,10 +2699,9 @@ function loadPolygonKey() {
 }
 
 async function refreshAllPrices() {
-  // Re-read key from input field directly as fallback
   const keyInput = document.getElementById('polygon-key-input');
   if (keyInput && keyInput.value.trim()) polygonKey = keyInput.value.trim();
-  if (!polygonKey) loadPolygonKey(); // try localStorage
+  if (!polygonKey) loadPolygonKey();
 
   if (!polygonKey) {
     togglePolygonKey();
@@ -2690,63 +2709,76 @@ async function refreshAllPrices() {
     if (status) { status.textContent = 'Enter your API key first'; status.style.color = '#fbbf24'; }
     return;
   }
+
   const btn = document.getElementById('refresh-prices-btn');
   const status = document.getElementById('refresh-status');
-  btn.disabled = true; btn.textContent = '⟳ Fetching...'; 
-  status.textContent = `Updating ${tickers.length} tickers — takes ~${Math.ceil(tickers.length * 13 / 60)} min on free tier`;
-  status.style.color = '#fbbf24';
+  btn.disabled = true; btn.textContent = '⟳ Fetching...';
+  status.textContent = 'Updating prices...'; status.style.color = '#fbbf24';
 
   const openPositions = positions.filter(p => !p.closed && p.ticker);
   const tickers = [...new Set(openPositions.map(p => p.ticker))];
   if (spLots.length > 0 && !tickers.includes('VOO')) tickers.push('VOO');
 
-  let updated = 0, failed = [];
-
-  for (const ticker of tickers) {
+  async function fetchWithTimeout(url, ms) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), ms);
     try {
-      const cleanTicker = ticker.replace('-', '.'); // BRK-B → BRK.B
-      // Try snapshot endpoint first, fall back to prev
-      const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${cleanTicker}?apiKey=${polygonKey}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      let price = data?.ticker?.day?.c || data?.ticker?.prevDay?.c;
-
-      if (!price) {
-        // Fallback to prev endpoint
-        const url2 = `https://api.polygon.io/v2/aggs/ticker/${cleanTicker}/prev?adjusted=true&apiKey=${polygonKey}`;
-        const res2 = await fetch(url2);
-        const data2 = await res2.json();
-        price = data2?.results?.[0]?.c;
-      }
-      if (price) {
-        if (ticker === 'VOO') {
-          spCurrentPrice = price;
-          const el = document.getElementById('sp-price-input');
-          if (el) el.value = price.toFixed(2);
-          renderSpBar(); renderSpSummary();
-        } else {
-          openPositions.filter(p => p.ticker === ticker).forEach(p => { p.exitPrice = price.toFixed(2); });
-          updated++;
-        }
-      } else { failed.push(ticker); }
-    } catch(e) { failed.push(ticker); }
-    await new Promise(r => setTimeout(r, 13000)); // Free tier: 5 calls/min = 12s apart
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(id);
+      return res;
+    } catch(e) { clearTimeout(id); throw e; }
   }
 
-  btn.disabled = false; btn.textContent = '⟳ Refresh Prices';
+  async function fetchTicker(ticker) {
+    const clean = ticker.replace('-', '.');
+    const url = `https://api.polygon.io/v2/aggs/ticker/${clean}/prev?adjusted=true&apiKey=${polygonKey}`;
+    try {
+      const res = await fetchWithTimeout(url, 8000);
+      const data = await res.json();
+      if (data.results && data.results.length > 0) return { ticker, price: data.results[0].c };
+      return { ticker, price: null };
+    } catch(e) { return { ticker, price: null }; }
+  }
+
+  const batchSize = 3;
+  const results = [];
+  for (let i = 0; i < tickers.length; i += batchSize) {
+    const batch = tickers.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(fetchTicker));
+    results.push(...batchResults);
+    status.textContent = `Updated ${Math.min(i + batchSize, tickers.length)} of ${tickers.length}...`;
+    if (i + batchSize < tickers.length) await new Promise(r => setTimeout(r, 15000));
+  }
+
+  let updated = 0, failed = [];
+  results.forEach(({ ticker, price }) => {
+    if (!price) { failed.push(ticker); return; }
+    if (ticker === 'VOO') {
+      spCurrentPrice = price;
+      const el = document.getElementById('sp-price-input');
+      if (el) el.value = price.toFixed(2);
+      renderSpBar(); renderSpSummary();
+    } else {
+      openPositions.filter(p => p.ticker === ticker).forEach(p => { p.exitPrice = price.toFixed(2); });
+      updated++;
+    }
+  });
+
+  btn.disabled = false; btn.textContent = '\u27f3 Refresh Prices';
   if (failed.length === 0) {
-    status.textContent = `✓ ${updated} positions updated · ${new Date().toLocaleTimeString()}`;
+    status.textContent = `\u2713 All ${updated} positions updated \u00b7 ${new Date().toLocaleTimeString()}`;
     status.style.color = 'var(--color-text-success)';
   } else if (updated > 0) {
-    status.textContent = `✓ ${updated} updated · ${failed.join(', ')} failed`;
+    status.textContent = `\u2713 ${updated} updated \u00b7 ${failed.join(', ')} failed`;
     status.style.color = '#fbbf24';
   } else {
-    status.textContent = 'Failed — check your API key';
+    status.textContent = 'Failed \u2014 check API key or try again';
     status.style.color = 'var(--color-text-danger)';
   }
   renderAll(); scheduleSave();
-  setTimeout(() => { if (status) { status.textContent = ''; status.style.color = ''; } }, 10000);
+  setTimeout(() => { if (status) { status.textContent = ''; status.style.color = ''; } }, 15000);
 }
+
 
 function setSpPrice(val) {
   spCurrentPrice = parseFloat(val) || 0;
