@@ -521,6 +521,119 @@
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
+  /* ── Trends tab ── */
+  .trends-controls {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; background: var(--color-background-secondary);
+    border: 1px solid var(--color-border-tertiary); border-radius: var(--border-radius-md);
+    margin-bottom: 16px;
+  }
+  .trends-controls .label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--color-text-tertiary);
+  }
+  .trends-controls select {
+    background: var(--color-background-tertiary); color: var(--color-text-primary);
+    border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md);
+    padding: 6px 10px; font-family: var(--font-sans); font-size: 11px;
+    cursor: pointer;
+  }
+  .trends-capture-btn {
+    background: var(--color-text-info); color: #0f0f0f; border: none;
+    border-radius: var(--border-radius-md); padding: 7px 14px;
+    font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .trends-capture-btn:hover { opacity: 0.85; }
+  .trends-capture-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .trends-snapshot-list {
+    margin-left: auto; display: flex; align-items: center; gap: 6px;
+    font-size: 10px; color: var(--color-text-secondary);
+  }
+  .trends-empty {
+    padding: 40px 20px; text-align: center; color: var(--color-text-secondary);
+    background: var(--color-background-secondary);
+    border: 1px solid var(--color-border-tertiary); border-radius: var(--border-radius-md);
+  }
+  .trends-empty .big {
+    font-size: 14px; color: var(--color-text-primary); margin-bottom: 8px;
+  }
+  .trends-section {
+    background: var(--color-background-secondary);
+    border: 1px solid var(--color-border-tertiary); border-radius: var(--border-radius-md);
+    padding: 16px; margin-bottom: 16px;
+  }
+  .trends-section-title {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--color-text-tertiary); margin-bottom: 12px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--color-border-tertiary);
+  }
+  .trends-section-title .meta {
+    float: right; text-transform: none; letter-spacing: 0;
+    color: var(--color-text-secondary); font-weight: 400;
+  }
+  .trends-summary-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .trends-stat {
+    background: var(--color-background-tertiary); padding: 10px 12px;
+    border-radius: var(--border-radius-md); border: 1px solid var(--color-border-tertiary);
+  }
+  .trends-stat-label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--color-text-tertiary); margin-bottom: 4px;
+  }
+  .trends-stat-value { font-size: 14px; font-weight: 600; }
+  .trends-stat-sub { font-size: 10px; color: var(--color-text-secondary); margin-top: 2px; }
+  .trends-table {
+    width: 100%; border-collapse: collapse; font-size: 11px;
+  }
+  .trends-table th {
+    text-align: left; padding: 8px 10px; font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--color-text-tertiary); font-weight: 600;
+    border-bottom: 1px solid var(--color-border-tertiary);
+  }
+  .trends-table th.r { text-align: right; }
+  .trends-table td {
+    padding: 8px 10px; border-bottom: 1px solid var(--color-border-tertiary);
+  }
+  .trends-table td.r { text-align: right; font-variant-numeric: tabular-nums; }
+  .trends-table tr:last-child td { border-bottom: none; }
+  .trends-table tr:hover td { background: var(--color-background-tertiary); }
+  .trends-tag {
+    display: inline-block; padding: 2px 6px; border-radius: 3px;
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+    margin-left: 6px;
+  }
+  .trends-tag.added { background: var(--color-background-info); color: var(--color-text-info); }
+  .trends-tag.sold { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
+  .trends-tag.gone { background: var(--color-background-danger); color: var(--color-text-danger); }
+  .trends-tag.shares { background: rgba(160, 160, 160, 0.12); color: var(--color-text-secondary); }
+  .trends-cross-up { color: var(--color-text-success); }
+  .trends-cross-down { color: var(--color-text-danger); }
+  .trends-snapshot-row {
+    display: flex; align-items: center; gap: 12px; padding: 8px 10px;
+    border-bottom: 1px solid var(--color-border-tertiary); font-size: 11px;
+  }
+  .trends-snapshot-row:last-child { border-bottom: none; }
+  .trends-snapshot-date { font-weight: 600; min-width: 100px; }
+  .trends-snapshot-meta { color: var(--color-text-secondary); flex: 1; }
+  .trends-snapshot-del {
+    background: transparent; border: 1px solid var(--color-border-secondary);
+    color: var(--color-text-tertiary); border-radius: 3px; padding: 2px 8px;
+    font-family: var(--font-sans); font-size: 9px; cursor: pointer;
+  }
+  .trends-snapshot-del:hover { color: var(--color-text-danger); border-color: var(--color-text-danger); }
+  .trends-section-cols {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  @media (max-width: 800px) {
+    .trends-section-cols { grid-template-columns: 1fr; }
+  }
+
   /* Rebalance tab */
   .rebal-controls {
     display: flex; gap: 16px; align-items: center;
@@ -691,6 +804,7 @@
     <button class="tab-btn active" onclick="switchTab('dashboard')">Dashboard</button>
     <button class="tab-btn" onclick="switchTab('rebalance')">Rebalance &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
+    <button class="tab-btn" onclick="switchTab('trends')">Trends</button>
   </div>
 
   <!-- Dashboard Tab -->
@@ -1053,6 +1167,19 @@
     <div class="postsell-cards" id="postsell-cards"></div>
   </div><!-- end tab-postsell -->
 
+  <!-- Trends Tab -->
+  <div class="tab-panel" id="tab-trends">
+    <div class="trends-controls">
+      <button class="trends-capture-btn" onclick="captureSnapshotManual()">+ Capture Snapshot</button>
+      <span class="label">Compare</span>
+      <select id="trends-select-b" onchange="renderTrends()"></select>
+      <span class="label">to</span>
+      <select id="trends-select-a" onchange="renderTrends()"></select>
+      <span class="trends-snapshot-list" id="trends-snapshot-count"></span>
+    </div>
+    <div id="trends-content"></div>
+  </div><!-- end tab-trends -->
+
 </div>
 
 <div id="save-note">Saved ✓</div>
@@ -1294,6 +1421,7 @@ let cashBuckets = { Taxable: 0, IRA: 0 };
 let cashLedger = [];
 let spLots = []; // { date, shares, pricePaid, account } — S&P passive core positions
 let spCurrentPrice = 0; // current VOO/SPY price, updated manually
+let snapshots = []; // { id, date, dateLocal, positions, spLots, cashBuckets, spxLive, spCurrentPrice, summary, autoCaptured }
 
 function mkPos() {
   return {
@@ -1323,6 +1451,7 @@ async function savePositions() {
     await window.storage.set('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
     await window.storage.set('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
     await window.storage.set('portfolio-ledger', JSON.stringify({ cashLedger }));
+    await window.storage.set('portfolio-snapshots', JSON.stringify({ snapshots }));
     flashSave();
   } catch(e) {
     console.warn('Save failed', e.message);
@@ -1383,6 +1512,14 @@ async function loadPositions() {
       if (spParsed.spCurrentPrice) spCurrentPrice = spParsed.spCurrentPrice;
     }
   } catch(e) { /* sp data not yet saved */ }
+
+  try {
+    const snapRes = await window.storage.get('portfolio-snapshots');
+    if (snapRes && snapRes.value) {
+      const snapParsed = JSON.parse(snapRes.value);
+      if (Array.isArray(snapParsed.snapshots)) snapshots = snapParsed.snapshots;
+    }
+  } catch(e) { /* no snapshots yet */ }
 
   if (positions.length === 0) {
     positions = [mkPos(), mkPos(), mkPos()];
@@ -2143,6 +2280,7 @@ function switchTab(name) {
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   if (name === 'rebalance') { renderSleevePerformance(); renderThemeIntel(); renderRebalance(); }
   if (name === 'postsell') renderPostSell();
+  if (name === 'trends') renderTrends();
   if (name === 'dashboard') syncFixedScrollbar();
 }
 
@@ -4994,7 +5132,7 @@ function undoSell() {
 function exportData() {
   const data = {
     positions, nextId, spxLive, spxLiveDate, cashBuckets, cashLedger,
-    spLots, spCurrentPrice, version: 1
+    spLots, spCurrentPrice, snapshots, version: 2
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -5021,6 +5159,7 @@ function importData(input) {
       if (data.cashLedger) cashLedger = data.cashLedger;
       if (data.spLots) spLots = data.spLots;
       if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
+      if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
       await savePositions();
       restoreSpxInput();
       renderAll();
@@ -5042,6 +5181,499 @@ function clearAll() {
   nextId = 1;
   renderAll();
   scheduleSave();
+}
+
+// ─────────────────────────────────────────────
+// Snapshots & Trends
+// ─────────────────────────────────────────────
+
+// Format an ISO date string (YYYY-MM-DD) for the user's local calendar day.
+// Used for "first visit each calendar day" auto-capture.
+function todayLocalDateStr() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Build the snapshot object — full deep copy of all state that drives metrics.
+function buildSnapshot(autoCaptured) {
+  const allPos = positions.map(p => ({ ...p }));
+  const summary = calcSummary(allPos.filter(p => !p.closed));
+  return {
+    id: Date.now(),                      // unique-enough; one per click/auto
+    date: new Date().toISOString(),      // full timestamp
+    dateLocal: todayLocalDateStr(),      // for "one per day" dedup
+    autoCaptured: !!autoCaptured,
+    positions: allPos,
+    spLots: spLots.map(l => ({ ...l })),
+    cashBuckets: { ...cashBuckets },
+    spxLive: spxLive,
+    spCurrentPrice: spCurrentPrice,
+    summary: summary
+  };
+}
+
+function captureSnapshotManual() {
+  const snap = buildSnapshot(false);
+  snapshots.push(snap);
+  scheduleSave();
+  renderTrends();
+  // Auto-select the new snapshot as "current" in the picker
+  const selB = document.getElementById('trends-select-b');
+  if (selB) selB.value = String(snap.id);
+  renderTrends();
+}
+
+// Auto-capture on first visit each calendar day, but only if there's actually
+// something to capture (at least one open position with shares & price).
+function maybeAutoCapture() {
+  const today = todayLocalDateStr();
+  const haveTodaySnap = snapshots.some(s => s.dateLocal === today);
+  if (haveTodaySnap) return;
+  const hasRealData = positions.some(p =>
+    !p.closed && parseFloat(p.shares) > 0 && parseFloat(p.pricePaid) > 0
+  );
+  if (!hasRealData) return;
+  const snap = buildSnapshot(true);
+  snapshots.push(snap);
+  scheduleSave();
+}
+
+function deleteSnapshot(id) {
+  if (!confirm('Delete this snapshot? This cannot be undone.')) return;
+  snapshots = snapshots.filter(s => s.id !== id);
+  scheduleSave();
+  renderTrends();
+}
+
+// Build a stable "key" for matching positions across snapshots.
+// Two positions are "the same position" if ticker + account + dateBought match.
+// (Same ticker bought on different dates are tracked as separate lots in this app,
+// so matching by all three preserves that distinction.)
+function posKey(p) {
+  return `${p.ticker}|${p.account}|${p.dateBought}`;
+}
+
+// Compute "exit value" for a position — same logic as calcPos but lighter,
+// since snapshots already contain the exit prices we want.
+function snapPosValue(p) {
+  const sh = parseFloat(p.shares);
+  const ep = parseFloat(p.exitPrice);
+  if (isNaN(sh) || isNaN(ep)) return 0;
+  return sh * ep;
+}
+function snapPosInvested(p) {
+  const sh = parseFloat(p.shares);
+  const pp = parseFloat(p.pricePaid);
+  if (isNaN(sh) || isNaN(pp)) return 0;
+  return sh * pp;
+}
+
+// Compute the dollar alpha for a single position at the time of a snapshot.
+// (Re-uses the same math as calcPos but on snapshot data.)
+function snapPosAlpha(p) {
+  const invested = snapPosInvested(p);
+  const exitVal = snapPosValue(p);
+  if (invested <= 0) return null;
+  const spxBuy = parseFloat(p.spxBuy);
+  const spxExit = parseFloat(p.spxExit);
+  if (isNaN(spxBuy) || isNaN(spxExit) || spxBuy <= 0) return null;
+  const spxReturn = ((spxExit / spxBuy) - 1);
+  const spxDollar = invested * spxReturn;
+  return (exitVal - invested) - spxDollar;
+}
+
+// "Beating S&P" boolean for a position in a snapshot.
+function snapPosBeating(p) {
+  const a = snapPosAlpha(p);
+  if (a === null) return null;
+  return a >= 0;
+}
+
+// Diff two snapshots A (older) and B (newer), returning a structured object.
+function diffSnapshots(snapA, snapB) {
+  // Index positions by key
+  const indexA = new Map();
+  const indexB = new Map();
+  (snapA.positions || []).filter(p => !p.closed).forEach(p => indexA.set(posKey(p), p));
+  (snapB.positions || []).filter(p => !p.closed).forEach(p => indexB.set(posKey(p), p));
+
+  const allKeys = new Set([...indexA.keys(), ...indexB.keys()]);
+
+  const movers = [];      // present in both snapshots — price-driven changes
+  const added = [];       // in B, not in A — newly opened
+  const removed = [];     // in A, not in B — closed/sold between snapshots
+  const sharesChanged = []; // in both, but share count changed — added to / trimmed
+
+  allKeys.forEach(k => {
+    const a = indexA.get(k);
+    const b = indexB.get(k);
+    if (a && b) {
+      const shA = parseFloat(a.shares) || 0;
+      const shB = parseFloat(b.shares) || 0;
+      if (shA !== shB) {
+        sharesChanged.push({ key: k, a, b, shA, shB, deltaShares: shB - shA });
+      }
+      const valA = snapPosValue(a);
+      const valB = snapPosValue(b);
+      const alphaA = snapPosAlpha(a);
+      const alphaB = snapPosAlpha(b);
+      const beatA = snapPosBeating(a);
+      const beatB = snapPosBeating(b);
+      movers.push({
+        key: k, a, b,
+        ticker: b.ticker, account: b.account,
+        valA, valB, deltaVal: valB - valA,
+        alphaA, alphaB,
+        deltaAlpha: (alphaA !== null && alphaB !== null) ? alphaB - alphaA : null,
+        beatA, beatB,
+        crossed: (beatA !== null && beatB !== null && beatA !== beatB) ? (beatB ? 'up' : 'down') : null,
+        sharesUnchanged: shA === shB
+      });
+    } else if (b && !a) {
+      added.push({ key: k, b });
+    } else if (a && !b) {
+      removed.push({ key: k, a });
+    }
+  });
+
+  // Headline numbers
+  const totA = (snapA.positions || []).filter(p => !p.closed).reduce((s, p) => s + snapPosValue(p), 0);
+  const totB = (snapB.positions || []).filter(p => !p.closed).reduce((s, p) => s + snapPosValue(p), 0);
+  const invA = (snapA.positions || []).filter(p => !p.closed).reduce((s, p) => s + snapPosInvested(p), 0);
+  const invB = (snapB.positions || []).filter(p => !p.closed).reduce((s, p) => s + snapPosInvested(p), 0);
+
+  // Total alpha sum across all positions
+  const alphaSumA = (snapA.positions || []).filter(p => !p.closed)
+    .map(snapPosAlpha).filter(x => x !== null).reduce((s, x) => s + x, 0);
+  const alphaSumB = (snapB.positions || []).filter(p => !p.closed)
+    .map(snapPosAlpha).filter(x => x !== null).reduce((s, x) => s + x, 0);
+
+  // Decompose total value change into "from new money" vs "from price"
+  // New money in (cost basis added): invB - invA, but only counting added/share-increase positions.
+  // This is approximate — it ignores the spx benchmark drift on the new money,
+  // but as a "where did the change come from" decomposition it's the standard approach.
+  const newMoneyIn = invB - invA;
+  const priceDriven = (totB - invB) - (totA - invA); // change in unrealized G/L
+
+  return {
+    snapA, snapB,
+    totA, totB, deltaTotal: totB - totA,
+    invA, invB, newMoneyIn,
+    priceDriven,
+    alphaSumA, alphaSumB, deltaAlpha: alphaSumB - alphaSumA,
+    movers, added, removed, sharesChanged
+  };
+}
+
+function fmtSnapDate(s) {
+  const d = new Date(s.date);
+  const opts = { year: 'numeric', month: 'short', day: 'numeric' };
+  return d.toLocaleDateString('en-US', opts);
+}
+function fmtSnapDateTime(s) {
+  const d = new Date(s.date);
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function renderTrends() {
+  const content = document.getElementById('trends-content');
+  const selA = document.getElementById('trends-select-a');
+  const selB = document.getElementById('trends-select-b');
+  const countEl = document.getElementById('trends-snapshot-count');
+  if (!content || !selA || !selB) return;
+
+  // Sort snapshots oldest -> newest for the picker
+  const sorted = [...snapshots].sort((x, y) => new Date(x.date) - new Date(y.date));
+
+  countEl.textContent = sorted.length === 0 ? 'No snapshots yet'
+    : sorted.length === 1 ? '1 snapshot'
+    : `${sorted.length} snapshots`;
+
+  // Empty state
+  if (sorted.length === 0) {
+    selA.innerHTML = '';
+    selB.innerHTML = '';
+    content.innerHTML = `
+      <div class="trends-empty">
+        <div class="big">No snapshots yet</div>
+        <div>Click <b>+ Capture Snapshot</b> to save the current state of your portfolio.</div>
+        <div style="margin-top:6px;font-size:10px;color:var(--color-text-tertiary)">Snapshots also auto-capture once per calendar day when you open the app.</div>
+      </div>`;
+    return;
+  }
+
+  // Populate dropdowns. selB defaults to newest; selA defaults to second-newest (or newest if only 1).
+  const prevA = selA.value;
+  const prevB = selB.value;
+  selA.innerHTML = sorted.map(s =>
+    `<option value="${s.id}">${fmtSnapDateTime(s)}${s.autoCaptured ? ' · auto' : ''}</option>`
+  ).join('');
+  selB.innerHTML = sorted.map(s =>
+    `<option value="${s.id}">${fmtSnapDateTime(s)}${s.autoCaptured ? ' · auto' : ''}</option>`
+  ).join('');
+
+  // Default selection: B = newest, A = second-newest
+  const newest = sorted[sorted.length - 1];
+  const secondNewest = sorted[sorted.length - 2];
+  selB.value = sorted.some(s => String(s.id) === prevB) ? prevB : String(newest.id);
+  if (secondNewest) {
+    selA.value = sorted.some(s => String(s.id) === prevA) ? prevA : String(secondNewest.id);
+  } else {
+    selA.value = String(newest.id);
+  }
+
+  if (sorted.length === 1) {
+    content.innerHTML = `
+      <div class="trends-empty">
+        <div class="big">One snapshot saved — capture another to see what's changed</div>
+        <div>The diff view becomes useful once you have at least 2 snapshots to compare.</div>
+      </div>
+      ${renderSnapshotListSection(sorted)}`;
+    return;
+  }
+
+  // Render the diff
+  const snapA = sorted.find(s => String(s.id) === selA.value);
+  const snapB = sorted.find(s => String(s.id) === selB.value);
+  if (!snapA || !snapB) {
+    content.innerHTML = `<div class="trends-empty">Select two snapshots to compare.</div>`;
+    return;
+  }
+
+  // If user picks them backwards (B older than A), we still compute A-as-older;
+  // swap so the math always reads "A is earlier, B is later".
+  let earlier = snapA, later = snapB;
+  if (new Date(snapA.date) > new Date(snapB.date)) {
+    earlier = snapB; later = snapA;
+  }
+  const diff = diffSnapshots(earlier, later);
+
+  content.innerHTML = `
+    ${renderDiffHeadline(diff)}
+    ${renderDiffMovers(diff)}
+    ${renderDiffComposition(diff)}
+    ${renderDiffCrossings(diff)}
+    ${renderSnapshotListSection(sorted)}
+  `;
+}
+
+function renderDiffHeadline(diff) {
+  const colTot = diff.deltaTotal >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const colAlpha = diff.deltaAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const colPrice = diff.priceDriven >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const colMoney = diff.newMoneyIn === 0 ? 'var(--color-text-tertiary)' : 'var(--color-text-info)';
+  const days = Math.max(1, Math.round((new Date(diff.snapB.date) - new Date(diff.snapA.date)) / 86400000));
+  return `
+    <div class="trends-section">
+      <div class="trends-section-title">
+        Change <span class="meta">${fmtSnapDate(diff.snapA)} → ${fmtSnapDate(diff.snapB)} · ${days} day${days === 1 ? '' : 's'}</span>
+      </div>
+      <div class="trends-summary-grid">
+        <div class="trends-stat">
+          <div class="trends-stat-label">Total Value</div>
+          <div class="trends-stat-value">${fmtDollarWhole(diff.totB)}</div>
+          <div class="trends-stat-sub" style="color:${colTot}">${diff.deltaTotal >= 0 ? '+' : ''}${fmtDollarWhole(diff.deltaTotal)}</div>
+        </div>
+        <div class="trends-stat">
+          <div class="trends-stat-label">Price-Driven</div>
+          <div class="trends-stat-value" style="color:${colPrice}">${diff.priceDriven >= 0 ? '+' : ''}${fmtDollarWhole(diff.priceDriven)}</div>
+          <div class="trends-stat-sub">change in unrealized G/L</div>
+        </div>
+        <div class="trends-stat">
+          <div class="trends-stat-label">New Money</div>
+          <div class="trends-stat-value" style="color:${colMoney}">${diff.newMoneyIn >= 0 ? '+' : ''}${fmtDollarWhole(diff.newMoneyIn)}</div>
+          <div class="trends-stat-sub">cost basis added/removed</div>
+        </div>
+        <div class="trends-stat">
+          <div class="trends-stat-label">Total Alpha vs S&amp;P</div>
+          <div class="trends-stat-value">${fmtDollarWhole(diff.alphaSumB)}</div>
+          <div class="trends-stat-sub" style="color:${colAlpha}">${diff.deltaAlpha >= 0 ? '+' : ''}${fmtDollarWhole(diff.deltaAlpha)}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDiffMovers(diff) {
+  // Only positions that exist in both snapshots and had unchanged shares
+  // (so we're showing pure price moves). Sort by absolute value change.
+  const priceMovers = diff.movers.filter(m => m.sharesUnchanged && Math.abs(m.deltaVal) > 0.01);
+  priceMovers.sort((a, b) => Math.abs(b.deltaVal) - Math.abs(a.deltaVal));
+
+  if (priceMovers.length === 0) {
+    return `
+      <div class="trends-section">
+        <div class="trends-section-title">Position Movers <span class="meta">price only — no changes to flag</span></div>
+        <div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0">No measurable price-driven changes between these snapshots.</div>
+      </div>`;
+  }
+
+  const top = priceMovers.slice(0, 12);
+  const rows = top.map(m => {
+    const valColor = m.deltaVal >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const alphaTxt = m.deltaAlpha === null ? '—' :
+      `<span style="color:${m.deltaAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${m.deltaAlpha >= 0 ? '+' : ''}${fmtDollarWhole(m.deltaAlpha)}</span>`;
+    let crossTag = '';
+    if (m.crossed === 'up')   crossTag = ' <span class="trends-tag added">→ beating</span>';
+    if (m.crossed === 'down') crossTag = ' <span class="trends-tag gone">→ trailing</span>';
+    return `
+      <tr>
+        <td><b>${m.ticker}</b> <span style="color:var(--color-text-tertiary);font-size:9px">${m.account}</span>${crossTag}</td>
+        <td class="r">${fmtDollarWhole(m.valA)}</td>
+        <td class="r">${fmtDollarWhole(m.valB)}</td>
+        <td class="r" style="color:${valColor}">${m.deltaVal >= 0 ? '+' : ''}${fmtDollarWhole(m.deltaVal)}</td>
+        <td class="r">${alphaTxt}</td>
+      </tr>`;
+  }).join('');
+
+  const more = priceMovers.length > 12 ? `<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:8px">+ ${priceMovers.length - 12} smaller movers not shown</div>` : '';
+
+  return `
+    <div class="trends-section">
+      <div class="trends-section-title">Position Movers <span class="meta">price-driven only · ${priceMovers.length} position${priceMovers.length === 1 ? '' : 's'}</span></div>
+      <table class="trends-table">
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th class="r">Value (was)</th>
+            <th class="r">Value (now)</th>
+            <th class="r">Δ Value</th>
+            <th class="r">Δ Alpha</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${more}
+    </div>
+  `;
+}
+
+function renderDiffComposition(diff) {
+  const hasAny = diff.added.length || diff.removed.length || diff.sharesChanged.length;
+  if (!hasAny) {
+    return `
+      <div class="trends-section">
+        <div class="trends-section-title">Composition Changes <span class="meta">positions you opened, closed, or resized</span></div>
+        <div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0">No composition changes between these snapshots.</div>
+      </div>`;
+  }
+
+  const addedRows = diff.added.map(x => {
+    const cost = snapPosInvested(x.b);
+    return `
+      <tr>
+        <td><b>${x.b.ticker}</b> <span style="color:var(--color-text-tertiary);font-size:9px">${x.b.account}</span> <span class="trends-tag added">opened</span></td>
+        <td class="r">${x.b.shares} sh @ ${fmtDollar(parseFloat(x.b.pricePaid))}</td>
+        <td class="r">${fmtDollarWhole(cost)}</td>
+      </tr>`;
+  }).join('');
+
+  const removedRows = diff.removed.map(x => {
+    const lastVal = snapPosValue(x.a);
+    return `
+      <tr>
+        <td><b>${x.a.ticker}</b> <span style="color:var(--color-text-tertiary);font-size:9px">${x.a.account}</span> <span class="trends-tag gone">closed</span></td>
+        <td class="r">${x.a.shares} sh</td>
+        <td class="r">${fmtDollarWhole(lastVal)}</td>
+      </tr>`;
+  }).join('');
+
+  const sharesRows = diff.sharesChanged.map(x => {
+    const verb = x.deltaShares > 0 ? 'added' : 'trimmed';
+    const tagClass = x.deltaShares > 0 ? 'added' : 'sold';
+    const sign = x.deltaShares > 0 ? '+' : '';
+    return `
+      <tr>
+        <td><b>${x.b.ticker}</b> <span style="color:var(--color-text-tertiary);font-size:9px">${x.b.account}</span> <span class="trends-tag ${tagClass}">${verb}</span></td>
+        <td class="r">${x.shA} → ${x.shB} sh</td>
+        <td class="r">${sign}${x.deltaShares} sh</td>
+      </tr>`;
+  }).join('');
+
+  const allRows = addedRows + sharesRows + removedRows;
+
+  return `
+    <div class="trends-section">
+      <div class="trends-section-title">Composition Changes <span class="meta">${diff.added.length} opened · ${diff.sharesChanged.length} resized · ${diff.removed.length} closed</span></div>
+      <table class="trends-table">
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th class="r">Detail</th>
+            <th class="r">Amount</th>
+          </tr>
+        </thead>
+        <tbody>${allRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderDiffCrossings(diff) {
+  // Positions that flipped beat<->trail status between snapshots
+  const ups = diff.movers.filter(m => m.crossed === 'up');
+  const downs = diff.movers.filter(m => m.crossed === 'down');
+  if (ups.length === 0 && downs.length === 0) {
+    return `
+      <div class="trends-section">
+        <div class="trends-section-title">S&amp;P Crossings <span class="meta">positions that flipped beat ↔ trail</span></div>
+        <div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0">No positions crossed the S&amp;P benchmark between these snapshots.</div>
+      </div>`;
+  }
+  const upRows = ups.map(m => `
+    <tr>
+      <td><b>${m.ticker}</b> <span style="color:var(--color-text-tertiary);font-size:9px">${m.account}</span></td>
+      <td class="r trends-cross-up">trailing → beating</td>
+      <td class="r">${m.alphaA === null ? '—' : fmtDollarWhole(m.alphaA)} → ${m.alphaB === null ? '—' : fmtDollarWhole(m.alphaB)}</td>
+    </tr>`).join('');
+  const downRows = downs.map(m => `
+    <tr>
+      <td><b>${m.ticker}</b> <span style="color:var(--color-text-tertiary);font-size:9px">${m.account}</span></td>
+      <td class="r trends-cross-down">beating → trailing</td>
+      <td class="r">${m.alphaA === null ? '—' : fmtDollarWhole(m.alphaA)} → ${m.alphaB === null ? '—' : fmtDollarWhole(m.alphaB)}</td>
+    </tr>`).join('');
+  return `
+    <div class="trends-section">
+      <div class="trends-section-title">S&amp;P Crossings <span class="meta">${ups.length} flipped to beating · ${downs.length} flipped to trailing</span></div>
+      <table class="trends-table">
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th class="r">Direction</th>
+            <th class="r">Alpha (was → now)</th>
+          </tr>
+        </thead>
+        <tbody>${upRows}${downRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderSnapshotListSection(sorted) {
+  // Show newest first
+  const list = [...sorted].reverse();
+  const rows = list.map(s => {
+    const totVal = (s.positions || []).filter(p => !p.closed).reduce((acc, p) => acc + snapPosValue(p), 0);
+    return `
+      <div class="trends-snapshot-row">
+        <div class="trends-snapshot-date">${fmtSnapDateTime(s)}</div>
+        <div class="trends-snapshot-meta">
+          ${(s.positions || []).filter(p => !p.closed).length} positions · ${fmtDollarWhole(totVal)}
+          ${s.autoCaptured ? ' · <span style="color:var(--color-text-tertiary)">auto</span>' : ''}
+        </div>
+        <button class="trends-snapshot-del" onclick="deleteSnapshot(${s.id})">Delete</button>
+      </div>
+    `;
+  }).join('');
+  return `
+    <div class="trends-section">
+      <div class="trends-section-title">All Snapshots <span class="meta">${sorted.length} saved</span></div>
+      ${rows}
+    </div>
+  `;
 }
 
 // ─────────────────────────────────────────────
@@ -5203,10 +5835,12 @@ async function init() {
   renderSleeveBreakdown();
   renderSleeveRef();
   renderAll();
+  // After all data is loaded and rendered, attempt the daily auto-snapshot.
+  // Done last so summary numbers reflect any seed/migration changes.
+  maybeAutoCapture();
 }
 
 init();
 </script>
 </body>
 </html>
-```
