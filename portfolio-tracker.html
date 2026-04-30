@@ -644,7 +644,9 @@
   <a class="spx-link" href="https://multpl.com/s-p-500-historical-prices/table/by-month" target="_blank">↗ Historical S&P (multpl.com)</a>
   <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
     <button id="refresh-prices-btn" class="btn btn-sm btn-primary" onclick="refreshAllPrices()" style="font-size:10px;padding:4px 12px">⟳ Refresh Prices</button>
+    <button id="get-benchmarks-btn" class="btn btn-sm" onclick="getBenchmarkPrices()" style="font-size:10px;padding:4px 12px" title="Fetches benchmark ETF prices (QQQ, SMH, CIBR, XLF, XLE, GLD, XLY, ITA, SPHQ) — needed for snapshots and benchmark display">⟳ Get Benchmarks</button>
     <span id="refresh-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
+    <span id="benchmark-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
     <span id="polygon-key-toggle" style="font-size:10px;color:var(--color-text-tertiary);cursor:pointer;text-decoration:underline" onclick="togglePolygonKey()">API Key</span>
   </div>
 </div>
@@ -691,6 +693,7 @@
     <button class="tab-btn active" onclick="switchTab('dashboard')">Dashboard</button>
     <button class="tab-btn" onclick="switchTab('rebalance')">Rebalance &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
+    <button class="tab-btn" onclick="switchTab('trends')">Trends</button>
   </div>
 
   <!-- Dashboard Tab -->
@@ -1053,6 +1056,17 @@
     <div class="postsell-cards" id="postsell-cards"></div>
   </div><!-- end tab-postsell -->
 
+  <!-- Trends Tab -->
+  <div class="tab-panel" id="tab-trends">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button class="btn btn-sm btn-primary" onclick="openTakeSnapshotModal()" style="font-size:11px;padding:6px 14px">📸 Take Snapshot</button>
+      <span style="font-size:10px;color:var(--color-text-tertiary)">Refresh Prices &amp; Get Benchmarks live on the Dashboard tab.</span>
+    </div>
+    <div id="trends-summary" style="margin-bottom:14px"></div>
+    <div class="section-heading">Snapshot History</div>
+    <div id="trends-list"></div>
+  </div><!-- end tab-trends -->
+
 </div>
 
 <div id="save-note">Saved ✓</div>
@@ -1259,6 +1273,25 @@
   </div>
 </div>
 
+<!-- Take Snapshot Modal -->
+<div class="modal-overlay hidden" id="snapshot-modal">
+  <div class="modal">
+    <div class="modal-title">Take Snapshot</div>
+    <div class="modal-subtitle">Captures current portfolio state — positions, prices, benchmarks, cash. Forward-only history.</div>
+    <div id="snapshot-benchmark-warning" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);border-radius:var(--border-radius-md);padding:8px 12px;margin-bottom:14px;font-size:10px;color:#fbbf24"></div>
+    <div id="snapshot-storage-warning" style="display:none;background:var(--color-background-danger);border:1px solid rgba(248,113,113,0.3);border-radius:var(--border-radius-md);padding:8px 12px;margin-bottom:14px;font-size:10px;color:var(--color-text-danger)"></div>
+    <div class="modal-field">
+      <label class="modal-label">Optional note <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--color-text-tertiary)">— context for this snapshot (skip if not needed)</span></label>
+      <textarea class="modal-input" id="snapshot-note" rows="2" placeholder="e.g. Before earnings · Post-rebalance · Pre-tax-loss-harvest…" style="resize:vertical"></textarea>
+    </div>
+    <div id="snapshot-preview" style="font-size:10px;color:var(--color-text-tertiary);margin-top:6px"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeTakeSnapshotModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmTakeSnapshot()">Save Snapshot</button>
+    </div>
+  </div>
+</div>
+
 <div id="card-overlay" style="display:none;position:fixed;inset:0;z-index:8000;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;padding:24px" onclick="if(event.target===this){cardOverlayActive=false;closeCardOverlay()}">
   <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-lg);padding:24px;max-width:580px;width:100%;position:relative;box-shadow:0 20px 60px rgba(0,0,0,0.5);max-height:80vh;overflow-y:auto" onmouseenter="keepCardOverlay()" onmouseleave="leaveCardOverlay()">
     <button onclick="cardOverlayActive=false;closeCardOverlay()" style="position:absolute;top:12px;right:14px;background:none;border:none;color:var(--color-text-tertiary);font-size:18px;cursor:pointer;line-height:1">✕</button>
@@ -1295,6 +1328,9 @@ let cashBuckets = { Taxable: 0, IRA: 0 };
 let cashLedger = [];
 let spLots = []; // { date, shares, pricePaid, account } — S&P passive core positions
 let spCurrentPrice = 0; // current VOO/SPY price, updated manually
+let snapshots = []; // forward-only history captured by Take Snapshot
+let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Benchmarks
+let benchmarkPricesDate = null; // ISO timestamp of last benchmark fetch
 
 function mkPos() {
   return {
@@ -1324,6 +1360,7 @@ async function savePositions() {
     localStorage.setItem('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
     localStorage.setItem('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
     localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
+    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate }));
     flashSave();
   } catch(e) {
     console.warn('Save failed', e.message);
@@ -1384,6 +1421,16 @@ async function loadPositions() {
       if (spParsed.spCurrentPrice) spCurrentPrice = spParsed.spCurrentPrice;
     }
   } catch(e) { /* sp data not yet saved */ }
+
+  try {
+    const snapRes = localStorage.getItem('portfolio-snapshots-v1');
+    if (snapRes) {
+      const snapParsed = JSON.parse(snapRes);
+      if (Array.isArray(snapParsed.snapshots)) snapshots = snapParsed.snapshots;
+      if (snapParsed.benchmarkPrices && typeof snapParsed.benchmarkPrices === 'object') benchmarkPrices = snapParsed.benchmarkPrices;
+      if (snapParsed.benchmarkPricesDate) benchmarkPricesDate = snapParsed.benchmarkPricesDate;
+    }
+  } catch(e) { /* no snapshots yet */ }
 
   if (positions.length === 0) {
     positions = [mkPos(), mkPos(), mkPos()];
@@ -2079,6 +2126,7 @@ function renderThemeIntel() {
     return `<div>
       <div class="industry-intel-card ${cardClass}" id="card-${themeKey}" style="border-left-color:${color}" onclick="toggleThemeDrill('${themeKey}')">
         <div class="industry-intel-name">${esc(t.theme)} <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400">↕</span></div>
+        <div style="margin-bottom:6px">${fmtBenchmarkLine(t.theme)}</div>
         <div class="industry-intel-stats">
           <div class="industry-intel-stat">
             <div class="industry-intel-stat-label">Concentration</div>
@@ -2188,6 +2236,7 @@ function switchTab(name) {
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   if (name === 'rebalance') { renderSleevePerformance(); renderThemeIntel(); renderRebalance(); }
   if (name === 'postsell') renderPostSell();
+  if (name === 'trends') renderTrends();
   if (name === 'dashboard') syncFixedScrollbar();
 }
 
@@ -2197,6 +2246,377 @@ function setPriceToday(id, value) {
   pos.priceToday = value;
   scheduleSave();
   renderPostSell();
+}
+
+// ─────────────────────────────────────────────
+// Trends — Snapshot capture and history (Step 3)
+// Forward-only data capture. Each snapshot freezes current state for
+// later time-series analysis. Capture inputs (prices, positions, sleeves);
+// derive outputs (alpha, signals) at view time.
+// ─────────────────────────────────────────────
+
+// All theme + sleeve benchmark tickers we care about (from the locked BENCHMARKS map).
+function getAllBenchmarkTickers() {
+  const themes = Object.values(BENCHMARKS.themes).filter(t => t);
+  const sleeves = Object.values(BENCHMARKS.sleeves).filter(t => t && t !== 'SPX');
+  // SPX is not a fetchable ETF on Polygon free tier — handled separately via spxLive.
+  return [...new Set([...themes, ...sleeves])];
+}
+
+async function getBenchmarkPrices() {
+  const keyInput = document.getElementById('polygon-key-input');
+  if (keyInput && keyInput.value.trim()) polygonKey = keyInput.value.trim();
+  if (!polygonKey) loadPolygonKey();
+
+  const status = document.getElementById('benchmark-status');
+  if (!polygonKey) {
+    togglePolygonKey();
+    if (status) { status.textContent = 'Enter your Polygon API key first'; status.style.color = '#fbbf24'; }
+    return;
+  }
+
+  const btn = document.getElementById('get-benchmarks-btn');
+  btn.disabled = true; btn.textContent = '⟳ Fetching benchmarks...';
+  status.textContent = 'Fetching benchmark prices...'; status.style.color = '#fbbf24';
+
+  const tickers = getAllBenchmarkTickers();
+
+  async function fetchWithTimeout(url, ms) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), ms);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(id);
+      return res;
+    } catch(e) { clearTimeout(id); throw e; }
+  }
+
+  async function fetchTicker(ticker) {
+    const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${polygonKey}`;
+    try {
+      const res = await fetchWithTimeout(url, 8000);
+      const data = await res.json();
+      if (data.results && data.results.length > 0) return { ticker, price: data.results[0].c };
+      return { ticker, price: null };
+    } catch(e) { return { ticker, price: null }; }
+  }
+
+  // Same conservative cadence as Refresh Prices: 2/batch, 25s waits
+  const batchSize = 2;
+  const waitMs = 25000;
+
+  async function runBatches(tickerList, isRetry) {
+    const out = [];
+    for (let i = 0; i < tickerList.length; i += batchSize) {
+      const batch = tickerList.slice(i, i + batchSize);
+      const batchResults = await Promise.all(batch.map(fetchTicker));
+      out.push(...batchResults);
+      const done = Math.min(i + batchSize, tickerList.length);
+      const failedSoFar = out.filter(r => !r.price).map(r => r.ticker);
+      const prefix = isRetry ? 'Retrying — ' : '';
+      let msg = `${prefix}${done}/${tickerList.length} fetched`;
+      if (failedSoFar.length > 0 && !isRetry) msg += ` · ${failedSoFar.length} failed so far`;
+      status.textContent = msg;
+      if (i + batchSize < tickerList.length) await new Promise(r => setTimeout(r, waitMs));
+    }
+    return out;
+  }
+
+  let results = await runBatches(tickers, false);
+  const failedFirst = results.filter(r => !r.price).map(r => r.ticker);
+  if (failedFirst.length > 0) {
+    status.textContent = `${results.length - failedFirst.length}/${tickers.length} done · waiting ${waitMs/1000}s before retrying ${failedFirst.length}…`;
+    await new Promise(r => setTimeout(r, waitMs));
+    const retryResults = await runBatches(failedFirst, true);
+    const retryMap = new Map(retryResults.map(r => [r.ticker, r]));
+    results = results.map(r => retryMap.has(r.ticker) ? retryMap.get(r.ticker) : r);
+  }
+
+  let updated = 0, failed = [];
+  results.forEach(({ ticker, price }) => {
+    if (!price) { failed.push(ticker); return; }
+    benchmarkPrices[ticker] = price;
+    updated++;
+  });
+
+  if (updated > 0) benchmarkPricesDate = new Date().toISOString();
+
+  btn.disabled = false; btn.textContent = '\u27f3 Get Benchmarks';
+  const ts = new Date().toLocaleTimeString();
+  if (failed.length === 0) {
+    status.textContent = `\u2713 All ${updated} benchmarks updated \u00b7 ${ts}`;
+    status.style.color = 'var(--color-text-success)';
+  } else if (updated > 0) {
+    status.textContent = `\u2713 ${updated}/${tickers.length} updated \u00b7 Failed: ${failed.join(', ')}`;
+    status.style.color = '#fbbf24';
+  } else {
+    status.textContent = 'Failed \u2014 check API key, network, or try again';
+    status.style.color = 'var(--color-text-danger)';
+  }
+  scheduleSave();
+  renderTrends();
+}
+
+// Estimate localStorage usage as a percentage of ~5MB cap
+function estimateStorageUsagePct() {
+  let total = 0;
+  for (const k in localStorage) {
+    if (Object.prototype.hasOwnProperty.call(localStorage, k)) {
+      total += (localStorage[k]?.length || 0) + k.length;
+    }
+  }
+  return (total / (5 * 1024 * 1024)) * 100;
+}
+
+function openTakeSnapshotModal() {
+  const modal = document.getElementById('snapshot-modal');
+  const noteEl = document.getElementById('snapshot-note');
+  const benchWarn = document.getElementById('snapshot-benchmark-warning');
+  const storageWarn = document.getElementById('snapshot-storage-warning');
+  const preview = document.getElementById('snapshot-preview');
+
+  noteEl.value = '';
+
+  // Stale benchmarks warning
+  const allBenchTickers = getAllBenchmarkTickers();
+  const haveCount = allBenchTickers.filter(t => benchmarkPrices[t]).length;
+  let warnText = '';
+  if (haveCount === 0) {
+    warnText = '⚠ No benchmark prices fetched yet. Click "Get Benchmarks" first for full snapshot data, or proceed without.';
+  } else if (haveCount < allBenchTickers.length) {
+    warnText = `⚠ Only ${haveCount}/${allBenchTickers.length} benchmark prices captured. Run "Get Benchmarks" for full coverage.`;
+  } else if (benchmarkPricesDate) {
+    const hours = Math.floor((Date.now() - new Date(benchmarkPricesDate).getTime()) / 3600000);
+    if (hours >= 24) {
+      warnText = `⚠ Benchmark prices last fetched ${hours}h ago. Consider refreshing first.`;
+    }
+  }
+  if (warnText) {
+    benchWarn.textContent = warnText;
+    benchWarn.style.display = 'block';
+  } else {
+    benchWarn.style.display = 'none';
+  }
+
+  // Storage usage warning (>70%)
+  const usage = estimateStorageUsagePct();
+  if (usage > 70) {
+    storageWarn.textContent = `⚠ localStorage at ${usage.toFixed(0)}% of estimated capacity. ${snapshots.length} snapshots stored. Consider deleting older ones if you hit issues.`;
+    storageWarn.style.display = 'block';
+  } else {
+    storageWarn.style.display = 'none';
+  }
+
+  // Quick state preview
+  const openCount = positions.filter(p => !p.closed && p.ticker).length;
+  const totalValue = positions.filter(p => !p.closed && p.ticker)
+    .reduce((s,p) => s + (calcPos(p).exitValue || 0), 0);
+  preview.textContent = `Capturing: ${openCount} open positions · Total value ~${fmtDollarWhole(totalValue)} · SPX ${spxLive ? spxLive.toFixed(2) : '—'} · ${haveCount}/${allBenchTickers.length} benchmark prices`;
+
+  modal.classList.remove('hidden');
+  setTimeout(() => noteEl.focus(), 100);
+}
+
+function closeTakeSnapshotModal() {
+  document.getElementById('snapshot-modal').classList.add('hidden');
+}
+
+function confirmTakeSnapshot() {
+  const noteEl = document.getElementById('snapshot-note');
+  const note = (noteEl?.value || '').trim();
+
+  // Deep-clone all state at this moment
+  const positionsSnapshot = positions
+    .filter(p => !p.closed && p.ticker)
+    .map(p => ({
+      id: p.id,
+      ticker: p.ticker,
+      account: p.account || '',
+      sleeve: p.sleeve || '',
+      theme: p.theme || '',
+      shares: parseFloat(p.shares) || 0,
+      pricePaid: parseFloat(p.pricePaid) || 0,
+      price: parseFloat(p.exitPrice) || 0,
+      dateBought: p.dateBought || '',
+      isETF: !!p.isETF,
+      balanceFlavor: p.balanceFlavor || null
+    }));
+
+  const snapshot = {
+    snapshotVersion: '1.0',
+    source: 'manual',
+    ts: new Date().toISOString(),
+    note,
+    positions: positionsSnapshot,
+    spxLive: spxLive,
+    vooPrice: spCurrentPrice || 0,
+    benchmarks: { ...benchmarkPrices },
+    benchmarksFetchedAt: benchmarkPricesDate,
+    cashBuckets: { Taxable: cashBuckets.Taxable || 0, IRA: cashBuckets.IRA || 0 },
+  };
+
+  // First snapshot: embed the locked benchmark map for forensic insurance
+  if (snapshots.length === 0) {
+    snapshot.benchmarkMapAtCapture = JSON.parse(JSON.stringify(BENCHMARKS));
+  }
+
+  snapshots.push(snapshot);
+  scheduleSave();
+  closeTakeSnapshotModal();
+  renderTrends();
+}
+
+function deleteSnapshot(ts) {
+  const idx = snapshots.findIndex(s => s.ts === ts);
+  if (idx < 0) return;
+  if (!confirm(`Delete snapshot from ${new Date(ts).toLocaleString()}? This cannot be undone.`)) return;
+  snapshots.splice(idx, 1);
+  scheduleSave();
+  renderTrends();
+}
+
+function toggleSnapshotDetail(ts) {
+  const safeTs = ts.replace(/[^a-z0-9]/gi, '_');
+  const el = document.getElementById('snap-detail-' + safeTs);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function calcSnapshotTotal(snap) {
+  return (snap.positions || []).reduce((s, p) => s + (p.shares * p.price || 0), 0);
+}
+
+function renderTrends() {
+  const summary = document.getElementById('trends-summary');
+  const list = document.getElementById('trends-list');
+  if (!summary || !list) return;
+
+  // Top summary
+  const allBenchTickers = getAllBenchmarkTickers();
+  const haveCount = allBenchTickers.filter(t => benchmarkPrices[t]).length;
+  const benchAge = benchmarkPricesDate
+    ? Math.floor((Date.now() - new Date(benchmarkPricesDate).getTime()) / 3600000)
+    : null;
+  const benchAgeStr = benchAge === null ? 'never'
+    : benchAge < 1 ? '<1 hr ago'
+    : benchAge < 24 ? benchAge + ' hr ago'
+    : Math.floor(benchAge / 24) + ' day(s) ago';
+  const usage = estimateStorageUsagePct();
+
+  summary.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+      <div class="summary-card">
+        <div class="summary-card-label">Snapshots Captured</div>
+        <div class="summary-card-value">${snapshots.length}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">Benchmark Prices</div>
+        <div class="summary-card-value" style="color:${haveCount === allBenchTickers.length ? 'var(--color-text-success)' : haveCount === 0 ? 'var(--color-text-danger)' : '#fbbf24'}">${haveCount}/${allBenchTickers.length}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">Last Bench Fetch</div>
+        <div class="summary-card-value" style="font-size:11px">${benchAgeStr}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">Storage Usage</div>
+        <div class="summary-card-value" style="font-size:13px;color:${usage > 70 ? 'var(--color-text-danger)' : usage > 50 ? '#fbbf24' : 'var(--color-text-secondary)'}">${usage.toFixed(1)}%</div>
+      </div>
+    </div>
+  `;
+
+  if (snapshots.length === 0) {
+    list.innerHTML = `<div style="padding:24px;text-align:center;color:var(--color-text-tertiary);font-size:11px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">
+      No snapshots yet. Click "Take Snapshot" above to capture your current portfolio state. Snapshots are forward-only — start now to build history for time-series analysis.
+    </div>`;
+    return;
+  }
+
+  // Render snapshots most-recent first
+  const sorted = [...snapshots].sort((a, b) => new Date(b.ts) - new Date(a.ts));
+
+  list.innerHTML = sorted.map(snap => {
+    const safeTs = snap.ts.replace(/[^a-z0-9]/gi, '_');
+    const totalValue = calcSnapshotTotal(snap);
+    const ts = new Date(snap.ts);
+    const tsStr = ts.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const positionCount = (snap.positions || []).length;
+    const benchCount = Object.keys(snap.benchmarks || {}).length;
+    const benchTotal = getAllBenchmarkTickers().length;
+    const benchColor = benchCount === benchTotal ? 'var(--color-text-success)' : benchCount === 0 ? 'var(--color-text-danger)' : '#fbbf24';
+    const noteHtml = snap.note ? `<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px;font-style:italic">"${esc(snap.note)}"</div>` : '';
+
+    // Detail content (positions + benchmarks)
+    const positionsHtml = (snap.positions || []).map(p => {
+      const value = p.shares * p.price;
+      const cost = p.shares * p.pricePaid;
+      const gl = value - cost;
+      const glColor = gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const sleeveColor = SLEEVE_COLORS[p.sleeve] || 'var(--color-text-tertiary)';
+      return `<tr style="border-bottom:1px solid var(--color-border-tertiary)">
+        <td style="padding:4px 8px;font-weight:700">${esc(p.ticker)}${p.isETF ? ' <span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px">ETF</span>' : ''}</td>
+        <td style="padding:4px 8px;color:var(--color-text-tertiary);font-size:10px">${esc(p.account)}</td>
+        <td style="padding:4px 8px;font-size:10px;color:${sleeveColor};border-left:3px solid ${sleeveColor};padding-left:6px">${esc(p.sleeve || '—')}</td>
+        <td style="padding:4px 8px;font-size:10px;color:var(--color-text-tertiary)">${esc(p.theme || '—')}</td>
+        <td style="padding:4px 8px;text-align:right">${p.shares}</td>
+        <td style="padding:4px 8px;text-align:right">${fmtDollar(p.pricePaid)}</td>
+        <td style="padding:4px 8px;text-align:right">${fmtDollar(p.price)}</td>
+        <td style="padding:4px 8px;text-align:right">${fmtDollarWhole(value)}</td>
+        <td style="padding:4px 8px;text-align:right;color:${glColor}">${fmtDollarWhole(gl)}</td>
+      </tr>`;
+    }).join('');
+
+    const benchmarksHtml = Object.entries(snap.benchmarks || {})
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([t, p]) => `<span style="font-size:10px;color:var(--color-text-secondary);background:var(--color-background-tertiary);padding:2px 8px;border-radius:3px">${t}: ${fmtDollar(p)}</span>`).join(' ');
+
+    const cashStr = `Taxable: ${fmtDollarWhole(snap.cashBuckets?.Taxable||0)} · IRA: ${fmtDollarWhole(snap.cashBuckets?.IRA||0)}`;
+
+    return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:8px;padding:10px 14px">
+      <div style="display:flex;align-items:center;gap:14px;cursor:pointer" onclick="toggleSnapshotDetail('${snap.ts}')">
+        <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-weight:700;font-size:12px">${tsStr}</span>
+            <span style="font-size:10px;color:var(--color-text-tertiary)">${positionCount} positions</span>
+            <span style="font-size:10px;color:${benchColor}">${benchCount}/${benchTotal} benchmarks</span>
+          </div>
+          ${noteHtml}
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:13px;font-weight:700">${fmtDollarWhole(totalValue)}</div>
+          <div style="font-size:9px;color:var(--color-text-tertiary)">total value · click to expand</div>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteSnapshot('${snap.ts}')" style="font-size:9px">Delete</button>
+      </div>
+      <div id="snap-detail-${safeTs}" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--color-border-tertiary)">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-tertiary);margin-bottom:6px">SPX & VOO</div>
+        <div style="font-size:11px;margin-bottom:10px">SPX: ${snap.spxLive ? snap.spxLive.toFixed(2) : '—'} · VOO: ${snap.vooPrice ? fmtDollar(snap.vooPrice) : '—'}</div>
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-tertiary);margin-bottom:6px">Benchmarks captured</div>
+        <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:4px">${benchmarksHtml || '<span style="font-size:10px;color:var(--color-text-tertiary)">None</span>'}</div>
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-tertiary);margin-bottom:6px">Cash</div>
+        <div style="font-size:10px;margin-bottom:10px;color:var(--color-text-secondary)">${cashStr}</div>
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-tertiary);margin-bottom:6px">Positions</div>
+        <div style="overflow-x:auto;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">
+          <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead>
+              <tr style="background:var(--color-background-tertiary)">
+                <th style="text-align:left;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">Ticker</th>
+                <th style="text-align:left;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">Acct</th>
+                <th style="text-align:left;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">Sleeve</th>
+                <th style="text-align:left;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">Theme</th>
+                <th style="text-align:right;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">Shares</th>
+                <th style="text-align:right;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">Cost</th>
+                <th style="text-align:right;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">Price</th>
+                <th style="text-align:right;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">Value</th>
+                <th style="text-align:right;padding:5px 8px;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase">G/L</th>
+              </tr>
+            </thead>
+            <tbody>${positionsHtml}</tbody>
+          </table>
+        </div>
+        ${snap.benchmarkMapAtCapture ? `<div style="margin-top:10px;font-size:9px;color:var(--color-text-tertiary)">First snapshot — embedded benchmark map for forensic reference</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ─────────────────────────────────────────────
@@ -4449,7 +4869,8 @@ function renderDashboardThemeSpotlight() {
       'onclick="if(window._spotlightSignals&&window._spotlightSignals[\'' + themeKey + '\']){showSpotlightOverlay(window._spotlightSignals[\'' + themeKey + '\'])}">' +
       '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:' + borderColor + ';margin-bottom:2px">' + label + '</div>' +
       '<div class="industry-intel-name">' + esc(name) + ' <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400">— click for detail</span></div>' +
-      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px">' + sublabel + '</div>' +
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:6px">' + sublabel + '</div>' +
+      '<div style="margin-bottom:8px">' + fmtBenchmarkLine(name) + '</div>' +
       '<div class="industry-intel-stats">' +
         '<div class="industry-intel-stat"><div class="industry-intel-stat-label">Concentration</div><div class="industry-intel-stat-value" style="color:var(--color-text-secondary)">' + pct.toFixed(1) + '%</div></div>' +
         '<div class="industry-intel-stat"><div class="industry-intel-stat-label">vs S&P</div><div class="industry-intel-stat-value" style="color:' + alphaColor + '">' + (alpha!==null?fmtDollarWhole(alpha):'—') + '</div></div>' +
@@ -4526,6 +4947,31 @@ function getThemeBenchmark(themeName) {
 function getSleeveBenchmark(sleeveName) {
   if (!sleeveName) return undefined;
   return BENCHMARKS.sleeves[sleeveName];
+}
+
+// Returns HTML for a benchmark display: ticker + price + freshness, or "no benchmark" placeholder.
+// Used by Industry Intelligence cards (Rebalance tab) and Industry Spotlight cards (Dashboard).
+// Honest: shows the anchor and freshness, never claims any alpha math.
+function fmtBenchmarkLine(themeName) {
+  const ticker = getThemeBenchmark(themeName);
+  if (!ticker) {
+    return '<span style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">no benchmark assigned</span>';
+  }
+  const price = benchmarkPrices[ticker];
+  if (!price) {
+    return `<span style="font-size:9px;color:var(--color-text-tertiary)">${ticker} — </span><span style="font-size:9px;color:#fbbf24">not fetched yet</span>`;
+  }
+  // Freshness color: green <24h, amber 24-72h, red >72h
+  let freshColor = 'var(--color-text-tertiary)';
+  let freshLabel = '';
+  if (benchmarkPricesDate) {
+    const hours = Math.floor((Date.now() - new Date(benchmarkPricesDate).getTime()) / 3600000);
+    if (hours < 1) freshLabel = '<1h';
+    else if (hours < 24) freshLabel = hours + 'h';
+    else if (hours < 72) { freshLabel = Math.floor(hours/24) + 'd'; freshColor = '#fbbf24'; }
+    else { freshLabel = Math.floor(hours/24) + 'd'; freshColor = 'var(--color-text-danger)'; }
+  }
+  return `<span style="font-size:9px;color:var(--color-text-secondary);font-weight:600">${ticker}</span> <span style="font-size:9px;color:var(--color-text-primary)">${fmtDollar(price)}</span> <span style="font-size:9px;color:${freshColor}">${freshLabel}</span>`;
 }
 
 function renderConcentration() {
@@ -5142,7 +5588,8 @@ function exportData() {
   const data = {
     positions, nextId, spxLive, spxLiveDate, cashBuckets, cashLedger,
     spLots, spCurrentPrice,
-    version: "2.0",
+    snapshots, benchmarkPrices, benchmarkPricesDate,
+    version: "2.1",
     benchmarks: BENCHMARKS
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -5170,6 +5617,9 @@ function importData(input) {
       if (data.cashLedger) cashLedger = data.cashLedger;
       if (data.spLots) spLots = data.spLots;
       if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
+      if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
+      if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
+      if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
       // Run v1 → v2 migration on imported data (idempotent)
       migratePositionsV1ToV2();
       await savePositions();
