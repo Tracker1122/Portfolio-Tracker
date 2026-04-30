@@ -3701,6 +3701,9 @@ function renderSleeveRef() {
 // Keep updateSimulator as a no-op stub so old references don't break
 function updateSimulator() {}
 
+  const action = document.getElementById('sim-action').value;
+  const isBuy = action === 'buy';
+  const capitalSrc = document.getElementById('sim-capital-source')?.value || 'new';
 // ─────────────────────────────────────────────
 // Card Hover Overlays
 // ─────────────────────────────────────────────
@@ -4380,6 +4383,54 @@ const THEME_COLORS = {
   'Fixed Income':      '#6ee7b7',
   'Other':             '#64748b',
 };
+
+// ─────────────────────────────────────────────
+// Benchmark Map — locked design, see benchmark-design.docx
+// Each theme/sleeve maps to its discipline benchmark.
+// null = no per-position discipline (Thesis Plays, Portfolio Balance Plays sleeve).
+// Phase 2 Step 2A: lookup tables only — nothing consumes these yet.
+// ─────────────────────────────────────────────
+const BENCHMARKS = {
+  themes: {
+    'Big Tech':          'QQQ',
+    'Semiconductors':    'SMH',
+    'AI Infrastructure': 'SMH',
+    'Cybersecurity':     'CIBR',
+    'Financials':        'XLF',
+    'Energy & Grid':     'XLE',
+    'Commodities':       'GLD',
+    'Consumer':          'XLY',
+    'Space & Defense':   'ITA',
+    // Themes without a locked benchmark fall through to null.
+    // Add cautiously — only when we've decided the right ETF.
+    'Biotech & Health':  null,
+    'Real Estate':       null,
+    'Emerging Markets':  null,
+    'Broad ETF':         null,
+    'Fixed Income':      null,
+    'Other':             null,
+  },
+  sleeves: {
+    'Quality':       'SPHQ',
+    'Thesis Plays':  null,  // no sleeve-level benchmark; per-theme alphas only
+    'Ballast':       'SPX', // Portfolio Balance Plays — per-position opt-in
+  }
+};
+
+// Returns benchmark ticker for a theme, or null if none locked.
+function getThemeBenchmark(theme) {
+  if (!theme) return null;
+  return BENCHMARKS.themes[theme] ?? null;
+}
+
+// Returns benchmark ticker for a sleeve, or null if none locked.
+// NOTE: 'Ballast' sleeve will be renamed to 'Portfolio Balance Plays' in Step 2B.
+// Until then, lookups by either string need to resolve to the same value.
+function getSleeveBenchmark(sleeve) {
+  if (!sleeve) return null;
+  if (sleeve === 'Portfolio Balance Plays') return BENCHMARKS.sleeves['Ballast'];
+  return BENCHMARKS.sleeves[sleeve] ?? null;
+}
 
 function renderConcentration() {
   const el = document.getElementById('concentration-wrap');
@@ -5206,4 +5257,3 @@ init();
 </script>
 </body>
 </html>
-```
