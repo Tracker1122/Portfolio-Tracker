@@ -1317,20 +1317,30 @@ async function savePositions() {
     });
     const openPos = slim.filter(p => !p.closed);
     const closedPos = slim.filter(p => p.closed);
-    localStorage.setItem('portfolio-positions-v2', JSON.stringify({ positions: openPos, nextId, spxLive, spxLiveDate, cashBuckets }));
-    localStorage.setItem('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
-    localStorage.setItem('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
-    localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
+
+    // Save sequentially with small delays to avoid rate limiting
+    await window.storage.set('portfolio-positions-v2', JSON.stringify({ positions: openPos, nextId, spxLive, spxLiveDate, cashBuckets }));
+    await window.storage.set('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
+    await window.storage.set('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
+    await window.storage.set('portfolio-ledger', JSON.stringify({ cashLedger }));
     flashSave();
   } catch(e) {
     console.warn('Save failed', e.message);
+    // Retry once after a short delay
+    setTimeout(async () => {
+      try {
+        const slim = positions.map(p => { const { fetchState, priceToday, ...rest } = p; return rest; });
+        await window.storage.set('portfolio-positions-v2', JSON.stringify({ positions: slim.filter(p=>!p.closed), nextId, spxLive, spxLiveDate, cashBuckets }));
+        await window.storage.set('portfolio-positions-closed', JSON.stringify({ positions: slim.filter(p=>p.closed) }));
+        flashSave();
+      } catch(e2) { console.warn('Retry save failed', e2.message); }
+    }, 2000);
   }
 }
 
 async function loadPositions() {
   try {
-    const raw = localStorage.getItem('portfolio-positions-v2');
-    const res = raw ? { value: raw } : null;
+    const res = await window.storage.get('portfolio-positions-v2');
     if (res && res.value) {
       let parsed;
       try { parsed = JSON.parse(res.value); } catch(e) { console.warn('Parse failed', e); return; }
@@ -1348,7 +1358,7 @@ async function loadPositions() {
 
   // Load closed positions from separate key
   try {
-    const closedRes = (() => { const r = localStorage.getItem('portfolio-positions-closed'); return r ? { value: r } : null; })();
+    const closedRes = await window.storage.get('portfolio-positions-closed');
     if (closedRes && closedRes.value) {
       const cp = JSON.parse(closedRes.value);
       if (Array.isArray(cp.positions) && cp.positions.length > 0) {
@@ -1358,7 +1368,7 @@ async function loadPositions() {
   } catch(e) { /* no closed positions yet */ }
 
   try {
-    const ledgerRes = (() => { const r = localStorage.getItem('portfolio-ledger'); return r ? { value: r } : null; })();
+    const ledgerRes = await window.storage.get('portfolio-ledger');
     if (ledgerRes && ledgerRes.value) {
       const lp = JSON.parse(ledgerRes.value);
       if (Array.isArray(lp.cashLedger)) cashLedger = lp.cashLedger;
@@ -1366,7 +1376,7 @@ async function loadPositions() {
   } catch(e) { /* no ledger yet */ }
 
   try {
-    const spRes = (() => { const r = localStorage.getItem('portfolio-sp-data'); return r ? { value: r } : null; })();
+    const spRes = await window.storage.get('portfolio-sp-data');
     if (spRes && spRes.value) {
       const spParsed = JSON.parse(spRes.value);
       if (Array.isArray(spParsed.spLots)) spLots = spParsed.spLots;
@@ -1729,7 +1739,7 @@ function renderRow(pos) {
     <td><input class="cell-input ticker-input" type="text" placeholder="AAPL" value="${esc(pos.ticker)}" onblur="setField(${pos.id},'ticker',this.value.toUpperCase())" oninput="this.value=this.value.toUpperCase()" ${isClosed?'disabled':''}></td>
     <td><input class="cell-input account-input" type="text" placeholder="Brokerage" value="${esc(pos.account)}" onblur="setField(${pos.id},'account',this.value)" ${isClosed?'disabled':''}></td>
     <td><input class="cell-input date-input" type="text" placeholder="YYYY-MM-DD" value="${esc(pos.dateBought)}" onblur="handleDateBlur(${pos.id},'dateBought',this)" ${isClosed?'disabled':''}></td>
-    <td class="calc-cell" style="text-align:center;white-space:nowrap">${(() => {
+    <td class="calc-cell held-cell" style="text-align:center;white-space:nowrap">${(() => {
       if (!pos.dateBought) return '<span class="dash">—</span>';
       const days = Math.floor((new Date() - new Date(pos.dateBought)) / 86400000);
       const label = days < 30 ? '< 1M' : days < 90 ? '1–3M' : days < 180 ? '3–6M' : days < 365 ? '6–12M' : days < 730 ? '1–2Y' : '2Y+';
@@ -3691,9 +3701,6 @@ function renderSleeveRef() {
 // Keep updateSimulator as a no-op stub so old references don't break
 function updateSimulator() {}
 
-  const action = document.getElementById('sim-action').value;
-  const isBuy = action === 'buy';
-  const capitalSrc = document.getElementById('sim-capital-source')?.value || 'new';
 // ─────────────────────────────────────────────
 // Card Hover Overlays
 // ─────────────────────────────────────────────
@@ -4724,9 +4731,9 @@ function updateRowCalcs(id) {
   else if (c.result === 'Trail') resultHtml = '<span class="result-badge result-trail">Trail</span>';
   else if (c.result === 'Tied') resultHtml = '<span class="result-badge result-tied">Tied</span>';
 
-  const cells = row.querySelectorAll('td.calc-cell');
+  const cells = row.querySelectorAll('td.calc-cell:not(.held-cell)');
   // calc cells are: invested, exitValue, gainLoss, yourReturn, spxReturn, vsSpx
-  // They start after the input cells — find by index within calc-cells
+  // (Held cell has .held-cell class and is excluded — it's display-only, regenerated on full render)
   if (cells.length >= 6) {
     cells[0].innerHTML = c.invested > 0 ? fmtDollar(c.invested) : '<span class="dash">—</span>';
     cells[0].className = 'calc-cell';
