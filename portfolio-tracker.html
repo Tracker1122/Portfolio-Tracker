@@ -1319,10 +1319,10 @@ async function savePositions() {
     const closedPos = slim.filter(p => p.closed);
 
     // Save sequentially with small delays to avoid rate limiting
-    await window.storage.set('portfolio-positions-v2', JSON.stringify({ positions: openPos, nextId, spxLive, spxLiveDate, cashBuckets }));
-    await window.storage.set('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
-    await window.storage.set('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
-    await window.storage.set('portfolio-ledger', JSON.stringify({ cashLedger }));
+    localStorage.setItem('portfolio-positions-v2', JSON.stringify({ positions: openPos, nextId, spxLive, spxLiveDate, cashBuckets }));
+    localStorage.setItem('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
+    localStorage.setItem('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
+    localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
     flashSave();
   } catch(e) {
     console.warn('Save failed', e.message);
@@ -1330,8 +1330,8 @@ async function savePositions() {
     setTimeout(async () => {
       try {
         const slim = positions.map(p => { const { fetchState, priceToday, ...rest } = p; return rest; });
-        await window.storage.set('portfolio-positions-v2', JSON.stringify({ positions: slim.filter(p=>!p.closed), nextId, spxLive, spxLiveDate, cashBuckets }));
-        await window.storage.set('portfolio-positions-closed', JSON.stringify({ positions: slim.filter(p=>p.closed) }));
+        localStorage.setItem('portfolio-positions-v2', JSON.stringify({ positions: slim.filter(p=>!p.closed), nextId, spxLive, spxLiveDate, cashBuckets }));
+        localStorage.setItem('portfolio-positions-closed', JSON.stringify({ positions: slim.filter(p=>p.closed) }));
         flashSave();
       } catch(e2) { console.warn('Retry save failed', e2.message); }
     }, 2000);
@@ -1340,10 +1340,10 @@ async function savePositions() {
 
 async function loadPositions() {
   try {
-    const res = await window.storage.get('portfolio-positions-v2');
-    if (res && res.value) {
+    const res = localStorage.getItem('portfolio-positions-v2');
+    if (res) {
       let parsed;
-      try { parsed = JSON.parse(res.value); } catch(e) { console.warn('Parse failed', e); return; }
+      try { parsed = JSON.parse(res); } catch(e) { console.warn('Parse failed', e); return; }
       positions = parsed.positions || [];
       nextId = parsed.nextId || (positions.length + 1);
       if (parsed.spxLive) spxLive = parsed.spxLive;
@@ -1358,9 +1358,9 @@ async function loadPositions() {
 
   // Load closed positions from separate key
   try {
-    const closedRes = await window.storage.get('portfolio-positions-closed');
-    if (closedRes && closedRes.value) {
-      const cp = JSON.parse(closedRes.value);
+    const closedRes = localStorage.getItem('portfolio-positions-closed');
+    if (closedRes) {
+      const cp = JSON.parse(closedRes);
       if (Array.isArray(cp.positions) && cp.positions.length > 0) {
         positions = [...positions, ...cp.positions];
       }
@@ -1368,17 +1368,17 @@ async function loadPositions() {
   } catch(e) { /* no closed positions yet */ }
 
   try {
-    const ledgerRes = await window.storage.get('portfolio-ledger');
-    if (ledgerRes && ledgerRes.value) {
-      const lp = JSON.parse(ledgerRes.value);
+    const ledgerRes = localStorage.getItem('portfolio-ledger');
+    if (ledgerRes) {
+      const lp = JSON.parse(ledgerRes);
       if (Array.isArray(lp.cashLedger)) cashLedger = lp.cashLedger;
     }
   } catch(e) { /* no ledger yet */ }
 
   try {
-    const spRes = await window.storage.get('portfolio-sp-data');
-    if (spRes && spRes.value) {
-      const spParsed = JSON.parse(spRes.value);
+    const spRes = localStorage.getItem('portfolio-sp-data');
+    if (spRes) {
+      const spParsed = JSON.parse(spRes);
       if (Array.isArray(spParsed.spLots)) spLots = spParsed.spLots;
       if (spParsed.spCurrentPrice) spCurrentPrice = spParsed.spCurrentPrice;
     }
