@@ -699,6 +699,9 @@
   <!-- Dashboard Tab -->
   <div class="tab-panel active" id="tab-dashboard">
 
+    <!-- Stale Prices Banner (filled by renderStaleBanner) -->
+    <div id="stale-banner" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.35);border-radius:var(--border-radius-md);padding:8px 14px;margin-bottom:14px;font-size:11px;color:#fbbf24;display:flex;align-items:center;gap:10px"></div>
+
     <!-- Analytics Row -->
     <div class="analytics-grid">
       <div class="analytics-card" id="account-card" onclick="showCardOverlay('account')" style="cursor:pointer">
@@ -2620,6 +2623,51 @@ function renderTrends() {
 }
 
 // ─────────────────────────────────────────────
+// Stale Prices Banner — surfaces when position prices are older than benchmark prices.
+// Trust signal, not a market signal: tells you the alpha numbers may be unreliable.
+// ─────────────────────────────────────────────
+function renderStaleBanner() {
+  const banner = document.getElementById('stale-banner');
+  if (!banner) return;
+
+  // No benchmark fetched yet → nothing to compare against → hide banner
+  if (!benchmarkPricesDate) { banner.style.display = 'none'; return; }
+
+  const benchTime = new Date(benchmarkPricesDate).getTime();
+  const stale = [];
+  const noStamp = [];
+  positions.forEach(p => {
+    if (p.closed || !p.ticker) return;
+    if (!p.priceFetchedAt) {
+      // Position has never been refreshed since we started stamping — older than any benchmark fetch
+      noStamp.push(p.ticker);
+      return;
+    }
+    const posTime = new Date(p.priceFetchedAt).getTime();
+    // If position price is more than 1 hour older than benchmark fetch, flag it
+    if (benchTime - posTime > 3600000) {
+      stale.push(p.ticker);
+    }
+  });
+
+  const allStale = [...new Set([...noStamp, ...stale])];
+  if (allStale.length === 0) { banner.style.display = 'none'; return; }
+
+  // Build banner content
+  const sample = allStale.slice(0, 6).join(', ');
+  const moreStr = allStale.length > 6 ? ` and ${allStale.length - 6} more` : '';
+  banner.style.display = 'flex';
+  banner.innerHTML = `
+    <span style="font-size:12px">⚠</span>
+    <div style="flex:1">
+      <div style="font-weight:700;margin-bottom:2px">Stale position prices — alpha numbers may be unreliable</div>
+      <div style="font-size:10px;color:var(--color-text-secondary)">${allStale.length} position${allStale.length>1?'s':''} (${esc(sample)}${moreStr}) ${noStamp.length === allStale.length ? 'have never been refreshed' : 'are older than the latest benchmark fetch'}.</div>
+    </div>
+    <button class="btn btn-sm btn-primary" onclick="refreshAllPrices()" style="font-size:10px">⟳ Refresh Prices</button>
+  `;
+}
+
+// ─────────────────────────────────────────────
 // Post-Sell Analysis
 // ─────────────────────────────────────────────
 function renderPostSell() {
@@ -3253,6 +3301,7 @@ async function refreshAllPrices() {
   }
 
   // Apply prices
+  const fetchedAt = new Date().toISOString();
   let updated = 0, failed = [];
   results.forEach(({ ticker, price }) => {
     if (!price) { failed.push(ticker); return; }
@@ -3261,7 +3310,10 @@ async function refreshAllPrices() {
       const el = document.getElementById('sp-price-input');
       if (el) el.value = price.toFixed(2);
     } else {
-      openPositions.filter(p => p.ticker === ticker).forEach(p => { p.exitPrice = price.toFixed(2); });
+      openPositions.filter(p => p.ticker === ticker).forEach(p => {
+        p.exitPrice = price.toFixed(2);
+        p.priceFetchedAt = fetchedAt;
+      });
       updated++;
     }
   });
@@ -4600,6 +4652,17 @@ function showSpotlightOverlay(signal) {
     explanation = name + ' is generating ' + fmtDollarWhole(alpha||0) + ' above what the index would have returned — the strongest alpha contributor in your managed portfolio. At ' + pct.toFixed(1) + '% concentration it is earning its place. This is the industry doing the most work.';
   } else if (label === 'Thesis Paying Off') {
     explanation = 'Your Thesis Plays in ' + name + ' are generating meaningful alpha above the index. The conviction is paying off here. The concentration appears justified by the returns it is producing.';
+  } else if (label === 'Theme Dispersion') {
+    const stocks = d.tickers.filter(p => !p.isETF && p.daysHeld >= 90 && p.retPct !== null && p.retPct !== undefined);
+    const sorted = [...stocks].sort((a,b) => b.retPct - a.retPct);
+    const winners = sorted.filter(p => p.retPct > 0);
+    const losers = sorted.filter(p => p.retPct < 0);
+    const breakdown = sorted.map(p => p.ticker + ' ' + (p.retPct>=0?'+':'') + p.retPct.toFixed(1) + '%').join(', ');
+    explanation = 'Your ' + name + ' positions are diverging from each other. ' +
+      winners.map(p=>p.ticker).join(' and ') + ' ' + (winners.length>1?'are':'is') + ' positive while ' +
+      losers.map(p=>p.ticker).join(' and ') + ' ' + (losers.length>1?'are':'is') + ' negative — held side-by-side in the same theme for over 90 days. ' +
+      'Full breakdown: ' + breakdown + '. ' +
+      'This is a within-theme stock selection signal: the theme bet may or may not be working overall, but inside it, your picks are not moving together. Worth asking whether the laggards are differentiated bets that need more time, or redundant ones that should be re-evaluated separately. (This signal compares your positions to each other — not to a market benchmark.)';
   }
 
   content.innerHTML =
@@ -4649,7 +4712,7 @@ function renderDashboardThemeSpotlight() {
     d.value += c.exitValue || 0;
     d.invested += c.invested || 0;
     d.maxDays = Math.max(d.maxDays, daysHeld);
-    d.tickers.push({ ticker: p.ticker, value: c.exitValue||0, alpha, daysHeld, isIRA, sleeve: p.sleeve||'' });
+    d.tickers.push({ ticker: p.ticker, value: c.exitValue||0, alpha, daysHeld, isIRA, sleeve: p.sleeve||'', retPct: c.yourReturn, isETF: !!p.isETF });
     if (alpha !== null) {
       d.alphaSum += alpha; d.alphaCount++;
       if (isIRA) { d.iraAlpha += alpha; d.iraCount++; }
@@ -4767,6 +4830,32 @@ function renderDashboardThemeSpotlight() {
             sublabel: 'Your Thesis Plays beat the index overall — but not through ' + name,
             borderColor: 'var(--color-text-danger)', score });
         }
+      }
+    }
+
+    // 7. Theme Dispersion — within-theme stock-picking failure
+    // 2+ non-ETF positions, each held >90d, sign-split (some +, some −), spread >20pp.
+    // Catches "you bet on the theme but picked wrong within it." Doesn't claim alpha math —
+    // it's a divergence flag based on your own position returns. ETFs excluded since they
+    // structurally lag individual stocks and would create false positives.
+    const dispersionEligible = d.tickers.filter(p =>
+      !p.isETF && p.daysHeld >= 90 && p.retPct !== null && p.retPct !== undefined
+    );
+    if (dispersionEligible.length >= 2) {
+      const rets = dispersionEligible.map(p => p.retPct);
+      const maxRet = Math.max(...rets);
+      const minRet = Math.min(...rets);
+      const spread = maxRet - minRet;
+      const signSplit = minRet < 0 && maxRet > 0;
+      if (signSplit && spread > 20) {
+        const winners = dispersionEligible.filter(p => p.retPct > 0).length;
+        const total = dispersionEligible.length;
+        const worst = dispersionEligible.reduce((a, b) => a.retPct < b.retPct ? a : b);
+        const score = spread * (d.value / 1000);  // weight by theme dollar size
+        signals.push({ name, color, d, alpha, pct, realGl,
+          label: 'Theme Dispersion',
+          sublabel: `${winners} of ${total} ${name} positions positive, but ${worst.ticker} trails by ${spread.toFixed(0)}pp`,
+          borderColor: '#fbbf24', score });
       }
     }
 
@@ -5265,6 +5354,7 @@ function renderAll() {
   renderCashDisplay();
   renderCapitalFlow();
   renderTaxExposure();
+  renderStaleBanner();
   syncFixedScrollbar();
 }
 
