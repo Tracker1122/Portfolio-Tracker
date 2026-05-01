@@ -860,6 +860,10 @@
     </div>
     <div id="dashboard-theme-spotlight" style="margin-bottom:20px"></div>
 
+    <!-- Industry Reference -->
+    <div class="section-heading">Industry Reference</div>
+    <div id="industry-ref-panel" style="margin:8px 0 12px"></div>
+
     <!-- Strategy Reference -->
     <div class="section-heading">Strategy Reference</div>
     <div id="sleeve-ref-panel" style="margin:8px 0 12px" onclick="showCardOverlay('stratref')" style="cursor:pointer"></div>
@@ -4812,6 +4816,98 @@ function renderSleeveRef() {
 // Keep updateSimulator as a no-op stub so old references don't break
 function updateSimulator() {}
 
+// Industry Reference panel — structural view of open positions grouped by theme/industry.
+// Only renders industries that have at least one open position (no empty cards).
+// Sorted by total dollar value desc. 3-column responsive grid.
+function renderIndustryRef() {
+  const panel = document.getElementById('industry-ref-panel');
+  if (!panel) return;
+
+  const open = positions.filter(p => !p.closed && p.ticker);
+  const totalActive = open.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+
+  // Group by theme. Skip positions with no theme assigned.
+  const byTheme = {};
+  open.forEach(p => {
+    if (!p.theme) return;
+    if (!byTheme[p.theme]) byTheme[p.theme] = [];
+    byTheme[p.theme].push(p);
+  });
+
+  // Themes sorted by total dollar value desc
+  const themesSorted = Object.keys(byTheme)
+    .map(theme => {
+      const value = byTheme[theme].reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+      return { theme, value, positions: byTheme[theme] };
+    })
+    .sort((a, b) => b.value - a.value);
+
+  if (themesSorted.length === 0) {
+    panel.innerHTML = '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Tag positions with a theme to see Industry Reference.</div>';
+    return;
+  }
+
+  // Consolidate by ticker within each theme (a single ticker can have multiple lots)
+  const consolidate = (arr) => {
+    const map = {};
+    arr.forEach(p => {
+      const v = calcPos(p).exitValue || 0;
+      if (!map[p.ticker]) map[p.ticker] = { ticker: p.ticker, value: 0, sleeve: p.sleeve || '', isETF: p.isETF };
+      map[p.ticker].value += v;
+    });
+    return Object.values(map).sort((a, b) => b.value - a.value);
+  };
+
+  // Build each industry card
+  const cards = themesSorted.map(({ theme, value, positions: themePositions }) => {
+    const benchTicker = getThemeBenchmark(theme);
+    const tickers = consolidate(themePositions);
+
+    // Industry header: theme name + benchmark anchor + total $
+    const headerRight = benchTicker
+      ? `<span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400">vs ${benchTicker}</span>`
+      : '<span style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;font-weight:400">no benchmark</span>';
+
+    const rows = tickers.map(t => {
+      const pctTheme = value > 0 ? (t.value / value) * 100 : 0;
+      const pctActive = totalActive > 0 ? (t.value / totalActive) * 100 : 0;
+      const sleeveColor = SLEEVE_COLORS[t.sleeve] || 'var(--color-text-tertiary)';
+      const sleeveLabel = t.sleeve || '—';
+      const etfBadge = t.isETF
+        ? `<span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px;font-weight:700;margin-left:3px">ETF</span>`
+        : '';
+
+      return `<div style="padding:5px 0;border-bottom:1px solid var(--color-border-tertiary)">
+        <div style="display:flex;justify-content:space-between;align-items:start">
+          <div>
+            <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+              <span style="font-size:10px;font-weight:700;color:var(--color-text-primary)">${esc(t.ticker)}</span>
+              ${t.sleeve ? `<span style="font-size:8px;color:${sleeveColor};background:${sleeveColor}22;padding:1px 5px;border-radius:3px;font-weight:700">${esc(sleeveLabel)}</span>` : ''}
+              ${etfBadge}
+            </div>
+          </div>
+          <span style="font-size:9px;color:var(--color-text-tertiary)">${fmtDollarWhole(t.value)}</span>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">
+          <span style="font-size:9px;color:var(--color-text-tertiary)">Strategy <span style="color:var(--color-text-secondary);font-weight:600">${pctTheme.toFixed(1)}%</span></span>
+          <span style="font-size:9px;color:var(--color-text-tertiary)">Managed <span style="color:var(--color-text-secondary);font-weight:600">${pctActive.toFixed(1)}%</span></span>
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px">
+        <span style="font-size:9px;font-weight:700;color:var(--color-text-primary);text-transform:uppercase;letter-spacing:0.08em">${esc(theme)}</span>
+        ${headerRight}
+      </div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:6px">${fmtDollarWhole(value)} · ${tickers.length} position${tickers.length !== 1 ? 's' : ''}</div>
+      ${rows}
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px">${cards}</div>`;
+}
+
   const action = document.getElementById('sim-action').value;
   const isBuy = action === 'buy';
   const capitalSrc = document.getElementById('sim-capital-source')?.value || 'new';
@@ -5943,6 +6039,7 @@ function renderAll() {
   renderSpSummary();
   renderSleeveBreakdown();
   renderSleeveRef();
+  renderIndustryRef();
   renderCashDisplay();
   renderCapitalFlow();
   renderTaxExposure();
