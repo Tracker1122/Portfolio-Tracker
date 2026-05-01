@@ -2506,6 +2506,13 @@ function renderThemeIntel() {
         const pctOfTheme = themeValue > 0 ? ((c.exitValue / themeValue) * 100).toFixed(1) + '%' : '—';
         const pctOfPort = totalValue > 0 ? ((c.exitValue / totalValue) * 100).toFixed(1) + '%' : '—';
 
+        // Theme-relative alpha for this position
+        const ta = calcThemeAlpha(p);
+        const taColor = ta === null ? 'var(--color-text-tertiary)' : ta.themeAlphaDollar >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+        const taCell = ta === null
+          ? '<span style="color:var(--color-text-tertiary)">—</span>'
+          : (ta.themeAlphaDollar >= 0 ? '+' : '') + fmtDollar(ta.themeAlphaDollar);
+
         return `<tr style="border-bottom:1px solid var(--color-border-tertiary)">
           <td style="padding:6px 8px 6px 0;font-weight:700;white-space:nowrap">${esc(p.ticker)}</td>
           <td style="padding:6px 8px;color:var(--color-text-tertiary);font-size:10px;white-space:nowrap">${esc(p.account||'')}</td>
@@ -2514,6 +2521,7 @@ function renderThemeIntel() {
           <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--color-text-tertiary)">${pctOfPort}</td>
           <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--color-text-primary)">${fmtDollarWhole(c.exitValue)}</td>
           <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:${aColor}">${alpha !== null ? fmtDollar(alpha) : '<span style="color:var(--color-text-tertiary)">—</span>'}</td>
+          <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:${taColor};font-weight:${ta === null ? '400' : '600'}">${taCell}</td>
           <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:${gColor}">${fmtDollar(gl)}</td>
           <td style="padding:6px 0 6px 8px;text-align:right;white-space:nowrap"><span class="signal-badge ${sigClass}">${sig}</span></td>
         </tr>`;
@@ -2541,6 +2549,22 @@ function renderThemeIntel() {
             <div class="industry-intel-stat-value" style="color:${alphaColor}">${t.totalAlpha !== null ? fmtDollarWhole(t.totalAlpha) : '—'}</div>
           </div>
           <div class="industry-intel-stat">
+            <div class="industry-intel-stat-label">Theme α${getThemeBenchmark(t.theme) ? ' (vs ' + getThemeBenchmark(t.theme) + ')' : ''}</div>
+            <div class="industry-intel-stat-value" style="color:${(() => {
+              const themeAlphas = open.filter(p => p.theme === t.theme).map(p => calcThemeAlpha(p));
+              const valid = themeAlphas.filter(ta => ta !== null);
+              if (valid.length === 0) return 'var(--color-text-tertiary)';
+              const total = valid.reduce((s, ta) => s + ta.themeAlphaDollar, 0);
+              return total >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+            })()}">${(() => {
+              const themeAlphas = open.filter(p => p.theme === t.theme).map(p => calcThemeAlpha(p));
+              const valid = themeAlphas.filter(ta => ta !== null);
+              if (valid.length === 0) return '—';
+              const total = valid.reduce((s, ta) => s + ta.themeAlphaDollar, 0);
+              return (total >= 0 ? '+' : '') + fmtDollarWhole(total);
+            })()}</div>
+          </div>
+          <div class="industry-intel-stat">
             <div class="industry-intel-stat-label">G/L</div>
             <div class="industry-intel-stat-value" style="color:${t.totalAlpha !== null && open.filter(p=>p.theme===t.theme).reduce((s,p)=>s+(calcPos(p).gainLoss||0),0) >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${fmtDollarWhole(open.filter(p=>p.theme===t.theme).reduce((s,p)=>s+(calcPos(p).gainLoss||0),0))}</div>
           </div>
@@ -2562,6 +2586,7 @@ function renderThemeIntel() {
               <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">% of Managed</th>
               <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">Value $</th>
               <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">$ Alpha</th>
+              <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap" title="Theme-relative alpha — your dollar gain vs theme benchmark over the same holding period.">${getThemeBenchmark(t.theme) ? 'vs ' + getThemeBenchmark(t.theme) : 'Theme α'}</th>
               <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">G/L</th>
               <th style="text-align:right;padding:4px 0 4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">Signal</th>
             </tr>
@@ -5455,13 +5480,25 @@ function showSpotlightOverlay(signal) {
       'This is a within-theme stock selection signal: the theme bet may or may not be working overall, but inside it, your picks are not moving together. Worth asking whether the laggards are differentiated bets that need more time, or redundant ones that should be re-evaluated separately. (This signal compares your positions to each other — not to a market benchmark.)';
   }
 
+  // Compute aggregate theme alpha for this signal's industry
+  const themeOpen = open.filter(p => p.theme === name);
+  const themeAlphas = themeOpen.map(p => calcThemeAlpha(p)).filter(ta => ta !== null);
+  const themeAlphaTotal = themeAlphas.length > 0
+    ? themeAlphas.reduce((s, ta) => s + ta.themeAlphaDollar, 0)
+    : null;
+  const themeAlphaColor = themeAlphaTotal === null ? 'var(--color-text-tertiary)'
+    : themeAlphaTotal >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const benchTicker = getThemeBenchmark(name);
+  const themeAlphaLabel = benchTicker ? 'vs ' + benchTicker : 'Theme α';
+
   content.innerHTML =
     '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:' + borderColor + ';margin-bottom:6px">' + label + '</div>' +
     '<div style="font-size:20px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px;border-left:3px solid ' + (THEME_COLORS[name]||'#94a3b8') + ';padding-left:10px">' + esc(name) + '</div>' +
     '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:18px;padding-left:13px">' + sublabel + '</div>' +
-    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;padding:12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">' +
+    '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;padding:12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">' +
       '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">Concentration</div><div style="font-size:18px;font-weight:700;color:var(--color-text-secondary)">' + pct.toFixed(1) + '%</div></div>' +
       '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">vs S&P</div><div style="font-size:18px;font-weight:700;color:' + alphaColor + '">' + (alpha!==null?fmtDollarWhole(alpha):'—') + '</div></div>' +
+      '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">' + themeAlphaLabel + '</div><div style="font-size:18px;font-weight:700;color:' + themeAlphaColor + '">' + (themeAlphaTotal!==null?(themeAlphaTotal>=0?'+':'')+fmtDollarWhole(themeAlphaTotal):'—') + '</div></div>' +
       '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">G/L</div><div style="font-size:18px;font-weight:700;color:' + glColor + '">' + fmtDollarWhole(realGl) + '</div></div>' +
     '</div>' +
     '<div style="font-size:12px;line-height:1.7;color:var(--color-text-secondary)">' + explanation + '</div>';
