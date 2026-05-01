@@ -645,8 +645,10 @@
   <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
     <button id="refresh-prices-btn" class="btn btn-sm btn-primary" onclick="refreshAllPrices()" style="font-size:10px;padding:4px 12px">⟳ Refresh Prices</button>
     <button id="get-benchmarks-btn" class="btn btn-sm" onclick="getBenchmarkPrices()" style="font-size:10px;padding:4px 12px" title="Fetches benchmark ETF prices (QQQ, SMH, CIBR, XLF, XLE, GLD, XLY, ITA, SPHQ) — needed for snapshots and benchmark display">⟳ Get Benchmarks</button>
+    <button id="backfill-btn" class="btn btn-sm" onclick="backfillThemeBenchmarks()" style="font-size:10px;padding:4px 12px" title="One-time historical fetch of benchmark prices on each position's buy/sell dates. Enables theme-relative alpha math.">⟳ Backfill Theme Benchmarks</button>
     <span id="refresh-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
     <span id="benchmark-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
+    <span id="backfill-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
     <span id="polygon-key-toggle" style="font-size:10px;color:var(--color-text-tertiary);cursor:pointer;text-decoration:underline" onclick="togglePolygonKey()">API Key</span>
   </div>
 </div>
@@ -1350,7 +1352,11 @@ function mkPos() {
     shares: '', pricePaid: '', exitPrice: '',
     sellDate: '', spxBuy: '', spxExit: '',
     closed: false, fetchState: 'idle',
-    notes: '', priceToday: '', theme: '', sleeve: '', isETF: false
+    notes: '', priceToday: '', theme: '', sleeve: '', isETF: false,
+    // Step 4a: theme-relative alpha math — historical benchmark prices anchored to position dates
+    benchmarkAtBuy: null,         // ticker (e.g. "SMH") at the time of buy — sanity check against future map changes
+    benchmarkPriceAtBuy: null,    // benchmark price on dateBought
+    benchmarkPriceAtSell: null    // benchmark price on sellDate (closed positions only)
   };
 }
 
@@ -2644,6 +2650,205 @@ function estimateStorageUsagePct() {
     }
   }
   return (total / (5 * 1024 * 1024)) * 100;
+}
+
+// ─────────────────────────────────────────────
+// Step 4a — Theme alpha data layer
+// One-time historical fetch of benchmark prices anchored to position dates.
+// Forward-only data principle still applies: locked benchmark map is not refetched
+// or replaced. Historical PRICES are objective facts; the MAP is the locked judgment.
+// ─────────────────────────────────────────────
+
+// Identify positions that need backfill. Returns a list of { position, ticker, date, kind }
+// where kind is 'buy' or 'sell'. Skip positions with no theme benchmark assigned (unmapped industries)
+// or no valid date.
+function findBackfillTargets() {
+  const targets = [];
+  positions.forEach(p => {
+    if (!p.ticker) return;
+    const themeBench = getThemeBenchmark(p.theme);
+    if (!themeBench) return; // no benchmark assigned for this theme
+
+    // Buy-side fetch
+    if (!p.benchmarkPriceAtBuy && p.dateBought) {
+      const buyDate = new Date(p.dateBought);
+      if (!isNaN(buyDate)) {
+        targets.push({ id: p.id, ticker: themeBench, date: p.dateBought, kind: 'buy' });
+      }
+    }
+
+    // Sell-side fetch (closed positions only)
+    if (p.closed && !p.benchmarkPriceAtSell && p.sellDate) {
+      const sellDate = new Date(p.sellDate);
+      if (!isNaN(sellDate)) {
+        targets.push({ id: p.id, ticker: themeBench, date: p.sellDate, kind: 'sell' });
+      }
+    }
+  });
+  return targets;
+}
+
+// Smart-state for the backfill button. Disable when no work; show count when there is.
+function updateBackfillButton() {
+  const btn = document.getElementById('backfill-btn');
+  if (!btn) return;
+  const targets = findBackfillTargets();
+  if (targets.length === 0) {
+    btn.disabled = true;
+    btn.textContent = '⟳ Backfill Theme Benchmarks';
+    btn.title = 'All theme benchmark data current ✓';
+    btn.style.opacity = '0.5';
+  } else {
+    btn.disabled = false;
+    btn.textContent = `⟳ Backfill Theme Benchmarks (${targets.length})`;
+    btn.title = `${targets.length} historical benchmark prices missing — click to fetch`;
+    btn.style.opacity = '1';
+  }
+}
+
+// Polygon's open-close endpoint returns a single day's close. Note: weekends and market holidays
+// will return an error. For simplicity, treat those failures the same as any other fetch failure
+// for now — the user can re-fetch later or we can add date-walking later.
+async function fetchHistoricalBenchmarkPrice(ticker, date) {
+  if (!polygonKey) return { price: null, error: 'no API key' };
+  const url = `https://api.polygon.io/v1/open-close/${ticker}/${date}?adjusted=true&apiKey=${polygonKey}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) return { price: null, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    if (data.status === 'OK' && typeof data.close === 'number') {
+      return { price: data.close, error: null };
+    }
+    // Polygon returns various error shapes. Treat anything non-OK as a failure.
+    return { price: null, error: data.error || data.message || 'no data' };
+  } catch (e) {
+    clearTimeout(timeoutId);
+    return { price: null, error: e.message || 'network error' };
+  }
+}
+
+async function backfillThemeBenchmarks() {
+  const keyInput = document.getElementById('polygon-key-input');
+  if (keyInput && keyInput.value.trim()) polygonKey = keyInput.value.trim();
+  if (!polygonKey) loadPolygonKey();
+
+  const status = document.getElementById('backfill-status');
+  if (!polygonKey) {
+    togglePolygonKey();
+    if (status) { status.textContent = 'Enter your Polygon API key first'; status.style.color = '#fbbf24'; }
+    return;
+  }
+
+  let targets = findBackfillTargets();
+  if (targets.length === 0) {
+    if (status) status.textContent = 'No backfill needed';
+    renderAll();
+    return;
+  }
+
+  const btn = document.getElementById('backfill-btn');
+  btn.disabled = true; btn.textContent = '⟳ Backfilling…';
+  status.textContent = `Fetching ${targets.length} historical benchmark prices...`;
+  status.style.color = '#fbbf24';
+
+  // Same rate-limit cadence as Refresh Prices and Get Benchmarks: 2/batch with 25s waits.
+  const batchSize = 2;
+  const waitMs = 25000;
+
+  let succeeded = 0;
+  const failed = [];
+
+  for (let i = 0; i < targets.length; i += batchSize) {
+    const batch = targets.slice(i, i + batchSize);
+    const batchResults = await Promise.all(
+      batch.map(t => fetchHistoricalBenchmarkPrice(t.ticker, t.date).then(r => ({ ...t, ...r })))
+    );
+
+    batchResults.forEach(r => {
+      const pos = positions.find(p => p.id === r.id);
+      if (!pos) return;
+      if (r.price === null) {
+        failed.push(`${pos.ticker} ${r.kind}@${r.date}`);
+        return;
+      }
+      if (r.kind === 'buy') {
+        pos.benchmarkPriceAtBuy = r.price;
+        pos.benchmarkAtBuy = r.ticker;
+      } else if (r.kind === 'sell') {
+        pos.benchmarkPriceAtSell = r.price;
+      }
+      succeeded++;
+    });
+
+    const done = Math.min(i + batchSize, targets.length);
+    let msg = `${done}/${targets.length} fetched`;
+    if (failed.length > 0) msg += ` · ${failed.length} failed so far`;
+    status.textContent = msg;
+
+    if (i + batchSize < targets.length) {
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+  }
+
+  btn.disabled = false;
+  btn.textContent = '⟳ Backfill Theme Benchmarks';
+
+  const ts = new Date().toLocaleTimeString();
+  if (failed.length === 0) {
+    status.textContent = `✓ Backfilled ${succeeded} prices · ${ts}`;
+    status.style.color = 'var(--color-text-success)';
+  } else if (succeeded > 0) {
+    status.textContent = `${succeeded} succeeded · ${failed.length} failed (likely market-closed dates) · ${ts}`;
+    status.style.color = '#fbbf24';
+  } else {
+    status.textContent = `Failed — check API key, network, or dates`;
+    status.style.color = 'var(--color-text-danger)';
+  }
+
+  scheduleSave();
+  renderAll();
+}
+
+// Compute theme-relative alpha for a position, using the historical benchmark anchor.
+// For open positions: compares your-return-since-buy against benchmark-return-since-buy.
+// For closed positions: compares your-return-buy-to-sell against benchmark-return-buy-to-sell.
+// Returns null when data is missing (no benchmark for theme, no buy-date data, etc.).
+function calcThemeAlpha(pos) {
+  const themeBench = getThemeBenchmark(pos.theme);
+  if (!themeBench) return null;
+  if (!pos.benchmarkPriceAtBuy) return null;
+  const paid = parseFloat(pos.pricePaid) || 0;
+  const shares = parseFloat(pos.shares) || 0;
+  if (paid <= 0 || shares <= 0) return null;
+  const exitPrice = parseFloat(pos.exitPrice) || 0;
+  if (exitPrice <= 0) return null;
+
+  const yourReturn = ((exitPrice - paid) / paid) * 100;
+
+  let benchEnd;
+  if (pos.closed) {
+    if (!pos.benchmarkPriceAtSell) return null;
+    benchEnd = pos.benchmarkPriceAtSell;
+  } else {
+    benchEnd = benchmarkPrices[themeBench];
+    if (!benchEnd) return null;
+  }
+  const benchReturn = ((benchEnd - pos.benchmarkPriceAtBuy) / pos.benchmarkPriceAtBuy) * 100;
+
+  const themeAlphaPct = yourReturn - benchReturn;
+  const invested = shares * paid;
+  const themeAlphaDollar = (themeAlphaPct / 100) * invested;
+
+  return {
+    yourReturn,
+    benchReturn,
+    themeAlphaPct,        // percentage points
+    themeAlphaDollar,     // dollar value
+    benchTicker: themeBench
+  };
 }
 
 function openTakeSnapshotModal() {
@@ -5630,6 +5835,7 @@ function renderAll() {
   renderCapitalFlow();
   renderTaxExposure();
   renderStaleBanner();
+  updateBackfillButton();
   syncFixedScrollbar();
 }
 
@@ -5954,7 +6160,7 @@ function exportData() {
     positions, nextId, spxLive, spxLiveDate, cashBuckets, cashLedger,
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
-    version: "2.1",
+    version: "2.2",
     benchmarks: BENCHMARKS
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
