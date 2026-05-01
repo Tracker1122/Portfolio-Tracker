@@ -1334,6 +1334,14 @@ let spCurrentPrice = 0; // current VOO/SPY price, updated manually
 let snapshots = []; // forward-only history captured by Take Snapshot
 let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Benchmarks
 let benchmarkPricesDate = null; // ISO timestamp of last benchmark fetch
+let trackRecordMatureOnly = false; // toggle: filter Track Record cards to mature positions only
+
+// Tax rates for after-tax adjustments (Oregon resident, mid-six-figures household).
+// Conservative side: slightly overstates drag if your real income is lower (errs toward making
+// after-tax alpha look worse than reality, which is the safer error direction).
+const TAX_RATE_LT = 0.27; // long-term: 15% federal + 9.9% Oregon + partial NIIT exposure
+const TAX_RATE_ST = 0.36; // short-term: 24% federal + 9.9% Oregon + partial NIIT exposure
+const MATURITY_DAYS = 180; // hold period before a closed position counts as "mature"
 
 function mkPos() {
   return {
@@ -1363,7 +1371,7 @@ async function savePositions() {
     localStorage.setItem('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
     localStorage.setItem('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
     localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
-    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate }));
+    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly }));
     flashSave();
   } catch(e) {
     console.warn('Save failed', e.message);
@@ -1432,6 +1440,7 @@ async function loadPositions() {
       if (Array.isArray(snapParsed.snapshots)) snapshots = snapParsed.snapshots;
       if (snapParsed.benchmarkPrices && typeof snapParsed.benchmarkPrices === 'object') benchmarkPrices = snapParsed.benchmarkPrices;
       if (snapParsed.benchmarkPricesDate) benchmarkPricesDate = snapParsed.benchmarkPricesDate;
+      if (typeof snapParsed.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = snapParsed.trackRecordMatureOnly;
     }
   } catch(e) { /* no snapshots yet */ }
 
@@ -1761,29 +1770,100 @@ function renderSummary(containerId, posArr, isOpen) {
 // Pulls from FULLY-CLOSED positions only (Interpretation 1).
 // Partial trims don't currently exist as records, so they're naturally excluded.
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Track Record statistical helpers
+// ─────────────────────────────────────────────
+
+// Wilson score interval for binomial proportions. Better than naive normal approx
+// for small samples. Returns [lo, hi] in [0, 1] range.
+// z values: 1.282 for 80%, 1.645 for 90%, 1.96 for 95%.
+function wilsonCI(successes, total, z) {
+  if (total <= 0) return [0, 0];
+  const p = successes / total;
+  const denom = 1 + (z * z) / total;
+  const center = p + (z * z) / (2 * total);
+  const spread = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * total)) / total);
+  const lo = (center - spread) / denom;
+  const hi = (center + spread) / denom;
+  return [Math.max(0, lo), Math.min(1, hi)];
+}
+
+// Returns a verdict string for a binary rate at given sample size.
+// "consistent with no edge" if 50% sits inside the 80% CI (z=1.282).
+function rateVerdict(successes, total) {
+  if (total === 0) return { text: 'no data', includes50: true };
+  if (total < 5) return { text: `n=${total} · sample too small`, includes50: true };
+  const [lo, hi] = wilsonCI(successes, total, 1.282); // 80% CI
+  const includes50 = lo <= 0.5 && hi >= 0.5;
+  if (includes50) return { text: `n=${total} · consistent with no edge`, includes50: true };
+  return { text: `n=${total} · 80% CI [${(lo*100).toFixed(0)}%–${(hi*100).toFixed(0)}%]`, includes50: false };
+}
+
+// Holding period in days for a closed position. Returns null if dates missing.
+function closedHoldingDays(pos) {
+  if (!pos.dateBought || !pos.sellDate) return null;
+  const buy = new Date(pos.dateBought);
+  const sell = new Date(pos.sellDate);
+  if (isNaN(buy) || isNaN(sell)) return null;
+  return Math.floor((sell - buy) / 86400000);
+}
+
+// Tax rate applied to a closed position based on holding period and account.
+// IRA accounts have zero tax drag (sheltered). Taxable: ST if <365d held, LT otherwise.
+// Missing dates → conservatively treated as ST (the worse case).
+function taxRateFor(pos) {
+  const acct = (pos.account || '').toLowerCase();
+  if (acct === 'ira') return 0; // tax-deferred / Roth: untaxed at gain level
+  const days = closedHoldingDays(pos);
+  if (days === null) return TAX_RATE_ST; // missing dates → assume short-term
+  return days >= 365 ? TAX_RATE_LT : TAX_RATE_ST;
+}
+
+// Apply tax to a gain. Tax is only applied to gains (>0); losses are not taxed
+// (would normally produce a tax credit, but for simplicity we leave losses untaxed —
+// this slightly understates after-tax alpha but matches "what you actually keep" framing
+// since losses don't generate cash refunds in the moment).
+function applyTaxToGain(gain, rate) {
+  if (gain <= 0) return gain; // losses pass through untouched
+  return gain * (1 - rate);
+}
+
+// After-tax SPX return for a position, applied at the same tax rate as the user's
+// position (apples-to-apples comparison). If you'd held VOO instead, you'd have paid
+// the same tax on the gain. So Beat % at after-tax compares your-after-tax vs SPX-after-tax.
+function afterTaxReturn(returnPct, rate) {
+  if (returnPct === null || returnPct === undefined) return null;
+  if (returnPct <= 0) return returnPct; // losses unchanged
+  return returnPct * (1 - rate);
+}
+
 function calcTrackRecord() {
   // Only fully-closed positions with valid invested capital
   const closed = positions.filter(p => p.closed && p.ticker);
-  const valid = closed.map(p => ({ pos: p, c: calcPos(p) }))
+  let validAll = closed.map(p => ({ pos: p, c: calcPos(p), days: closedHoldingDays(p) }))
     .filter(({ c }) => c.invested > 0 && c.exitValue !== undefined && c.exitValue !== null);
 
-  if (valid.length === 0) return null;
+  // Apply maturity filter if toggled on. Mature = held >= MATURITY_DAYS.
+  // Positions with missing dates are excluded from "mature only" view (we don't know the period).
+  const valid = trackRecordMatureOnly
+    ? validAll.filter(({ days }) => days !== null && days >= MATURITY_DAYS)
+    : validAll;
+
+  if (valid.length === 0) {
+    return { empty: true, totalAll: validAll.length, matureFiltered: trackRecordMatureOnly };
+  }
 
   const total = valid.length;
 
-  // Hit rate (vs zero) — was it profitable?
+  // ── Pre-tax metrics ──
   const winners = valid.filter(({ c }) => c.gainLoss > 0);
   const losers = valid.filter(({ c }) => c.gainLoss < 0);
-  // Tied = exactly $0 gain/loss → treated as neither winner nor loser
   const profitablePct = (winners.length / total) * 100;
 
-  // Beat rate — did it outperform SPX over the holding period?
-  // c.vsSpx is in percentage points; positive = beat, negative = trailed, 0 = tied
   const withVsSpx = valid.filter(({ c }) => c.vsSpx !== null && c.vsSpx !== undefined);
   const beatCount = withVsSpx.filter(({ c }) => c.vsSpx > 0).length;
   const beatPct = withVsSpx.length > 0 ? (beatCount / withVsSpx.length) * 100 : null;
 
-  // Avg win vs avg loss (dollar)
   const avgWin = winners.length > 0
     ? winners.reduce((s, { c }) => s + c.gainLoss, 0) / winners.length
     : null;
@@ -1791,45 +1871,107 @@ function calcTrackRecord() {
     ? losers.reduce((s, { c }) => s + c.gainLoss, 0) / losers.length
     : null;
 
+  // ── After-tax metrics (taxable accounts only; IRA has rate=0) ──
+  const validATX = valid.map(({ pos, c, days }) => {
+    const rate = taxRateFor(pos);
+    const gainATX = applyTaxToGain(c.gainLoss, rate);
+    const yourReturnATX = afterTaxReturn(c.yourReturn, rate);
+    const spxReturnATX = afterTaxReturn(c.spxReturn, rate);
+    const vsSpxATX = (yourReturnATX !== null && spxReturnATX !== null)
+      ? yourReturnATX - spxReturnATX : null;
+    return { pos, c, days, rate, gainATX, vsSpxATX };
+  });
+
+  const winnersATX = validATX.filter(v => v.gainATX > 0);
+  const losersATX = validATX.filter(v => v.gainATX < 0);
+  const profitablePctATX = (winnersATX.length / total) * 100;
+
+  const withVsSpxATX = validATX.filter(v => v.vsSpxATX !== null && v.vsSpxATX !== undefined);
+  const beatCountATX = withVsSpxATX.filter(v => v.vsSpxATX > 0).length;
+  const beatPctATX = withVsSpxATX.length > 0 ? (beatCountATX / withVsSpxATX.length) * 100 : null;
+
+  const avgWinATX = winnersATX.length > 0
+    ? winnersATX.reduce((s, v) => s + v.gainATX, 0) / winnersATX.length
+    : null;
+  const avgLossATX = losersATX.length > 0
+    ? losersATX.reduce((s, v) => s + v.gainATX, 0) / losersATX.length
+    : null;
+
   return {
+    empty: false,
+    matureFiltered: trackRecordMatureOnly,
+    totalAll: validAll.length,
     total, winners: winners.length, losers: losers.length,
+    // Pre-tax
     profitablePct,
-    beatRate: { pct: beatPct, beat: beatCount, totalWithSpx: withVsSpx.length },
-    avgWin, avgLoss
+    profitableVerdict: rateVerdict(winners.length, total),
+    beatRate: { pct: beatPct, beat: beatCount, totalWithSpx: withVsSpx.length,
+                verdict: rateVerdict(beatCount, withVsSpx.length) },
+    avgWin, avgLoss,
+    // After-tax
+    profitablePctATX,
+    profitableVerdictATX: rateVerdict(winnersATX.length, total),
+    beatRateATX: { pct: beatPctATX, beat: beatCountATX, totalWithSpx: withVsSpxATX.length,
+                   verdict: rateVerdict(beatCountATX, withVsSpxATX.length) },
+    avgWinATX, avgLossATX
   };
 }
 
 function renderTrackRecordCards() {
   const t = calcTrackRecord();
-  if (!t) {
-    // No closed positions yet — show placeholder cards so layout doesn't shift later
+
+  // Toggle button — shown on every render so user can flip between modes.
+  // Lives on the Hit Rate card as a small inline link (no separate UI block).
+  const toggleLabel = trackRecordMatureOnly ? 'mature only' : 'all closes';
+  const toggleAlt = trackRecordMatureOnly ? 'all closes' : `mature only (≥${MATURITY_DAYS}d)`;
+  const toggleHtml = `<span style="font-size:9px;color:var(--color-info);cursor:pointer;text-decoration:underline" onclick="toggleTrackRecordMature()" title="Click to switch to: ${toggleAlt}">${toggleLabel}</span>`;
+
+  // Empty state — no closed positions OR mature filter excludes all
+  if (t.empty) {
+    let emptyMsg;
+    if (t.matureFiltered && t.totalAll > 0) {
+      emptyMsg = `none ≥${MATURITY_DAYS}d`;
+    } else {
+      emptyMsg = '—';
+    }
     return `
       <div class="summary-card" title="Percentage of fully-closed positions that finished profitable. Updates as you close positions over time.">
-        <div class="summary-card-label">Hit Rate</div>
-        <div class="summary-card-value" style="color:var(--color-text-tertiary)">—</div>
+        <div class="summary-card-label">Hit Rate · ${toggleHtml}</div>
+        <div class="summary-card-value" style="color:var(--color-text-tertiary)">${emptyMsg}</div>
       </div>
       <div class="summary-card" title="Percentage of fully-closed positions that beat SPX over the holding period.">
         <div class="summary-card-label">Beat S&P %</div>
-        <div class="summary-card-value" style="color:var(--color-text-tertiary)">—</div>
+        <div class="summary-card-value" style="color:var(--color-text-tertiary)">${emptyMsg}</div>
       </div>
       <div class="summary-card" title="Average dollar gain on winning closes vs average dollar loss on losing closes.">
         <div class="summary-card-label">Avg Win / Loss</div>
-        <div class="summary-card-value" style="color:var(--color-text-tertiary)">—</div>
+        <div class="summary-card-value" style="color:var(--color-text-tertiary)">${emptyMsg}</div>
       </div>
     `;
   }
 
-  // Hit rate card
-  const hitColor = t.profitablePct >= 60 ? 'success' : t.profitablePct >= 40 ? 'info' : 'danger';
+  // Color guidance: muted/grey when verdict says "consistent with no edge" — visual signal that
+  // the headline number isn't trustworthy at this sample size. Only color confidently when CI excludes 50%.
+  const hitVerdictMuted = t.profitableVerdict.includes50;
+  const hitColor = hitVerdictMuted ? '' :
+    t.profitablePct >= 60 ? 'success' : t.profitablePct >= 40 ? 'info' : 'danger';
+  const hitColorStyle = hitVerdictMuted ? 'color:var(--color-text-secondary)' : '';
+
+  // After-tax always shown as subtitle. Format the after-tax line that sits under each headline.
+  const aftPctStr = t.profitablePctATX.toFixed(0);
+  const beatATXPctStr = t.beatRateATX.pct !== null ? t.beatRateATX.pct.toFixed(0) : null;
+  const winATXStr = t.avgWinATX !== null ? fmtDollarWhole(t.avgWinATX) : '—';
+  const lossATXStr = t.avgLossATX !== null ? fmtDollarWhole(t.avgLossATX) : '—';
+
   const hitCard = `
-    <div class="summary-card" title="Percentage of fully-closed positions that finished profitable. ${t.winners} winners out of ${t.total} closed.">
-      <div class="summary-card-label">Hit Rate</div>
-      <div class="summary-card-value ${hitColor}">${t.profitablePct.toFixed(0)}%</div>
-      <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">${t.winners}/${t.total} profitable</div>
+    <div class="summary-card" title="Percentage of fully-closed positions that finished profitable. ${t.winners}/${t.total} profitable. ${t.profitableVerdict.text}.">
+      <div class="summary-card-label">Hit Rate · ${toggleHtml}</div>
+      <div class="summary-card-value ${hitColor}" style="${hitColorStyle}">${t.profitablePct.toFixed(0)}%</div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">after-tax: ${aftPctStr}%</div>
+      <div style="font-size:9px;color:${hitVerdictMuted?'#fbbf24':'var(--color-text-tertiary)'};margin-top:2px">${t.profitableVerdict.text}</div>
     </div>
   `;
 
-  // Beat S&P rate card
   let beatCard;
   if (t.beatRate.pct === null) {
     beatCard = `
@@ -1840,17 +1982,20 @@ function renderTrackRecordCards() {
       </div>
     `;
   } else {
-    const beatColor = t.beatRate.pct >= 60 ? 'success' : t.beatRate.pct >= 40 ? 'info' : 'danger';
+    const beatVerdictMuted = t.beatRate.verdict.includes50;
+    const beatColor = beatVerdictMuted ? '' :
+      t.beatRate.pct >= 60 ? 'success' : t.beatRate.pct >= 40 ? 'info' : 'danger';
+    const beatColorStyle = beatVerdictMuted ? 'color:var(--color-text-secondary)' : '';
     beatCard = `
-      <div class="summary-card" title="Percentage of fully-closed positions that beat SPX over the holding period. ${t.beatRate.beat} beat the index out of ${t.beatRate.totalWithSpx} with SPX data.">
+      <div class="summary-card" title="Percentage of fully-closed positions that beat SPX over the holding period. ${t.beatRate.beat}/${t.beatRate.totalWithSpx} beat index. ${t.beatRate.verdict.text}. After-tax: comparing your-after-tax return vs SPX-after-tax return at the same rate (apples to apples).">
         <div class="summary-card-label">Beat S&P %</div>
-        <div class="summary-card-value ${beatColor}">${t.beatRate.pct.toFixed(0)}%</div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">${t.beatRate.beat}/${t.beatRate.totalWithSpx} beat index</div>
+        <div class="summary-card-value ${beatColor}" style="${beatColorStyle}">${t.beatRate.pct.toFixed(0)}%</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">after-tax: ${beatATXPctStr !== null ? beatATXPctStr+'%' : '—'}</div>
+        <div style="font-size:9px;color:${beatVerdictMuted?'#fbbf24':'var(--color-text-tertiary)'};margin-top:2px">${t.beatRate.verdict.text}</div>
       </div>
     `;
   }
 
-  // Avg win/loss card
   let edgeCard;
   if (t.avgWin === null && t.avgLoss === null) {
     edgeCard = `
@@ -1863,19 +2008,26 @@ function renderTrackRecordCards() {
     const winStr = t.avgWin !== null ? fmtDollarWhole(t.avgWin) : '—';
     const lossStr = t.avgLoss !== null ? fmtDollarWhole(t.avgLoss) : '—';
     edgeCard = `
-      <div class="summary-card" title="Average dollar gain across ${t.winners} winning close${t.winners!==1?'s':''}, vs average dollar loss across ${t.losers} losing close${t.losers!==1?'s':''}.">
+      <div class="summary-card" title="Average dollar gain across ${t.winners} winning close${t.winners!==1?'s':''}, vs average dollar loss across ${t.losers} losing close${t.losers!==1?'s':''}. After-tax adjusts only the winner side at LT/ST rates depending on hold period (Oregon resident defaults: ${(TAX_RATE_LT*100).toFixed(0)}% LT / ${(TAX_RATE_ST*100).toFixed(0)}% ST). IRA gains untaxed.">
         <div class="summary-card-label">Avg Win / Loss</div>
         <div class="summary-card-value" style="font-size:13px">
           <span class="success">${winStr}</span>
           <span style="color:var(--color-text-tertiary);font-weight:400"> / </span>
           <span class="danger">${lossStr}</span>
         </div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">after-tax: <span class="success">${winATXStr}</span> / <span class="danger">${lossATXStr}</span></div>
         <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">${t.winners}W · ${t.losers}L</div>
       </div>
     `;
   }
 
   return hitCard + beatCard + edgeCard;
+}
+
+function toggleTrackRecordMature() {
+  trackRecordMatureOnly = !trackRecordMatureOnly;
+  scheduleSave();
+  renderAll();
 }
 
 // ─────────────────────────────────────────────
