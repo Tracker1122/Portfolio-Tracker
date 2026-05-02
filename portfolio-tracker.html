@@ -5117,8 +5117,9 @@ function renderIndustryRef() {
     const map = {};
     arr.forEach(p => {
       const v = calcPos(p).exitValue || 0;
-      if (!map[p.ticker]) map[p.ticker] = { ticker: p.ticker, value: 0, sleeve: p.sleeve || '', isETF: p.isETF };
+      if (!map[p.ticker]) map[p.ticker] = { ticker: p.ticker, value: 0, sleeve: p.sleeve || '', isETF: p.isETF, lots: [] };
       map[p.ticker].value += v;
+      map[p.ticker].lots.push(p);
     });
     return Object.values(map).sort((a, b) => b.value - a.value);
   };
@@ -5142,6 +5143,40 @@ function renderIndustryRef() {
         ? `<span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px;font-weight:700;margin-left:3px">ETF</span>`
         : '';
 
+      // Per-position theme alpha — capital-weighted across this ticker's lots
+      // (matches drill-down's method exactly so card and overlay agree)
+      const lotAlphas = (t.lots || []).map(p => calcThemeAlpha(p)).filter(ta => ta !== null);
+      let alphaInline = '';
+      if (lotAlphas.length > 0) {
+        const totalThemeDollar = lotAlphas.reduce((s, ta) => s + ta.themeAlphaDollar, 0);
+        const totalInvestedLots = lotAlphas.reduce((s, ta) => s + ta.invested, 0);
+        const positionPp = totalInvestedLots > 0 ? (totalThemeDollar / totalInvestedLots) * 100 : 0;
+        const taColor = totalThemeDollar > 0 ? 'var(--color-text-success)' : totalThemeDollar < 0 ? 'var(--color-text-danger)' : 'var(--color-text-tertiary)';
+        const dollarStr = (totalThemeDollar >= 0 ? '+' : '') + fmtDollarWhole(totalThemeDollar);
+        const ppStr = (positionPp >= 0 ? '+' : '') + positionPp.toFixed(0) + 'pp';
+        alphaInline = `<span style="font-size:9px;color:${taColor};font-weight:600">${dollarStr}</span> <span style="font-size:9px;color:${taColor};opacity:0.85">(${ppStr})</span>`;
+      }
+
+      // Held bucket — oldest lot's buy date (matches drill-down)
+      let heldInline = '';
+      const earliestBuyDate = (t.lots || [])
+        .map(p => p.dateBought ? new Date(p.dateBought) : null)
+        .filter(d => d !== null && !isNaN(d))
+        .sort((a, b) => a - b)[0];
+      if (earliestBuyDate) {
+        const days = Math.floor((Date.now() - earliestBuyDate.getTime()) / 86400000);
+        const heldLabel = days < 30 ? '<1M'
+          : days < 90 ? '1–3M'
+          : days < 180 ? '3–6M'
+          : days < 365 ? '6–12M'
+          : days < 730 ? '1–2Y'
+          : '2Y+';
+        const heldColor = days < 90 ? 'var(--color-text-danger)'
+          : days < 365 ? '#fbbf24'
+          : 'var(--color-text-success)';
+        heldInline = `<span style="font-size:9px;color:${heldColor};font-weight:700">${heldLabel}</span>`;
+      }
+
       return `<div style="padding:5px 0;border-bottom:1px solid var(--color-border-tertiary)">
         <div style="display:flex;justify-content:space-between;align-items:start">
           <div>
@@ -5153,9 +5188,11 @@ function renderIndustryRef() {
           </div>
           <span style="font-size:9px;color:var(--color-text-tertiary)">${fmtDollarWhole(t.value)}</span>
         </div>
-        <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">
+        <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;align-items:baseline">
           <span style="font-size:9px;color:var(--color-text-tertiary)">Strategy <span style="color:var(--color-text-secondary);font-weight:600">${pctTheme.toFixed(1)}%</span></span>
           <span style="font-size:9px;color:var(--color-text-tertiary)">Managed <span style="color:var(--color-text-secondary);font-weight:600">${pctActive.toFixed(1)}%</span></span>
+          ${alphaInline ? `<span style="font-size:9px;color:var(--color-text-tertiary)">·</span>${alphaInline}` : ''}
+          ${heldInline ? `<span style="font-size:9px;color:var(--color-text-tertiary)">·</span>${heldInline}` : ''}
         </div>
       </div>`;
     }).join('');
