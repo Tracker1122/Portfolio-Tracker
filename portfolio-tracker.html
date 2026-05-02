@@ -1052,6 +1052,7 @@
           <tr>
             <th onclick="sortRebal('ticker')" class="sortable">Position <span id="sort-ticker"></span></th>
             <th onclick="sortRebal('daysHeld')" class="sortable r">Held <span id="sort-daysHeld"></span></th>
+            <th class="r" title="Soak status — whether this position has been held long enough that its alpha numbers are meaningful signal vs noise. Per-sleeve thresholds: Thesis Plays 180d, Quality 365d, PBP 1095d. Informational only — does not change signal logic.">Soak</th>
             <th>Strategy</th>
             <th onclick="sortRebal('portfolioPct')" class="sortable r">Managed % <span id="sort-portfolioPct"></span></th>
             <th class="r">Industry %</th>
@@ -5300,6 +5301,24 @@ function _renderCardOverlay(type) {
         const glColor = c.gainLoss>=0?'var(--color-text-success)':'var(--color-text-danger)';
         const aColor = alpha===null?'var(--color-text-tertiary)':alpha>=0?'var(--color-text-success)':'var(--color-text-danger)';
 
+        // Theme alpha — aggregate across all lots of this ticker in this sleeve
+        const tickerLots = open.filter(q => q.ticker === p.ticker && q.sleeve === sleeve);
+        const lotAlphas = tickerLots.map(q => calcThemeAlpha(q));
+        const allHaveTheme = lotAlphas.length > 0 && lotAlphas.every(ta => ta !== null);
+        let themeAlphaCell;
+        if (allHaveTheme) {
+          const totalThemeDollar = lotAlphas.reduce((s, ta) => s + ta.themeAlphaDollar, 0);
+          const benchTicker = lotAlphas[0].benchTicker;
+          const taColor = totalThemeDollar > 0 ? 'var(--color-text-success)' : totalThemeDollar < 0 ? 'var(--color-text-danger)' : 'var(--color-text-tertiary)';
+          const dollarStr = (totalThemeDollar >= 0 ? '+' : '') + fmtDollarWhole(totalThemeDollar);
+          themeAlphaCell = '<span style="color:var(--color-text-tertiary);font-size:9px">vs ' + benchTicker + '</span><br><span style="color:' + taColor + ';font-weight:600">' + dollarStr + '</span>';
+        } else if (tickerLots.length > 0 && getThemeBenchmark(tickerLots[0].theme)) {
+          const benchTicker = getThemeBenchmark(tickerLots[0].theme);
+          themeAlphaCell = '<span style="color:var(--color-text-tertiary);font-size:9px">vs ' + benchTicker + '</span><br><span style="color:var(--color-text-tertiary)">—</span>';
+        } else {
+          themeAlphaCell = '<span style="color:var(--color-text-tertiary);font-size:9px">no benchmark</span><br><span style="color:var(--color-text-tertiary)">—</span>';
+        }
+
         // Extract thesis/rationale/role tag from notes
         let elaborationTag = '';
         if (p.notes) {
@@ -5311,10 +5330,11 @@ function _renderCardOverlay(type) {
           else if (ballastMatch) elaborationTag = ballastMatch[1].trim();
         }
         const etfBadge = p.isETF ? '<span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px;font-weight:700;margin-left:4px">ETF</span>' : '';
-        html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 44px;gap:6px;font-size:11px;padding:6px 0;border-bottom:1px solid var(--color-border-tertiary);align-items:start">';
+        html += '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1.1fr 44px;gap:6px;font-size:11px;padding:6px 0;border-bottom:1px solid var(--color-border-tertiary);align-items:start">';
         html += '<div><div style="font-weight:700;display:flex;align-items:center;gap:4px">' + esc(p.ticker) + etfBadge + '</div>' + (elaborationTag ? '<div style="font-size:8px;color:'+color+';background:'+color+'22;padding:1px 5px;border-radius:3px;font-weight:700;margin-top:2px;display:inline-block">' + esc(elaborationTag) + '</div>' : '') + '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">' + fmtDollarWhole(c.exitValue) + '</div></div>';
         html += '<span style="color:'+glColor+'">G/L<br>'+fmtDollarWhole(c.gainLoss)+'</span>';
-        html += '<span style="color:'+aColor+'">α<br>'+(alpha!==null?fmtDollarWhole(alpha):'—')+'</span>';
+        html += '<span style="color:'+aColor+'">vs S&P<br>'+(alpha!==null?fmtDollarWhole(alpha):'—')+'</span>';
+        html += '<span>' + themeAlphaCell + '</span>';
         html += '<span style="color:var(--color-text-tertiary)">' + held + '</span>';
         html += '</div>';
       });
@@ -5829,6 +5849,19 @@ const SLEEVE_TARGETS = {
   'Portfolio Balance Plays': { min: 5,  max: 10 },
 };
 
+// Soak periods per sleeve — the holding period below which alpha numbers should be
+// treated as noise rather than signal. Mirrors existing precedent:
+//   - Thesis Plays: 180 days — already enforced as "hard floor" in spotlight signal logic
+//   - PBP: 1095 days (36 months) — matches existing UI text in PBP opt-in picker
+//   - Quality: 365 days (12 months) — aligned with LT/ST tax cutoff
+// Used by the Soak Status column on Trim Candidates. Passive informational only —
+// does NOT change signal-firing logic.
+const SLEEVE_SOAK = {
+  'Thesis Plays': 180,
+  'Quality': 365,
+  'Portfolio Balance Plays': 1095,
+};
+
 // Sleeve colour palette
 const SLEEVE_COLORS = {
   'Thesis Plays':  '#f59e0b',
@@ -6168,7 +6201,7 @@ function renderRebalance() {
   });
 
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" class="no-rows">No open positions to analyse.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="no-rows">No open positions to analyse.</td></tr>`;
     return;
   }
 
@@ -6220,6 +6253,24 @@ function renderRebalance() {
     const sleeve = positions.find(p => !p.closed && p.ticker === r.ticker)?.sleeve || '';
     const sleeveColor = SLEEVE_COLORS[sleeve] || 'var(--color-text-tertiary)';
 
+    // Soak status — compare days held against per-sleeve threshold
+    const soakThreshold = SLEEVE_SOAK[sleeve];
+    let soakLabel, soakColor, soakTooltip;
+    if (!soakThreshold || d === null) {
+      soakLabel = '—';
+      soakColor = 'var(--color-text-tertiary)';
+      soakTooltip = 'No soak threshold defined';
+    } else if (d < soakThreshold) {
+      const daysLeft = soakThreshold - d;
+      soakLabel = 'In soak';
+      soakColor = 'var(--color-text-danger)';
+      soakTooltip = `${daysLeft} days remaining (${sleeve} threshold: ${soakThreshold}d)`;
+    } else {
+      soakLabel = 'Complete';
+      soakColor = 'var(--color-text-success)';
+      soakTooltip = `Held ${d - soakThreshold} days past soak (${sleeve} threshold: ${soakThreshold}d)`;
+    }
+
     return `<tr>
       <td>
         <span style="font-weight:700;font-size:13px">${esc(r.ticker)}</span>
@@ -6228,6 +6279,7 @@ function renderRebalance() {
         <span style="font-size:9px;color:${holdColor};margin-left:6px">${r.holdingLabel}</span>
       </td>
       <td class="r" style="font-weight:600;color:${heldColor}">${heldLabel}</td>
+      <td class="r" style="font-size:10px;color:${soakColor};font-weight:600" title="${soakTooltip}">${soakLabel}</td>
       <td style="white-space:nowrap"><span style="font-size:10px;font-weight:600;color:${sleeveColor};border-left:3px solid ${sleeveColor};padding-left:5px">${sleeve || '—'}</span></td>
       <td class="r" style="font-weight:600;color:var(--color-text-secondary)">${r.portfolioPct !== null ? r.portfolioPct.toFixed(1) + '%' : '—'}</td>
       <td class="r" style="font-size:10px;color:var(--color-text-tertiary)">${r.industryPct !== null ? r.industryPct.toFixed(1) + '%' : '—'}</td>
