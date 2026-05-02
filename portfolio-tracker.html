@@ -5419,7 +5419,27 @@ function _renderCardOverlay(type) {
         themeAlphaCell = '<span style="color:' + tColor + ';font-weight:600">' + dollarStr + '</span>';
       }
 
-      body += '<div style="padding:10px 12px;border-bottom:1px solid var(--color-border-tertiary);display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;align-items:start">';
+      // Held bucket — use the oldest lot's buy date (most conservative for soak/maturity reads)
+      let heldLabel = '—';
+      let heldColor = 'var(--color-text-tertiary)';
+      const earliestBuyDate = t.lots
+        .map(p => p.dateBought ? new Date(p.dateBought) : null)
+        .filter(d => d !== null && !isNaN(d))
+        .sort((a, b) => a - b)[0];
+      if (earliestBuyDate) {
+        const days = Math.floor((Date.now() - earliestBuyDate.getTime()) / 86400000);
+        heldLabel = days < 30 ? '<1M'
+          : days < 90 ? '1–3M'
+          : days < 180 ? '3–6M'
+          : days < 365 ? '6–12M'
+          : days < 730 ? '1–2Y'
+          : '2Y+';
+        heldColor = days < 90 ? 'var(--color-text-danger)'
+          : days < 365 ? '#fbbf24'
+          : 'var(--color-text-success)';
+      }
+
+      body += '<div style="padding:10px 12px;border-bottom:1px solid var(--color-border-tertiary);display:grid;grid-template-columns:2fr 1fr 1fr 60px;gap:12px;align-items:start">';
       // Left column: ticker + tags + percentages
       body += '<div>';
       body += '<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-bottom:3px">';
@@ -5437,6 +5457,11 @@ function _renderCardOverlay(type) {
       body += '<div style="text-align:right">';
       body += '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:2px">vs ' + (benchTicker || '—') + '</div>';
       body += '<div style="font-size:12px">' + themeAlphaCell + '</div>';
+      body += '</div>';
+      // 4th column: held bucket
+      body += '<div style="text-align:right">';
+      body += '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:2px">Held</div>';
+      body += '<div style="font-size:11px;font-weight:600;color:' + heldColor + '">' + heldLabel + '</div>';
       body += '</div>';
       body += '</div>';
     });
