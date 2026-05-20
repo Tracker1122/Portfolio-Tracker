@@ -8306,6 +8306,47 @@ function renderPeDeals() {
   }
 
   const fmtPct = (r) => r === null ? '—' : ((r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%');
+
+  // 1-deal special case — aggregates obscure which deal it is, so show the company name
+  // prominently. As soon as a second deal is added, fall back to weighted aggregate view.
+  if (t.count === 1) {
+    const d = peDeals[0];
+    const c = calcPeDeal(d);
+    // c can be null if the deal has no amountInvested, but t.count === 1 implies we have
+    // a deal; defensive guard just in case.
+    if (!c) {
+      el.innerHTML = '<div style="color:var(--color-text-tertiary);font-size:11px">Deal data incomplete</div>';
+      return;
+    }
+    const ppsColor = c.ppsReturn === null ? 'var(--color-text-tertiary)' : (c.ppsReturn >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
+    const valColor = c.valReturn === null ? 'var(--color-text-tertiary)' : (c.valReturn >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
+    const staleWarn = (t.staleDays !== null && t.staleDays > 180)
+      ? '<span style="color:var(--color-text-warning);font-size:9px;margin-left:4px" title="Valuation is ' + t.staleDays + ' days old">· stale (' + t.staleDays + 'd)</span>'
+      : '';
+
+    let html = '<div>';
+    // Company name header
+    html += '<div style="font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">';
+    html += esc(d.company || '(unnamed)');
+    if (d.stage) html += ' <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400">· ' + esc(d.stage) + '</span>';
+    html += '</div>';
+    // Metrics grid (same shape as aggregate so layout doesn't jump when you add a 2nd deal)
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">';
+    html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Invested</div><div style="font-size:13px;font-weight:700">' + fmtDollarWhole(c.inv) + '</div></div>';
+    html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Current Value</div><div style="font-size:13px;font-weight:700;color:var(--color-text-primary)">' + fmtDollarWhole(c.currentValue) + '</div></div>';
+    html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)" title="Per-share value of what you actually own.">Per-Share Return</div><div style="font-size:13px;font-weight:700;color:' + ppsColor + '">' + fmtPct(c.ppsReturn) + '</div></div>';
+    html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)" title="Company-level growth, before dilution effects.">Valuation Change</div><div style="font-size:13px;font-weight:700;color:' + valColor + '">' + fmtPct(c.valReturn) + '</div></div>';
+    html += '<div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px">';
+    html += '<div style="font-size:9px;color:var(--color-text-tertiary)">' + c.multiple.toFixed(2) + 'x ' + staleWarn + '</div>';
+    html += addBtn;
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+    el.innerHTML = html;
+    return;
+  }
+
+  // Multi-deal aggregate view
   const ppsColor = t.ppsReturnWeighted === null ? 'var(--color-text-tertiary)' : (t.ppsReturnWeighted >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
   const valColor = t.valReturnWeighted === null ? 'var(--color-text-tertiary)' : (t.valReturnWeighted >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
   const staleWarn = (t.staleDays !== null && t.staleDays > 180)
@@ -8318,7 +8359,7 @@ function renderPeDeals() {
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)" title="Weighted by amount invested. Tracks the per-share value of what you actually own.">Per-Share Return</div><div style="font-size:13px;font-weight:700;color:' + ppsColor + '">' + fmtPct(t.ppsReturnWeighted) + '</div></div>';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)" title="Weighted by amount invested. Company-level growth, before dilution effects.">Valuation Change</div><div style="font-size:13px;font-weight:700;color:' + valColor + '">' + fmtPct(t.valReturnWeighted) + '</div></div>';
   html += '<div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px">';
-  html += '<div style="font-size:9px;color:var(--color-text-tertiary)">' + t.count + ' deal' + (t.count === 1 ? '' : 's') + ' · ' + t.multiple.toFixed(2) + 'x ' + staleWarn + '</div>';
+  html += '<div style="font-size:9px;color:var(--color-text-tertiary)">' + t.count + ' deals · ' + t.multiple.toFixed(2) + 'x ' + staleWarn + '</div>';
   html += addBtn;
   html += '</div>';
   html += '</div>';
