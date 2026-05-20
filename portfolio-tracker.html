@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Portfolio vs S&P 500</title>
 <style>
+  /* Hide number-input spinners (up/down arrows) globally — user prefers type-only input.
+     Combined with a mousewheel handler in JS to prevent scroll-changes-value. */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+
   :root {
     --color-text-primary: #e8e8e8;
     --color-text-secondary: #a0a0a0;
@@ -1232,11 +1243,33 @@
         <option value="IRA">IRA</option>
       </select>
     </div>
+    <div class="modal-field">
+      <label class="modal-label" title="If any portion of this VOO buy was funded by selling something, enter that amount here. The rest counts as new capital.">Redeployed from sale proceeds ($)</label>
+      <input class="modal-input" id="add-voo-redeployed" type="number" min="0" step="0.01" placeholder="0 (leave blank if all new capital)" style="width:180px">
+    </div>
     <div id="add-voo-preview" style="font-size:10px;color:var(--color-text-tertiary);margin-top:6px"></div>
     <div id="add-voo-error" style="font-size:10px;color:var(--color-text-danger);margin-top:6px;display:none"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeAddVooLotModal()">Cancel</button>
       <button class="btn btn-primary" onclick="confirmAddVooLot()">Add Lot</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Position (advanced fields) Modal -->
+<div class="modal-overlay hidden" id="edit-position-modal">
+  <div class="modal">
+    <div class="modal-title">Edit Position</div>
+    <div class="modal-subtitle" id="edit-position-subtitle">Advanced fields not visible in the row.</div>
+    <div class="modal-field">
+      <label class="modal-label" title="Dollar amount of this buy that came from recent sale proceeds rather than new outside capital.">Redeployed from sale proceeds ($)</label>
+      <input class="modal-input" id="edit-pos-redeployed" type="number" min="0" step="0.01" placeholder="0 (all new capital)" style="width:180px">
+      <div id="edit-pos-redeployed-hint" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+    </div>
+    <div id="edit-pos-error" style="font-size:10px;color:var(--color-text-danger);margin-top:6px;display:none"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeEditPositionModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmEditPosition()">Save Changes</button>
     </div>
   </div>
 </div>
@@ -1307,13 +1340,21 @@
 <div class="modal-overlay hidden" id="capital-modal">
   <div class="modal">
     <div class="modal-title">Capital Source</div>
-    <div class="modal-subtitle">Is this new money coming in or redeploying existing cash?</div>
+    <div class="modal-subtitle">How was this purchase funded?</div>
     <div class="modal-field">
       <label class="modal-label">Source</label>
       <select class="modal-select" id="capital-source-sel" onchange="updateCapitalModal()">
-        <option value="new">New capital from outside</option>
-        <option value="cash">Redeploying from cash bucket</option>
+        <option value="new">All new capital (deposit, bonus, rollover, etc.)</option>
+        <option value="redeployed">Partial or full redeployment from sale proceeds</option>
+        <option value="cash">Redeploying from tracked cash bucket</option>
       </select>
+    </div>
+    <div id="capital-redeployed-detail" style="display:none">
+      <div class="modal-field">
+        <label class="modal-label" title="Dollar amount of this buy that came from a recent sale">Amount redeployed ($)</label>
+        <input class="modal-input" id="capital-redeployed-input" type="number" min="0" step="0.01" placeholder="e.g. 4903" style="width:140px">
+        <div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">The rest of the buy will count as new capital. Enter the full buy amount if 100% was redeployed.</div>
+      </div>
     </div>
     <div id="capital-cash-detail" style="display:none">
       <div class="modal-field">
@@ -1524,7 +1565,10 @@ function mkPos() {
     // Step 4a: theme-relative alpha math — historical benchmark prices anchored to position dates
     benchmarkAtBuy: null,         // ticker (e.g. "SMH") at the time of buy — sanity check against future map changes
     benchmarkPriceAtBuy: null,    // benchmark price on dateBought
-    benchmarkPriceAtSell: null    // benchmark price on sellDate (closed positions only)
+    benchmarkPriceAtSell: null,   // benchmark price on sellDate (closed positions only)
+    // Capital source tracking — see Capital Deployed metric. Default 0 (treat as new capital).
+    // User-supplied at time of purchase via the capital-modal.
+    redeployedAmount: 0
   };
 }
 
@@ -2425,7 +2469,7 @@ function renderRow(pos) {
       </select>
     </td>
     <td><input class="cell-input notes-input" type="text" placeholder="Thesis, target…" value="${esc(pos.notes||'')}" onblur="setField(${pos.id},'notes',this.value)"></td>
-    <td><button class="btn btn-sm btn-danger" onclick="deletePosition(${pos.id})" title="Delete">✕</button></td>
+    <td style="white-space:nowrap"><button class="btn btn-sm" onclick="openEditPositionModal(${pos.id})" title="Edit advanced fields" style="margin-right:4px">✎</button><button class="btn btn-sm btn-danger" onclick="deletePosition(${pos.id})" title="Delete">✕</button></td>
   </tr>`;
 }
 
@@ -4616,12 +4660,13 @@ function openAddVooLotModal(editIndex) {
   if (primaryBtn) primaryBtn.textContent = isEdit ? 'Save Changes' : 'Add Lot';
 
   // Default values: edit mode → existing lot; add mode → today + most-recent account
-  let defaultDate, defaultShares, defaultPrice, defaultAccount;
+  let defaultDate, defaultShares, defaultPrice, defaultAccount, defaultRedeployed;
   if (isEdit && editing) {
     defaultDate = editing.date;
     defaultShares = editing.shares;
     defaultPrice = editing.pricePaid;
     defaultAccount = editing.account || 'Taxable';
+    defaultRedeployed = editing.redeployedAmount || '';
   } else {
     const t = new Date();
     const yyyy = t.getFullYear();
@@ -4630,6 +4675,7 @@ function openAddVooLotModal(editIndex) {
     defaultDate = `${yyyy}-${mm}-${dd}`;
     defaultShares = '';
     defaultPrice = '';
+    defaultRedeployed = '';
     // Smart account default: most recent lot's account, fallback Taxable
     defaultAccount = 'Taxable';
     if (spLots.length > 0) {
@@ -4642,6 +4688,7 @@ function openAddVooLotModal(editIndex) {
   document.getElementById('add-voo-shares').value = defaultShares;
   document.getElementById('add-voo-price').value = defaultPrice;
   document.getElementById('add-voo-account').value = defaultAccount;
+  document.getElementById('add-voo-redeployed').value = defaultRedeployed;
   document.getElementById('add-voo-preview').textContent = '';
   document.getElementById('add-voo-error').style.display = 'none';
   modal.classList.remove('hidden');
@@ -4691,7 +4738,17 @@ function confirmAddVooLot() {
   if (!(price > 0)) return showErr('Price must be greater than 0.');
   if (!['Taxable', 'IRA'].includes(account)) return showErr('Pick an account.');
 
-  const lot = { date: dateStr, shares, pricePaid: price, account };
+  // Redeployment amount — optional, default 0. Cap at total cost to keep math sane.
+  const redeployedStr = document.getElementById('add-voo-redeployed').value;
+  let redeployedAmount = 0;
+  if (redeployedStr !== '' && redeployedStr != null) {
+    redeployedAmount = parseFloat(redeployedStr);
+    if (isNaN(redeployedAmount) || redeployedAmount < 0) return showErr('Redeployed amount must be 0 or greater.');
+    const totalCost = shares * price;
+    if (redeployedAmount > totalCost) return showErr('Redeployed amount cannot exceed total cost ($' + totalCost.toFixed(2) + ').');
+  }
+
+  const lot = { date: dateStr, shares, pricePaid: price, account, redeployedAmount };
 
   if (_vooEditIndex >= 0 && _vooEditIndex < spLots.length) {
     // Edit mode — replace in place
@@ -5113,26 +5170,43 @@ function confirmCashModal() {
 // Capital source modal (shown before add position)
 function updateCapitalModal() {
   const src = document.getElementById('capital-source-sel').value;
+  document.getElementById('capital-redeployed-detail').style.display = src === 'redeployed' ? 'block' : 'none';
   document.getElementById('capital-cash-detail').style.display = src === 'cash' ? 'block' : 'none';
   updateCapitalAvailable();
 }
 
 function updateCapitalAvailable() {
-  const account = document.getElementById('capital-account-sel').value;
+  const account = document.getElementById('capital-account-sel')?.value;
+  if (!account) return;
   const avail = cashBuckets[account] || 0;
-  document.getElementById('capital-available').textContent = `Available: ${fmtDollarWhole(avail)}`;
+  const el = document.getElementById('capital-available');
+  if (el) el.textContent = `Available: ${fmtDollarWhole(avail)}`;
 }
 
 function skipCapitalModal() {
   document.getElementById('capital-modal').classList.add('hidden');
-  // Ask for strategy before thesis modal
+  // Skip = treat as new capital, no redeployment tracked
+  window._pendingRedeployedAmount = 0;
   window._pendingStrategy = '';
   showStrategyPicker();
 }
 
 function confirmCapitalModal() {
   const src = document.getElementById('capital-source-sel').value;
-  if (src === 'cash') {
+  let redeployedAmount = 0;
+
+  if (src === 'redeployed') {
+    // Store the dollar amount of redeployment. If left blank, treat as 0
+    // (i.e. user picked the option but didn't fill in an amount — fail safe to "no redeployment").
+    const inputVal = document.getElementById('capital-redeployed-input').value;
+    if (inputVal === '' || inputVal == null) {
+      redeployedAmount = 0;
+    } else {
+      redeployedAmount = parseFloat(inputVal) || 0;
+      if (redeployedAmount < 0) redeployedAmount = 0;
+    }
+  } else if (src === 'cash') {
+    // Existing cashBucket-based flow — also counts as redeployment for the Capital Deployed metric
     const account = document.getElementById('capital-account-sel').value;
     const amount = parseFloat(document.getElementById('capital-amount-input').value) || 0;
     if (amount > 0) {
@@ -5142,8 +5216,12 @@ function confirmCapitalModal() {
       renderCashDisplay();
       renderStackedBar();
       scheduleSave();
+      redeployedAmount = amount; // this much of the upcoming buy is recycled cash
     }
   }
+  // src === 'new' → redeployedAmount stays 0
+
+  window._pendingRedeployedAmount = redeployedAmount;
   document.getElementById('capital-modal').classList.add('hidden');
   window._pendingStrategy = '';
   showStrategyPicker();
@@ -6366,7 +6444,7 @@ function _renderCardOverlay(type) {
     const { windows, buys } = computeCapitalDeployed();
 
     html = '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">Capital Deployed — Money In Over Time</div>';
-    html += '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:16px">Gross dollars put to work across stocks, VOO, and private investments. Sales are not netted out — this is "how much new money have I deployed," not net cash flow.</div>';
+    html += '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:16px">Net new capital deployed across stocks, VOO, and private investments. The portion of each buy you flagged as "redeployed from sale proceeds" is excluded — only genuinely new money is counted. See per-buy breakdown below.</div>';
 
     // Windows table — 6 columns: Window · Stocks · VOO · PE · Total · Buys
     html += '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 0.6fr;gap:8px;padding:10px 12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">';
@@ -6394,20 +6472,26 @@ function _renderCardOverlay(type) {
       html += '<div style="padding:20px;color:var(--color-text-tertiary);font-style:italic;text-align:center;font-size:11px">No buys recorded yet.</div>';
     } else {
       html += '<div style="max-height:340px;overflow-y:auto;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">';
-      html += '<div style="display:grid;grid-template-columns:1fr 0.8fr 0.6fr 0.8fr 1fr;gap:8px;padding:6px 10px;background:var(--color-background-tertiary);font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;position:sticky;top:0">';
-      html += '<div>Date</div><div>Ticker</div><div>Kind</div><div>Account</div><div style="text-align:right">Amount</div>';
+      // Grid: Date · Ticker · Kind · Account · Total · New / Redeployed
+      html += '<div style="display:grid;grid-template-columns:0.9fr 0.7fr 0.5fr 0.7fr 0.9fr 1.2fr;gap:8px;padding:6px 10px;background:var(--color-background-tertiary);font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;position:sticky;top:0">';
+      html += '<div>Date</div><div>Ticker</div><div>Kind</div><div>Account</div><div style="text-align:right">Total</div><div style="text-align:right">New / Redeployed</div>';
       html += '</div>';
       buys.forEach(b => {
         let kindColor, kindLabel;
         if (b.kind === 'voo') { kindColor = '#a0a0b8'; kindLabel = 'VOO'; }
         else if (b.kind === 'pe') { kindColor = 'var(--color-text-warning)'; kindLabel = 'PE'; }
         else { kindColor = 'var(--color-text-info)'; kindLabel = 'Stock'; }
-        html += '<div style="display:grid;grid-template-columns:1fr 0.8fr 0.6fr 0.8fr 1fr;gap:8px;padding:5px 10px;border-bottom:1px solid var(--color-border-tertiary);font-size:11px">';
+        const hasRedeployed = b.redeployed > 0;
+        const splitDisplay = hasRedeployed
+          ? fmtDollarWhole(b.newCapital) + ' <span style="color:var(--color-text-tertiary)">/ ' + fmtDollarWhole(b.redeployed) + '</span>'
+          : '<span style="color:var(--color-text-tertiary)">all new</span>';
+        html += '<div style="display:grid;grid-template-columns:0.9fr 0.7fr 0.5fr 0.7fr 0.9fr 1.2fr;gap:8px;padding:5px 10px;border-bottom:1px solid var(--color-border-tertiary);font-size:11px">';
         html += '<div style="color:var(--color-text-secondary)">' + esc(b.date) + '</div>';
         html += '<div style="font-weight:600">' + esc(b.ticker) + '</div>';
         html += '<div style="color:' + kindColor + ';font-size:9px;text-transform:uppercase;letter-spacing:0.05em;align-self:center">' + kindLabel + '</div>';
         html += '<div style="color:var(--color-text-tertiary);font-size:10px">' + esc(b.account) + '</div>';
         html += '<div style="text-align:right;font-weight:600">' + fmtDollarWhole(b.amount) + '</div>';
+        html += '<div style="text-align:right;font-size:10px">' + splitDisplay + '</div>';
         html += '</div>';
       });
       html += '</div>';
@@ -8073,9 +8157,14 @@ function computeCapitalDeployed() {
     const shares = parseFloat(p.shares);
     const price = parseFloat(p.pricePaid);
     if (!(shares > 0) || !(price > 0)) return;
+    const total = shares * price;
+    // Cap redeployment at total cost — defensive against bad data
+    const redeployed = Math.min(Math.max(parseFloat(p.redeployedAmount) || 0, 0), total);
     buys.push({
       date: p.dateBought,
-      amount: shares * price,
+      amount: total,
+      redeployed: redeployed,
+      newCapital: total - redeployed,
       kind: 'stock',
       ticker: p.ticker || '—',
       account: p.account || 'Taxable'
@@ -8085,18 +8174,20 @@ function computeCapitalDeployed() {
   spLots.forEach(l => {
     if (!l.date || !l.shares || !l.pricePaid) return;
     if (!(l.shares > 0) || !(l.pricePaid > 0)) return;
+    const total = l.shares * l.pricePaid;
+    const redeployed = Math.min(Math.max(parseFloat(l.redeployedAmount) || 0, 0), total);
     buys.push({
       date: l.date,
-      amount: l.shares * l.pricePaid,
+      amount: total,
+      redeployed: redeployed,
+      newCapital: total - redeployed,
       kind: 'voo',
       ticker: 'VOO',
       account: l.account || 'Taxable'
     });
   });
 
-  // PE deals — each deal is a single capital deployment event. Account is not tracked
-  // on PE deals (most PE goes into a separate entity / trust / direct holding) so we
-  // label it 'Private' to make the audit list clear.
+  // PE deals — always treated as full new capital (separate from public book by design)
   peDeals.forEach(d => {
     if (!d.investmentDate || !d.amountInvested) return;
     const amt = parseFloat(d.amountInvested);
@@ -8104,6 +8195,8 @@ function computeCapitalDeployed() {
     buys.push({
       date: d.investmentDate,
       amount: amt,
+      redeployed: 0,
+      newCapital: amt,
       kind: 'pe',
       ticker: d.company || '(unnamed)',
       account: 'Private'
@@ -8128,19 +8221,21 @@ function computeCapitalDeployed() {
   ];
 
   const result = windows.map(w => {
-    let stock = 0, voo = 0, pe = 0, count = 0;
+    let stock = 0, voo = 0, pe = 0, count = 0, redeployedTotal = 0;
     buys.forEach(b => {
       if (w.days !== null) {
         const buyDate = new Date(b.date + 'T00:00:00');
         const diff = (today - buyDate) / msPerDay;
         if (diff < 0 || diff > w.days) return;
       }
-      if (b.kind === 'stock') stock += b.amount;
-      else if (b.kind === 'voo') voo += b.amount;
-      else if (b.kind === 'pe') pe += b.amount;
+      // Only newCapital counts toward deployment; redeployed portion is internal recycling
+      if (b.kind === 'stock') stock += b.newCapital;
+      else if (b.kind === 'voo') voo += b.newCapital;
+      else if (b.kind === 'pe') pe += b.newCapital;
+      redeployedTotal += b.redeployed;
       count++;
     });
-    return { ...w, stock, voo, pe, total: stock + voo + pe, count };
+    return { ...w, stock, voo, pe, total: stock + voo + pe, redeployedTotal, count };
   });
 
   return { windows: result, buys };
@@ -8172,7 +8267,7 @@ function renderCapitalDeployed() {
     html += '<span style="font-weight:700;color:var(--color-text-primary)">' + fmtDollarWhole(w.total) + '</span>';
     html += '</div>';
   });
-  html += '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-tertiary)">Gross deployment · click for full breakdown</div>';
+  html += '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-tertiary)">Net new capital · click for breakdown</div>';
   html += '</div>';
   el.innerHTML = html;
 }
@@ -8593,6 +8688,84 @@ function getDateString(dayOffset) {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
+// ─────────────────────────────────────────────
+// Edit Position (advanced fields)
+//
+// Most position fields are inline-editable on the row (ticker, shares, price, etc).
+// This modal exists for fields that don't have a cell — currently just redeployedAmount.
+// Designed to be additive: more fields can be added here as the schema grows without
+// adding columns to an already-wide table.
+// ─────────────────────────────────────────────
+let _editPositionId = null;
+
+function openEditPositionModal(posId) {
+  const p = positions.find(pos => pos.id === posId);
+  if (!p) return;
+  _editPositionId = posId;
+
+  const modal = document.getElementById('edit-position-modal');
+  const subtitle = document.getElementById('edit-position-subtitle');
+  const redeployInput = document.getElementById('edit-pos-redeployed');
+  const hint = document.getElementById('edit-pos-redeployed-hint');
+  const err = document.getElementById('edit-pos-error');
+
+  // Compute total cost to show as a hint and enforce the upper bound at validation time
+  const shares = parseFloat(p.shares);
+  const price = parseFloat(p.pricePaid);
+  const total = (shares > 0 && price > 0) ? shares * price : null;
+
+  subtitle.textContent = `${p.ticker || '(no ticker)'} · ${p.account || '(no account)'} · bought ${p.dateBought || '—'}`;
+  redeployInput.value = p.redeployedAmount || '';
+  hint.textContent = total !== null
+    ? `Total cost: ${fmtDollar(total)} — redeployment cannot exceed this.`
+    : 'Total cost unknown (shares × price not yet entered). No upper bound enforced.';
+  err.style.display = 'none';
+
+  modal.classList.remove('hidden');
+}
+
+function closeEditPositionModal() {
+  document.getElementById('edit-position-modal').classList.add('hidden');
+  _editPositionId = null;
+}
+
+function confirmEditPosition() {
+  if (_editPositionId === null) return;
+  const p = positions.find(pos => pos.id === _editPositionId);
+  if (!p) { closeEditPositionModal(); return; }
+
+  const err = document.getElementById('edit-pos-error');
+  const showErr = (msg) => { err.textContent = msg; err.style.display = 'block'; };
+
+  const redeployStr = document.getElementById('edit-pos-redeployed').value;
+  let redeployed = 0;
+  if (redeployStr !== '' && redeployStr != null) {
+    redeployed = parseFloat(redeployStr);
+    if (isNaN(redeployed) || redeployed < 0) return showErr('Redeployed amount must be 0 or greater.');
+    // If we know total cost, enforce that redeployment doesn't exceed it
+    const shares = parseFloat(p.shares);
+    const price = parseFloat(p.pricePaid);
+    if (shares > 0 && price > 0) {
+      const total = shares * price;
+      if (redeployed > total) return showErr(`Cannot exceed total cost (${fmtDollar(total)}).`);
+    }
+  }
+
+  p.redeployedAmount = redeployed;
+  closeEditPositionModal();
+  renderAll();           // re-render the row (in case anything visible depends on it later)
+  renderCapitalDeployed(); // refresh the dashboard card immediately
+  scheduleSave();
+
+  // If the Capital Deployed overlay is open, refresh it
+  if (cardOverlayActive) {
+    const content = document.getElementById('card-overlay-content');
+    if (content && content.textContent.includes('Capital Deployed')) {
+      _renderCardOverlay('capital-deployed');
+    }
+  }
+}
+
 function deletePeDeal(id) {
   const idx = peDeals.findIndex(d => d.id === id);
   if (idx < 0) return;
@@ -8770,16 +8943,17 @@ function updateSummaries() {
 }
 
 function addPosition() {
-  const totalCash = (cashBuckets.Taxable || 0) + (cashBuckets.IRA || 0);
-  if (totalCash > 0) {
-    document.getElementById('capital-modal').classList.remove('hidden');
-    document.getElementById('capital-source-sel').value = 'new';
-    document.getElementById('capital-cash-detail').style.display = 'none';
-    updateCapitalAvailable();
-  } else {
-    window._pendingStrategy = '';
-    showStrategyPicker();
-  }
+  // Always show capital-modal so the user records whether this is new capital or redeployment.
+  // The 'cash' option in the modal is only meaningful when cashBuckets has funds; otherwise
+  // it functions the same as 'redeployed' (records the redeployment but doesn't draw from a bucket).
+  document.getElementById('capital-modal').classList.remove('hidden');
+  document.getElementById('capital-source-sel').value = 'new';
+  document.getElementById('capital-redeployed-detail').style.display = 'none';
+  document.getElementById('capital-cash-detail').style.display = 'none';
+  // Reset redeployment input
+  const rInput = document.getElementById('capital-redeployed-input');
+  if (rInput) rInput.value = '';
+  updateCapitalAvailable();
 }
 
 function skipThesis() {
@@ -8825,6 +8999,11 @@ function createNewPosition(note, isETF = false, sleeve = '', balanceFlavor = nul
   if (sleeve) p.sleeve = sleeve;
   if (balanceFlavor) p.balanceFlavor = balanceFlavor;
   if (spxLive) p.spxExit = spxLive.toFixed(2);
+  // Apply pending redeployment from capital-modal flow
+  if (typeof window._pendingRedeployedAmount === 'number' && window._pendingRedeployedAmount > 0) {
+    p.redeployedAmount = window._pendingRedeployedAmount;
+  }
+  window._pendingRedeployedAmount = 0;
   positions.push(p);
   renderAll();
   scheduleSave();
@@ -9191,6 +9370,18 @@ async function init() {
   renderSleeveRef();
   renderAll();
 }
+
+// Block mousewheel from changing focused number inputs. The browser default lets
+// you spin a focused number input by scrolling; users who navigate by scroll can
+// accidentally edit values. Calling preventDefault on the wheel event stops it.
+// We also blur the input on wheel as a belt-and-suspenders safeguard.
+document.addEventListener('wheel', (e) => {
+  const t = e.target;
+  if (t && t.tagName === 'INPUT' && t.type === 'number' && t === document.activeElement) {
+    e.preventDefault();
+    t.blur();
+  }
+}, { passive: false });
 
 init();
 </script>
