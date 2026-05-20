@@ -1285,6 +1285,37 @@
   </div>
 </div>
 
+<!-- Edit Closed Position Modal -->
+<div class="modal-overlay hidden" id="edit-closed-position-modal">
+  <div class="modal">
+    <div class="modal-title">Edit Closed Position</div>
+    <div class="modal-subtitle" id="edit-closed-subtitle">Sale details. Editable for closed positions only.</div>
+    <div class="modal-field">
+      <label class="modal-label">Sale date</label>
+      <input class="modal-input" id="edit-closed-sell-date" type="date" style="width:170px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Sale price per share ($)</label>
+      <input class="modal-input" id="edit-closed-exit-price" type="number" min="0" step="0.0001" placeholder="e.g. 184.5" style="width:170px">
+      <div id="edit-closed-proceeds-preview" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" title="S&P 500 index value on the sale date. Used for 'vs S&P' return calculation.">S&P 500 at sale</label>
+      <input class="modal-input" id="edit-closed-spx-exit" type="number" min="0" step="0.01" placeholder="e.g. 6896.24" style="width:170px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" id="edit-closed-bench-label" title="Theme benchmark price on the sale date. Used for theme-alpha calculation.">Theme benchmark at sale ($)</label>
+      <input class="modal-input" id="edit-closed-bench-exit" type="number" min="0" step="0.01" placeholder="e.g. 619.43" style="width:170px">
+      <div id="edit-closed-bench-hint" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+    </div>
+    <div id="edit-closed-error" style="font-size:10px;color:var(--color-text-danger);margin-top:6px;display:none"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeEditClosedPositionModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmEditClosedPosition()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
 <!-- Add/Edit PE Deal Modal -->
 <div class="modal-overlay hidden" id="add-pe-deal-modal">
   <div class="modal" style="max-height:90vh;overflow-y:auto">
@@ -2396,7 +2427,7 @@ function renderClosedRow(pos) {
     <td><span class="sold-badge" onclick="toggleClosed(${pos.id})" title="Click to reopen">Sold</span></td>
     <td class="calc-cell" style="text-align:left">${esc(pos.theme||'') || '<span class="dash">—</span>'}</td>
     <td class="calc-cell" style="text-align:left;max-width:160px;white-space:normal">${esc(pos.notes||'') || '<span class="dash">—</span>'}</td>
-    <td><button class="btn btn-sm btn-danger" onclick="deletePosition(${pos.id})" title="Delete">✕</button></td>
+    <td style="white-space:nowrap"><button class="btn btn-sm" onclick="openEditClosedPositionModal(${pos.id})" title="Edit sale details" style="margin-right:4px">✎</button><button class="btn btn-sm btn-danger" onclick="deletePosition(${pos.id})" title="Delete">✕</button></td>
   </tr>`;
 }
 
@@ -8775,6 +8806,132 @@ function confirmEditPosition() {
       _renderCardOverlay('capital-deployed');
     }
   }
+}
+
+// ─────────────────────────────────────────────
+// Edit Closed Position
+//
+// Closed positions are rendered read-only by renderClosedRow. This modal lets the user
+// fix data that was missed or wrong at sell time:
+//   - sale date
+//   - sale price per share (exitPrice)
+//   - S&P at sale (spxExit)
+//   - theme benchmark at sale (benchmarkPriceAtSell)
+//
+// Required because the sell-modal historically didn't capture these reliably, and
+// because actual sale prices/dates sometimes need correction after the fact.
+// ─────────────────────────────────────────────
+let _editClosedPositionId = null;
+
+function openEditClosedPositionModal(posId) {
+  const p = positions.find(pos => pos.id === posId);
+  if (!p || !p.closed) return;
+  _editClosedPositionId = posId;
+
+  const modal = document.getElementById('edit-closed-position-modal');
+  const subtitle = document.getElementById('edit-closed-subtitle');
+  const benchLabel = document.getElementById('edit-closed-bench-label');
+  const benchHint = document.getElementById('edit-closed-bench-hint');
+  const errEl = document.getElementById('edit-closed-error');
+
+  subtitle.textContent = `${p.ticker || '(no ticker)'} · ${p.account || '(no account)'} · bought ${p.dateBought || '—'}`;
+
+  document.getElementById('edit-closed-sell-date').value = p.sellDate || '';
+  document.getElementById('edit-closed-exit-price').value = p.exitPrice || '';
+  document.getElementById('edit-closed-spx-exit').value = p.spxExit || '';
+  document.getElementById('edit-closed-bench-exit').value = (p.benchmarkPriceAtSell != null) ? p.benchmarkPriceAtSell : '';
+
+  // Customize the benchmark label and hint to show which benchmark this position uses
+  const benchTicker = p.benchmarkAtBuy;
+  if (benchTicker) {
+    benchLabel.textContent = `${benchTicker} (theme benchmark) at sale ($)`;
+    const buyPrice = p.benchmarkPriceAtBuy;
+    benchHint.textContent = buyPrice ? `${benchTicker} at buy: ${fmtDollar(parseFloat(buyPrice))}. Leave blank if unknown — theme alpha won't compute.` : `Leave blank if unknown — theme alpha won't compute.`;
+  } else {
+    benchLabel.textContent = 'Theme benchmark at sale ($)';
+    benchHint.textContent = 'No theme benchmark anchored at buy time — this field has no effect.';
+  }
+
+  // Live proceeds preview
+  const updatePreview = () => {
+    const price = parseFloat(document.getElementById('edit-closed-exit-price').value);
+    const shares = parseFloat(p.shares) || 0;
+    const previewEl = document.getElementById('edit-closed-proceeds-preview');
+    if (price > 0 && shares > 0) {
+      previewEl.textContent = `Proceeds: ${shares} × ${fmtDollar(price)} = ${fmtDollar(shares * price)}`;
+    } else {
+      previewEl.textContent = '';
+    }
+  };
+  document.getElementById('edit-closed-exit-price').oninput = updatePreview;
+  updatePreview();
+
+  errEl.style.display = 'none';
+  modal.classList.remove('hidden');
+}
+
+function closeEditClosedPositionModal() {
+  document.getElementById('edit-closed-position-modal').classList.add('hidden');
+  _editClosedPositionId = null;
+}
+
+function confirmEditClosedPosition() {
+  if (_editClosedPositionId === null) return;
+  const p = positions.find(pos => pos.id === _editClosedPositionId);
+  if (!p) { closeEditClosedPositionModal(); return; }
+
+  const errEl = document.getElementById('edit-closed-error');
+  const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+
+  const sellDateStr = document.getElementById('edit-closed-sell-date').value;
+  const exitPriceStr = document.getElementById('edit-closed-exit-price').value;
+  const spxExitStr = document.getElementById('edit-closed-spx-exit').value;
+  const benchExitStr = document.getElementById('edit-closed-bench-exit').value;
+
+  // Validate sale date — required, not future, not absurd
+  if (!sellDateStr) return showErr('Sale date is required.');
+  const sd = new Date(sellDateStr + 'T00:00:00');
+  const today = new Date(); today.setHours(0,0,0,0);
+  if (isNaN(sd.getTime())) return showErr('Invalid sale date.');
+  if (sd > today) return showErr('Sale date cannot be in the future.');
+  // Sale date must be on or after buy date
+  if (p.dateBought) {
+    const bd = new Date(p.dateBought + 'T00:00:00');
+    if (!isNaN(bd.getTime()) && sd < bd) return showErr('Sale date cannot be before buy date (' + p.dateBought + ').');
+  }
+
+  // Validate exit price — required, positive
+  if (exitPriceStr === '' || exitPriceStr == null) return showErr('Sale price is required.');
+  const exitPrice = parseFloat(exitPriceStr);
+  if (isNaN(exitPrice) || exitPrice <= 0) return showErr('Sale price must be greater than 0.');
+
+  // SPX and benchmark are optional. Validate only if provided.
+  let spxExit = null;
+  if (spxExitStr !== '' && spxExitStr != null) {
+    spxExit = parseFloat(spxExitStr);
+    if (isNaN(spxExit) || spxExit <= 0) return showErr('S&P value must be greater than 0 (or leave blank).');
+  }
+  let benchExit = null;
+  if (benchExitStr !== '' && benchExitStr != null) {
+    benchExit = parseFloat(benchExitStr);
+    if (isNaN(benchExit) || benchExit <= 0) return showErr('Benchmark value must be greater than 0 (or leave blank).');
+  }
+
+  // Apply
+  p.sellDate = sellDateStr;
+  p.exitPrice = exitPrice;
+  // For SPX/bench, allow clearing back to empty/null if user removed the value
+  p.spxExit = spxExit !== null ? String(spxExit) : '';
+  if (benchExit !== null) {
+    p.benchmarkPriceAtSell = benchExit;
+  } else if (p.benchmarkPriceAtSell != null) {
+    // User cleared the field — remove the property
+    delete p.benchmarkPriceAtSell;
+  }
+
+  closeEditClosedPositionModal();
+  renderAll();
+  scheduleSave();
 }
 
 function deletePeDeal(id) {
