@@ -744,6 +744,10 @@
         <div class="analytics-card-title">Capital Deployed — Money In Over Time</div>
         <div id="capital-deployed-content"></div>
       </div>
+      <div class="analytics-card" id="pe-deals-card" onclick="showCardOverlay('private-investments')" style="cursor:pointer">
+        <div class="analytics-card-title">Private Investments — Direct PE Deals</div>
+        <div id="pe-deals-content"></div>
+      </div>
     </div>
 
 
@@ -1237,7 +1241,47 @@
   </div>
 </div>
 
-<!-- Capital Source Modal -->
+<!-- Add/Edit PE Deal Modal -->
+<div class="modal-overlay hidden" id="add-pe-deal-modal">
+  <div class="modal">
+    <div class="modal-title">Add Private Investment</div>
+    <div class="modal-subtitle">Direct investment in a private company. Kept separate from public portfolio totals.</div>
+    <div class="modal-field">
+      <label class="modal-label">Company name</label>
+      <input class="modal-input" id="add-pe-company" type="text" placeholder="e.g. Acme Robotics" style="width:260px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Investment date</label>
+      <input class="modal-input" id="add-pe-invest-date" type="date" style="width:170px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Amount invested ($)</label>
+      <input class="modal-input" id="add-pe-amount" type="number" min="0" step="0.01" placeholder="e.g. 50000" style="width:160px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Current estimated value ($)</label>
+      <input class="modal-input" id="add-pe-current-value" type="number" min="0" step="0.01" placeholder="Leave blank to use amount invested" style="width:200px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Last valuation date</label>
+      <input class="modal-input" id="add-pe-valuation-date" type="date" style="width:170px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Stage / round (optional)</label>
+      <input class="modal-input" id="add-pe-stage" type="text" placeholder="e.g. Seed, Series A" style="width:200px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Notes (optional)</label>
+      <textarea class="modal-input" id="add-pe-notes" rows="3" placeholder="Thesis, terms, vesting, anything to remember" style="width:300px;font-family:inherit;resize:vertical"></textarea>
+    </div>
+    <div id="add-pe-preview" style="font-size:10px;color:var(--color-text-tertiary);margin-top:6px"></div>
+    <div id="add-pe-error" style="font-size:10px;color:var(--color-text-danger);margin-top:6px;display:none"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeAddPeDealModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmAddPeDeal()">Save</button>
+    </div>
+  </div>
+</div>
 <div class="modal-overlay hidden" id="capital-modal">
   <div class="modal">
     <div class="modal-title">Capital Source</div>
@@ -1426,6 +1470,8 @@ let cashLedger = [];
 let spLots = []; // { date, shares, pricePaid, account } — S&P passive core positions
 let spCurrentPrice = 0; // current VOO/SPY price, updated manually
 let snapshots = []; // forward-only history captured by Take Snapshot
+let peDeals = []; // private equity / direct private investments — kept fully separate from public book
+// peDeal shape: { id, company, investmentDate, amountInvested, currentValue, lastValuationDate, stage, notes }
 let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Benchmarks
 let benchmarkPricesDate = null; // ISO timestamp of last benchmark fetch
 let trackRecordMatureOnly = false; // toggle: filter Track Record cards to mature positions only
@@ -1478,6 +1524,7 @@ async function savePositions() {
     localStorage.setItem('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
     localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
     localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory }));
+    localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
     flashSave();
   } catch(e) {
     console.warn('Save failed', e.message);
@@ -1551,6 +1598,14 @@ async function loadPositions() {
       if (snapParsed.themeUniverseHistory && typeof snapParsed.themeUniverseHistory === 'object') themeUniverseHistory = snapParsed.themeUniverseHistory;
     }
   } catch(e) { /* no snapshots yet */ }
+
+  try {
+    const peRes = localStorage.getItem('portfolio-pe-deals-v1');
+    if (peRes) {
+      const peParsed = JSON.parse(peRes);
+      if (Array.isArray(peParsed.peDeals)) peDeals = peParsed.peDeals;
+    }
+  } catch(e) { /* no pe deals yet */ }
 
   if (positions.length === 0) {
     positions = [mkPos(), mkPos(), mkPos()];
@@ -6332,6 +6387,94 @@ function _renderCardOverlay(type) {
       });
       html += '</div>';
     }
+  } else if (type === 'private-investments') {
+    const t = computePeTotals();
+    const overlayAddBtn = '<button onclick="closeCardOverlay();openAddPeDealModal()" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:4px;padding:4px 12px;font-size:10px;cursor:pointer;font-family:inherit">+ Add Deal</button>';
+
+    html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary)">Private Investments — Direct PE Deals</div>';
+    html += overlayAddBtn;
+    html += '</div>';
+    html += '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:16px">Direct investments in private companies. Marked at user-supplied values, not live prices. Kept fully separate from public portfolio totals.</div>';
+
+    if (t.count === 0) {
+      html += '<div style="padding:24px;color:var(--color-text-tertiary);font-style:italic;text-align:center;font-size:11px">No private investments yet. Click + Add Deal to add your first.</div>';
+    } else {
+      // Summary block
+      const glColor = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;padding:12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">';
+      html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Total Invested</div><div style="font-size:14px;font-weight:700">' + fmtDollarWhole(t.totalInvested) + '</div></div>';
+      html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Current Value</div><div style="font-size:14px;font-weight:700">' + fmtDollarWhole(t.totalCurrentValue) + '</div></div>';
+      html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Unrealized G/L</div><div style="font-size:14px;font-weight:700;color:' + glColor + '">' + fmtDollarWhole(t.gl) + '</div></div>';
+      html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Multiple</div><div style="font-size:14px;font-weight:700;color:var(--color-text-secondary)">' + t.multiple.toFixed(2) + 'x</div></div>';
+      html += '</div>';
+
+      // Deal list — most-recently-invested first
+      const sortedDeals = [...peDeals].sort((a,b) => (b.investmentDate || '').localeCompare(a.investmentDate || ''));
+
+      html += '<div style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin:6px 0 6px">Deals</div>';
+      html += '<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);max-height:420px;overflow-y:auto">';
+
+      sortedDeals.forEach(d => {
+        const inv = parseFloat(d.amountInvested) || 0;
+        const cv = (d.currentValue !== '' && d.currentValue != null && !isNaN(parseFloat(d.currentValue))) ? parseFloat(d.currentValue) : inv;
+        const gl = cv - inv;
+        const mult = inv > 0 ? cv / inv : 0;
+        const dealGlColor = gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+
+        // Staleness for this specific deal
+        let staleNote = '';
+        if (d.lastValuationDate) {
+          const today = new Date(); today.setHours(0,0,0,0);
+          const valDate = new Date(d.lastValuationDate + 'T00:00:00');
+          const days = Math.round((today - valDate)/(24*60*60*1000));
+          if (days > 180) {
+            staleNote = '<span style="color:var(--color-text-warning);font-size:9px;margin-left:6px">stale ' + days + 'd</span>';
+          }
+        } else {
+          staleNote = '<span style="color:var(--color-text-tertiary);font-size:9px;margin-left:6px">no valuation date</span>';
+        }
+
+        html += '<div style="padding:10px 12px;border-bottom:1px solid var(--color-border-tertiary)">';
+        // Top row: company name + actions
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+        html += '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary)">' + esc(d.company || '(unnamed)') + (d.stage ? ' <span style="font-size:10px;color:var(--color-text-tertiary);font-weight:400">· ' + esc(d.stage) + '</span>' : '') + '</div>';
+        html += '<div style="display:flex;gap:4px">';
+        html += '<button onclick="closeCardOverlay();openAddPeDealModal(' + JSON.stringify(d.id) + ')" title="Edit deal" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;font-family:inherit">edit</button>';
+        html += '<button onclick="deletePeDeal(' + JSON.stringify(d.id) + ')" title="Delete deal" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-danger);border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;font-family:inherit">×</button>';
+        html += '</div>';
+        html += '</div>';
+        // Metrics row
+        html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;font-size:11px">';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Invested</div><div style="font-weight:600">' + fmtDollarWhole(inv) + '</div></div>';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Current Value</div><div style="font-weight:600">' + fmtDollarWhole(cv) + '</div></div>';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">G/L</div><div style="font-weight:600;color:' + dealGlColor + '">' + fmtDollarWhole(gl) + '</div></div>';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Multiple</div><div style="font-weight:600">' + mult.toFixed(2) + 'x</div></div>';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Invested</div><div style="font-size:10px;color:var(--color-text-tertiary)">' + esc(d.investmentDate || '—') + '</div></div>';
+        html += '</div>';
+        // Valuation date + notes row
+        html += '<div style="margin-top:6px;font-size:10px;color:var(--color-text-tertiary)">';
+        html += 'Last valuation: ' + esc(d.lastValuationDate || '—') + staleNote;
+        html += '</div>';
+        if (d.notes) {
+          html += '<div style="margin-top:4px;font-size:10px;color:var(--color-text-secondary);font-style:italic">' + esc(d.notes) + '</div>';
+        }
+        // Research row — pre-built search links open in new tabs
+        if (d.company && d.company.trim()) {
+          const links = buildPeResearchLinks(d.company);
+          html += '<div style="margin-top:8px;padding-top:6px;border-top:1px dashed var(--color-border-tertiary)">';
+          html += '<div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Research</div>';
+          html += '<div style="display:flex;flex-wrap:wrap;gap:4px">';
+          links.forEach(l => {
+            html += '<a href="' + esc(l.url) + '" target="_blank" rel="noopener noreferrer" title="' + esc(l.hint) + '" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:3px;padding:2px 8px;font-size:9px;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-block">' + esc(l.label) + ' ↗</a>';
+          });
+          html += '</div>';
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    }
   }
 
   content.innerHTML = html;
@@ -7928,6 +8071,281 @@ function renderCapitalDeployed() {
   el.innerHTML = html;
 }
 
+// ─────────────────────────────────────────────
+// Private Investments (PE) — direct private company holdings
+//
+// Kept fully separate from the public portfolio. PE values are user-marked
+// (no live pricing), often stale, and not comparable to public-market alpha.
+// The dashboard "Total Portfolio" intentionally does NOT include PE.
+//
+// peDeal shape:
+//   { id, company, investmentDate, amountInvested, currentValue,
+//     lastValuationDate, stage, notes }
+// ─────────────────────────────────────────────
+let _peEditId = null; // null = add mode, otherwise the id of the deal being edited
+
+function computePeTotals() {
+  let totalInvested = 0;
+  let totalCurrentValue = 0;
+  let oldestValuationDate = null;
+  peDeals.forEach(d => {
+    const inv = parseFloat(d.amountInvested) || 0;
+    // If no currentValue set, fall back to cost basis (treat as "marked at cost")
+    const cv = (d.currentValue !== '' && d.currentValue != null && !isNaN(parseFloat(d.currentValue)))
+      ? parseFloat(d.currentValue) : inv;
+    totalInvested += inv;
+    totalCurrentValue += cv;
+    if (d.lastValuationDate) {
+      if (!oldestValuationDate || d.lastValuationDate < oldestValuationDate) {
+        oldestValuationDate = d.lastValuationDate;
+      }
+    }
+  });
+  const gl = totalCurrentValue - totalInvested;
+  const multiple = totalInvested > 0 ? totalCurrentValue / totalInvested : 0;
+
+  // Days since oldest valuation — staleness indicator
+  let staleDays = null;
+  if (oldestValuationDate) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const valDate = new Date(oldestValuationDate + 'T00:00:00');
+    staleDays = Math.round((today - valDate) / (24*60*60*1000));
+  }
+
+  return { totalInvested, totalCurrentValue, gl, multiple, staleDays, count: peDeals.length };
+}
+
+function renderPeDeals() {
+  const el = document.getElementById('pe-deals-content');
+  if (!el) return;
+  const t = computePeTotals();
+
+  if (t.count === 0) {
+    el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+      '<div style="color:var(--color-text-tertiary);font-size:11px">No private investments yet</div>' +
+      '<button onclick="event.stopPropagation();openAddPeDealModal()" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-family:inherit">+ Add Deal</button>' +
+      '</div>';
+    return;
+  }
+
+  const glColor = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const staleWarn = (t.staleDays !== null && t.staleDays > 180)
+    ? '<span style="color:var(--color-text-warning);font-size:9px" title="At least one deal has a valuation older than 180 days">· stale (' + t.staleDays + 'd)</span>'
+    : '';
+
+  let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Invested</div><div style="font-size:13px;font-weight:700">' + fmtDollarWhole(t.totalInvested) + '</div></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Current Value</div><div style="font-size:13px;font-weight:700;color:var(--color-text-primary)">' + fmtDollarWhole(t.totalCurrentValue) + '</div></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Unrealized G/L</div><div style="font-size:13px;font-weight:700;color:' + glColor + '">' + fmtDollarWhole(t.gl) + '</div></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Multiple</div><div style="font-size:13px;font-weight:700;color:var(--color-text-secondary)">' + t.multiple.toFixed(2) + 'x</div></div>';
+  html += '<div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px">';
+  html += '<div style="font-size:9px;color:var(--color-text-tertiary)">' + t.count + ' deal' + (t.count === 1 ? '' : 's') + ' ' + staleWarn + '</div>';
+  html += '<button onclick="event.stopPropagation();openAddPeDealModal()" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-family:inherit">+ Add Deal</button>';
+  html += '</div>';
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// CRUD ─────────────
+function openAddPeDealModal(editId) {
+  const modal = document.getElementById('add-pe-deal-modal');
+  if (!modal) return;
+
+  _peEditId = (editId != null) ? editId : null;
+  const isEdit = _peEditId !== null;
+  const editing = isEdit ? peDeals.find(d => d.id === _peEditId) : null;
+
+  // Title and button update for mode
+  const titleEl = document.querySelector('#add-pe-deal-modal .modal-title');
+  const subtitleEl = document.querySelector('#add-pe-deal-modal .modal-subtitle');
+  const primaryBtn = document.querySelector('#add-pe-deal-modal .modal-actions .btn-primary');
+  if (titleEl) titleEl.textContent = isEdit ? 'Edit Private Investment' : 'Add Private Investment';
+  if (subtitleEl) subtitleEl.textContent = isEdit
+    ? 'Update fields. Other deals are not affected.'
+    : 'Direct investment in a private company. Kept separate from public portfolio totals.';
+  if (primaryBtn) primaryBtn.textContent = isEdit ? 'Save Changes' : 'Save';
+
+  // Defaults
+  const t = new Date();
+  const todayStr = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+
+  document.getElementById('add-pe-company').value = editing ? (editing.company || '') : '';
+  document.getElementById('add-pe-invest-date').value = editing ? (editing.investmentDate || '') : todayStr;
+  document.getElementById('add-pe-amount').value = editing ? (editing.amountInvested || '') : '';
+  document.getElementById('add-pe-current-value').value = editing ? (editing.currentValue != null ? editing.currentValue : '') : '';
+  document.getElementById('add-pe-valuation-date').value = editing ? (editing.lastValuationDate || '') : todayStr;
+  document.getElementById('add-pe-stage').value = editing ? (editing.stage || '') : '';
+  document.getElementById('add-pe-notes').value = editing ? (editing.notes || '') : '';
+  document.getElementById('add-pe-preview').textContent = '';
+  document.getElementById('add-pe-error').style.display = 'none';
+  modal.classList.remove('hidden');
+
+  // Live preview of multiple
+  const update = () => {
+    const amt = parseFloat(document.getElementById('add-pe-amount').value);
+    const cv = parseFloat(document.getElementById('add-pe-current-value').value);
+    const preview = document.getElementById('add-pe-preview');
+    if (amt > 0 && cv > 0) {
+      const mult = (cv / amt).toFixed(2);
+      const gl = cv - amt;
+      const glStr = (gl >= 0 ? '+' : '') + fmtDollar(gl);
+      preview.textContent = `Multiple: ${mult}x · Unrealized: ${glStr}`;
+    } else {
+      preview.textContent = '';
+    }
+  };
+  document.getElementById('add-pe-amount').oninput = update;
+  document.getElementById('add-pe-current-value').oninput = update;
+  update();
+}
+
+function closeAddPeDealModal() {
+  const modal = document.getElementById('add-pe-deal-modal');
+  if (modal) modal.classList.add('hidden');
+  _peEditId = null;
+}
+
+function confirmAddPeDeal() {
+  const company = document.getElementById('add-pe-company').value.trim();
+  const investDate = document.getElementById('add-pe-invest-date').value;
+  const amountStr = document.getElementById('add-pe-amount').value;
+  const currentValueStr = document.getElementById('add-pe-current-value').value;
+  const valuationDate = document.getElementById('add-pe-valuation-date').value;
+  const stage = document.getElementById('add-pe-stage').value.trim();
+  const notes = document.getElementById('add-pe-notes').value.trim();
+  const errEl = document.getElementById('add-pe-error');
+  const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+
+  // Validate
+  if (!company) return showErr('Company name is required.');
+  if (!investDate) return showErr('Investment date is required.');
+  const invDate = new Date(investDate + 'T00:00:00');
+  const today = new Date(); today.setHours(0,0,0,0);
+  if (isNaN(invDate.getTime())) return showErr('Invalid investment date.');
+  if (invDate > today) return showErr('Investment date cannot be in the future.');
+  if (invDate.getFullYear() < 1990) return showErr('Investment date is too far in the past.');
+
+  const amount = parseFloat(amountStr);
+  if (!(amount > 0)) return showErr('Amount invested must be greater than 0.');
+
+  let currentValue = null;
+  if (currentValueStr !== '' && currentValueStr != null) {
+    currentValue = parseFloat(currentValueStr);
+    if (isNaN(currentValue) || currentValue < 0) return showErr('Current value must be 0 or greater (or leave blank).');
+  }
+
+  // Valuation date — if provided, must be a real date and not in the future
+  if (valuationDate) {
+    const vDate = new Date(valuationDate + 'T00:00:00');
+    if (isNaN(vDate.getTime())) return showErr('Invalid valuation date.');
+    if (vDate > today) return showErr('Valuation date cannot be in the future.');
+  }
+
+  const deal = {
+    id: _peEditId !== null ? _peEditId : ('pe_' + Date.now() + '_' + Math.floor(Math.random() * 1000)),
+    company,
+    investmentDate: investDate,
+    amountInvested: amount,
+    currentValue: currentValue !== null ? currentValue : '',
+    lastValuationDate: valuationDate || '',
+    stage,
+    notes
+  };
+
+  if (_peEditId !== null) {
+    const idx = peDeals.findIndex(d => d.id === _peEditId);
+    if (idx >= 0) peDeals[idx] = deal;
+    else peDeals.push(deal); // fallback: id not found, treat as add
+  } else {
+    peDeals.push(deal);
+  }
+  _peEditId = null;
+
+  closeAddPeDealModal();
+  renderPeDeals();
+  scheduleSave();
+
+  // Refresh overlay if it's the PE overlay
+  if (cardOverlayActive) {
+    const content = document.getElementById('card-overlay-content');
+    if (content && content.textContent.includes('Private Investments')) {
+      _renderCardOverlay('private-investments');
+    }
+  }
+}
+
+// Build the set of "research" search URLs for a given private company.
+//
+// Each entry opens in a new tab pre-loaded with a targeted query. We construct
+// queries that bias toward valuation/funding/secondary news rather than general
+// company news, because the user's purpose is informing their PE mark, not
+// reading every story about the company.
+//
+// Note: search engines occasionally change URL params. If a button stops
+// returning useful results, the engine likely tweaked something — these aren't
+// guaranteed-stable APIs, they're URL conventions.
+function buildPeResearchLinks(companyName) {
+  const name = (companyName || '').trim();
+  if (!name) return [];
+  const q = encodeURIComponent('"' + name + '"');
+  // Keyword group biased toward valuation-relevant news
+  const valKeywords = encodeURIComponent('(valuation OR tender OR secondary OR funding OR "raised" OR "series")');
+  // SEC EDGAR full-text search — useful because mutual funds disclose marks on
+  // private holdings in their N-PORT filings (Fidelity, T. Rowe Price, BlackRock, etc.).
+  const edgarQ = encodeURIComponent(name);
+  // EDGAR full-text search URL — uses the public EDGAR search UI
+  const edgarStart = getDateString(-365);
+  const edgarEnd = getDateString(0);
+
+  return [
+    {
+      label: 'Recent News (3mo)',
+      url: 'https://www.google.com/search?q=' + q + '+' + valKeywords + '&tbm=nws&tbs=qdr:m3',
+      hint: 'Google News, last 3 months, valuation/funding keywords'
+    },
+    {
+      label: 'Broader News',
+      url: 'https://www.google.com/search?q=' + q + '&tbm=nws',
+      hint: 'Google News, all results, no keyword filter'
+    },
+    {
+      label: 'Bing News',
+      url: 'https://www.bing.com/news/search?q=' + q + '+' + valKeywords,
+      hint: 'Bing News — often surfaces different sources than Google'
+    },
+    {
+      label: 'SEC Filings',
+      url: 'https://www.sec.gov/edgar/search/#/q=' + edgarQ + '&forms=NPORT-P&dateRange=custom&startdt=' + edgarStart + '&enddt=' + edgarEnd,
+      hint: 'SEC EDGAR full-text search of N-PORT filings (mutual fund holdings disclosures) for the last 12 months — these often contain marks on private companies held by funds like Fidelity, T. Rowe Price, BlackRock'
+    }
+  ];
+}
+
+// Helper: get a YYYY-MM-DD string for (today + offset days). Negative offset = past.
+function getDateString(dayOffset) {
+  const d = new Date();
+  d.setDate(d.getDate() + dayOffset);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+function deletePeDeal(id) {
+  const idx = peDeals.findIndex(d => d.id === id);
+  if (idx < 0) return;
+  const deal = peDeals[idx];
+  const inv = parseFloat(deal.amountInvested) || 0;
+  const msg = `Delete this private investment?\n\n${deal.company} · invested ${deal.investmentDate}\nAmount: ${fmtDollar(inv)}\n\nThis cannot be undone.`;
+  if (!confirm(msg)) return;
+  peDeals.splice(idx, 1);
+  renderPeDeals();
+  scheduleSave();
+  if (cardOverlayActive) {
+    const content = document.getElementById('card-overlay-content');
+    if (content && content.textContent.includes('Private Investments')) {
+      _renderCardOverlay('private-investments');
+    }
+  }
+}
+
 function renderAll() {
   const open = positions.filter(p => !p.closed);
   const closed = positions.filter(p => p.closed);
@@ -7963,6 +8381,7 @@ function renderAll() {
   renderCashDisplay();
   renderCapitalFlow();
   renderCapitalDeployed();
+  renderPeDeals();
   renderTaxExposure();
   renderStaleBanner();
   renderStaleTags();
@@ -8294,6 +8713,7 @@ function exportData() {
     positions, nextId, spxLive, spxLiveDate, cashBuckets, cashLedger,
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
+    peDeals,
     version: "2.2",
     benchmarks: BENCHMARKS
   };
@@ -8325,6 +8745,7 @@ function importData(input) {
       if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
       if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
       if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
+      if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
       // Run v1 → v2 migration on imported data (idempotent)
       migratePositionsV1ToV2();
       await savePositions();
