@@ -1154,7 +1154,17 @@
 <div class="modal-overlay hidden" id="sell-modal">
   <div class="modal">
     <div class="modal-title">Marking as Sold — Exit Thesis</div>
-    <div class="modal-subtitle">Why are you selling? This gets recorded in the Post-Sell Analysis alongside your original thesis.</div>
+    <div class="modal-subtitle">Confirm the sale, then record why. Both get saved on the closed position.</div>
+    <div class="modal-field">
+      <label class="modal-label">Sale date</label>
+      <input class="modal-input" id="sell-date" type="date" style="width:170px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" title="Defaults to last refreshed market price. Override with the actual price you sold at.">Sale price per share ($)</label>
+      <input class="modal-input" id="sell-price" type="number" min="0" step="0.0001" style="width:170px">
+      <div id="sell-proceeds-preview" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+    </div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px;padding:6px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">SPX and theme benchmark values at sell are captured from current live data at the moment of marking sold. If you backdate the sale significantly, those values will reflect today rather than the actual sale date.</div>
     <div class="modal-field">
       <label class="modal-label">Why are you selling now?</label>
       <textarea class="modal-input" id="sell-why" rows="2" placeholder="e.g. Thesis played out, taking profits. / Thesis broken — margins compressed. / Trailing S&P by too much for too long…" style="resize:vertical"></textarea>
@@ -1174,6 +1184,7 @@
       <label class="modal-label">What will you do with the proceeds?</label>
       <textarea class="modal-input" id="sell-proceeds" rows="1" placeholder="e.g. Rotating into SMH / Taking cash / Harvesting loss against AAPL gain…" style="resize:vertical"></textarea>
     </div>
+    <div id="sell-error" style="font-size:10px;color:var(--color-text-danger);margin-top:6px;display:none"></div>
     <div class="modal-actions">
       <button class="btn" onclick="skipSellThesis()">Skip</button>
       <button class="btn btn-primary" onclick="confirmSellThesis()">Mark Sold</button>
@@ -9049,20 +9060,66 @@ function toggleClosed(id) {
     document.getElementById('sell-why').value = '';
     document.getElementById('sell-verdict').value = '';
     document.getElementById('sell-proceeds').value = '';
-    setTimeout(() => document.getElementById('sell-why').focus(), 100);
+    document.getElementById('sell-error').style.display = 'none';
+
+    // Prefill sale date with today
+    const t = new Date();
+    const todayStr = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+    document.getElementById('sell-date').value = todayStr;
+
+    // Prefill sale price with current market price (last refreshed exitPrice).
+    // Hint: if the user knows the actual fill differs, they override.
+    const currentPrice = parseFloat(pos.exitPrice);
+    document.getElementById('sell-price').value = (currentPrice > 0) ? currentPrice : '';
+
+    // Update proceeds preview as user types
+    const updatePreview = () => {
+      const price = parseFloat(document.getElementById('sell-price').value);
+      const shares = parseFloat(pos.shares) || 0;
+      const previewEl = document.getElementById('sell-proceeds-preview');
+      if (price > 0 && shares > 0) {
+        previewEl.textContent = `Proceeds: ${shares} × ${fmtDollar(price)} = ${fmtDollar(shares * price)}`;
+      } else {
+        previewEl.textContent = '';
+      }
+    };
+    document.getElementById('sell-price').oninput = updatePreview;
+    updatePreview();
+
+    setTimeout(() => document.getElementById('sell-price').focus(), 100);
   }
 }
 
 function skipSellThesis() {
+  // Even on skip, capture the date/price the user saw — they're factual, not narrative.
+  const saleDate = document.getElementById('sell-date').value;
+  const salePriceStr = document.getElementById('sell-price').value;
+  const salePrice = parseFloat(salePriceStr);
   document.getElementById('sell-modal').classList.add('hidden');
-  executeSell(pendingSellId, '');
+  executeSell(pendingSellId, '', { saleDate, salePrice: isNaN(salePrice) ? null : salePrice });
   pendingSellId = null;
 }
 
 function confirmSellThesis() {
+  const saleDate = document.getElementById('sell-date').value;
+  const salePriceStr = document.getElementById('sell-price').value;
   const why = document.getElementById('sell-why').value.trim();
   const verdict = document.getElementById('sell-verdict').value;
   const proceeds = document.getElementById('sell-proceeds').value.trim();
+  const errEl = document.getElementById('sell-error');
+  const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
+
+  // Validate date
+  if (!saleDate) return showErr('Sale date is required.');
+  const sd = new Date(saleDate + 'T00:00:00');
+  const today = new Date(); today.setHours(0,0,0,0);
+  if (isNaN(sd.getTime())) return showErr('Invalid sale date.');
+  if (sd > today) return showErr('Sale date cannot be in the future.');
+
+  // Validate price — required, must be positive
+  if (salePriceStr === '' || salePriceStr == null) return showErr('Sale price is required.');
+  const salePrice = parseFloat(salePriceStr);
+  if (isNaN(salePrice) || salePrice <= 0) return showErr('Sale price must be greater than 0.');
 
   let sellNote = '';
   if (verdict) sellNote += `Exit verdict: ${verdict}`;
@@ -9070,7 +9127,7 @@ function confirmSellThesis() {
   if (proceeds) sellNote += (sellNote ? ' | ' : '') + `Proceeds: ${proceeds}`;
 
   document.getElementById('sell-modal').classList.add('hidden');
-  executeSell(pendingSellId, sellNote);
+  executeSell(pendingSellId, sellNote, { saleDate, salePrice });
   pendingSellId = null;
 }
 
@@ -9078,21 +9135,56 @@ let undoState = null;
 let undoTimeout = null;
 let undoBarTimeout = null;
 
-function executeSell(id, sellNote) {
+function executeSell(id, sellNote, saleInfo) {
   const pos = positions.find(p => p.id === id);
   if (!pos) return;
 
-  // Calculate proceeds
+  // saleInfo is { saleDate, salePrice } from the modal. Both may be missing if the
+  // function is called from a legacy path; we fall back to today + current exitPrice.
+  const info = saleInfo || {};
+  const userSaleDate = info.saleDate;
+  const userSalePrice = (typeof info.salePrice === 'number' && info.salePrice > 0) ? info.salePrice : null;
+
+  // Apply user-supplied price BEFORE computing proceeds — so proceeds reflect what
+  // actually happened, not the last-refreshed market price.
+  if (userSalePrice !== null) {
+    pos.exitPrice = userSalePrice;
+  }
+
+  // Calculate proceeds (using post-override price)
   const shares = parseFloat(pos.shares) || 0;
   const exitPrice = parseFloat(pos.exitPrice) || 0;
   const proceeds = shares * exitPrice;
   const account = pos.account || 'Taxable';
 
   // Save undo state before mutating
-  undoState = { id, prevNotes: pos.notes, prevClosed: pos.closed, prevSellDate: pos.sellDate, prevExitPrice: pos.exitPrice, prevSpxExit: pos.spxExit };
+  undoState = {
+    id, prevNotes: pos.notes, prevClosed: pos.closed,
+    prevSellDate: pos.sellDate, prevExitPrice: pos.exitPrice, prevSpxExit: pos.spxExit,
+    prevBenchmarkPriceAtSell: pos.benchmarkPriceAtSell
+  };
 
   pos.closed = true;
-  pos.spxExit = '';
+
+  // Sale date: prefer user-supplied, else default to today
+  if (userSaleDate) {
+    pos.sellDate = userSaleDate;
+  } else if (!pos.sellDate) {
+    const t = new Date();
+    pos.sellDate = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+  }
+
+  // Capture SPX at sell — use current spxLive. Required for "vs S&P" math on closed positions.
+  // Note: this captures *today's* SPX even if the sale was backdated. Documented limitation.
+  if (spxLive) {
+    pos.spxExit = spxLive.toFixed(2);
+  }
+
+  // Capture theme benchmark at sell — required for theme-alpha math.
+  if (pos.benchmarkAtBuy && benchmarkPrices[pos.benchmarkAtBuy]) {
+    pos.benchmarkPriceAtSell = benchmarkPrices[pos.benchmarkAtBuy];
+  }
+
   if (sellNote) {
     pos.notes = pos.notes ? pos.notes + ' || SOLD: ' + sellNote : 'SOLD: ' + sellNote;
   }
@@ -9144,6 +9236,10 @@ function undoSell() {
       pos.sellDate = undoState.prevSellDate;
       pos.exitPrice = undoState.prevExitPrice;
       pos.spxExit = undoState.prevSpxExit;
+      // benchmarkPriceAtSell may not be present on older undo states — only restore if it was recorded
+      if ('prevBenchmarkPriceAtSell' in undoState) {
+        pos.benchmarkPriceAtSell = undoState.prevBenchmarkPriceAtSell;
+      }
     }
   }
 
