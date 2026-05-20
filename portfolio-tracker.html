@@ -9466,63 +9466,21 @@ function importData(input) {
 // ─────────────────────────────────────────────
 // Boot
 // ─────────────────────────────────────────────
-function buildSeedPositions() {
-  let id = 100;
-  const mk = (t, acc, db, sh, pp, ep, sd, sb, se, closed, theme='') => ({
-    id: id++, ticker: t, account: acc, dateBought: db,
-    shares: String(sh), pricePaid: String(pp), exitPrice: String(ep),
-    sellDate: sd || '', spxBuy: String(sb), spxExit: String(se || ''),
-    closed: !!closed, fetchState: 'idle', notes: '', priceToday: '', theme
-  });
-
-  return [
-    mk('AMZN','Taxable','2026-01-14',45,237.86,263.99,'',6926.60,7165.08,false,'Big Tech'),
-    mk('CRWV','Taxable','2026-01-14',100,88.45,112.00,'',6926.60,7165.08,false,'AI Infrastructure'),
-    mk('GLD','Taxable','2025-11-04',30,362.24,433.25,'',6771.55,7165.08,false,'Commodities'),
-    mk('GLD','Taxable','2025-12-29',3,398.49,433.25,'',6905.74,7165.08,false,'Commodities'),
-    mk('GRID','Taxable','2025-12-30',200,154.59,187.00,'',6896.24,7165.08,false,'Energy & Grid'),
-    mk('MSFT','Taxable','2026-02-17',12,397.56,423.88,'',6843.22,7165.08,false,'Big Tech'),
-    mk('NFLX','Taxable','2026-01-21',121,82.51,92.19,'',6875.62,7165.08,false,'Consumer'),
-    mk('ORCL','Taxable','2025-12-11',25,194.15,173.00,'',6901.00,7165.08,false,'Big Tech'),
-    mk('RKLB','Taxable','2026-01-21',56,90.00,82.26,'',6875.62,7165.08,false,'Space & Defense'),
-    mk('SMH','Taxable','2026-02-03',25,395.85,506.00,'',6917.81,7165.08,false,'Semiconductors'),
-    mk('SMH','Taxable','2025-12-30',80,365.10,506.00,'',6896.24,7165.08,false,'Semiconductors'),
-    mk('SOFI','Taxable','2026-04-15',6,18.40,18.48,'',7022.95,7165.08,false,'Financials'),
-    mk('V','Taxable','2025-11-18',25,321.27,309.42,'',6617.32,7165.08,false,'Financials'),
-    mk('ORCL','IRA','2026-04-16',60,177.11,173.00,'',7071.00,7165.08,false,'Big Tech'),
-    mk('PANW','IRA','2026-04-16',60,167.40,178.40,'',7071.00,7165.08,false,'Cybersecurity'),
-    mk('MSFT','IRA','2026-04-16',50,418.38,423.88,'',7071.00,7165.08,false,'Big Tech'),
-    mk('CRWD','IRA','2026-04-16',22,418.37,448.13,'',7071.00,7165.08,false,'Cybersecurity'),
-    mk('AXP','IRA','2026-04-16',30,326.73,314.08,'',7071.00,7165.08,false,'Financials'),
-    mk('NASA','IRA','2026-04-16',525,30.74,30.00,'',7071.00,7165.08,false,'Space & Defense'),
-    mk('DRAM','IRA','2026-04-16',500,35.29,38.45,'',7071.00,7165.08,false,'AI Infrastructure'),
-    mk('ORCL','Taxable','2025-12-11',25,194.15,196.13,'2025-12-30',6901.00,6896.24,true,'Big Tech'),
-  ];
-}
-
 async function init() {
   await loadPositions();
-  const seed = buildSeedPositions();
   let changed = false;
 
-  seed.forEach(s => {
-    const exists = positions.find(p =>
-      p.ticker === s.ticker &&
-      p.dateBought === s.dateBought &&
-      String(p.shares) === String(s.shares) &&
-      p.closed === s.closed
-    );
-    if (!exists) {
-      positions.push({ ...s, id: nextId++ });
-      changed = true;
-    } else if (s.theme && !exists.theme) {
-      // Patch theme onto existing position if it doesn't have one
-      exists.theme = s.theme;
-      changed = true;
-    }
-  });
-
-  // Patch themes by ticker+account for positions not matched by seed
+  // ─────────────────────────────────────────────
+  // Field defaulting for legacy positions
+  //
+  // For positions that pre-date later schema additions (theme, sleeve, isETF flag,
+  // strategy elaboration tags in notes), fill in sensible defaults — but ONLY if
+  // the field is currently missing/empty. User-set values are never overwritten.
+  //
+  // This pattern (only-if-missing) is the correction to the prior "always overwrite"
+  // logic that made it impossible to change sleeves/themes via the UI without them
+  // reverting on next load.
+  // ─────────────────────────────────────────────
   const tickerThemeMap = {
     'AAPL': 'Big Tech', 'MS': 'Financials', 'NVDA': 'Semiconductors',
     'WMB': 'Energy & Grid', 'BRK-B': 'Financials',
@@ -9544,7 +9502,14 @@ async function init() {
     'NVDA': 'Thesis Plays',
   };
   positions.forEach(p => {
-    if (tickerSleeveMap[p.ticker]) {
+    if (!p.ticker) return;
+    // Theme: only if missing
+    if (!p.theme && tickerThemeMap[p.ticker]) {
+      p.theme = tickerThemeMap[p.ticker];
+      changed = true;
+    }
+    // Sleeve: only if missing (was previously overwriting unconditionally)
+    if (!p.sleeve && tickerSleeveMap[p.ticker]) {
       p.sleeve = tickerSleeveMap[p.ticker];
       changed = true;
     }
@@ -9557,7 +9522,7 @@ async function init() {
     }
   });
 
-  // Seed elaboration tags into notes for existing positions
+  // Seed elaboration tags into notes for existing positions — only if not already present
   const elaborationMap = {
     'CRWV': 'Thesis: AI', 'SMH': 'Thesis: AI', 'DRAM': 'Thesis: AI',
     'ORCL': 'Thesis: AI', 'PANW': 'Thesis: AI', 'CRWD': 'Thesis: AI',
