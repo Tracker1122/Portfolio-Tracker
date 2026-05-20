@@ -1243,7 +1243,7 @@
 
 <!-- Add/Edit PE Deal Modal -->
 <div class="modal-overlay hidden" id="add-pe-deal-modal">
-  <div class="modal">
+  <div class="modal" style="max-height:90vh;overflow-y:auto">
     <div class="modal-title">Add Private Investment</div>
     <div class="modal-subtitle">Direct investment in a private company. Kept separate from public portfolio totals.</div>
     <div class="modal-field">
@@ -1254,19 +1254,41 @@
       <label class="modal-label">Investment date</label>
       <input class="modal-input" id="add-pe-invest-date" type="date" style="width:170px">
     </div>
-    <div class="modal-field">
-      <label class="modal-label">Amount invested ($)</label>
-      <input class="modal-input" id="add-pe-amount" type="number" min="0" step="0.01" placeholder="e.g. 50000" style="width:160px">
+
+    <div style="margin-top:8px;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">
+      <div style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">At Purchase</div>
+      <div class="modal-field">
+        <label class="modal-label">Amount invested ($)</label>
+        <input class="modal-input" id="add-pe-amount" type="number" min="0" step="0.01" placeholder="e.g. 50000" style="width:160px">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Price per share at buy ($)</label>
+        <input class="modal-input" id="add-pe-pps-buy" type="number" min="0" step="0.0001" placeholder="e.g. 65.50" style="width:160px">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Company valuation at buy ($)</label>
+        <input class="modal-input" id="add-pe-val-buy" type="number" min="0" step="0.01" placeholder="e.g. 50000000000 ($50B)" style="width:220px">
+      </div>
+      <div id="add-pe-shares-derived" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
     </div>
-    <div class="modal-field">
-      <label class="modal-label">Current estimated value ($)</label>
-      <input class="modal-input" id="add-pe-current-value" type="number" min="0" step="0.01" placeholder="Leave blank to use amount invested" style="width:200px">
+
+    <div style="margin-top:8px;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">
+      <div style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Current Mark (optional)</div>
+      <div class="modal-field">
+        <label class="modal-label">Current price per share ($)</label>
+        <input class="modal-input" id="add-pe-pps-current" type="number" min="0" step="0.0001" placeholder="Leave blank to mark at cost" style="width:200px">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Current company valuation ($)</label>
+        <input class="modal-input" id="add-pe-val-current" type="number" min="0" step="0.01" placeholder="Leave blank if unknown" style="width:220px">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Date of current mark</label>
+        <input class="modal-input" id="add-pe-valuation-date" type="date" style="width:170px">
+      </div>
     </div>
-    <div class="modal-field">
-      <label class="modal-label">Last valuation date</label>
-      <input class="modal-input" id="add-pe-valuation-date" type="date" style="width:170px">
-    </div>
-    <div class="modal-field">
+
+    <div class="modal-field" style="margin-top:8px">
       <label class="modal-label">Stage / round (optional)</label>
       <input class="modal-input" id="add-pe-stage" type="text" placeholder="e.g. Seed, Series A" style="width:200px">
     </div>
@@ -6344,21 +6366,22 @@ function _renderCardOverlay(type) {
     const { windows, buys } = computeCapitalDeployed();
 
     html = '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">Capital Deployed — Money In Over Time</div>';
-    html += '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:16px">Gross dollars put to work across stocks and VOO. Sales are not netted out — this is "how much new money have I deployed," not net cash flow.</div>';
+    html += '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:16px">Gross dollars put to work across stocks, VOO, and private investments. Sales are not netted out — this is "how much new money have I deployed," not net cash flow.</div>';
 
-    // Windows table
-    html += '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 0.6fr;gap:8px;padding:10px 12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">';
-    html += '<div>Window</div><div style="text-align:right">Stocks</div><div style="text-align:right">VOO</div><div style="text-align:right">Total</div><div style="text-align:right">Buys</div>';
+    // Windows table — 6 columns: Window · Stocks · VOO · PE · Total · Buys
+    html += '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 0.6fr;gap:8px;padding:10px 12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">';
+    html += '<div>Window</div><div style="text-align:right">Stocks</div><div style="text-align:right">VOO</div><div style="text-align:right">PE</div><div style="text-align:right">Total</div><div style="text-align:right">Buys</div>';
     html += '</div>';
 
     windows.forEach(w => {
       const dim = w.total === 0 ? 'opacity:0.45' : '';
       const isAllTime = w.key === 'all';
       const rowBg = isAllTime ? 'background:var(--color-background-tertiary);font-weight:700' : '';
-      html += '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 0.6fr;gap:8px;padding:8px 12px;border-bottom:1px solid var(--color-border-tertiary);font-size:11px;' + dim + ';' + rowBg + '">';
+      html += '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 0.6fr;gap:8px;padding:8px 12px;border-bottom:1px solid var(--color-border-tertiary);font-size:11px;' + dim + ';' + rowBg + '">';
       html += '<div style="color:var(--color-text-secondary)">' + w.label + '</div>';
       html += '<div style="text-align:right">' + (w.stock > 0 ? fmtDollarWhole(w.stock) : '—') + '</div>';
       html += '<div style="text-align:right">' + (w.voo > 0 ? fmtDollarWhole(w.voo) : '—') + '</div>';
+      html += '<div style="text-align:right">' + (w.pe > 0 ? fmtDollarWhole(w.pe) : '—') + '</div>';
       html += '<div style="text-align:right;font-weight:700;color:var(--color-text-primary)">' + (w.total > 0 ? fmtDollarWhole(w.total) : '—') + '</div>';
       html += '<div style="text-align:right;color:var(--color-text-tertiary)">' + w.count + '</div>';
       html += '</div>';
@@ -6375,8 +6398,10 @@ function _renderCardOverlay(type) {
       html += '<div>Date</div><div>Ticker</div><div>Kind</div><div>Account</div><div style="text-align:right">Amount</div>';
       html += '</div>';
       buys.forEach(b => {
-        const kindColor = b.kind === 'voo' ? '#a0a0b8' : 'var(--color-text-info)';
-        const kindLabel = b.kind === 'voo' ? 'VOO' : 'Stock';
+        let kindColor, kindLabel;
+        if (b.kind === 'voo') { kindColor = '#a0a0b8'; kindLabel = 'VOO'; }
+        else if (b.kind === 'pe') { kindColor = 'var(--color-text-warning)'; kindLabel = 'PE'; }
+        else { kindColor = 'var(--color-text-info)'; kindLabel = 'Stock'; }
         html += '<div style="display:grid;grid-template-columns:1fr 0.8fr 0.6fr 0.8fr 1fr;gap:8px;padding:5px 10px;border-bottom:1px solid var(--color-border-tertiary);font-size:11px">';
         html += '<div style="color:var(--color-text-secondary)">' + esc(b.date) + '</div>';
         html += '<div style="font-weight:600">' + esc(b.ticker) + '</div>';
@@ -6400,13 +6425,25 @@ function _renderCardOverlay(type) {
     if (t.count === 0) {
       html += '<div style="padding:24px;color:var(--color-text-tertiary);font-style:italic;text-align:center;font-size:11px">No private investments yet. Click + Add Deal to add your first.</div>';
     } else {
-      // Summary block
+      // Summary block — top row: dollar metrics; bottom row: weighted return comparison
       const glColor = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-      html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;padding:12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">';
+      const ppsRetColor = t.ppsReturnWeighted === null ? 'var(--color-text-tertiary)' : (t.ppsReturnWeighted >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
+      const valRetColor = t.valReturnWeighted === null ? 'var(--color-text-tertiary)' : (t.valReturnWeighted >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
+      const fmtPct = (r) => r === null ? '—' : ((r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%');
+
+      html += '<div style="padding:12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:16px">';
+      // Top row: dollar metrics
+      html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px">';
       html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Total Invested</div><div style="font-size:14px;font-weight:700">' + fmtDollarWhole(t.totalInvested) + '</div></div>';
       html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Current Value</div><div style="font-size:14px;font-weight:700">' + fmtDollarWhole(t.totalCurrentValue) + '</div></div>';
       html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Unrealized G/L</div><div style="font-size:14px;font-weight:700;color:' + glColor + '">' + fmtDollarWhole(t.gl) + '</div></div>';
       html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Multiple</div><div style="font-size:14px;font-weight:700;color:var(--color-text-secondary)">' + t.multiple.toFixed(2) + 'x</div></div>';
+      html += '</div>';
+      // Bottom row: per-share vs valuation returns (weighted by capital)
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)">';
+      html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)" title="Weighted by capital invested. Tracks the per-share value of what you actually own.">PER-SHARE RETURN (weighted)</div><div style="font-size:14px;font-weight:700;color:' + ppsRetColor + '">' + fmtPct(t.ppsReturnWeighted) + '</div></div>';
+      html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)" title="Weighted by capital invested. Company-level growth, before dilution.">VALUATION CHANGE (weighted)</div><div style="font-size:14px;font-weight:700;color:' + valRetColor + '">' + fmtPct(t.valReturnWeighted) + '</div></div>';
+      html += '</div>';
       html += '</div>';
 
       // Deal list — most-recently-invested first
@@ -6416,11 +6453,15 @@ function _renderCardOverlay(type) {
       html += '<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);max-height:420px;overflow-y:auto">';
 
       sortedDeals.forEach(d => {
-        const inv = parseFloat(d.amountInvested) || 0;
-        const cv = (d.currentValue !== '' && d.currentValue != null && !isNaN(parseFloat(d.currentValue))) ? parseFloat(d.currentValue) : inv;
-        const gl = cv - inv;
-        const mult = inv > 0 ? cv / inv : 0;
-        const dealGlColor = gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+        const c = calcPeDeal(d);
+        if (!c) {
+          // Deal has no amountInvested — skip (shouldn't happen given validation, but defensive)
+          return;
+        }
+        const dealGlColor = c.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+        const ppsRetColor = c.ppsReturn === null ? 'var(--color-text-tertiary)' : (c.ppsReturn >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
+        const valRetColor = c.valReturn === null ? 'var(--color-text-tertiary)' : (c.valReturn >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
+        const fmtPct = (r) => r === null ? '—' : ((r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%');
 
         // Staleness for this specific deal
         let staleNote = '';
@@ -6432,32 +6473,72 @@ function _renderCardOverlay(type) {
             staleNote = '<span style="color:var(--color-text-warning);font-size:9px;margin-left:6px">stale ' + days + 'd</span>';
           }
         } else {
-          staleNote = '<span style="color:var(--color-text-tertiary);font-size:9px;margin-left:6px">no valuation date</span>';
+          staleNote = '<span style="color:var(--color-text-tertiary);font-size:9px;margin-left:6px">no mark date</span>';
         }
+
+        // Format valuations — these can be very large ($50B, $100B) so use compact notation
+        const fmtVal = (n) => {
+          if (n == null || isNaN(n)) return '—';
+          if (n >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
+          if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+          if (n >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K';
+          return fmtDollarWhole(n);
+        };
+        // Format share count — handle very small numbers (fractional shares are common)
+        const fmtShares = (s) => {
+          if (s == null || isNaN(s)) return '—';
+          if (s >= 1000) return s.toFixed(2);
+          if (s >= 1) return s.toFixed(4);
+          return s.toFixed(6);
+        };
 
         html += '<div style="padding:10px 12px;border-bottom:1px solid var(--color-border-tertiary)">';
         // Top row: company name + actions
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
         html += '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary)">' + esc(d.company || '(unnamed)') + (d.stage ? ' <span style="font-size:10px;color:var(--color-text-tertiary);font-weight:400">· ' + esc(d.stage) + '</span>' : '') + '</div>';
         html += '<div style="display:flex;gap:4px">';
         html += '<button onclick="closeCardOverlay();openAddPeDealModal(' + JSON.stringify(d.id) + ')" title="Edit deal" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;font-family:inherit">edit</button>';
         html += '<button onclick="deletePeDeal(' + JSON.stringify(d.id) + ')" title="Delete deal" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-danger);border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;font-family:inherit">×</button>';
         html += '</div>';
         html += '</div>';
-        // Metrics row
-        html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;font-size:11px">';
-        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Invested</div><div style="font-weight:600">' + fmtDollarWhole(inv) + '</div></div>';
-        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Current Value</div><div style="font-weight:600">' + fmtDollarWhole(cv) + '</div></div>';
-        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">G/L</div><div style="font-weight:600;color:' + dealGlColor + '">' + fmtDollarWhole(gl) + '</div></div>';
-        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Multiple</div><div style="font-weight:600">' + mult.toFixed(2) + 'x</div></div>';
-        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Invested</div><div style="font-size:10px;color:var(--color-text-tertiary)">' + esc(d.investmentDate || '—') + '</div></div>';
+
+        // Dollar metrics row
+        html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px;margin-bottom:8px">';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Invested</div><div style="font-weight:600">' + fmtDollarWhole(c.inv) + '</div></div>';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Current Value</div><div style="font-weight:600">' + fmtDollarWhole(c.currentValue) + '</div></div>';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">G/L</div><div style="font-weight:600;color:' + dealGlColor + '">' + fmtDollarWhole(c.gl) + '</div></div>';
+        html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Multiple</div><div style="font-weight:600">' + c.multiple.toFixed(2) + 'x</div></div>';
         html += '</div>';
-        // Valuation date + notes row
-        html += '<div style="margin-top:6px;font-size:10px;color:var(--color-text-tertiary)">';
-        html += 'Last valuation: ' + esc(d.lastValuationDate || '—') + staleNote;
+
+        // Return-comparison row: per-share vs valuation
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;margin-bottom:8px;padding:6px 8px;background:var(--color-background-tertiary);border-radius:4px">';
+        html += '<div>';
+        html += '<div style="font-size:9px;color:var(--color-text-tertiary)" title="Change in the per-share price of what you actually own">PER-SHARE RETURN</div>';
+        html += '<div style="font-weight:700;color:' + ppsRetColor + ';font-size:13px">' + fmtPct(c.ppsReturn) + '</div>';
+        if (c.ppsBuy > 0 || c.ppsCur > 0) {
+          html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">' + (c.ppsBuy > 0 ? fmtDollar(c.ppsBuy) : '—') + ' → ' + (c.ppsCur > 0 ? fmtDollar(c.ppsCur) : '—') + '</div>';
+        }
         html += '</div>';
+        html += '<div>';
+        html += '<div style="font-size:9px;color:var(--color-text-tertiary)" title="Change in the company\'s total valuation (subject to dilution from new rounds)">VALUATION CHANGE</div>';
+        html += '<div style="font-weight:700;color:' + valRetColor + ';font-size:13px">' + fmtPct(c.valReturn) + '</div>';
+        if (c.valBuy > 0 || c.valCur > 0) {
+          html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">' + (c.valBuy > 0 ? fmtVal(c.valBuy) : '—') + ' → ' + (c.valCur > 0 ? fmtVal(c.valCur) : '—') + '</div>';
+        }
+        html += '</div>';
+        html += '</div>';
+
+        // Details row: shares, dates
+        html += '<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:10px;color:var(--color-text-tertiary)">';
+        if (c.shares != null) {
+          html += '<span>Shares: <span style="color:var(--color-text-secondary)">' + fmtShares(c.shares) + '</span></span>';
+        }
+        html += '<span>Invested: <span style="color:var(--color-text-secondary)">' + esc(d.investmentDate || '—') + '</span></span>';
+        html += '<span>Last mark: <span style="color:var(--color-text-secondary)">' + esc(d.lastValuationDate || '—') + '</span>' + staleNote + '</span>';
+        html += '</div>';
+
         if (d.notes) {
-          html += '<div style="margin-top:4px;font-size:10px;color:var(--color-text-secondary);font-style:italic">' + esc(d.notes) + '</div>';
+          html += '<div style="margin-top:6px;font-size:10px;color:var(--color-text-secondary);font-style:italic">' + esc(d.notes) + '</div>';
         }
         // Research row — pre-built search links open in new tabs
         if (d.company && d.company.trim()) {
@@ -7979,6 +8060,12 @@ function renderRebalance() {
 // ─────────────────────────────────────────────
 function computeCapitalDeployed() {
   // Build a unified list of buys: {date: 'YYYY-MM-DD', amount, kind, ticker, account}
+  // Three kinds of "buys" are folded together:
+  //   - 'stock' : managed public-equity positions (from positions[])
+  //   - 'voo'   : passive core lots (from spLots[])
+  //   - 'pe'    : direct private investments (from peDeals[])
+  // Each is dated by when the money went in (dateBought / lot date / investmentDate).
+  // PE deployment events are bursty — most windows will have $0 in PE, occasional large entries.
   const buys = [];
 
   positions.forEach(p => {
@@ -8007,6 +8094,22 @@ function computeCapitalDeployed() {
     });
   });
 
+  // PE deals — each deal is a single capital deployment event. Account is not tracked
+  // on PE deals (most PE goes into a separate entity / trust / direct holding) so we
+  // label it 'Private' to make the audit list clear.
+  peDeals.forEach(d => {
+    if (!d.investmentDate || !d.amountInvested) return;
+    const amt = parseFloat(d.amountInvested);
+    if (!(amt > 0)) return;
+    buys.push({
+      date: d.investmentDate,
+      amount: amt,
+      kind: 'pe',
+      ticker: d.company || '(unnamed)',
+      account: 'Private'
+    });
+  });
+
   // Sort newest-first for the audit list
   buys.sort((a, b) => b.date.localeCompare(a.date));
 
@@ -8025,7 +8128,7 @@ function computeCapitalDeployed() {
   ];
 
   const result = windows.map(w => {
-    let stock = 0, voo = 0, count = 0;
+    let stock = 0, voo = 0, pe = 0, count = 0;
     buys.forEach(b => {
       if (w.days !== null) {
         const buyDate = new Date(b.date + 'T00:00:00');
@@ -8033,10 +8136,11 @@ function computeCapitalDeployed() {
         if (diff < 0 || diff > w.days) return;
       }
       if (b.kind === 'stock') stock += b.amount;
-      else voo += b.amount;
+      else if (b.kind === 'voo') voo += b.amount;
+      else if (b.kind === 'pe') pe += b.amount;
       count++;
     });
-    return { ...w, stock, voo, total: stock + voo, count };
+    return { ...w, stock, voo, pe, total: stock + voo + pe, count };
   });
 
   return { windows: result, buys };
@@ -8058,9 +8162,11 @@ function renderCapitalDeployed() {
   let html = '<div style="display:flex;flex-direction:column;gap:5px">';
   display.forEach(w => {
     const dim = w.total === 0 ? 'opacity:0.45' : '';
-    const splitTitle = w.total > 0
-      ? 'Stocks ' + fmtDollarWhole(w.stock) + ' · VOO ' + fmtDollarWhole(w.voo)
-      : 'No buys in this window';
+    const splitParts = [];
+    if (w.stock > 0) splitParts.push('Stocks ' + fmtDollarWhole(w.stock));
+    if (w.voo > 0) splitParts.push('VOO ' + fmtDollarWhole(w.voo));
+    if (w.pe > 0) splitParts.push('PE ' + fmtDollarWhole(w.pe));
+    const splitTitle = splitParts.length > 0 ? splitParts.join(' · ') : 'No buys in this window';
     html += '<div style="display:flex;justify-content:space-between;align-items:baseline;font-size:11px;' + dim + '" title="' + splitTitle + '">';
     html += '<span style="color:var(--color-text-tertiary);font-size:10px">' + w.label + '</span>';
     html += '<span style="font-weight:700;color:var(--color-text-primary)">' + fmtDollarWhole(w.total) + '</span>';
@@ -8079,30 +8185,97 @@ function renderCapitalDeployed() {
 // The dashboard "Total Portfolio" intentionally does NOT include PE.
 //
 // peDeal shape:
-//   { id, company, investmentDate, amountInvested, currentValue,
-//     lastValuationDate, stage, notes }
+//   {
+//     id, company, investmentDate, stage, notes,
+//     amountInvested,           // $ wired
+//     pricePerShareAtBuy,       // $/share at time of investment
+//     valuationAtBuy,           // company valuation at time of investment ($)
+//     pricePerShareCurrent,     // latest $/share mark (may be '' if unknown)
+//     valuationCurrent,         // latest company valuation (may be '' if unknown)
+//     lastValuationDate         // when current mark was set
+//   }
+//
+// sharesOwned is DERIVED: amountInvested / pricePerShareAtBuy
+// currentValue is DERIVED: sharesOwned * pricePerShareCurrent  (or amountInvested if no current mark)
+//
+// Two returns are surfaced because they tell different truths:
+//   - per-share return:    (ppsCurrent / ppsAtBuy) - 1   — what you actually own
+//   - valuation change:    (valCurrent / valAtBuy) - 1   — company growth (subject to dilution)
+// They can diverge significantly after new funding rounds; both are useful.
 // ─────────────────────────────────────────────
 let _peEditId = null; // null = add mode, otherwise the id of the deal being edited
+
+// Derive computed metrics for one deal. Returns null if amountInvested is missing/zero
+// (you can't compute much without that). Other fields may be null if the underlying
+// data isn't present, and downstream code should handle that.
+function calcPeDeal(d) {
+  const inv = parseFloat(d.amountInvested);
+  if (!(inv > 0)) return null;
+
+  const ppsBuy = parseFloat(d.pricePerShareAtBuy);
+  const ppsCur = parseFloat(d.pricePerShareCurrent);
+  const valBuy = parseFloat(d.valuationAtBuy);
+  const valCur = parseFloat(d.valuationCurrent);
+
+  // Shares derived from amount/pps-at-buy. Can be null if pps-at-buy is missing.
+  const shares = (ppsBuy > 0) ? (inv / ppsBuy) : null;
+
+  // Current value: prefer shares * current pps, fall back to cost if current pps not set.
+  // If current pps is set but shares isn't derivable (no buy pps), we can't compute it
+  // cleanly — leave as cost in that case.
+  const currentValue = (shares != null && ppsCur > 0)
+    ? shares * ppsCur
+    : inv;
+
+  const gl = currentValue - inv;
+  const multiple = currentValue / inv;
+
+  // Returns — only computable when both ends of the comparison are present
+  const ppsReturn = (ppsBuy > 0 && ppsCur > 0) ? (ppsCur / ppsBuy - 1) : null;
+  const valReturn = (valBuy > 0 && valCur > 0) ? (valCur / valBuy - 1) : null;
+
+  return {
+    inv, ppsBuy, ppsCur, valBuy, valCur,
+    shares, currentValue, gl, multiple,
+    ppsReturn, valReturn
+  };
+}
 
 function computePeTotals() {
   let totalInvested = 0;
   let totalCurrentValue = 0;
   let oldestValuationDate = null;
+
+  // Track weighted return aggregates. We weight per-share returns by amount invested
+  // so a $100k deal counts more than a $5k deal — this matches how portfolio-level
+  // returns are usually thought about.
+  let ppsWeightedSum = 0, ppsWeightTotal = 0;
+  let valWeightedSum = 0, valWeightTotal = 0;
+
   peDeals.forEach(d => {
-    const inv = parseFloat(d.amountInvested) || 0;
-    // If no currentValue set, fall back to cost basis (treat as "marked at cost")
-    const cv = (d.currentValue !== '' && d.currentValue != null && !isNaN(parseFloat(d.currentValue)))
-      ? parseFloat(d.currentValue) : inv;
-    totalInvested += inv;
-    totalCurrentValue += cv;
+    const c = calcPeDeal(d);
+    if (!c) return;
+    totalInvested += c.inv;
+    totalCurrentValue += c.currentValue;
+    if (c.ppsReturn !== null) {
+      ppsWeightedSum += c.ppsReturn * c.inv;
+      ppsWeightTotal += c.inv;
+    }
+    if (c.valReturn !== null) {
+      valWeightedSum += c.valReturn * c.inv;
+      valWeightTotal += c.inv;
+    }
     if (d.lastValuationDate) {
       if (!oldestValuationDate || d.lastValuationDate < oldestValuationDate) {
         oldestValuationDate = d.lastValuationDate;
       }
     }
   });
+
   const gl = totalCurrentValue - totalInvested;
   const multiple = totalInvested > 0 ? totalCurrentValue / totalInvested : 0;
+  const ppsReturnWeighted = ppsWeightTotal > 0 ? ppsWeightedSum / ppsWeightTotal : null;
+  const valReturnWeighted = valWeightTotal > 0 ? valWeightedSum / valWeightTotal : null;
 
   // Days since oldest valuation — staleness indicator
   let staleDays = null;
@@ -8112,35 +8285,41 @@ function computePeTotals() {
     staleDays = Math.round((today - valDate) / (24*60*60*1000));
   }
 
-  return { totalInvested, totalCurrentValue, gl, multiple, staleDays, count: peDeals.length };
+  return {
+    totalInvested, totalCurrentValue, gl, multiple,
+    ppsReturnWeighted, valReturnWeighted,
+    staleDays, count: peDeals.length
+  };
 }
 
 function renderPeDeals() {
   const el = document.getElementById('pe-deals-content');
   if (!el) return;
   const t = computePeTotals();
+  const addBtn = '<button onclick="event.stopPropagation();openAddPeDealModal()" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-family:inherit">+ Add Deal</button>';
 
   if (t.count === 0) {
     el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
       '<div style="color:var(--color-text-tertiary);font-size:11px">No private investments yet</div>' +
-      '<button onclick="event.stopPropagation();openAddPeDealModal()" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-family:inherit">+ Add Deal</button>' +
-      '</div>';
+      addBtn + '</div>';
     return;
   }
 
-  const glColor = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const fmtPct = (r) => r === null ? '—' : ((r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%');
+  const ppsColor = t.ppsReturnWeighted === null ? 'var(--color-text-tertiary)' : (t.ppsReturnWeighted >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
+  const valColor = t.valReturnWeighted === null ? 'var(--color-text-tertiary)' : (t.valReturnWeighted >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
   const staleWarn = (t.staleDays !== null && t.staleDays > 180)
-    ? '<span style="color:var(--color-text-warning);font-size:9px" title="At least one deal has a valuation older than 180 days">· stale (' + t.staleDays + 'd)</span>'
+    ? '<span style="color:var(--color-text-warning);font-size:9px" title="Oldest deal valuation is ' + t.staleDays + ' days old">· stale (' + t.staleDays + 'd)</span>'
     : '';
 
   let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Invested</div><div style="font-size:13px;font-weight:700">' + fmtDollarWhole(t.totalInvested) + '</div></div>';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Current Value</div><div style="font-size:13px;font-weight:700;color:var(--color-text-primary)">' + fmtDollarWhole(t.totalCurrentValue) + '</div></div>';
-  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Unrealized G/L</div><div style="font-size:13px;font-weight:700;color:' + glColor + '">' + fmtDollarWhole(t.gl) + '</div></div>';
-  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)">Multiple</div><div style="font-size:13px;font-weight:700;color:var(--color-text-secondary)">' + t.multiple.toFixed(2) + 'x</div></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)" title="Weighted by amount invested. Tracks the per-share value of what you actually own.">Per-Share Return</div><div style="font-size:13px;font-weight:700;color:' + ppsColor + '">' + fmtPct(t.ppsReturnWeighted) + '</div></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary)" title="Weighted by amount invested. Company-level growth, before dilution effects.">Valuation Change</div><div style="font-size:13px;font-weight:700;color:' + valColor + '">' + fmtPct(t.valReturnWeighted) + '</div></div>';
   html += '<div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px">';
-  html += '<div style="font-size:9px;color:var(--color-text-tertiary)">' + t.count + ' deal' + (t.count === 1 ? '' : 's') + ' ' + staleWarn + '</div>';
-  html += '<button onclick="event.stopPropagation();openAddPeDealModal()" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:4px;padding:2px 8px;font-size:9px;cursor:pointer;font-family:inherit">+ Add Deal</button>';
+  html += '<div style="font-size:9px;color:var(--color-text-tertiary)">' + t.count + ' deal' + (t.count === 1 ? '' : 's') + ' · ' + t.multiple.toFixed(2) + 'x ' + staleWarn + '</div>';
+  html += addBtn;
   html += '</div>';
   html += '</div>';
   el.innerHTML = html;
@@ -8169,33 +8348,57 @@ function openAddPeDealModal(editId) {
   const t = new Date();
   const todayStr = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
 
-  document.getElementById('add-pe-company').value = editing ? (editing.company || '') : '';
-  document.getElementById('add-pe-invest-date').value = editing ? (editing.investmentDate || '') : todayStr;
-  document.getElementById('add-pe-amount').value = editing ? (editing.amountInvested || '') : '';
-  document.getElementById('add-pe-current-value').value = editing ? (editing.currentValue != null ? editing.currentValue : '') : '';
-  document.getElementById('add-pe-valuation-date').value = editing ? (editing.lastValuationDate || '') : todayStr;
-  document.getElementById('add-pe-stage').value = editing ? (editing.stage || '') : '';
-  document.getElementById('add-pe-notes').value = editing ? (editing.notes || '') : '';
+  const safe = (v) => (v === undefined || v === null) ? '' : v;
+
+  document.getElementById('add-pe-company').value = editing ? safe(editing.company) : '';
+  document.getElementById('add-pe-invest-date').value = editing ? safe(editing.investmentDate) : todayStr;
+  document.getElementById('add-pe-amount').value = editing ? safe(editing.amountInvested) : '';
+  document.getElementById('add-pe-pps-buy').value = editing ? safe(editing.pricePerShareAtBuy) : '';
+  document.getElementById('add-pe-val-buy').value = editing ? safe(editing.valuationAtBuy) : '';
+  document.getElementById('add-pe-pps-current').value = editing ? safe(editing.pricePerShareCurrent) : '';
+  document.getElementById('add-pe-val-current').value = editing ? safe(editing.valuationCurrent) : '';
+  document.getElementById('add-pe-valuation-date').value = editing ? safe(editing.lastValuationDate) : todayStr;
+  document.getElementById('add-pe-stage').value = editing ? safe(editing.stage) : '';
+  document.getElementById('add-pe-notes').value = editing ? safe(editing.notes) : '';
   document.getElementById('add-pe-preview').textContent = '';
+  document.getElementById('add-pe-shares-derived').textContent = '';
   document.getElementById('add-pe-error').style.display = 'none';
   modal.classList.remove('hidden');
 
-  // Live preview of multiple
+  // Live preview: shares derived, current value derived, per-share and valuation returns
   const update = () => {
     const amt = parseFloat(document.getElementById('add-pe-amount').value);
-    const cv = parseFloat(document.getElementById('add-pe-current-value').value);
-    const preview = document.getElementById('add-pe-preview');
-    if (amt > 0 && cv > 0) {
-      const mult = (cv / amt).toFixed(2);
-      const gl = cv - amt;
-      const glStr = (gl >= 0 ? '+' : '') + fmtDollar(gl);
-      preview.textContent = `Multiple: ${mult}x · Unrealized: ${glStr}`;
+    const ppsBuy = parseFloat(document.getElementById('add-pe-pps-buy').value);
+    const ppsCur = parseFloat(document.getElementById('add-pe-pps-current').value);
+    const valBuy = parseFloat(document.getElementById('add-pe-val-buy').value);
+    const valCur = parseFloat(document.getElementById('add-pe-val-current').value);
+
+    const sharesEl = document.getElementById('add-pe-shares-derived');
+    if (amt > 0 && ppsBuy > 0) {
+      const shares = amt / ppsBuy;
+      // Show with reasonable precision — fractional shares are common in private
+      sharesEl.textContent = 'Derived shares: ' + (shares >= 1 ? shares.toFixed(4) : shares.toFixed(6));
     } else {
-      preview.textContent = '';
+      sharesEl.textContent = '';
     }
+
+    const preview = document.getElementById('add-pe-preview');
+    const parts = [];
+    if (amt > 0 && ppsBuy > 0 && ppsCur > 0) {
+      const shares = amt / ppsBuy;
+      const cv = shares * ppsCur;
+      const ret = (ppsCur / ppsBuy - 1) * 100;
+      parts.push('Current value: ' + fmtDollar(cv) + ' (' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '% per-share)');
+    }
+    if (valBuy > 0 && valCur > 0) {
+      const vret = (valCur / valBuy - 1) * 100;
+      parts.push('Valuation: ' + (vret >= 0 ? '+' : '') + vret.toFixed(1) + '%');
+    }
+    preview.textContent = parts.join(' · ');
   };
-  document.getElementById('add-pe-amount').oninput = update;
-  document.getElementById('add-pe-current-value').oninput = update;
+  ['add-pe-amount','add-pe-pps-buy','add-pe-pps-current','add-pe-val-buy','add-pe-val-current'].forEach(id => {
+    document.getElementById(id).oninput = update;
+  });
   update();
 }
 
@@ -8209,14 +8412,17 @@ function confirmAddPeDeal() {
   const company = document.getElementById('add-pe-company').value.trim();
   const investDate = document.getElementById('add-pe-invest-date').value;
   const amountStr = document.getElementById('add-pe-amount').value;
-  const currentValueStr = document.getElementById('add-pe-current-value').value;
+  const ppsBuyStr = document.getElementById('add-pe-pps-buy').value;
+  const valBuyStr = document.getElementById('add-pe-val-buy').value;
+  const ppsCurStr = document.getElementById('add-pe-pps-current').value;
+  const valCurStr = document.getElementById('add-pe-val-current').value;
   const valuationDate = document.getElementById('add-pe-valuation-date').value;
   const stage = document.getElementById('add-pe-stage').value.trim();
   const notes = document.getElementById('add-pe-notes').value.trim();
   const errEl = document.getElementById('add-pe-error');
   const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
 
-  // Validate
+  // Required fields
   if (!company) return showErr('Company name is required.');
   if (!investDate) return showErr('Investment date is required.');
   const invDate = new Date(investDate + 'T00:00:00');
@@ -8228,17 +8434,29 @@ function confirmAddPeDeal() {
   const amount = parseFloat(amountStr);
   if (!(amount > 0)) return showErr('Amount invested must be greater than 0.');
 
-  let currentValue = null;
-  if (currentValueStr !== '' && currentValueStr != null) {
-    currentValue = parseFloat(currentValueStr);
-    if (isNaN(currentValue) || currentValue < 0) return showErr('Current value must be 0 or greater (or leave blank).');
-  }
+  // Optional numeric fields — validate only if provided. Helper:
+  const parseOptional = (str, label) => {
+    if (str === '' || str == null) return null;
+    const n = parseFloat(str);
+    if (isNaN(n) || n < 0) { showErr(label + ' must be 0 or greater (or leave blank).'); throw new Error('validation'); }
+    return n;
+  };
+  let ppsBuy, valBuy, ppsCur, valCur;
+  try {
+    ppsBuy = parseOptional(ppsBuyStr, 'Price per share at buy');
+    valBuy = parseOptional(valBuyStr, 'Company valuation at buy');
+    ppsCur = parseOptional(ppsCurStr, 'Current price per share');
+    valCur = parseOptional(valCurStr, 'Current company valuation');
+  } catch(e) { return; }
 
-  // Valuation date — if provided, must be a real date and not in the future
+  // Per-share at buy must be > 0 if provided (you can't divide by zero for shares)
+  if (ppsBuy !== null && !(ppsBuy > 0)) return showErr('Price per share at buy must be greater than 0 (or leave blank).');
+
+  // Valuation date sanity
   if (valuationDate) {
     const vDate = new Date(valuationDate + 'T00:00:00');
-    if (isNaN(vDate.getTime())) return showErr('Invalid valuation date.');
-    if (vDate > today) return showErr('Valuation date cannot be in the future.');
+    if (isNaN(vDate.getTime())) return showErr('Invalid date of current mark.');
+    if (vDate > today) return showErr('Date of current mark cannot be in the future.');
   }
 
   const deal = {
@@ -8246,7 +8464,10 @@ function confirmAddPeDeal() {
     company,
     investmentDate: investDate,
     amountInvested: amount,
-    currentValue: currentValue !== null ? currentValue : '',
+    pricePerShareAtBuy: ppsBuy !== null ? ppsBuy : '',
+    valuationAtBuy: valBuy !== null ? valBuy : '',
+    pricePerShareCurrent: ppsCur !== null ? ppsCur : '',
+    valuationCurrent: valCur !== null ? valCur : '',
     lastValuationDate: valuationDate || '',
     stage,
     notes
@@ -8263,13 +8484,16 @@ function confirmAddPeDeal() {
 
   closeAddPeDealModal();
   renderPeDeals();
+  renderCapitalDeployed();
   scheduleSave();
 
-  // Refresh overlay if it's the PE overlay
+  // Refresh overlay if it's the PE or Capital Deployed overlay (both depend on PE data)
   if (cardOverlayActive) {
     const content = document.getElementById('card-overlay-content');
     if (content && content.textContent.includes('Private Investments')) {
       _renderCardOverlay('private-investments');
+    } else if (content && content.textContent.includes('Capital Deployed')) {
+      _renderCardOverlay('capital-deployed');
     }
   }
 }
@@ -8337,11 +8561,14 @@ function deletePeDeal(id) {
   if (!confirm(msg)) return;
   peDeals.splice(idx, 1);
   renderPeDeals();
+  renderCapitalDeployed();
   scheduleSave();
   if (cardOverlayActive) {
     const content = document.getElementById('card-overlay-content');
     if (content && content.textContent.includes('Private Investments')) {
       _renderCardOverlay('private-investments');
+    } else if (content && content.textContent.includes('Capital Deployed')) {
+      _renderCardOverlay('capital-deployed');
     }
   }
 }
