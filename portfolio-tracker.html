@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Portfolio vs S&P 500</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   /* Hide number-input spinners (up/down arrows) globally — user prefers type-only input.
      Combined with a mousewheel handler in JS to prevent scroll-changes-value. */
@@ -325,6 +326,99 @@
     z-index: 2000; padding: 20px;
   }
   .modal-overlay.hidden { display: none; }
+
+  /* ── Drive Backup ── */
+  .drive-status {
+    font-size: 10px; color: var(--color-text-tertiary);
+    cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 6px; border-radius: 3px;
+    transition: background 0.15s, color 0.15s;
+    user-select: none;
+  }
+  .drive-status:hover { background: var(--color-background-tertiary); color: var(--color-text-secondary); }
+  .drive-status .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--color-text-tertiary); flex-shrink: 0;
+  }
+  .drive-status.synced .dot { background: var(--color-text-success); }
+  .drive-status.saving .dot { background: var(--color-text-info); animation: drive-pulse 1s ease-in-out infinite; }
+  .drive-status.error .dot { background: var(--color-text-danger); }
+  .drive-status.disconnected .dot { background: var(--color-text-tertiary); }
+  @keyframes drive-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .drive-modal { max-width: 560px; }
+  .drive-section {
+    border-top: 1px solid var(--color-border-tertiary);
+    padding-top: 16px; margin-top: 16px;
+  }
+  .drive-section:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+  .drive-section-title {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--color-text-tertiary); margin-bottom: 10px;
+  }
+  .drive-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; padding: 4px 0; color: var(--color-text-secondary);
+  }
+  .drive-row .label { color: var(--color-text-tertiary); }
+  .drive-row .value { color: var(--color-text-primary); font-weight: 600; }
+  .drive-row .value.success { color: var(--color-text-success); }
+  .drive-row .value.danger { color: var(--color-text-danger); }
+  .drive-row .value.info { color: var(--color-text-info); }
+  .revisions-list {
+    max-height: 280px; overflow-y: auto;
+    border: 1px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+    background: var(--color-background-tertiary);
+  }
+  .revision-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 10px; border-bottom: 1px solid var(--color-border-tertiary);
+    font-size: 11px;
+  }
+  .revision-row:last-child { border-bottom: none; }
+  .revision-meta { display: flex; flex-direction: column; gap: 2px; }
+  .revision-time { color: var(--color-text-primary); font-weight: 600; }
+  .revision-detail { color: var(--color-text-tertiary); font-size: 9px; letter-spacing: 0.04em; }
+  .revision-actions { display: flex; gap: 6px; }
+  .revisions-empty {
+    padding: 16px; text-align: center; color: var(--color-text-tertiary);
+    font-size: 10px;
+  }
+  .revision-preview {
+    margin-top: 10px; padding: 10px;
+    background: var(--color-background-tertiary);
+    border: 1px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md); font-size: 10px;
+  }
+  .revision-preview .preview-title {
+    color: var(--color-text-info); font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: 9px; margin-bottom: 6px;
+  }
+  .revision-preview .preview-row {
+    display: flex; justify-content: space-between;
+    padding: 2px 0; color: var(--color-text-secondary);
+  }
+  .restore-confirm-input {
+    width: 100%; background: var(--color-background-tertiary);
+    border: 1px solid var(--color-text-danger); border-radius: var(--border-radius-md);
+    color: var(--color-text-danger); font-family: var(--font-sans); font-size: 12px;
+    padding: 8px 10px; outline: none; text-transform: uppercase; letter-spacing: 0.1em;
+    text-align: center;
+  }
+
+  /* ── Drive newer-than-local banner ── */
+  .drive-newer-banner {
+    background: var(--color-background-info);
+    border-bottom: 1px solid var(--color-text-info);
+    padding: 10px 20px; display: flex; align-items: center; gap: 12px;
+    font-size: 11px; color: var(--color-text-primary);
+  }
+  .drive-newer-banner .icon { color: var(--color-text-info); font-size: 14px; }
+  .drive-newer-banner .msg { flex: 1; }
+  .drive-newer-banner .msg-detail { font-size: 10px; color: var(--color-text-tertiary); margin-top: 2px; }
+  .drive-newer-banner.hidden { display: none; }
   .modal {
     background: var(--color-background-secondary);
     border: 1px solid var(--color-border-secondary);
@@ -640,10 +734,25 @@
   <div class="header-title">Portfolio vs S&P 500</div>
   <div class="header-actions">
     <span id="save-note-inline" style="font-size:10px;color:var(--color-text-tertiary);opacity:0;transition:opacity 0.3s;">Saved</span>
+    <span id="drive-status" class="drive-status disconnected" onclick="openDriveModal()" title="Google Drive backup">
+      <span class="dot"></span>
+      <span id="drive-status-text">Drive: off</span>
+    </span>
     <button class="btn btn-sm" onclick="addPosition()">+ Add Position</button>
     <button class="btn btn-sm" onclick="exportData()" style="margin-right:4px">⬇ Export Data</button>
     <label class="btn btn-sm" style="cursor:pointer;margin-right:4px">⬆ Import Data<input type="file" accept=".json" style="display:none" onchange="importData(this)"></label>
   </div>
+</div>
+
+<!-- Drive newer-than-local banner -->
+<div id="drive-newer-banner" class="drive-newer-banner hidden">
+  <span class="icon">↻</span>
+  <div class="msg">
+    <div>Drive has a newer version of your data than this device.</div>
+    <div class="msg-detail" id="drive-newer-detail">Modified on Drive at unknown time. Probably from another device or browser.</div>
+  </div>
+  <button class="btn btn-primary" onclick="restoreFromBannerPrompt()" style="font-size:10px">Restore latest</button>
+  <button class="btn" onclick="dismissNewerBanner()" style="font-size:10px">Dismiss</button>
 </div>
 
 <!-- S&P Bar -->
@@ -1560,6 +1669,89 @@
   <div id="undo-toast-bar" style="width:100%"></div>
 </div>
 
+<!-- Drive Backup Modal -->
+<div class="modal-overlay hidden" id="drive-modal">
+  <div class="modal drive-modal">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+      <div class="modal-title">Google Drive Backup</div>
+      <button onclick="closeDriveModal()" style="background:none;border:none;color:var(--color-text-tertiary);font-size:16px;cursor:pointer;line-height:1">✕</button>
+    </div>
+    <div class="modal-subtitle">Automatic backup of your tracker data to your own Google Drive. Drive keeps version history so you can roll back if needed.</div>
+
+    <!-- Setup section: only shown when no client ID configured -->
+    <div id="drive-setup-section" class="drive-section" style="display:none">
+      <div class="drive-section-title">One-time setup</div>
+      <div style="font-size:10px;color:var(--color-text-secondary);line-height:1.7;margin-bottom:12px">
+        Paste your Google OAuth Client ID below. You created this in Google Cloud Console under APIs &amp; Services → Credentials. It looks like <span style="color:var(--color-text-info)">123...apps.googleusercontent.com</span>.
+      </div>
+      <input id="drive-client-id-input" class="modal-input" type="text" placeholder="Paste Client ID here" style="font-size:11px">
+      <div class="modal-actions" style="margin-top:10px">
+        <button class="btn btn-primary" onclick="saveDriveClientId()">Save Client ID</button>
+      </div>
+    </div>
+
+    <!-- Connect section: shown when client ID set but not authorized -->
+    <div id="drive-connect-section" class="drive-section" style="display:none">
+      <div class="drive-section-title">Sign in to Drive</div>
+      <div style="font-size:10px;color:var(--color-text-secondary);line-height:1.7;margin-bottom:12px">
+        Client ID is configured. Click below to authorize this tracker to read/write the single backup file in your Drive.
+      </div>
+      <div class="modal-actions" style="justify-content:flex-start;gap:10px">
+        <button class="btn btn-primary" onclick="connectDrive()">Connect Google Drive</button>
+        <button class="btn" onclick="changeDriveClientId()" style="font-size:10px">Change Client ID</button>
+      </div>
+      <div id="drive-connect-error" style="font-size:10px;color:var(--color-text-danger);margin-top:10px;display:none"></div>
+    </div>
+
+    <!-- Connected section -->
+    <div id="drive-connected-section" style="display:none">
+      <div class="drive-section">
+        <div class="drive-section-title">Status</div>
+        <div class="drive-row"><span class="label">State</span><span id="drive-state-value" class="value success">Connected</span></div>
+        <div class="drive-row"><span class="label">Last backup</span><span id="drive-last-backup" class="value">—</span></div>
+        <div class="drive-row"><span class="label">Backup file</span><span id="drive-file-link" class="value">—</span></div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="backupNowManual()" style="font-size:10px">Backup now</button>
+          <button class="btn" onclick="createNamedSnapshot()" style="font-size:10px" title="Create a labeled checkpoint you can restore later">+ Named snapshot</button>
+          <button class="btn" onclick="disconnectDrive()" style="font-size:10px">Disconnect</button>
+        </div>
+      </div>
+
+      <div class="drive-section">
+        <div class="drive-section-title">Restore from latest backup</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);line-height:1.7;margin-bottom:10px">
+          Pulls the current Drive file and replaces your local data. Use this if you cleared site data or moved to a new browser.
+        </div>
+        <button class="btn btn-danger" onclick="confirmRestoreLatest()" style="font-size:10px">Restore latest from Drive</button>
+      </div>
+
+      <div class="drive-section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="drive-section-title" style="margin-bottom:0">Version history</div>
+          <button class="btn" onclick="loadRevisionList()" style="font-size:9px;padding:3px 8px">⟳ Refresh</button>
+        </div>
+        <div id="revisions-list" class="revisions-list">
+          <div class="revisions-empty">Click Refresh to load version history</div>
+        </div>
+        <div id="revision-preview-area"></div>
+      </div>
+    </div>
+
+    <!-- Restore confirmation -->
+    <div id="drive-restore-confirm" class="drive-section" style="display:none">
+      <div class="drive-section-title" style="color:var(--color-text-danger)">⚠ Confirm restore</div>
+      <div id="drive-restore-confirm-msg" style="font-size:11px;color:var(--color-text-secondary);line-height:1.6;margin-bottom:10px"></div>
+      <input id="drive-restore-confirm-input" class="restore-confirm-input" type="text" placeholder="Type RESTORE to confirm" oninput="checkRestoreConfirm()">
+      <div class="modal-actions">
+        <button class="btn" onclick="cancelRestoreConfirm()">Cancel</button>
+        <button id="drive-restore-confirm-btn" class="btn btn-danger" onclick="executeRestore()" disabled>Restore</button>
+      </div>
+    </div>
+
+    <div id="drive-modal-toast" style="display:none;margin-top:14px;padding:8px 12px;border-radius:4px;font-size:10px"></div>
+  </div>
+</div>
+
 <script>
 // ─────────────────────────────────────────────
 // State
@@ -1634,6 +1826,10 @@ async function savePositions() {
     localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
     flashSave();
+    // Trigger Drive backup (no-op if Drive not connected).
+    if (typeof DriveState !== 'undefined' && DriveState.clientId && DriveState.accessToken) {
+      driveScheduleSync();
+    }
   } catch(e) {
     console.warn('Save failed', e.message);
     // Retry once after a short delay
@@ -9464,6 +9660,676 @@ function importData(input) {
 }
 
 // ─────────────────────────────────────────────
+// Google Drive Backup Module
+//
+// One-file backup to user's own Google Drive via OAuth (Google Identity
+// Services token model). Hooks into savePositions() — after each successful
+// local save, a debounced upload pushes the full dataset to a single file
+// in Drive. Drive's built-in revisions API gives us version history;
+// named snapshots are implemented via the keepForever revision flag.
+//
+// Threat model:
+//   - Client ID and access tokens live in localStorage. Anyone with access
+//     to this browser profile can use the token (until expiry, ~1 hour).
+//   - Scope is `drive.file` only — app can ONLY see files it created.
+//     A leaked token cannot read your other Drive files.
+//   - In testing mode (default Google OAuth setup), refresh tokens are
+//     invalidated after 7 days. User will see "reconnect" then.
+//
+// Failure mode philosophy:
+//   - Drive failures NEVER break local save. Local save runs first; Drive
+//     is a "fire and forget" follow-up with status reporting.
+//   - Status indicator goes red on persistent failure so user notices.
+// ─────────────────────────────────────────────
+
+const DRIVE_FILE_NAME = 'personal-tracker-backup.json';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_SYNC_DEBOUNCE_MS = 5000;
+const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
+const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
+
+const DriveState = {
+  clientId: null,
+  accessToken: null,
+  tokenExpiresAt: 0,
+  fileId: null,
+  tokenClient: null,
+  gisReady: false,
+  lastBackupAt: null,
+  lastBackupSize: null,
+  status: 'disconnected',
+  errorMessage: null,
+  syncTimer: null,
+  syncInFlight: false,
+  pendingSync: false,
+  suppressNextSync: false,
+};
+
+// ─── Drive-specific localStorage (single prefix to keep it tidy) ───
+function driveStoreGet(key) {
+  try { return localStorage.getItem('portfolio-drive-' + key); }
+  catch { return null; }
+}
+function driveStoreSet(key, val) {
+  try { localStorage.setItem('portfolio-drive-' + key, val); return true; }
+  catch { return false; }
+}
+
+function driveLoadConfig() {
+  DriveState.clientId = driveStoreGet('client-id');
+  DriveState.fileId = driveStoreGet('file-id');
+  const lastAt = driveStoreGet('last-backup-at');
+  if (lastAt) DriveState.lastBackupAt = parseInt(lastAt, 10);
+  const lastSize = driveStoreGet('last-backup-size');
+  if (lastSize) DriveState.lastBackupSize = parseInt(lastSize, 10);
+}
+
+// ─── Google Identity Services bootstrap ───
+function driveWaitForGIS(timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+      DriveState.gisReady = true;
+      return resolve();
+    }
+    const start = Date.now();
+    const interval = setInterval(() => {
+      if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+        clearInterval(interval);
+        DriveState.gisReady = true;
+        resolve();
+      } else if (Date.now() - start > timeoutMs) {
+        clearInterval(interval);
+        reject(new Error('Google Identity Services failed to load — check network / ad blockers'));
+      }
+    }, 100);
+  });
+}
+
+function driveInitTokenClient() {
+  if (!DriveState.clientId) throw new Error('No Client ID configured');
+  if (DriveState.tokenClient) return DriveState.tokenClient;
+  DriveState.tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: DriveState.clientId,
+    scope: DRIVE_SCOPE,
+    callback: '',
+  });
+  return DriveState.tokenClient;
+}
+
+function driveRequestToken(interactive = true) {
+  return new Promise((resolve, reject) => {
+    if (!DriveState.tokenClient) {
+      try { driveInitTokenClient(); }
+      catch (e) { return reject(e); }
+    }
+    DriveState.tokenClient.callback = (resp) => {
+      if (resp.error) {
+        reject(new Error(resp.error_description || resp.error));
+        return;
+      }
+      DriveState.accessToken = resp.access_token;
+      DriveState.tokenExpiresAt = Date.now() + ((resp.expires_in || 3600) - 60) * 1000;
+      resolve(resp.access_token);
+    };
+    try {
+      DriveState.tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+    } catch (e) { reject(e); }
+  });
+}
+
+async function driveGetValidToken() {
+  if (DriveState.accessToken && Date.now() < DriveState.tokenExpiresAt) {
+    return DriveState.accessToken;
+  }
+  try { return await driveRequestToken(false); }
+  catch (e) { throw new Error('Token expired — please reconnect Drive'); }
+}
+
+// ─── Drive API helpers ───
+async function driveApi(path, opts = {}) {
+  const token = await driveGetValidToken();
+  const url = path.startsWith('http') ? path : DRIVE_API_BASE + path;
+  const headers = { 'Authorization': `Bearer ${token}`, ...(opts.headers || {}) };
+  const resp = await fetch(url, { ...opts, headers });
+  if (!resp.ok) {
+    let detail = '';
+    try { const j = await resp.json(); detail = j.error?.message || ''; } catch {}
+    throw new Error(`Drive API ${resp.status}: ${detail || resp.statusText}`);
+  }
+  return resp;
+}
+
+async function driveFindOrCreateFile() {
+  if (DriveState.fileId) {
+    try {
+      await driveApi(`/files/${DriveState.fileId}?fields=id,name,trashed,modifiedTime`);
+      return DriveState.fileId;
+    } catch (e) {
+      console.warn('Stored file ID invalid, searching for new one', e.message);
+      DriveState.fileId = null;
+    }
+  }
+  const q = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
+  const resp = await driveApi(`/files?q=${q}&fields=files(id,name,modifiedTime)&pageSize=10`);
+  const data = await resp.json();
+  if (data.files && data.files.length > 0) {
+    DriveState.fileId = data.files[0].id;
+    driveStoreSet('file-id', data.files[0].id);
+    return data.files[0].id;
+  }
+  const createResp = await driveApi('/files', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: DRIVE_FILE_NAME, mimeType: 'application/json' }),
+  });
+  const created = await createResp.json();
+  DriveState.fileId = created.id;
+  driveStoreSet('file-id', created.id);
+  return created.id;
+}
+
+async function driveUploadBackup(jsonString, { keepForever = false, snapshotLabel = null } = {}) {
+  const fileId = await driveFindOrCreateFile();
+  const url = `${DRIVE_UPLOAD_BASE}/files/${fileId}?uploadType=media&keepRevisionForever=${keepForever}`;
+  const token = await driveGetValidToken();
+  const resp = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: jsonString,
+  });
+  if (!resp.ok) {
+    let detail = '';
+    try { const j = await resp.json(); detail = j.error?.message || ''; } catch {}
+    throw new Error(`Upload ${resp.status}: ${detail || resp.statusText}`);
+  }
+  // Label the latest revision if requested. Drive's revisions API doesn't accept
+  // arbitrary metadata, so we keep labels in localStorage keyed by revision ID.
+  if (snapshotLabel) {
+    try {
+      const revsResp = await driveApi(`/files/${fileId}/revisions?fields=revisions(id,modifiedTime)&pageSize=1000`);
+      const revsData = await revsResp.json();
+      const revs = revsData.revisions || [];
+      const latest = revs[revs.length - 1];
+      if (latest) {
+        const labels = JSON.parse(driveStoreGet('revision-labels') || '{}');
+        labels[latest.id] = snapshotLabel;
+        driveStoreSet('revision-labels', JSON.stringify(labels));
+      }
+    } catch (e) { console.warn('Failed to label snapshot', e.message); }
+  }
+  return resp;
+}
+
+// Build the full payload — mirrors exportData() shape exactly.
+function driveBuildBackupPayload() {
+  return {
+    positions, nextId, spxLive, spxLiveDate, cashBuckets, cashLedger,
+    spLots, spCurrentPrice,
+    snapshots, benchmarkPrices, benchmarkPricesDate,
+    peDeals,
+    themeUniverseHistory,
+    trackRecordMatureOnly, industryAlphaMatureOnly,
+    version: '2.2',
+    benchmarks: typeof BENCHMARKS !== 'undefined' ? BENCHMARKS : null,
+    _backupMeta: { backedUpAt: new Date().toISOString(), source: 'portfolio-tracker-auto' },
+  };
+}
+
+// ─── Sync orchestration ───
+function driveScheduleSync() {
+  if (!DriveState.clientId || !DriveState.accessToken) return;
+  if (DriveState.status === 'disconnected') return;
+  if (DriveState.suppressNextSync) { DriveState.suppressNextSync = false; return; }
+  if (DriveState.syncInFlight) { DriveState.pendingSync = true; return; }
+  clearTimeout(DriveState.syncTimer);
+  DriveState.syncTimer = setTimeout(() => driveExecuteSync(), DRIVE_SYNC_DEBOUNCE_MS);
+}
+
+async function driveExecuteSync({ manual = false } = {}) {
+  if (DriveState.syncInFlight) { DriveState.pendingSync = true; return; }
+  DriveState.syncInFlight = true;
+  driveSetStatus('saving');
+  try {
+    const payload = driveBuildBackupPayload();
+    const json = JSON.stringify(payload, null, 2);
+    await driveUploadBackup(json);
+    DriveState.lastBackupAt = Date.now();
+    DriveState.lastBackupSize = json.length;
+    driveStoreSet('last-backup-at', String(DriveState.lastBackupAt));
+    driveStoreSet('last-backup-size', String(DriveState.lastBackupSize));
+    driveSetStatus('synced');
+    DriveState.errorMessage = null;
+  } catch (e) {
+    console.warn('Drive sync failed', e.message);
+    DriveState.errorMessage = e.message;
+    const isAuthError = /Token expired|401|unauthorized|invalid_token/i.test(e.message);
+    driveSetStatus(isAuthError ? 'disconnected' : 'error');
+    if (isAuthError) {
+      const textEl = document.getElementById('drive-status-text');
+      if (textEl) textEl.textContent = 'Drive: sign in';
+    }
+  } finally {
+    DriveState.syncInFlight = false;
+    if (DriveState.pendingSync) {
+      DriveState.pendingSync = false;
+      setTimeout(() => driveScheduleSync(), 1500);
+    }
+  }
+}
+
+// ─── Status UI ───
+function driveSetStatus(status) {
+  DriveState.status = status;
+  const el = document.getElementById('drive-status');
+  const textEl = document.getElementById('drive-status-text');
+  if (!el || !textEl) return;
+  el.classList.remove('synced', 'saving', 'error', 'disconnected');
+  el.classList.add(status);
+  const map = {
+    disconnected: 'Drive: off',
+    connecting: 'Connecting…',
+    saving: 'Saving…',
+    synced: driveFormatLastBackup(),
+    error: 'Drive: error',
+  };
+  textEl.textContent = map[status] || status;
+  if (!document.getElementById('drive-modal').classList.contains('hidden')) {
+    driveRenderModalState();
+  }
+}
+
+function driveFormatLastBackup() {
+  if (!DriveState.lastBackupAt) return 'Drive: synced';
+  const secs = Math.round((Date.now() - DriveState.lastBackupAt) / 1000);
+  if (secs < 5) return 'Drive: synced just now';
+  if (secs < 60) return `Drive: ${secs}s ago`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `Drive: ${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `Drive: ${hrs}h ago`;
+  return `Drive: ${Math.round(hrs/24)}d ago`;
+}
+
+// Keep the "X seconds ago" label fresh
+setInterval(() => {
+  if (DriveState.status === 'synced') {
+    const textEl = document.getElementById('drive-status-text');
+    if (textEl) textEl.textContent = driveFormatLastBackup();
+  }
+}, 15000);
+
+// ─── Modal UI ───
+function openDriveModal() {
+  document.getElementById('drive-modal').classList.remove('hidden');
+  driveRenderModalState();
+}
+function closeDriveModal() {
+  document.getElementById('drive-modal').classList.add('hidden');
+  cancelRestoreConfirm();
+  document.getElementById('drive-modal-toast').style.display = 'none';
+}
+
+function driveRenderModalState() {
+  const setupEl = document.getElementById('drive-setup-section');
+  const connectEl = document.getElementById('drive-connect-section');
+  const connectedEl = document.getElementById('drive-connected-section');
+  setupEl.style.display = 'none';
+  connectEl.style.display = 'none';
+  connectedEl.style.display = 'none';
+
+  if (!DriveState.clientId) { setupEl.style.display = 'block'; return; }
+  if (!DriveState.accessToken || Date.now() >= DriveState.tokenExpiresAt) {
+    connectEl.style.display = 'block'; return;
+  }
+  connectedEl.style.display = 'block';
+
+  const stateEl = document.getElementById('drive-state-value');
+  const lastEl = document.getElementById('drive-last-backup');
+  const fileEl = document.getElementById('drive-file-link');
+  if (DriveState.status === 'error') {
+    stateEl.textContent = 'Error'; stateEl.className = 'value danger';
+    stateEl.title = DriveState.errorMessage || '';
+  } else if (DriveState.status === 'saving') {
+    stateEl.textContent = 'Saving…'; stateEl.className = 'value info';
+  } else {
+    stateEl.textContent = 'Connected'; stateEl.className = 'value success';
+  }
+  if (DriveState.lastBackupAt) {
+    const d = new Date(DriveState.lastBackupAt);
+    const sizeStr = DriveState.lastBackupSize ? ` · ${(DriveState.lastBackupSize/1024).toFixed(1)} KB` : '';
+    lastEl.textContent = d.toLocaleString() + sizeStr;
+  } else { lastEl.textContent = 'Never'; }
+  if (DriveState.fileId) {
+    fileEl.innerHTML = `<a href="https://drive.google.com/file/d/${DriveState.fileId}/view" target="_blank" style="color:var(--color-text-info);text-decoration:none">View in Drive ↗</a>`;
+  } else { fileEl.textContent = '—'; }
+}
+
+function driveShowModalToast(msg, kind = 'info') {
+  const el = document.getElementById('drive-modal-toast');
+  el.textContent = msg;
+  const colors = {
+    success: { bg: 'var(--color-background-success)', fg: 'var(--color-text-success)' },
+    error: { bg: 'var(--color-background-danger)', fg: 'var(--color-text-danger)' },
+    info: { bg: 'var(--color-background-info)', fg: 'var(--color-text-info)' },
+  };
+  const c = colors[kind] || colors.info;
+  el.style.background = c.bg; el.style.color = c.fg; el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+// ─── Setup / Connect handlers ───
+function saveDriveClientId() {
+  const input = document.getElementById('drive-client-id-input');
+  const id = (input.value || '').trim();
+  if (!id) { driveShowModalToast('Paste a Client ID first', 'error'); return; }
+  if (!id.endsWith('.apps.googleusercontent.com')) {
+    if (!confirm("That doesn't look like a Google OAuth Client ID (should end in .apps.googleusercontent.com). Save anyway?")) return;
+  }
+  DriveState.clientId = id;
+  driveStoreSet('client-id', id);
+  DriveState.tokenClient = null;
+  driveShowModalToast('Client ID saved. Click Connect to authorize.', 'success');
+  driveRenderModalState();
+}
+
+function changeDriveClientId() {
+  document.getElementById('drive-setup-section').style.display = 'block';
+  document.getElementById('drive-connect-section').style.display = 'none';
+  document.getElementById('drive-client-id-input').value = DriveState.clientId || '';
+}
+
+async function connectDrive() {
+  const errEl = document.getElementById('drive-connect-error');
+  errEl.style.display = 'none';
+  driveSetStatus('connecting');
+  try {
+    await driveWaitForGIS();
+    driveInitTokenClient();
+    await driveRequestToken(true);
+    await driveFindOrCreateFile();
+    driveSetStatus('synced');
+    driveShowModalToast('Connected to Drive ✓', 'success');
+    driveRenderModalState();
+    // Check if Drive has newer than local before kicking off auto-sync
+    await driveCheckIfDriveIsNewer();
+    driveScheduleSync();
+  } catch (e) {
+    console.warn('Drive connect failed', e);
+    DriveState.errorMessage = e.message;
+    driveSetStatus('disconnected');
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+async function disconnectDrive() {
+  if (!confirm('Disconnect Drive? Your local data stays. The backup file in Drive stays. You can reconnect later.')) return;
+  if (DriveState.accessToken && window.google?.accounts?.oauth2) {
+    try { google.accounts.oauth2.revoke(DriveState.accessToken, () => {}); } catch {}
+  }
+  DriveState.accessToken = null;
+  DriveState.tokenExpiresAt = 0;
+  driveSetStatus('disconnected');
+  driveRenderModalState();
+}
+
+// ─── Manual backup / named snapshot ───
+async function backupNowManual() {
+  await driveExecuteSync({ manual: true });
+  if (DriveState.status === 'synced') driveShowModalToast('Backed up ✓', 'success');
+  else if (DriveState.errorMessage) driveShowModalToast(DriveState.errorMessage, 'error');
+}
+
+async function createNamedSnapshot() {
+  const label = prompt('Label for this snapshot (e.g. "Pre-rebalance May 21"):');
+  if (!label || !label.trim()) return;
+  DriveState.syncInFlight = true;
+  driveSetStatus('saving');
+  try {
+    const payload = driveBuildBackupPayload();
+    payload._backupMeta.snapshotLabel = label.trim();
+    const json = JSON.stringify(payload, null, 2);
+    await driveUploadBackup(json, { keepForever: true, snapshotLabel: label.trim() });
+    DriveState.lastBackupAt = Date.now();
+    DriveState.lastBackupSize = json.length;
+    driveStoreSet('last-backup-at', String(DriveState.lastBackupAt));
+    driveStoreSet('last-backup-size', String(DriveState.lastBackupSize));
+    driveSetStatus('synced');
+    driveShowModalToast(`Snapshot "${label.trim()}" saved ✓`, 'success');
+    loadRevisionList();
+  } catch (e) {
+    DriveState.errorMessage = e.message;
+    driveSetStatus('error');
+    driveShowModalToast(e.message, 'error');
+  } finally {
+    DriveState.syncInFlight = false;
+  }
+}
+
+// ─── Revision history ───
+async function loadRevisionList() {
+  const listEl = document.getElementById('revisions-list');
+  listEl.innerHTML = '<div class="revisions-empty">Loading…</div>';
+  try {
+    if (!DriveState.fileId) await driveFindOrCreateFile();
+    const resp = await driveApi(`/files/${DriveState.fileId}/revisions?fields=revisions(id,modifiedTime,size,keepForever)&pageSize=200`);
+    const data = await resp.json();
+    let revs = data.revisions || [];
+    revs.reverse();
+    if (revs.length === 0) {
+      listEl.innerHTML = '<div class="revisions-empty">No versions yet</div>';
+      return;
+    }
+    const labels = JSON.parse(driveStoreGet('revision-labels') || '{}');
+    listEl.innerHTML = revs.map((r, idx) => {
+      const d = new Date(r.modifiedTime);
+      const sizeKB = r.size ? (parseInt(r.size,10)/1024).toFixed(1) + ' KB' : '?';
+      const label = labels[r.id];
+      const isLatest = idx === 0;
+      const tagBits = [];
+      if (isLatest) tagBits.push('<span style="color:var(--color-text-success);font-size:9px">● LATEST</span>');
+      if (r.keepForever) tagBits.push('<span style="color:var(--color-text-info);font-size:9px">★ PINNED</span>');
+      if (label) tagBits.push(`<span style="color:var(--color-text-info);font-size:9px">"${label}"</span>`);
+      const tags = tagBits.length ? ` · ${tagBits.join(' · ')}` : '';
+      return `
+        <div class="revision-row">
+          <div class="revision-meta">
+            <div class="revision-time">${d.toLocaleString()}</div>
+            <div class="revision-detail">${sizeKB}${tags}</div>
+          </div>
+          <div class="revision-actions">
+            <button class="btn" style="font-size:9px;padding:3px 8px" onclick="previewRevision('${r.id}')">Preview</button>
+            <button class="btn btn-danger" style="font-size:9px;padding:3px 8px" onclick="confirmRestoreRevision('${r.id}', '${d.toLocaleString().replace(/'/g,"\\'")}')">Restore</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    listEl.innerHTML = `<div class="revisions-empty" style="color:var(--color-text-danger)">Failed: ${e.message}</div>`;
+  }
+}
+
+async function previewRevision(revId) {
+  const previewArea = document.getElementById('revision-preview-area');
+  previewArea.innerHTML = '<div class="revision-preview"><div class="preview-title">Loading preview…</div></div>';
+  try {
+    const resp = await driveApi(`/files/${DriveState.fileId}/revisions/${revId}?alt=media`);
+    const data = await resp.json();
+    const openPos = (data.positions || []).filter(p => !p.closed);
+    const closedPos = (data.positions || []).filter(p => p.closed);
+    const cashTotal = data.cashBuckets ? (data.cashBuckets.Taxable || 0) + (data.cashBuckets.IRA || 0) : 0;
+    const snapshotCount = (data.snapshots || []).length;
+    const peCount = (data.peDeals || []).length;
+    const spLotCount = (data.spLots || []).length;
+    const meta = data._backupMeta || {};
+    const label = meta.snapshotLabel ? `<div class="preview-row"><span>Label</span><span style="color:var(--color-text-info)">"${meta.snapshotLabel}"</span></div>` : '';
+    previewArea.innerHTML = `
+      <div class="revision-preview">
+        <div class="preview-title">Revision preview</div>
+        ${label}
+        <div class="preview-row"><span>Open positions</span><span>${openPos.length}</span></div>
+        <div class="preview-row"><span>Closed positions</span><span>${closedPos.length}</span></div>
+        <div class="preview-row"><span>SPY/VOO lots</span><span>${spLotCount}</span></div>
+        <div class="preview-row"><span>Cash buckets total</span><span>$${cashTotal.toLocaleString(undefined, {maximumFractionDigits:0})}</span></div>
+        <div class="preview-row"><span>Snapshots stored</span><span>${snapshotCount}</span></div>
+        <div class="preview-row"><span>PE deals</span><span>${peCount}</span></div>
+        <div class="preview-row"><span>Schema version</span><span>${data.version || '?'}</span></div>
+      </div>
+    `;
+  } catch (e) {
+    previewArea.innerHTML = `<div class="revision-preview" style="border-color:var(--color-text-danger)"><div class="preview-title" style="color:var(--color-text-danger)">Preview failed: ${e.message}</div></div>`;
+  }
+}
+
+// ─── Restore flow ───
+let pendingRestoreRevId = null; // null = restore latest
+
+function confirmRestoreLatest() {
+  pendingRestoreRevId = null;
+  document.getElementById('drive-restore-confirm-msg').innerHTML =
+    'This will <strong style="color:var(--color-text-danger)">overwrite all local data</strong> with the latest Drive backup. Your current local state will be lost. Type RESTORE to confirm.';
+  document.getElementById('drive-restore-confirm').style.display = 'block';
+  document.getElementById('drive-restore-confirm-input').value = '';
+  document.getElementById('drive-restore-confirm-btn').disabled = true;
+  document.getElementById('drive-restore-confirm-input').focus();
+}
+
+function confirmRestoreRevision(revId, label) {
+  pendingRestoreRevId = revId;
+  document.getElementById('drive-restore-confirm-msg').innerHTML =
+    `This will <strong style="color:var(--color-text-danger)">overwrite all local data</strong> with the version from <strong>${label}</strong>. Type RESTORE to confirm.`;
+  document.getElementById('drive-restore-confirm').style.display = 'block';
+  document.getElementById('drive-restore-confirm-input').value = '';
+  document.getElementById('drive-restore-confirm-btn').disabled = true;
+  document.getElementById('drive-restore-confirm-input').focus();
+}
+
+function cancelRestoreConfirm() {
+  document.getElementById('drive-restore-confirm').style.display = 'none';
+  pendingRestoreRevId = null;
+}
+
+function checkRestoreConfirm() {
+  const val = document.getElementById('drive-restore-confirm-input').value;
+  document.getElementById('drive-restore-confirm-btn').disabled = val.trim().toUpperCase() !== 'RESTORE';
+}
+
+async function executeRestore() {
+  const btn = document.getElementById('drive-restore-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Restoring…';
+  try {
+    const url = pendingRestoreRevId === null
+      ? `/files/${DriveState.fileId}?alt=media`
+      : `/files/${DriveState.fileId}/revisions/${pendingRestoreRevId}?alt=media`;
+    const resp = await driveApi(url);
+    const data = await resp.json();
+    if (!data.positions) throw new Error('Backup file missing positions array');
+
+    // Apply data — mirrors importData()
+    positions = data.positions || [];
+    nextId = data.nextId || positions.length + 1;
+    if (data.spxLive) spxLive = data.spxLive;
+    if (data.spxLiveDate) spxLiveDate = data.spxLiveDate;
+    if (data.cashBuckets) cashBuckets = data.cashBuckets;
+    if (data.cashLedger) cashLedger = data.cashLedger;
+    if (data.spLots) spLots = data.spLots;
+    if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
+    if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
+    if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
+    if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
+    if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
+    if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
+    if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
+    if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
+
+    migratePositionsV1ToV2();
+
+    // Save locally — suppress immediate Drive re-upload of what we just downloaded
+    DriveState.suppressNextSync = true;
+    await savePositions();
+    restoreSpxInput();
+    renderAll();
+    renderSpBar();
+    renderSpSummary();
+    renderSleeveBreakdown();
+    renderSleeveRef();
+
+    dismissNewerBanner();
+    driveShowModalToast('Restore complete ✓', 'success');
+    cancelRestoreConfirm();
+  } catch (e) {
+    driveShowModalToast('Restore failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Restore';
+  }
+}
+
+// ─── Newer-than-local banner ───
+// On connect / boot, check if Drive's modifiedTime is newer than our last local save.
+// If so, show a banner suggesting restore. Helps the multi-device case where another
+// browser uploaded changes since this device last saved.
+async function driveCheckIfDriveIsNewer() {
+  try {
+    if (!DriveState.fileId) return;
+    const resp = await driveApi(`/files/${DriveState.fileId}?fields=id,modifiedTime,size`);
+    const data = await resp.json();
+    const driveModTime = new Date(data.modifiedTime).getTime();
+    const localLastBackup = DriveState.lastBackupAt || 0;
+    // If Drive is meaningfully newer than our last successful local-then-upload (>2 min buffer to avoid jitter)
+    if (driveModTime > localLastBackup + 120000) {
+      showNewerBanner(driveModTime, data.size);
+    }
+  } catch (e) {
+    console.warn('Newer-check failed', e.message);
+  }
+}
+
+function showNewerBanner(driveModTime, driveSize) {
+  const banner = document.getElementById('drive-newer-banner');
+  const detailEl = document.getElementById('drive-newer-detail');
+  if (!banner) return;
+  const d = new Date(driveModTime);
+  const ago = Math.round((Date.now() - driveModTime) / 60000);
+  const agoStr = ago < 60 ? `${ago}m ago` : ago < 1440 ? `${Math.round(ago/60)}h ago` : `${Math.round(ago/1440)}d ago`;
+  const sizeKB = driveSize ? `, ${(parseInt(driveSize,10)/1024).toFixed(1)} KB` : '';
+  detailEl.textContent = `Drive modified ${agoStr} (${d.toLocaleString()}${sizeKB}). Probably from another device or browser.`;
+  banner.classList.remove('hidden');
+}
+
+function dismissNewerBanner() {
+  document.getElementById('drive-newer-banner').classList.add('hidden');
+}
+
+async function restoreFromBannerPrompt() {
+  dismissNewerBanner();
+  openDriveModal();
+  confirmRestoreLatest();
+}
+
+// ─── Init: load config, attempt silent reconnect, check newer ───
+async function driveInit() {
+  driveLoadConfig();
+  if (!DriveState.clientId) {
+    driveSetStatus('disconnected');
+    return;
+  }
+  try {
+    await driveWaitForGIS();
+    driveInitTokenClient();
+    await driveRequestToken(false);
+    driveSetStatus('synced');
+    // Check if Drive's version is newer than our last successful local backup
+    await driveCheckIfDriveIsNewer();
+  } catch (e) {
+    driveSetStatus('disconnected');
+    const textEl = document.getElementById('drive-status-text');
+    if (textEl) textEl.textContent = 'Drive: sign in';
+  }
+}
+
+// ─────────────────────────────────────────────
 // Boot
 // ─────────────────────────────────────────────
 async function init() {
@@ -9587,6 +10453,8 @@ async function init() {
   renderSleeveBreakdown();
   renderSleeveRef();
   renderAll();
+  // Drive backup — runs last so it doesn't block UI render
+  driveInit().catch(e => console.warn('Drive init failed', e.message));
 }
 
 // Block mousewheel from changing focused number inputs. The browser default lets
