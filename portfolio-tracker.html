@@ -9610,6 +9610,8 @@ function exportData() {
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
     peDeals,
+    themeUniverseHistory,
+    trackRecordMatureOnly, industryAlphaMatureOnly,
     version: "2.2",
     benchmarks: BENCHMARKS
   };
@@ -9642,6 +9644,9 @@ function importData(input) {
       if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
       if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
       if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
+      if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
+      if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
+      if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
       // Run v1 → v2 migration on imported data (idempotent)
       migratePositionsV1ToV2();
       await savePositions();
