@@ -10273,12 +10273,14 @@ async function executeRestore() {
 async function driveCheckIfDriveIsNewer() {
   try {
     if (!DriveState.fileId) return;
+    // Skip the check on first-ever connect — no local baseline to compare against.
+    // (lastBackupAt is null until the first successful local-then-upload cycle completes.)
+    if (!DriveState.lastBackupAt) return;
     const resp = await driveApi(`/files/${DriveState.fileId}?fields=id,modifiedTime,size`);
     const data = await resp.json();
     const driveModTime = new Date(data.modifiedTime).getTime();
-    const localLastBackup = DriveState.lastBackupAt || 0;
     // If Drive is meaningfully newer than our last successful local-then-upload (>2 min buffer to avoid jitter)
-    if (driveModTime > localLastBackup + 120000) {
+    if (driveModTime > DriveState.lastBackupAt + 120000) {
       showNewerBanner(driveModTime, data.size);
     }
   } catch (e) {
