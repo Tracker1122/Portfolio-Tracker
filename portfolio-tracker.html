@@ -498,6 +498,39 @@
   .csv-pill.skip .num { color: var(--color-text-tertiary); }
   .csv-pill.dupe .num { color: var(--color-text-tertiary); }
 
+  /* ── Auto-Tag Card (Dashboard) ── */
+  .autotag-card {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--color-background-info);
+    border: 1px solid var(--color-text-info);
+    border-radius: var(--border-radius-md);
+    padding: 12px 16px; margin-bottom: 16px;
+    cursor: pointer; transition: background 0.15s, border-color 0.15s;
+  }
+  .autotag-card:hover { background: var(--color-background-tertiary); border-color: var(--color-text-info); }
+  .autotag-card.success {
+    background: var(--color-background-success);
+    border-color: var(--color-text-success);
+    cursor: default;
+  }
+  .autotag-card.success:hover { background: var(--color-background-success); }
+  .autotag-icon { font-size: 20px; flex-shrink: 0; }
+  .autotag-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .autotag-headline {
+    font-size: 12px; font-weight: 700; color: var(--color-text-primary);
+    letter-spacing: 0.02em;
+  }
+  .autotag-card.success .autotag-headline { color: var(--color-text-success); }
+  .autotag-detail { font-size: 10px; color: var(--color-text-tertiary); }
+  .autotag-action {
+    font-size: 10px; font-weight: 600; color: var(--color-text-info);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 4px 10px; border: 1px solid var(--color-text-info);
+    border-radius: var(--border-radius-md);
+    flex-shrink: 0;
+  }
+  .autotag-card.success .autotag-action { display: none; }
+
   .modal {
     background: var(--color-background-secondary);
     border: 1px solid var(--color-border-secondary);
@@ -910,6 +943,16 @@
     <!-- Managed Positions -->
     <div class="section-heading">Managed Positions</div>
     <div class="summary-grid" id="open-summary"></div>
+
+    <!-- Auto-Tag Card — actionable when positions need theme/sleeve -->
+    <div id="autotag-card" class="autotag-card" onclick="autoTagUntaggedPositions()" style="display:none">
+      <div class="autotag-icon" id="autotag-icon">🏷️</div>
+      <div class="autotag-text">
+        <div class="autotag-headline" id="autotag-headline">—</div>
+        <div class="autotag-detail" id="autotag-detail">—</div>
+      </div>
+      <div class="autotag-action" id="autotag-action">Tag now →</div>
+    </div>
 
     <!-- Analytics Row -->
     <div class="analytics-grid">
@@ -1924,6 +1967,17 @@
           </thead>
           <tbody id="csv-preview-tbody"></tbody>
         </table>
+      </div>
+
+      <!-- Auto-tag option (only shown when there's something to auto-tag) -->
+      <div id="csv-autotag-option" style="display:none;margin-top:14px;padding:10px 12px;background:var(--color-background-info);border:1px solid var(--color-text-info);border-radius:var(--border-radius-md)">
+        <label style="font-size:11px;color:var(--color-text-primary);display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+          <input type="checkbox" id="csv-autotag-checkbox" checked style="margin-top:2px">
+          <div style="flex:1">
+            <div style="font-weight:700;margin-bottom:2px">Auto-tag during import</div>
+            <div id="csv-autotag-detail" style="font-size:10px;color:var(--color-text-secondary);line-height:1.5"></div>
+          </div>
+        </label>
       </div>
 
       <div class="modal-actions">
@@ -9376,6 +9430,8 @@ function renderAll() {
   renderStaleTags();
   updateBackfillButton();
   updateIndustryAlphaToggleVisual();
+  // Auto-tag card — defensive: function may not exist on partial load
+  if (typeof renderAutoTagCard === 'function') renderAutoTagCard();
   syncFixedScrollbar();
 }
 
@@ -9846,6 +9902,209 @@ function importData(input) {
     }
   };
   reader.readAsText(file);
+}
+
+// ─────────────────────────────────────────────
+// Auto-Tag Module
+//
+// Fills missing theme + sleeve on positions without overwriting existing tags.
+// Two sources, applied in order:
+//   1. Past-tag memory — if you already have a position for ticker X with a
+//      theme/sleeve set, copy those onto any other position of X that's missing.
+//      This handles the common re-buy case (you bought NVDA again, it inherits
+//      your existing NVDA classification).
+//   2. Baked-in dictionary — fallback for tickers not yet seen in your tracker.
+//      Seeded with common holdings; missing fields are filled from the dict.
+//
+// Both sources only fill MISSING fields. User-set tags are never overwritten.
+// Unknown tickers (no past tag, no dict entry) are left untagged for manual.
+// ─────────────────────────────────────────────
+
+// Baked-in defaults for tickers seen in user's portfolio.
+// Values MUST match the THEMES dropdown keys and SLEEVES array exactly.
+const TICKER_DEFAULT_TAGS = {
+  // Big Tech
+  'AAPL': { theme: 'Big Tech',          sleeve: 'Quality' },
+  'MSFT': { theme: 'Big Tech',          sleeve: 'Quality' },
+  // AI / Semiconductors
+  'NVDA': { theme: 'AI Infrastructure', sleeve: 'Thesis Plays' },
+  // Financials
+  'AXP':  { theme: 'Financials',        sleeve: 'Quality' },
+  'V':    { theme: 'Financials',        sleeve: 'Quality' },
+  'MS':   { theme: 'Financials',        sleeve: 'Quality' },
+  'BRKB': { theme: 'Financials',        sleeve: 'Quality' },
+  // Space & Defense
+  'ASTS': { theme: 'Space & Defense',   sleeve: 'Thesis Plays' },
+  // Energy
+  'WMB':  { theme: 'Energy & Grid',     sleeve: 'Portfolio Balance Plays' },
+  // Broad ETF
+  'VOO':  { theme: 'Broad ETF',         sleeve: 'Portfolio Balance Plays' },
+};
+
+// Build a memory of past tags from the current positions array.
+// Returns { ticker: { theme, sleeve } } using the most recently-tagged values.
+// If a ticker has multiple tagged positions with different themes/sleeves
+// (rare — usually means user changed their mind), the most-recent buy wins.
+function buildPastTagMemory() {
+  const memory = {};
+  // Sort positions newest-first by dateBought so the first tagged hit per ticker wins
+  const sorted = [...positions].sort((a, b) => (b.dateBought || '').localeCompare(a.dateBought || ''));
+  for (const p of sorted) {
+    const ticker = (p.ticker || '').trim().toUpperCase();
+    if (!ticker) continue;
+    if (!memory[ticker]) memory[ticker] = {};
+    if (p.theme && !memory[ticker].theme) memory[ticker].theme = p.theme;
+    if (p.sleeve && !memory[ticker].sleeve) memory[ticker].sleeve = p.sleeve;
+  }
+  return memory;
+}
+
+// Compute what would happen if we ran auto-tag. Does NOT mutate.
+// Returns { eligible, byTicker, unknownTickers, memoryHits, dictHits }
+function analyzeAutoTag(targetPositions) {
+  const target = targetPositions || positions;
+  const memory = buildPastTagMemory();
+  const eligible = []; // [{posRef, ticker, fillTheme, fillSleeve, source}]
+  const byTicker = {}; // ticker → { count, sources: Set, theme, sleeve }
+  const unknownTickers = new Set();
+  let memoryHits = 0, dictHits = 0;
+
+  for (const p of target) {
+    if (p.theme && p.sleeve) continue; // fully tagged, skip
+    const ticker = (p.ticker || '').trim().toUpperCase();
+    if (!ticker) continue;
+
+    const mem = memory[ticker] || {};
+    const dict = TICKER_DEFAULT_TAGS[ticker] || {};
+    const fillTheme = !p.theme ? (mem.theme || dict.theme || null) : null;
+    const fillSleeve = !p.sleeve ? (mem.sleeve || dict.sleeve || null) : null;
+
+    if (!fillTheme && !fillSleeve) {
+      unknownTickers.add(ticker);
+      continue;
+    }
+
+    // Track source per field
+    const sources = new Set();
+    if (fillTheme) sources.add(mem.theme === fillTheme ? 'memory' : 'dict');
+    if (fillSleeve) sources.add(mem.sleeve === fillSleeve ? 'memory' : 'dict');
+    if (sources.has('memory')) memoryHits++;
+    if (sources.has('dict') && !sources.has('memory')) dictHits++;
+
+    eligible.push({ posRef: p, ticker, fillTheme, fillSleeve, source: [...sources].join('+') });
+
+    if (!byTicker[ticker]) byTicker[ticker] = { count: 0, sources: new Set(), theme: fillTheme, sleeve: fillSleeve };
+    byTicker[ticker].count++;
+    sources.forEach(s => byTicker[ticker].sources.add(s));
+  }
+
+  return { eligible, byTicker, unknownTickers, memoryHits, dictHits };
+}
+
+// Apply auto-tag — mutates positions in place. Returns counts.
+function autoTagUntaggedPositions() {
+  const analysis = analyzeAutoTag();
+  if (analysis.eligible.length === 0) {
+    renderAutoTagCard();
+    return { tagged: 0, positionsTouched: 0 };
+  }
+
+  let positionsTouched = 0;
+  let fieldsTagged = 0;
+  for (const e of analysis.eligible) {
+    let touched = false;
+    if (e.fillTheme && !e.posRef.theme) { e.posRef.theme = e.fillTheme; touched = true; fieldsTagged++; }
+    if (e.fillSleeve && !e.posRef.sleeve) { e.posRef.sleeve = e.fillSleeve; touched = true; fieldsTagged++; }
+    if (touched) positionsTouched++;
+  }
+
+  scheduleSave();
+  renderAll();
+  renderAutoTagCard();
+
+  // Build a small toast/log
+  const unknownCount = analysis.unknownTickers.size;
+  const msg = `Auto-tagged ${fieldsTagged} field${fieldsTagged === 1 ? '' : 's'} across ${positionsTouched} position${positionsTouched === 1 ? '' : 's'}.` +
+    (unknownCount > 0 ? ` ${unknownCount} unknown ticker${unknownCount === 1 ? '' : 's'} need manual tagging: ${[...analysis.unknownTickers].sort().slice(0, 5).join(', ')}${unknownCount > 5 ? '…' : ''}` : '');
+  console.log(msg);
+  // Use the inline save indicator briefly to show what happened
+  const inline = document.getElementById('save-note-inline');
+  if (inline) {
+    const old = inline.textContent;
+    inline.textContent = `Tagged ${positionsTouched}`;
+    inline.style.opacity = '1';
+    setTimeout(() => { inline.style.opacity = '0'; setTimeout(() => { inline.textContent = old; }, 300); }, 2500);
+  }
+
+  return { tagged: fieldsTagged, positionsTouched };
+}
+
+// Apply auto-tag to a SPECIFIC list of positions (used by CSV import).
+// Returns counts.
+function autoTagSpecificPositions(positionsList) {
+  const analysis = analyzeAutoTag(positionsList);
+  let positionsTouched = 0;
+  let fieldsTagged = 0;
+  for (const e of analysis.eligible) {
+    let touched = false;
+    if (e.fillTheme && !e.posRef.theme) { e.posRef.theme = e.fillTheme; touched = true; fieldsTagged++; }
+    if (e.fillSleeve && !e.posRef.sleeve) { e.posRef.sleeve = e.fillSleeve; touched = true; fieldsTagged++; }
+    if (touched) positionsTouched++;
+  }
+  return { tagged: fieldsTagged, positionsTouched, unknownTickers: [...analysis.unknownTickers] };
+}
+
+// Render the dashboard card — green when nothing pending, info-blue when work.
+function renderAutoTagCard() {
+  const card = document.getElementById('autotag-card');
+  if (!card) return;
+  const analysis = analyzeAutoTag();
+  const eligibleCount = analysis.eligible.length;
+  const unknownCount = analysis.unknownTickers.size;
+
+  // Count untagged positions overall (including unknowns) so the user knows the full picture
+  const untaggedTotal = positions.filter(p => !p.theme || !p.sleeve).length;
+
+  if (untaggedTotal === 0) {
+    card.style.display = 'flex';
+    card.classList.add('success');
+    document.getElementById('autotag-icon').textContent = '✓';
+    document.getElementById('autotag-headline').textContent = 'All positions tagged';
+    document.getElementById('autotag-detail').textContent = 'Nothing pending. Theme and strategy filled across the book.';
+    return;
+  }
+
+  card.style.display = 'flex';
+  card.classList.remove('success');
+  document.getElementById('autotag-icon').textContent = '🏷️';
+
+  if (eligibleCount === 0) {
+    document.getElementById('autotag-headline').textContent = `${untaggedTotal} position${untaggedTotal === 1 ? '' : 's'} need tagging — manual only`;
+    const sample = [...analysis.unknownTickers].sort().slice(0, 4).join(', ');
+    document.getElementById('autotag-detail').textContent = `No auto-fill available for: ${sample}${unknownCount > 4 ? `, +${unknownCount - 4} more` : ''}. Tag via dropdowns in the positions table.`;
+    document.getElementById('autotag-action').textContent = 'Tag manually';
+    document.getElementById('autotag-action').style.opacity = '0.5';
+    card.style.cursor = 'default';
+    card.onclick = null;
+  } else {
+    document.getElementById('autotag-headline').textContent = `${eligibleCount} position${eligibleCount === 1 ? '' : 's'} can be auto-tagged`;
+    let detail = '';
+    if (analysis.memoryHits > 0 && analysis.dictHits > 0) {
+      detail = `${analysis.memoryHits} from past tickers you've tagged, ${analysis.dictHits} from defaults.`;
+    } else if (analysis.memoryHits > 0) {
+      detail = `From tickers you've already tagged in your book.`;
+    } else {
+      detail = `From baked-in defaults for known tickers.`;
+    }
+    if (unknownCount > 0) {
+      detail += ` ${unknownCount} unknown ticker${unknownCount === 1 ? '' : 's'} will stay untagged: ${[...analysis.unknownTickers].sort().slice(0, 3).join(', ')}${unknownCount > 3 ? '…' : ''}`;
+    }
+    document.getElementById('autotag-detail').textContent = detail;
+    document.getElementById('autotag-action').textContent = 'Auto-tag →';
+    document.getElementById('autotag-action').style.opacity = '1';
+    card.style.cursor = 'pointer';
+    card.onclick = autoTagUntaggedPositions;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -10425,6 +10684,50 @@ function csvGoToPreview() {
   }
 
   document.getElementById('csv-confirm-btn').disabled = (plan.buys.length === 0 && plan.sells.length === 0);
+
+  // Auto-tag preview: simulate what auto-tag WOULD do on the to-be-imported buys.
+  // Note: we have to simulate without actually mutating yet — build a temp list of
+  // candidate position objects (the same ones applyPlan would push) and run the
+  // analyzer against the union of (existing positions + simulated new positions).
+  const csvAutotagOption = document.getElementById('csv-autotag-option');
+  if (plan.buys.length === 0) {
+    csvAutotagOption.style.display = 'none';
+  } else {
+    // Temp list = clone of buy candidates (they all start untagged)
+    const tempCandidates = plan.buys.map(b => ({ ...b.candidate }));
+    // Run analyzer against just the new candidates (memory is built from REAL positions array)
+    const analysis = analyzeAutoTag(tempCandidates);
+    if (analysis.eligible.length === 0) {
+      // Nothing to auto-tag among the new buys
+      const unknownInBuys = new Set(tempCandidates.filter(c => !c.theme || !c.sleeve).map(c => c.ticker));
+      if (unknownInBuys.size > 0) {
+        csvAutotagOption.style.display = 'block';
+        document.getElementById('csv-autotag-checkbox').checked = false;
+        document.getElementById('csv-autotag-checkbox').disabled = true;
+        document.getElementById('csv-autotag-detail').textContent =
+          `None of these tickers match a past tag or a default. ${[...unknownInBuys].sort().slice(0, 5).join(', ')}${unknownInBuys.size > 5 ? '…' : ''} will stay untagged — use the dashboard's Auto-tag card or the dropdowns after import.`;
+      } else {
+        csvAutotagOption.style.display = 'none';
+      }
+    } else {
+      csvAutotagOption.style.display = 'block';
+      document.getElementById('csv-autotag-checkbox').checked = true;
+      document.getElementById('csv-autotag-checkbox').disabled = false;
+      let detail = `${analysis.eligible.length} of ${plan.buys.length} new position${plan.buys.length === 1 ? '' : 's'} will get theme + strategy filled. `;
+      if (analysis.memoryHits > 0 && analysis.dictHits > 0) {
+        detail += `${analysis.memoryHits} from past tickers you've tagged, ${analysis.dictHits} from baked-in defaults.`;
+      } else if (analysis.memoryHits > 0) {
+        detail += `From tickers you've already tagged.`;
+      } else {
+        detail += `From baked-in defaults.`;
+      }
+      const unknownCount = analysis.unknownTickers.length;
+      if (unknownCount > 0) {
+        detail += ` ${unknownCount} unknown ticker${unknownCount === 1 ? '' : 's'} will stay untagged: ${analysis.unknownTickers.sort().slice(0, 3).join(', ')}${unknownCount > 3 ? '…' : ''}`;
+      }
+      document.getElementById('csv-autotag-detail').textContent = detail;
+    }
+  }
 }
 
 function csvBackToUpload() {
@@ -10438,7 +10741,18 @@ async function csvConfirmImport() {
   btn.disabled = true;
   btn.textContent = 'Importing…';
   try {
+    // Snapshot existing position IDs so we can identify newly-added ones after applyPlan
+    const idsBefore = new Set(positions.map(p => p.id));
     const result = CSVImporter.applyPlan(_csvState.plan, positions, () => nextId++);
+    const newlyAdded = positions.filter(p => !idsBefore.has(p.id));
+
+    // Apply auto-tag to newly imported positions if the checkbox is checked
+    let autoTagResult = null;
+    const autoTagCheckbox = document.getElementById('csv-autotag-checkbox');
+    if (autoTagCheckbox && autoTagCheckbox.checked && !autoTagCheckbox.disabled) {
+      autoTagResult = autoTagSpecificPositions(newlyAdded);
+    }
+
     await savePositions();
 
     if (document.getElementById('csv-save-mapping-checkbox').checked && _csvState.mapping) {
@@ -10461,8 +10775,14 @@ async function csvConfirmImport() {
     renderSleeveBreakdown(); renderSleeveRef();
     renderCashDisplay(); renderCapitalFlow(); renderTaxExposure();
 
-    const summary = `Imported ${result.added} position${result.added === 1 ? '' : 's'}` +
+    let summary = `Imported ${result.added} position${result.added === 1 ? '' : 's'}` +
       (result.closedFull + result.closedPartial > 0 ? `, closed ${result.closedFull} full + ${result.closedPartial} partial` : '');
+    if (autoTagResult && autoTagResult.positionsTouched > 0) {
+      summary += `. Auto-tagged ${autoTagResult.positionsTouched} of them`;
+      if (autoTagResult.unknownTickers.length > 0) {
+        summary += `; ${autoTagResult.unknownTickers.length} unknown ticker${autoTagResult.unknownTickers.length === 1 ? '' : 's'} need manual tagging (${autoTagResult.unknownTickers.slice(0, 5).join(', ')}${autoTagResult.unknownTickers.length > 5 ? '…' : ''})`;
+      }
+    }
     alert('✓ ' + summary);
   } catch (e) {
     console.error('Import failed', e);
