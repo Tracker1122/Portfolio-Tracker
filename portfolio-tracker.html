@@ -1385,6 +1385,8 @@
 
   <!-- Analysis and Performance Tab -->
   <div class="tab-panel" id="tab-analysis">
+    <div class="section-heading">Sleeve Value-Add — Is the Active Work Justified?</div>
+    <div id="sleeve-valueadd-wrap" style="margin-bottom:24px"></div>
     <div class="section-heading">Strategy Performance</div>
     <div id="sleeve-performance-wrap" style="margin-bottom:20px"></div>
     <div class="section-heading">Industry Intelligence
@@ -4243,7 +4245,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
-  if (name === 'analysis') { renderSleevePerformance(); renderThemeIntel(); renderAddCandidatesTable(); }
+  if (name === 'analysis') { renderSleeveValueAdd(); renderSleevePerformance(); renderThemeIntel(); renderAddCandidatesTable(); }
   if (name === 'rebalance') { renderRebalance(); }
   if (name === 'postsell') renderPostSell();
   if (name === 'trends') renderTrends();
@@ -5419,6 +5421,125 @@ function positionTooltip(e) {
   tip.style.top = (y + h > window.innerHeight ? y - h - 20 : y) + 'px';
 }
 
+
+// ─────────────────────────────────────────────
+// Sleeve Value-Add Verdict — does each sleeve justify itself over its benchmarks?
+// LEADS with vs-theme alpha (the honest "did the picking add value over just buying
+// the sector ETF" question); vs-SPX is shown secondary. Soak-aware: when most of a
+// sleeve's capital is younger than its soak threshold, the verdict is withheld as
+// "too early" rather than asserting a conclusion the data can't yet support.
+// PBP is judged on its structural role, not on alpha.
+// ─────────────────────────────────────────────
+function buildSleeveValueAdd() {
+  const open = positions.filter(p => !p.closed && p.ticker);
+  const today = new Date();
+  const out = {};
+  SLEEVES.forEach(s => out[s] = {
+    positions: 0, totalCapital: 0, inSoakCapital: 0,
+    spxAlpha: 0, spxCount: 0,
+    themeDollar: 0, themeInvested: 0, themeCount: 0, beatTheme: 0,
+    noThemeCount: 0
+  });
+  open.forEach(p => {
+    const o = out[p.sleeve];
+    if (!o) return;
+    const c = calcPos(p);
+    o.positions++;
+    o.totalCapital += c.invested;
+    const buy = p.dateBought ? new Date(p.dateBought) : null;
+    const days = buy ? Math.floor((today - buy) / 86400000) : null;
+    const soak = SLEEVE_SOAK[p.sleeve] || 0;
+    if (days !== null && days < soak) o.inSoakCapital += c.invested;
+    if (c.spxReturn !== null && c.invested > 0) {
+      o.spxAlpha += (c.exitValue - c.invested) - c.invested * (c.spxReturn / 100);
+      o.spxCount++;
+    }
+    const ta = calcThemeAlpha(p);
+    if (ta) {
+      o.themeDollar += ta.themeAlphaDollar;
+      o.themeInvested += ta.invested;
+      o.themeCount++;
+      if (ta.themeAlphaPct > 0) o.beatTheme++;
+    } else {
+      o.noThemeCount++;
+    }
+  });
+  return out;
+}
+
+// Decide a verdict for a sleeve given its aggregates. Returns { text, color, detail }.
+// Honesty guardrails:
+//   - PBP: structural, never judged on alpha.
+//   - >60% capital in soak: withhold verdict ("too early"), regardless of sign.
+//   - No computable theme alpha: say so rather than implying a pass/fail.
+function sleeveVerdict(sleeve, o) {
+  if (sleeve === 'Portfolio Balance Plays') {
+    return { text: 'Structural — not alpha-judged', color: 'var(--color-text-info)',
+      detail: 'Ballast sleeve. Its job is diversification, not beating a benchmark. vs-SPX/vs-theme shown for context only.' };
+  }
+  const soakPct = o.totalCapital > 0 ? (o.inSoakCapital / o.totalCapital) * 100 : 0;
+  const themePp = o.themeInvested > 0 ? (o.themeDollar / o.themeInvested) * 100 : null;
+  if (o.themeCount === 0) {
+    return { text: 'No theme benchmark', color: 'var(--color-text-tertiary)',
+      detail: 'No positions in this sleeve have a computable theme benchmark, so value-add over the sector ETF can\u2019t be judged.' };
+  }
+  if (soakPct > 60) {
+    return { text: 'Too early to judge', color: 'var(--color-text-tertiary)',
+      detail: `${soakPct.toFixed(0)}% of capital is still inside the ${SLEEVE_SOAK[sleeve]}-day soak window. The numbers below are real but statistically immature — treat as provisional, not a verdict.` };
+  }
+  // Matured enough to read. Threshold: ±2pp dollar-weighted to avoid calling noise a result.
+  if (themePp !== null && themePp >= 2) {
+    return { text: 'Justified — beats its benchmarks', color: 'var(--color-text-success)',
+      detail: `Picks added ${fmtDollarWhole(o.themeDollar)} over the sector ETFs (${themePp >= 0 ? '+' : ''}${themePp.toFixed(1)}pp on deployed capital).` };
+  }
+  if (themePp !== null && themePp <= -2) {
+    return { text: 'Under review — trails its benchmarks', color: 'var(--color-text-danger)',
+      detail: `Picks gave up ${fmtDollarWhole(Math.abs(o.themeDollar))} vs just owning the sector ETFs (${themePp.toFixed(1)}pp). The active work isn\u2019t paying off here yet.` };
+  }
+  return { text: 'Roughly matching benchmarks', color: 'var(--color-text-secondary)',
+    detail: `Within \u00b12pp of the sector ETFs (${themePp >= 0 ? '+' : ''}${themePp.toFixed(1)}pp). Not clearly adding or destroying value vs indexing the theme.` };
+}
+
+function renderSleeveValueAdd() {
+  const el = document.getElementById('sleeve-valueadd-wrap');
+  if (!el) return;
+  const data = buildSleeveValueAdd();
+
+  const cards = SLEEVES.map(sleeve => {
+    const o = data[sleeve];
+    const color = SLEEVE_COLORS[sleeve];
+    const v = sleeveVerdict(sleeve, o);
+    const themePp = o.themeInvested > 0 ? (o.themeDollar / o.themeInvested) * 100 : null;
+    const soakPct = o.totalCapital > 0 ? (o.inSoakCapital / o.totalCapital) * 100 : 0;
+    const themeColor = o.themeDollar >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const spxColor = o.spxAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+
+    return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${color};border-radius:var(--border-radius-lg);padding:12px">
+      <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">${sleeve}</div>
+      <div style="font-size:12px;font-weight:700;color:${v.color};margin-bottom:6px">${v.text}</div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.45;margin-bottom:10px">${v.detail}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--color-border-tertiary);padding-top:8px">
+        <div>
+          <div style="font-size:9px;color:var(--color-text-tertiary)">vs Theme ETF <span style="opacity:0.6">(primary)</span></div>
+          <div style="font-size:14px;font-weight:700;color:${themeColor}">${o.themeCount > 0 ? fmtDollarWhole(o.themeDollar) : '—'}</div>
+          <div style="font-size:9px;color:var(--color-text-tertiary)">${themePp !== null ? (themePp >= 0 ? '+' : '') + themePp.toFixed(1) + 'pp · ' : ''}beat ${o.beatTheme}/${o.themeCount}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--color-text-tertiary)">vs S&P 500 <span style="opacity:0.6">(context)</span></div>
+          <div style="font-size:12px;font-weight:600;color:${spxColor}">${o.spxCount > 0 ? fmtDollarWhole(o.spxAlpha) : '—'}</div>
+          <div style="font-size:9px;color:var(--color-text-tertiary)">${o.positions} pos · ${fmtDollarWhole(o.totalCapital)}</div>
+        </div>
+      </div>
+      ${soakPct > 0 && sleeve !== 'Portfolio Balance Plays' ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:6px;font-style:italic">${soakPct.toFixed(0)}% of capital still in ${SLEEVE_SOAK[sleeve]}-day soak</div>` : ''}
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 10px;padding:0 2px;line-height:1.5">
+      Does each sleeve justify the active work over the simple alternatives? <strong>vs Theme ETF</strong> answers \u201cwould I have done better just buying the sector?\u201d \u2014 the honest test for stock-picking. <strong>vs S&P</strong> is shown for context (beating the S&P while trailing your theme means the theme won, not your pick). Verdicts are withheld while most of a sleeve\u2019s capital is still in its soak window. Point-in-time, not time-weighted; benchmark prices may lag the S&P figure by a day.
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">${cards}</div>`;
+}
 
 // ─────────────────────────────────────────────
 // Strategy Performance (Rebalance tab)
