@@ -531,6 +531,83 @@
   }
   .autotag-card.success .autotag-action { display: none; }
 
+  /* ── Tax Profile ── */
+  .tax-profile-panel { margin-bottom: 16px; }
+  .tax-preset-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tax-preset-pill {
+    padding: 8px 14px; border-radius: var(--border-radius-md);
+    border: 1px solid var(--color-border-secondary);
+    background: var(--color-background-secondary);
+    cursor: pointer; transition: all 0.15s; user-select: none;
+    display: flex; flex-direction: column; gap: 1px; min-width: 90px;
+  }
+  .tax-preset-pill:hover { border-color: var(--color-text-info); }
+  .tax-preset-pill.active { border-color: var(--color-text-info); background: var(--color-background-info); }
+  .tax-preset-pill .pill-name { font-size: 12px; font-weight: 700; color: var(--color-text-primary); }
+  .tax-preset-pill .pill-sub { font-size: 9px; color: var(--color-text-tertiary); }
+  .tax-preset-pill.active .pill-name { color: var(--color-text-info); }
+  .tax-builder {
+    background: var(--color-background-secondary);
+    border: 1px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .tax-builder-grid { display: grid; grid-template-columns: 130px 1fr; gap: 8px 12px; align-items: center; }
+  .tax-builder-grid label { font-size: 11px; color: var(--color-text-secondary); }
+  .tax-builder-grid select, .tax-builder-grid input[type="number"] {
+    background: var(--color-background-tertiary);
+    border: 1px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md);
+    color: var(--color-text-primary); font-family: var(--font-sans);
+    font-size: 11px; padding: 5px 8px; outline: none; width: 100%;
+  }
+  .tax-builder-grid select:focus, .tax-builder-grid input:focus { border-color: var(--color-text-info); }
+  .tax-effective {
+    display: flex; gap: 20px; padding: 12px 16px; margin-bottom: 12px;
+    background: var(--color-background-tertiary);
+    border: 1px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+  }
+  .tax-effective .eff-block { display: flex; flex-direction: column; gap: 2px; }
+  .tax-effective .eff-label { font-size: 9px; color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; }
+  .tax-effective .eff-value { font-size: 18px; font-weight: 700; color: var(--color-text-primary); }
+  .tax-effective .eff-breakdown { font-size: 9px; color: var(--color-text-tertiary); }
+  .tax-state-note { font-size: 10px; color: var(--color-text-tertiary); font-style: italic; margin-bottom: 12px; line-height: 1.5; }
+  .tax-disclaimer {
+    background: var(--color-background-tertiary);
+    border: 1px solid var(--color-border-tertiary);
+    border-left: 3px solid var(--color-text-info);
+    border-radius: var(--border-radius-md);
+    padding: 12px 14px; font-size: 10px; color: var(--color-text-secondary);
+    line-height: 1.7; margin-top: 8px;
+  }
+  .tax-disclaimer strong { color: var(--color-text-primary); }
+  .tax-implications-panel { margin-top: 20px; }
+  .tax-imp-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .tax-imp-table thead th {
+    background: var(--color-background-tertiary); color: var(--color-text-tertiary);
+    font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--color-border-tertiary);
+  }
+  .tax-imp-table thead th:first-child { text-align: left; }
+  .tax-imp-table tbody td { padding: 5px 8px; border-bottom: 1px solid var(--color-border-tertiary); text-align: right; }
+  .tax-imp-table tbody td:first-child { text-align: left; font-weight: 600; color: var(--color-text-primary); }
+  .tax-imp-table tbody tr:last-child td { border-bottom: none; }
+  .tax-imp-near-lt { color: var(--color-text-success); font-weight: 600; }
+
+  /* ── Tax year selector pills + ledger ── */
+  .tax-year-pills { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+  .tax-year-pill {
+    font-size: 10px; padding: 3px 10px; border-radius: 10px;
+    border: 1px solid var(--color-border-secondary);
+    color: var(--color-text-tertiary); cursor: pointer; user-select: none;
+    transition: all 0.15s;
+  }
+  .tax-year-pill:hover { border-color: var(--color-text-info); color: var(--color-text-secondary); }
+  .tax-year-pill.active { background: var(--color-text-info); color: #000; border-color: var(--color-text-info); font-weight: 600; }
+  .tax-ledger-wrap { max-height: 360px; overflow-y: auto; border: 1px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); }
+  .tax-ledger-wrap .tax-imp-table thead th { position: sticky; top: 0; }
+
   .modal {
     background: var(--color-background-secondary);
     border: 1px solid var(--color-border-secondary);
@@ -1163,7 +1240,7 @@
           </div>
         </div>
         <!-- Tax Exposure Summary -->
-        <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 14px;min-width:220px" id="tax-exposure-card" onclick="showCardOverlay('tax')" style="cursor:pointer">
+        <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 14px;min-width:220px;cursor:pointer" id="tax-exposure-card" onclick="openRealizedLedgerModal()" title="Click for the full realized-gains ledger by year">
           <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px" id="tax-year-label">2026 Tax Year</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
             <div>
@@ -1352,6 +1429,13 @@
     </div>
     <div id="add-candidates-tier1-wrap"></div>
     <div id="add-candidates-tier2-wrap" style="margin-top:12px"></div>
+
+    <!-- Tax Profile & Implications -->
+    <div class="section-heading" style="margin-top:28px">Tax Profile</div>
+    <div id="tax-profile-panel" class="tax-profile-panel"></div>
+    <div id="tax-implications-panel" class="tax-implications-panel"></div>
+    <div class="section-heading" style="margin-top:24px">Realized Gains Ledger</div>
+    <div id="realized-ledger-inline"></div>
   </div><!-- end tab-rebalance -->
 
   <!-- Post-Sell Analysis Tab -->
@@ -1990,6 +2074,18 @@
   </div>
 </div>
 
+<!-- Realized Gains Ledger Modal (popped from dashboard Tax Exposure card) -->
+<div class="modal-overlay hidden" id="realized-ledger-modal-overlay">
+  <div class="modal" style="max-width:780px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+      <div class="modal-title">Realized Gains — Tax Picture</div>
+      <button onclick="closeRealizedLedgerModal()" style="background:none;border:none;color:var(--color-text-tertiary);font-size:16px;cursor:pointer;line-height:1">✕</button>
+    </div>
+    <div class="modal-subtitle">Closed positions and their estimated tax, by year. Uses your active tax profile's rates.</div>
+    <div id="realized-ledger-modal" style="margin-top:14px"></div>
+  </div>
+</div>
+
 <script>
 // ─────────────────────────────────────────────
 // State
@@ -2019,11 +2115,13 @@ let industryAlphaMatureOnly = false; // toggle: filter Industry Intelligence/Spo
 // so daily benchmark refresh doesn't invalidate historical anchors.
 let themeUniverseHistory = {};
 
-// Tax rates for after-tax adjustments (Oregon resident, mid-six-figures household).
-// Conservative side: slightly overstates drag if your real income is lower (errs toward making
-// after-tax alpha look worse than reality, which is the safer error direction).
-const TAX_RATE_LT = 0.27; // long-term: 15% federal + 9.9% Oregon + partial NIIT exposure
-const TAX_RATE_ST = 0.36; // short-term: 24% federal + 9.9% Oregon + partial NIIT exposure
+// Tax rates for after-tax adjustments. These are now DRIVEN BY THE ACTIVE TAX PROFILE
+// (see Tax Profile Module below). They start at the Oregon-high-earner defaults and get
+// recomputed whenever the user picks a profile or edits Custom. Stored as `let` (not const)
+// so applyTaxProfile() can update them. Everything that reads these — Track Record, Tax
+// Exposure card, Rebalance trim signals, card overlays — stays consistent automatically.
+let TAX_RATE_LT = 0.27; // long-term effective rate (fed LT + state LT + NIIT)
+let TAX_RATE_ST = 0.36; // short-term effective rate (fed ST + state ST + NIIT)
 const MATURITY_DAYS = 180; // hold period before a closed position counts as "mature"
 
 function mkPos() {
@@ -2335,6 +2433,555 @@ async function fetchRowData(id) {
       renderAll();
     }, 2500);
   }
+}
+
+// ─────────────────────────────────────────────
+// Tax Profile Module
+//
+// Configurable tax rates via named presets + a guided Custom builder.
+// The active profile drives TAX_RATE_LT / TAX_RATE_ST, which everything
+// tax-related reads (Track Record, Tax Exposure, Rebalance signals, etc.).
+//
+// IMPORTANT — what these estimates can and can't do:
+//   - State rates below are TOP MARGINAL rates from public 2025/2026 data.
+//     Accurate for high earners; OVERSTATE the rate for lower brackets.
+//   - Effective rate is computed additively: federal + state + NIIT.
+//     This is a standard simplification. It ignores the federal deduction
+//     for state taxes, bracket phase-ins, AMT, and the interaction of LT
+//     gains with ordinary income. It is an ESTIMATE, not tax advice.
+//   - Stored per-browser, so each user's profile is independent.
+//   - VERIFY with a tax professional before relying on these for decisions.
+//
+// State library: long-term + short-term rates stored separately (most states
+// tax gains as ordinary income so LT === ST; Hawaii and a few others differ).
+// Source: SmartAsset state capital gains guide (fact-checked, Apr 2026) and
+// cross-referenced public data. Rates are top-of-bracket estimates.
+// ─────────────────────────────────────────────
+
+// stateLT / stateST are the STATE portion only (federal + NIIT added separately).
+const TAX_STATE_LIBRARY = {
+  // Your states
+  'OR': { name: 'Oregon',         stateLT: 9.9,  stateST: 9.9,  note: 'Taxes gains as ordinary income, top 9.9%.' },
+  'HI': { name: 'Hawaii',         stateLT: 7.25, stateST: 11.0, note: 'LT capped at 7.25%; ST taxed as ordinary income up to 11%.' },
+  'AK': { name: 'Alaska',         stateLT: 0,    stateST: 0,    note: 'No state income tax.' },
+  // No-tax states
+  'FL': { name: 'Florida',        stateLT: 0,    stateST: 0,    note: 'No state income tax.' },
+  'TX': { name: 'Texas',          stateLT: 0,    stateST: 0,    note: 'No state income tax.' },
+  'NV': { name: 'Nevada',         stateLT: 0,    stateST: 0,    note: 'No state income tax.' },
+  'WY': { name: 'Wyoming',        stateLT: 0,    stateST: 0,    note: 'No state income tax.' },
+  'SD': { name: 'South Dakota',   stateLT: 0,    stateST: 0,    note: 'No state income tax.' },
+  'TN': { name: 'Tennessee',      stateLT: 0,    stateST: 0,    note: 'No state income tax.' },
+  'NH': { name: 'New Hampshire',  stateLT: 0,    stateST: 0,    note: 'Investment income tax fully phased out in 2025.' },
+  'WA': { name: 'Washington',     stateLT: 0,    stateST: 0,    note: '0% for most; 7% on LT gains above ~$270k, 9.9% above $1M. Set to 0 — adjust via Custom if you are a very high earner.' },
+  // Big-population states
+  'CA': { name: 'California',     stateLT: 13.3, stateST: 13.3, note: 'Taxes gains as ordinary income, top 13.3%.' },
+  'NY': { name: 'New York',       stateLT: 10.9, stateST: 10.9, note: 'Taxes gains as ordinary income, top 10.9%.' },
+  'NJ': { name: 'New Jersey',     stateLT: 10.75,stateST: 10.75,note: 'Taxes gains as ordinary income, top 10.75%.' },
+  'MA': { name: 'Massachusetts',  stateLT: 5.0,  stateST: 8.5,  note: 'LT ~5% flat; ST taxed higher (~8.5%). Collectibles 12%.' },
+  'IL': { name: 'Illinois',       stateLT: 4.95, stateST: 4.95, note: 'Flat 4.95%.' },
+  'PA': { name: 'Pennsylvania',   stateLT: 3.07, stateST: 3.07, note: 'Flat 3.07%.' },
+  'VA': { name: 'Virginia',       stateLT: 5.75, stateST: 5.75, note: 'Taxes gains as income, top 5.75%.' },
+  'CO': { name: 'Colorado',       stateLT: 4.40, stateST: 4.40, note: 'Flat 4.40%.' },
+  'AZ': { name: 'Arizona',        stateLT: 2.50, stateST: 2.50, note: 'Flat 2.5% (25% LT subtraction may lower further).' },
+};
+
+// Federal long-term brackets (choose by income).
+const TAX_FED_LT_OPTIONS = [
+  { value: 0,  label: '0% (low income)' },
+  { value: 15, label: '15% (most filers)' },
+  { value: 20, label: '20% (high income)' },
+];
+// Federal short-term = ordinary income brackets.
+const TAX_FED_ST_OPTIONS = [
+  { value: 10, label: '10%' },
+  { value: 12, label: '12%' },
+  { value: 22, label: '22%' },
+  { value: 24, label: '24%' },
+  { value: 32, label: '32%' },
+  { value: 35, label: '35%' },
+  { value: 37, label: '37%' },
+];
+const TAX_NIIT_RATE = 3.8;
+
+// Preset profiles — point at library entries + federal bracket choices.
+// "componentsEditable" lists which pieces the user can adjust while staying in the preset.
+const TAX_PRESETS = {
+  oregon: {
+    name: 'Oregon',
+    sub: 'Misha · high earner',
+    state: 'OR',
+    fedLT: 15, fedST: 24, niit: 2.1, // 2.1 NIIT reproduces the original 27/36 effective rates
+    note: 'Reproduces the original 27% LT / 36% ST. NIIT shown as 2.1% (partial exposure) to match.',
+  },
+  hawaii: {
+    name: 'Hawaii',
+    sub: 'Ari · high earner',
+    state: 'HI',
+    fedLT: 20, fedST: 32, niit: 3.8,
+    note: 'Federal 20% LT / 32% ST + Hawaii (7.25% LT / 11% ST) + NIIT. Pick exact ST bracket below.',
+  },
+  alaska: {
+    name: 'Alaska',
+    sub: 'Ari · high earner',
+    state: 'AK',
+    fedLT: 20, fedST: 32, niit: 3.8,
+    note: 'Federal 20% LT / 32% ST + no state tax + NIIT. Pick exact ST bracket below.',
+  },
+};
+
+// The active profile, persisted per-browser.
+let taxProfile = {
+  preset: 'oregon',       // 'oregon' | 'hawaii' | 'alaska' | 'custom'
+  state: 'OR',
+  fedLT: 15,
+  fedST: 24,
+  niit: 2.1,
+  niitOn: true,
+};
+
+function taxLoadProfile() {
+  try {
+    const raw = localStorage.getItem('portfolio-tax-profile');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        taxProfile = { ...taxProfile, ...parsed };
+      }
+    }
+  } catch (e) { console.warn('Tax profile load failed', e); }
+  applyTaxProfile();
+}
+function taxSaveProfile() {
+  try { localStorage.setItem('portfolio-tax-profile', JSON.stringify(taxProfile)); }
+  catch (e) { console.warn('Tax profile save failed', e); }
+}
+
+// Compute effective LT/ST rates from the active profile and push them into
+// TAX_RATE_LT/ST + the rebalance rate inputs. Single source of truth.
+function applyTaxProfile() {
+  const st = TAX_STATE_LIBRARY[taxProfile.state] || { stateLT: 0, stateST: 0 };
+  const niit = taxProfile.niitOn ? (taxProfile.niit || 0) : 0;
+  const effLT = (taxProfile.fedLT || 0) + st.stateLT + niit;
+  const effST = (taxProfile.fedST || 0) + st.stateST + niit;
+  TAX_RATE_LT = effLT / 100;
+  TAX_RATE_ST = effST / 100;
+  // Sync the rebalance rate inputs so trim signals match
+  const stInput = document.getElementById('rate-st');
+  const ltInput = document.getElementById('rate-lt');
+  if (stInput) stInput.value = effST.toFixed(1).replace(/\.0$/, '');
+  if (ltInput) ltInput.value = effLT.toFixed(1).replace(/\.0$/, '');
+  return { effLT, effST };
+}
+
+// Apply a named preset.
+function selectTaxPreset(presetKey) {
+  if (presetKey === 'custom') {
+    taxProfile.preset = 'custom';
+    // keep current component values; user edits via the builder
+  } else {
+    const p = TAX_PRESETS[presetKey];
+    if (!p) return;
+    taxProfile.preset = presetKey;
+    taxProfile.state = p.state;
+    taxProfile.fedLT = p.fedLT;
+    taxProfile.fedST = p.fedST;
+    taxProfile.niit = p.niit;
+    taxProfile.niitOn = true;
+  }
+  applyTaxProfile();
+  taxSaveProfile();
+  renderTaxProfilePanel();
+  // Re-render everything tax-aware
+  if (typeof renderRebalance === 'function') renderRebalance();
+  if (typeof renderTaxExposure === 'function') renderTaxExposure();
+  if (typeof renderAll === 'function') renderAll();
+}
+
+// Update a single component (from Custom builder or in-preset editing).
+function updateTaxComponent(field, value) {
+  if (field === 'state') taxProfile.state = value;
+  else if (field === 'fedLT') taxProfile.fedLT = parseFloat(value);
+  else if (field === 'fedST') taxProfile.fedST = parseFloat(value);
+  else if (field === 'niit') taxProfile.niit = parseFloat(value);
+  else if (field === 'niitOn') taxProfile.niitOn = !!value;
+  // Editing a component while on a named preset shifts you to a modified state —
+  // but we keep the preset label unless state changes the fundamental identity.
+  // For simplicity: editing fed bracket or NIIT keeps the preset name (it's a
+  // legitimate in-preset adjustment); changing state moves you to Custom.
+  if (field === 'state' && taxProfile.preset !== 'custom') {
+    const presetState = TAX_PRESETS[taxProfile.preset]?.state;
+    if (value !== presetState) taxProfile.preset = 'custom';
+  }
+  applyTaxProfile();
+  taxSaveProfile();
+  renderTaxProfilePanel();
+  if (typeof renderRebalance === 'function') renderRebalance();
+  if (typeof renderTaxExposure === 'function') renderTaxExposure();
+  if (typeof renderAll === 'function') renderAll();
+}
+
+// ─── Tax profile panel render ───
+function renderTaxProfilePanel() {
+  const panel = document.getElementById('tax-profile-panel');
+  if (!panel) return;
+  const st = TAX_STATE_LIBRARY[taxProfile.state] || { name: taxProfile.state, stateLT: 0, stateST: 0, note: '' };
+  const { effLT, effST } = applyTaxProfile();
+  const niit = taxProfile.niitOn ? (taxProfile.niit || 0) : 0;
+
+  // Preset pills
+  const presetKeys = ['oregon', 'hawaii', 'alaska', 'custom'];
+  const pillsHtml = presetKeys.map(key => {
+    const isCustom = key === 'custom';
+    const p = isCustom ? { name: 'Custom', sub: 'build your own' } : TAX_PRESETS[key];
+    const active = taxProfile.preset === key ? ' active' : '';
+    return `<div class="tax-preset-pill${active}" onclick="selectTaxPreset('${key}')">
+      <span class="pill-name">${p.name}</span>
+      <span class="pill-sub">${p.sub}</span>
+    </div>`;
+  }).join('');
+
+  // Component builder — always visible so you can adjust fed bracket / NIIT within a preset,
+  // or fully build a Custom profile.
+  const stateOptions = Object.entries(TAX_STATE_LIBRARY)
+    .sort((a, b) => a[1].name.localeCompare(b[1].name))
+    .map(([code, s]) => `<option value="${code}"${code === taxProfile.state ? ' selected' : ''}>${s.name}</option>`)
+    .join('');
+  const fedLTOptions = TAX_FED_LT_OPTIONS
+    .map(o => `<option value="${o.value}"${o.value === taxProfile.fedLT ? ' selected' : ''}>${o.label}</option>`)
+    .join('');
+  const fedSTOptions = TAX_FED_ST_OPTIONS
+    .map(o => `<option value="${o.value}"${o.value === taxProfile.fedST ? ' selected' : ''}>${o.label}</option>`)
+    .join('');
+
+  panel.innerHTML = `
+    <div class="tax-preset-pills">${pillsHtml}</div>
+
+    <div class="tax-effective">
+      <div class="eff-block">
+        <span class="eff-label">Long-term rate</span>
+        <span class="eff-value">${effLT.toFixed(1).replace(/\.0$/, '')}%</span>
+        <span class="eff-breakdown">${taxProfile.fedLT}% fed + ${st.stateLT}% ${taxProfile.state}${niit ? ` + ${niit}% NIIT` : ''}</span>
+      </div>
+      <div class="eff-block">
+        <span class="eff-label">Short-term rate</span>
+        <span class="eff-value">${effST.toFixed(1).replace(/\.0$/, '')}%</span>
+        <span class="eff-breakdown">${taxProfile.fedST}% fed + ${st.stateST}% ${taxProfile.state}${niit ? ` + ${niit}% NIIT` : ''}</span>
+      </div>
+    </div>
+
+    <div class="tax-builder">
+      <div class="tax-builder-grid">
+        <label>State</label>
+        <select onchange="updateTaxComponent('state', this.value)">${stateOptions}</select>
+        <label>Federal LT bracket</label>
+        <select onchange="updateTaxComponent('fedLT', this.value)">${fedLTOptions}</select>
+        <label>Federal ST bracket</label>
+        <select onchange="updateTaxComponent('fedST', this.value)">${fedSTOptions}</select>
+        <label>NIIT (3.8% surtax)</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px">
+            <input type="checkbox" ${taxProfile.niitOn ? 'checked' : ''} onchange="updateTaxComponent('niitOn', this.checked)" style="width:auto">
+            Applies to me
+          </label>
+          <input type="number" value="${taxProfile.niit}" min="0" max="10" step="0.1" onchange="updateTaxComponent('niit', this.value)" style="width:70px" title="NIIT rate (3.8% standard; lower for partial exposure)">
+        </div>
+      </div>
+    </div>
+
+    <div class="tax-state-note">${st.name}: ${st.note || ''}</div>
+
+    <div class="tax-disclaimer">
+      <strong>What this estimate can and can't do.</strong> These rates are <strong>top-of-bracket estimates</strong> from public 2025–2026 data, combined additively (federal + state + NIIT). They're a reasonable approximation for high earners and a planning aid — <strong>not tax advice.</strong> They <strong>can</strong> help you compare "sell now vs. wait for long-term," spot harvest opportunities, and ballpark your year's bill. They <strong>cannot</strong> account for your exact bracket thresholds, the federal deduction for state taxes, AMT, how capital gains stack on top of ordinary income, state-specific exclusions, or your full financial picture. Wash-sale flags are estimates based on buy dates within ±30 days and don't judge "substantially identical" securities. <strong>Verify with a tax professional before making decisions.</strong> This tool is not a substitute for an accountant.
+    </div>
+  `;
+}
+
+// ─── Tax implications: holding-period view + sell-now-vs-wait + year summary ───
+function renderTaxImplications() {
+  const panel = document.getElementById('tax-implications-panel');
+  if (!panel) return;
+  const today = new Date();
+  const taxYear = today.getFullYear();
+  const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
+
+  // ── Year-to-date realized summary (option C) ──
+  let ytdLT = 0, ytdST = 0, ytdHarvested = 0;
+  positions.filter(p => p.closed && p.ticker && p.sellDate).forEach(p => {
+    if (new Date(p.sellDate).getFullYear() !== taxYear) return;
+    if ((p.account || '').toUpperCase().includes('IRA')) return;
+    const c = calcPos(p);
+    const gl = c.gainLoss;
+    const days = closedHoldingDays(p);
+    if (gl > 0) { (days !== null && days >= 365) ? ytdLT += gl : ytdST += gl; }
+    else if (gl < 0) ytdHarvested += Math.abs(gl);
+  });
+  const grossTax = ytdLT * ltRate + ytdST * stRate;
+  const harvestOffset = Math.min(ytdHarvested, grossTax);
+  const netBill = Math.max(0, grossTax - harvestOffset);
+
+  // ── Open positions: holding-period + sell-now-vs-wait (options A & D) ──
+  const openRows = [];
+  let harvestCandidates = [];
+  positions.filter(p => !p.closed && p.ticker).forEach(p => {
+    const isIRA = (p.account || '').toUpperCase().includes('IRA');
+    const c = calcPos(p);
+    const gl = c.gainLoss;
+    if (gl === undefined || gl === null) return;
+    const buyDate = p.dateBought ? new Date(p.dateBought) : null;
+    const daysHeld = buyDate ? Math.floor((today - buyDate) / 86400000) : null;
+    const isLT = daysHeld !== null && daysHeld >= 365;
+    const daysToLT = (daysHeld !== null && daysHeld < 365) ? (365 - daysHeld) : 0;
+
+    // Tax if sold today
+    let taxNow = 0, taxLater = 0;
+    if (!isIRA && gl > 0) {
+      taxNow = gl * (isLT ? ltRate : stRate);
+      taxLater = gl * ltRate; // if held to LT
+    }
+    const savingsIfWait = taxNow - taxLater;
+
+    openRows.push({
+      ticker: p.ticker, account: p.account || '', daysHeld, isLT, daysToLT,
+      gl, isIRA, taxNow, taxLater, savingsIfWait,
+    });
+
+    // Harvest candidate: open position sitting at a loss in a taxable account
+    if (!isIRA && gl < 0) {
+      // Wash-sale flag: any OTHER position (open or closed) of same ticker bought within ±30 days of today
+      // (simplified — real wash sale is ±30d around the SALE, but for "if I harvest now" the sale is today)
+      const washRisk = positions.some(other => {
+        if (other === p) return false;
+        if ((other.ticker || '').toUpperCase() !== (p.ticker || '').toUpperCase()) return false;
+        const ob = other.dateBought ? new Date(other.dateBought) : null;
+        if (!ob) return false;
+        const daysApart = Math.abs((today - ob) / 86400000);
+        return daysApart <= 30;
+      });
+      harvestCandidates.push({ ticker: p.ticker, account: p.account || '', loss: Math.abs(gl), washRisk });
+    }
+  });
+
+  // Sort: positions approaching LT (gains, closest to crossover) first — most actionable
+  const sellWaitRows = openRows
+    .filter(r => !r.isIRA && r.gl > 0 && !r.isLT)
+    .sort((a, b) => a.daysToLT - b.daysToLT);
+  harvestCandidates.sort((a, b) => b.loss - a.loss);
+
+  // ── Build HTML ──
+  let html = '';
+
+  // (Year-to-date realized summary now lives in the Realized Gains Ledger below,
+  // which has a year selector and itemized rows. We skip the duplicate summary here
+  // and go straight to the forward-looking decision tools.)
+
+  // Sell-now-vs-wait (positions approaching long-term)
+  if (sellWaitRows.length > 0) {
+    html += `<div class="section-heading" style="font-size:11px;margin:16px 0 8px">Approaching Long-Term — Sell Now vs. Wait</div>`;
+    html += `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">Open taxable gainers held under 1 year. Waiting until the long-term threshold drops the rate from ${(stRate*100).toFixed(0)}% to ${(ltRate*100).toFixed(0)}%.</div>`;
+    html += `<table class="tax-imp-table"><thead><tr>
+      <th>Position</th><th>Held</th><th>Days to LT</th><th>Unreal. gain</th><th>Tax now (ST)</th><th>Tax if LT</th><th>Save by waiting</th>
+    </tr></thead><tbody>`;
+    sellWaitRows.forEach(r => {
+      const near = r.daysToLT <= 60 ? ' class="tax-imp-near-lt"' : '';
+      html += `<tr>
+        <td>${r.ticker} <span style="color:var(--color-text-tertiary);font-weight:400">${r.account}</span></td>
+        <td>${r.daysHeld}d</td>
+        <td${near}>${r.daysToLT}d</td>
+        <td>${fmtDollarWhole(r.gl)}</td>
+        <td style="color:var(--color-text-danger)">${fmtDollarWhole(r.taxNow)}</td>
+        <td>${fmtDollarWhole(r.taxLater)}</td>
+        <td style="color:var(--color-text-success)">${fmtDollarWhole(r.savingsIfWait)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+
+  // Harvest candidates
+  if (harvestCandidates.length > 0) {
+    html += `<div class="section-heading" style="font-size:11px;margin:20px 0 8px">Tax-Loss Harvest Candidates</div>`;
+    html += `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">Open taxable positions sitting at a loss. Realizing the loss can offset gains. ⚠ = potential wash sale (same ticker bought within ±30 days) — estimate only.</div>`;
+    html += `<table class="tax-imp-table"><thead><tr>
+      <th>Position</th><th>Unrealized loss</th><th>Est. tax offset value</th><th>Wash-sale flag</th>
+    </tr></thead><tbody>`;
+    harvestCandidates.forEach(h => {
+      // Offset value uses ST rate as the conservative "best case" (offsetting ST gains)
+      const offsetVal = h.loss * stRate;
+      html += `<tr>
+        <td>${h.ticker} <span style="color:var(--color-text-tertiary);font-weight:400">${h.account}</span></td>
+        <td style="color:var(--color-text-danger)">${fmtDollarWhole(h.loss)}</td>
+        <td style="color:var(--color-text-success)">~${fmtDollarWhole(offsetVal)}</td>
+        <td>${h.washRisk ? '<span style="color:var(--color-text-danger)">⚠ possible</span>' : '<span style="color:var(--color-text-tertiary)">clear</span>'}</td>
+      </tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+
+  if (sellWaitRows.length === 0 && harvestCandidates.length === 0 && ytdLT === 0 && ytdST === 0) {
+    html += `<div style="font-size:11px;color:var(--color-text-tertiary);padding:12px 0">No taxable gains, harvest candidates, or positions approaching long-term right now. Tax implications will populate as you hold and trade.</div>`;
+  }
+
+  panel.innerHTML = html;
+}
+
+// Combined render entry point for the tax section.
+function renderTaxSection() {
+  renderTaxProfilePanel();
+  renderTaxImplications();
+  renderRealizedLedgerInline();
+}
+
+// ─── Realized Gains Ledger (reusable) ───
+// Detect tax years present in closed positions, plus the current year, plus "all".
+function detectRealizedYears() {
+  const years = new Set();
+  positions.filter(p => p.closed && p.ticker && p.sellDate).forEach(p => {
+    const y = new Date(p.sellDate).getFullYear();
+    if (!isNaN(y)) years.add(y);
+  });
+  years.add(new Date().getFullYear()); // always include current year
+  return Array.from(years).sort((a, b) => b - a); // newest first
+}
+
+// Tracks the selected year per mount point ('inline' and 'modal').
+const _realizedYearSel = { inline: null, modal: null };
+
+// Build the realized-gains data for a given year ('all' or a number).
+// Returns { rows, ltGains, stGains, harvested, ltTax, stTax, netBill }.
+function buildRealizedData(year) {
+  const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
+  const rows = [];
+  let ltGains = 0, stGains = 0, harvested = 0;
+
+  positions.filter(p => p.closed && p.ticker && p.sellDate).forEach(p => {
+    const sellYear = new Date(p.sellDate).getFullYear();
+    if (year !== 'all' && sellYear !== year) return;
+    const isIRA = (p.account || '').toUpperCase().includes('IRA');
+    const c = calcPos(p);
+    const gl = c.gainLoss || 0;
+    const buyDate = p.dateBought ? new Date(p.dateBought) : null;
+    const sellDate = new Date(p.sellDate);
+    const daysHeld = buyDate ? Math.floor((sellDate - buyDate) / 86400000) : null;
+    const isLT = daysHeld !== null && daysHeld > 365; // IRS: more than one year
+    // Tax only on taxable (non-IRA) gains
+    let estTax = 0;
+    if (!isIRA && gl > 0) estTax = gl * (isLT ? ltRate : stRate);
+    // Accumulate tax totals (exclude IRA)
+    if (!isIRA) {
+      if (gl > 0) { isLT ? ltGains += gl : stGains += gl; }
+      else if (gl < 0) harvested += Math.abs(gl);
+    }
+    rows.push({
+      ticker: p.ticker, account: p.account || '', isIRA,
+      buyDate: p.dateBought || '', sellDate: p.sellDate,
+      daysHeld, isLT, gl, proceeds: c.exitValue || 0, estTax, sellYear,
+    });
+  });
+
+  // Sort newest sale first
+  rows.sort((a, b) => (b.sellDate || '').localeCompare(a.sellDate || ''));
+
+  const ltTax = ltGains * ltRate;
+  const stTax = stGains * stRate;
+  const grossTax = ltTax + stTax;
+  const harvestOffset = Math.min(harvested, grossTax);
+  const netBill = Math.max(0, grossTax - harvestOffset);
+
+  return { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill };
+}
+
+// Render the full ledger (summary + year selector + itemized table) into a mount element.
+// mountKey is 'inline' or 'modal' (tracks its own selected year + element ids).
+function renderRealizedLedger(mountId, mountKey) {
+  const mount = document.getElementById(mountId);
+  if (!mount) return;
+  const years = detectRealizedYears();
+  // Default selected year = current year if present, else newest
+  if (_realizedYearSel[mountKey] === null) {
+    const cur = new Date().getFullYear();
+    _realizedYearSel[mountKey] = years.includes(cur) ? cur : (years[0] || cur);
+  }
+  const sel = _realizedYearSel[mountKey];
+  const data = buildRealizedData(sel);
+  const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
+
+  // Year selector pills
+  const yearPills = years.map(y =>
+    `<span class="tax-year-pill${sel === y ? ' active' : ''}" onclick="setRealizedYear('${mountKey}', ${y})">${y}</span>`
+  ).join('') + `<span class="tax-year-pill${sel === 'all' ? ' active' : ''}" onclick="setRealizedYear('${mountKey}', 'all')">All</span>`;
+
+  // Summary cards
+  const summary = `
+    <div class="tax-effective" style="margin-bottom:14px">
+      <div class="eff-block"><span class="eff-label">LT gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.ltGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.ltTax)} @ ${(ltRate*100).toFixed(0)}%</span></div>
+      <div class="eff-block"><span class="eff-label">ST gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.stGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.stTax)} @ ${(stRate*100).toFixed(0)}%</span></div>
+      <div class="eff-block"><span class="eff-label">Losses harvested</span><span class="eff-value" style="font-size:14px;color:var(--color-text-success)">${fmtDollarWhole(data.harvested)}</span><span class="eff-breakdown">offsets ${fmtDollarWhole(data.harvestOffset)}</span></div>
+      <div class="eff-block"><span class="eff-label">Est. net bill</span><span class="eff-value" style="font-size:14px;color:${data.netBill>0?'var(--color-text-danger)':'var(--color-text-success)'}">${fmtDollarWhole(data.netBill)}</span><span class="eff-breakdown">after harvest offset</span></div>
+    </div>`;
+
+  // Itemized table
+  let tableRows = '';
+  if (data.rows.length === 0) {
+    tableRows = `<tr><td colspan="8" style="text-align:center;color:var(--color-text-tertiary);padding:14px">No realized sales ${sel === 'all' ? 'on record' : 'in ' + sel}.</td></tr>`;
+  } else {
+    data.rows.forEach(r => {
+      const muted = r.isIRA ? ' style="opacity:0.5"' : '';
+      const glColor = r.gl > 0 ? 'var(--color-text-success)' : r.gl < 0 ? 'var(--color-text-danger)' : 'var(--color-text-tertiary)';
+      const term = r.daysHeld === null ? '—' : (r.isLT ? '<span style="color:var(--color-text-success)">LT</span>' : '<span style="color:var(--color-text-info)">ST</span>');
+      const taxCell = r.isIRA ? '<span style="color:var(--color-text-tertiary)">$0 · IRA</span>' : (r.gl > 0 ? fmtDollarWhole(r.estTax) : '—');
+      tableRows += `<tr${muted}>
+        <td style="text-align:left">${r.ticker} <span style="color:var(--color-text-tertiary);font-weight:400">${r.account}</span></td>
+        <td>${r.buyDate || '—'}</td>
+        <td>${r.sellDate || '—'}</td>
+        <td>${r.daysHeld !== null ? r.daysHeld + 'd' : '—'}</td>
+        <td>${term}</td>
+        <td>${fmtDollarWhole(r.proceeds)}</td>
+        <td style="color:${glColor}">${fmtDollarWhole(r.gl)}</td>
+        <td>${taxCell}</td>
+      </tr>`;
+    });
+  }
+
+  mount.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+      <span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary)">Tax year</span>
+      <div class="tax-year-pills">${yearPills}</div>
+    </div>
+    ${summary}
+    <div class="tax-ledger-wrap">
+      <table class="tax-imp-table">
+        <thead><tr>
+          <th>Position</th><th>Bought</th><th>Sold</th><th>Held</th><th>Term</th><th>Proceeds</th><th>Gain/Loss</th><th>Est. tax</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px">IRA rows shown muted and excluded from tax totals (sheltered). Estimates only — see disclaimer above.</div>
+  `;
+}
+
+function setRealizedYear(mountKey, year) {
+  _realizedYearSel[mountKey] = year;
+  if (mountKey === 'inline') renderRealizedLedgerInline();
+  else renderRealizedLedgerModal();
+}
+
+function renderRealizedLedgerInline() {
+  renderRealizedLedger('realized-ledger-inline', 'inline');
+}
+function renderRealizedLedgerModal() {
+  renderRealizedLedger('realized-ledger-modal', 'modal');
+}
+
+// Open the realized-gains ledger as a modal from the dashboard Tax Exposure card.
+function openRealizedLedgerModal() {
+  const modal = document.getElementById('realized-ledger-modal-overlay');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  renderRealizedLedgerModal();
+}
+function closeRealizedLedgerModal() {
+  const modal = document.getElementById('realized-ledger-modal-overlay');
+  if (modal) modal.classList.add('hidden');
 }
 
 // ─────────────────────────────────────────────
@@ -9432,6 +10079,8 @@ function renderAll() {
   updateIndustryAlphaToggleVisual();
   // Auto-tag card — defensive: function may not exist on partial load
   if (typeof renderAutoTagCard === 'function') renderAutoTagCard();
+  // Tax profile + implications — defensive
+  if (typeof renderTaxSection === 'function') renderTaxSection();
   syncFixedScrollbar();
 }
 
@@ -9852,6 +10501,7 @@ function exportData() {
     peDeals,
     themeUniverseHistory,
     trackRecordMatureOnly, industryAlphaMatureOnly,
+    taxProfile,
     version: "2.2",
     benchmarks: BENCHMARKS
   };
@@ -9887,6 +10537,7 @@ function importData(input) {
       if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
       if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
       if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
+      if (data.taxProfile && typeof data.taxProfile === 'object') { taxProfile = { ...taxProfile, ...data.taxProfile }; applyTaxProfile(); }
       // Run v1 → v2 migration on imported data (idempotent)
       migratePositionsV1ToV2();
       await savePositions();
@@ -11017,6 +11668,7 @@ function driveBuildBackupPayload() {
     peDeals,
     themeUniverseHistory,
     trackRecordMatureOnly, industryAlphaMatureOnly,
+    taxProfile,
     version: '2.2',
     benchmarks: typeof BENCHMARKS !== 'undefined' ? BENCHMARKS : null,
     _backupMeta: { backedUpAt: new Date().toISOString(), source: 'portfolio-tracker-auto' },
@@ -11390,6 +12042,7 @@ async function executeRestore() {
     if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
     if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
     if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
+    if (data.taxProfile && typeof data.taxProfile === 'object') { taxProfile = { ...taxProfile, ...data.taxProfile }; applyTaxProfile(); }
 
     migratePositionsV1ToV2();
 
@@ -11594,6 +12247,7 @@ async function init() {
     await savePositions();
   }
   loadPolygonKey();
+  taxLoadProfile(); // load + apply saved tax profile before first render
   restoreSpxInput();
   renderCashDisplay();
   renderCapitalFlow();
