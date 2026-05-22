@@ -531,6 +531,15 @@
   }
   .autotag-card.success .autotag-action { display: none; }
 
+  /* Compact success pill — auto width, minimal padding, no detail line */
+  .autotag-card.compact {
+    padding: 5px 12px; gap: 8px; margin-bottom: 16px;
+    width: auto; max-width: max-content;
+  }
+  .autotag-card.compact .autotag-icon { font-size: 13px; }
+  .autotag-card.compact .autotag-headline { font-size: 11px; }
+  .autotag-card.compact .autotag-detail { display: none; }
+
   /* ── Tax Profile ── */
   .tax-profile-panel { margin-bottom: 16px; }
   .tax-preset-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -1005,6 +1014,7 @@
   <!-- Tab Bar -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="switchTab('dashboard')">Dashboard</button>
+    <button class="tab-btn" onclick="switchTab('analysis')">Analysis and Performance</button>
     <button class="tab-btn" onclick="switchTab('rebalance')">Rebalance &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Trends</button>
@@ -1373,8 +1383,8 @@
 
   </div><!-- end tab-dashboard -->
 
-  <!-- Rebalance & Tax Tab -->
-  <div class="tab-panel" id="tab-rebalance">
+  <!-- Analysis and Performance Tab -->
+  <div class="tab-panel" id="tab-analysis">
     <div class="section-heading">Strategy Performance</div>
     <div id="sleeve-performance-wrap" style="margin-bottom:20px"></div>
     <div class="section-heading">Industry Intelligence
@@ -1388,6 +1398,17 @@
       </span>
     </div>
     <div id="theme-intel-wrap" style="margin-bottom:20px"></div>
+
+    <div class="section-heading" style="margin-top:24px">Add Candidates</div>
+    <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
+      Positions beating both SPX and theme by ≥+$300. Tier 1 = past sleeve soak, fair to consider for adding. Tier 2 = early strength, still in soak — informational only, not action-eligible. Portfolio Balance Plays excluded.
+    </div>
+    <div id="add-candidates-tier1-wrap"></div>
+    <div id="add-candidates-tier2-wrap" style="margin-top:12px"></div>
+  </div><!-- end tab-analysis -->
+
+  <!-- Rebalance & Tax Tab -->
+  <div class="tab-panel" id="tab-rebalance">
     <div class="section-heading">Trim Candidates</div>
     <div class="rebal-controls">
       <span class="rebal-control-label">Short-term rate</span>
@@ -1422,13 +1443,6 @@
       <input type="range" class="scroll-slider" id="rebal-slider" min="0" value="0" step="1"
         oninput="sliderScroll('rebal-table-wrap', this)">
     </div>
-
-    <div class="section-heading" style="margin-top:24px">Add Candidates</div>
-    <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
-      Positions beating both SPX and theme by ≥+$300. Tier 1 = past sleeve soak, fair to consider for adding. Tier 2 = early strength, still in soak — informational only, not action-eligible. Portfolio Balance Plays excluded.
-    </div>
-    <div id="add-candidates-tier1-wrap"></div>
-    <div id="add-candidates-tier2-wrap" style="margin-top:12px"></div>
 
     <!-- Tax Profile & Implications -->
     <div class="section-heading" style="margin-top:28px">Tax Profile</div>
@@ -4189,7 +4203,8 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
-  if (name === 'rebalance') { renderSleevePerformance(); renderThemeIntel(); renderRebalance(); }
+  if (name === 'analysis') { renderSleevePerformance(); renderThemeIntel(); renderAddCandidatesTable(); }
+  if (name === 'rebalance') { renderRebalance(); }
   if (name === 'postsell') renderPostSell();
   if (name === 'trends') renderTrends();
   if (name === 'themes') renderThemeUniverse();
@@ -9241,9 +9256,6 @@ function renderRebalance() {
     slider.max = Math.max(wrap.scrollWidth - wrap.clientWidth, 100);
     wrap.onscroll = () => { slider.value = wrap.scrollLeft; };
   }
-
-  // Render Add Candidates table (lives below Trim Candidates in this tab)
-  renderAddCandidatesTable();
 }
 
 
@@ -10717,14 +10729,16 @@ function renderAutoTagCard() {
   const untaggedTotal = positions.filter(p => !p.theme || !p.sleeve).length;
 
   if (untaggedTotal === 0) {
-    card.style.display = 'flex';
+    card.style.display = 'inline-flex';
     card.classList.add('success');
+    card.classList.add('compact');
     document.getElementById('autotag-icon').textContent = '✓';
     document.getElementById('autotag-headline').textContent = 'All positions tagged';
-    document.getElementById('autotag-detail').textContent = 'Nothing pending. Theme and strategy filled across the book.';
+    document.getElementById('autotag-detail').textContent = '';
     return;
   }
 
+  card.classList.remove('compact');
   card.style.display = 'flex';
   card.classList.remove('success');
   document.getElementById('autotag-icon').textContent = '🏷️';
