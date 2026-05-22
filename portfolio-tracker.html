@@ -2265,6 +2265,12 @@ async function loadPositions() {
     positions = [mkPos(), mkPos(), mkPos()];
   }
 
+  // Normalize the `closed` flag to a real boolean BEFORE anything filters on it.
+  // Latent fragility: `!p.closed` treats the string "False" as truthy (=closed),
+  // so a stringified flag from an old export/import would silently hide a position
+  // from the open list. Coerce defensively. Idempotent.
+  normalizeClosedFlags();
+
   // Run v1 → v2 migration on existing data (idempotent — only does work if needed)
   migratePositionsV1ToV2();
 
@@ -2274,6 +2280,25 @@ async function loadPositions() {
   // Cleanup: remove fully-empty placeholder positions (legacy from initial seed).
   // Only deletes rows where every meaningful field is blank — won't touch drafts.
   cleanEmptyPlaceholders();
+}
+
+// ─────────────────────────────────────────────
+// Coerce the `closed` flag to a real boolean. Handles legacy/stringified values
+// like "true"/"false"/"True"/"False"/"1"/"0". A non-empty string is truthy in JS,
+// so "false" would otherwise read as closed=true and the position would vanish
+// from the open list. Idempotent — safe to call repeatedly.
+// ─────────────────────────────────────────────
+function normalizeClosedFlags() {
+  positions.forEach(p => {
+    const c = p.closed;
+    if (typeof c === 'boolean') return;
+    if (typeof c === 'string') {
+      const v = c.trim().toLowerCase();
+      p.closed = (v === 'true' || v === '1' || v === 'yes');
+    } else {
+      p.closed = !!c;
+    }
+  });
 }
 
 // ─────────────────────────────────────────────
@@ -2710,6 +2735,25 @@ function renderTaxProfilePanel() {
   `;
 }
 
+// ─── Shared harvest-offset math ───
+// Capital losses offset capital GAINS before tax is applied — NOT the tax bill
+// dollar-for-dollar. A $1k loss removes $1k of taxable gain, saving you the RATE
+// on it (~rate×$1k), not $1k of tax. We net losses against ST gains first (taxed
+// highest → taxpayer-favorable and a reasonable proxy for IRS same-then-cross
+// character ordering), then against LT gains.
+// NOTE: simplification — we don't split harvested losses into LT/ST character,
+// and we ignore the $3k/yr ordinary-income offset and loss carryforward.
+// Returns { grossTax, netBill, taxSaved } — taxSaved is the real value of the harvest.
+function computeHarvestOffset(ltGains, stGains, harvested, ltRate, stRate) {
+  const grossTax = ltGains * ltRate + stGains * stRate;
+  const netST = Math.max(0, stGains - harvested);
+  const remainingLoss = Math.max(0, harvested - stGains);
+  const netLT = Math.max(0, ltGains - remainingLoss);
+  const netBill = netST * stRate + netLT * ltRate;
+  const taxSaved = Math.max(0, grossTax - netBill);
+  return { grossTax, netBill, taxSaved };
+}
+
 // ─── Tax implications: holding-period view + sell-now-vs-wait + year summary ───
 function renderTaxImplications() {
   const panel = document.getElementById('tax-implications-panel');
@@ -2726,12 +2770,10 @@ function renderTaxImplications() {
     const c = calcPos(p);
     const gl = c.gainLoss;
     const days = closedHoldingDays(p);
-    if (gl > 0) { (days !== null && days >= 365) ? ytdLT += gl : ytdST += gl; }
+    if (gl > 0) { (days !== null && days > 365) ? ytdLT += gl : ytdST += gl; }
     else if (gl < 0) ytdHarvested += Math.abs(gl);
   });
-  const grossTax = ytdLT * ltRate + ytdST * stRate;
-  const harvestOffset = Math.min(ytdHarvested, grossTax);
-  const netBill = Math.max(0, grossTax - harvestOffset);
+  const { grossTax, netBill, taxSaved: harvestOffset } = computeHarvestOffset(ytdLT, ytdST, ytdHarvested, ltRate, stRate);
 
   // ── Open positions: holding-period + sell-now-vs-wait (options A & D) ──
   const openRows = [];
@@ -2743,8 +2785,8 @@ function renderTaxImplications() {
     if (gl === undefined || gl === null) return;
     const buyDate = p.dateBought ? new Date(p.dateBought) : null;
     const daysHeld = buyDate ? Math.floor((today - buyDate) / 86400000) : null;
-    const isLT = daysHeld !== null && daysHeld >= 365;
-    const daysToLT = (daysHeld !== null && daysHeld < 365) ? (365 - daysHeld) : 0;
+    const isLT = daysHeld !== null && daysHeld > 365;
+    const daysToLT = (daysHeld !== null && daysHeld <= 365) ? (366 - daysHeld) : 0;
 
     // Tax if sold today
     let taxNow = 0, taxLater = 0;
@@ -2896,9 +2938,7 @@ function buildRealizedData(year) {
 
   const ltTax = ltGains * ltRate;
   const stTax = stGains * stRate;
-  const grossTax = ltTax + stTax;
-  const harvestOffset = Math.min(harvested, grossTax);
-  const netBill = Math.max(0, grossTax - harvestOffset);
+  const { grossTax, netBill, taxSaved: harvestOffset } = computeHarvestOffset(ltGains, stGains, harvested, ltRate, stRate);
 
   return { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill };
 }
@@ -2928,7 +2968,7 @@ function renderRealizedLedger(mountId, mountKey) {
     <div class="tax-effective" style="margin-bottom:14px">
       <div class="eff-block"><span class="eff-label">LT gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.ltGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.ltTax)} @ ${(ltRate*100).toFixed(0)}%</span></div>
       <div class="eff-block"><span class="eff-label">ST gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.stGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.stTax)} @ ${(stRate*100).toFixed(0)}%</span></div>
-      <div class="eff-block"><span class="eff-label">Losses harvested</span><span class="eff-value" style="font-size:14px;color:var(--color-text-success)">${fmtDollarWhole(data.harvested)}</span><span class="eff-breakdown">offsets ${fmtDollarWhole(data.harvestOffset)}</span></div>
+      <div class="eff-block"><span class="eff-label">Losses harvested</span><span class="eff-value" style="font-size:14px;color:var(--color-text-success)">${fmtDollarWhole(data.harvested)}</span><span class="eff-breakdown">saves ~${fmtDollarWhole(data.harvestOffset)} in tax</span></div>
       <div class="eff-block"><span class="eff-label">Est. net bill</span><span class="eff-value" style="font-size:14px;color:${data.netBill>0?'var(--color-text-danger)':'var(--color-text-success)'}">${fmtDollarWhole(data.netBill)}</span><span class="eff-breakdown">after harvest offset</span></div>
     </div>`;
 
@@ -3185,7 +3225,7 @@ function taxRateFor(pos) {
   if (acct === 'ira') return 0; // tax-deferred / Roth: untaxed at gain level
   const days = closedHoldingDays(pos);
   if (days === null) return TAX_RATE_ST; // missing dates → assume short-term
-  return days >= 365 ? TAX_RATE_LT : TAX_RATE_ST;
+  return days > 365 ? TAX_RATE_LT : TAX_RATE_ST;
 }
 
 // Apply tax to a gain. Tax is only applied to gains (>0); losses are not taxed
@@ -6111,9 +6151,7 @@ function renderTaxExposure() {
 
   const ltTax = ltGains * ltRate;
   const stTax = stGains * stRate;
-  const grossTax = ltTax + stTax;
-  const harvestOffset = Math.min(harvested, grossTax); // losses offset tax dollar for dollar up to tax owed
-  const netTax = Math.max(0, grossTax - harvestOffset);
+  const { grossTax, netBill: netTax } = computeHarvestOffset(ltGains, stGains, harvested, ltRate, stRate);
 
   const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   const setColor = (id, color) => { const el = document.getElementById(id); if (el) el.style.color = color; };
