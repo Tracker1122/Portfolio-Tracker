@@ -5590,13 +5590,233 @@ function renderQrSavedList() {
       </summary>
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
         ${rows || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No fields filled.</div>'}
-        <div style="display:flex;gap:8px;margin-top:8px">
+        <div id="qr-flags-${c.id}" style="margin-top:10px">${renderQualityFlags(c)}</div>
+        <div id="qr-ai-${c.id}" style="margin-top:10px"></div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">Edit</button>
+          <button class="btn btn-sm" onclick="startQrAiAnalysis('${c.id}')" style="font-size:10px">⚖ Analyze with AI (for / against / gaps)</button>
           <button class="btn btn-sm" onclick="deleteQrCandidate('${c.id}')" style="font-size:10px;color:var(--color-text-danger)">Delete</button>
         </div>
       </div>
     </details>`;
   }).join('');
+}
+
+// ── Option 1: deterministic quality flags (checkable observations, no recommendation) ──
+function buildQualityFlags(candidate, holdingsOverlaps) {
+  const f = candidate.fields || {};
+  const flags = [];
+  const isEtf = candidate.type === 'etf';
+  const num = v => parseFloat(v) || 0;
+
+  if (candidate.theme) {
+    const ex = qrThemeExposure(candidate.theme);
+    if (ex && ex.total > 0) {
+      const lvl = ex.portfolioPct >= 25 ? 'flag' : ex.portfolioPct >= 15 ? 'caution' : 'info';
+      flags.push({ level: lvl, text: `You already hold ${ex.portfolioPct.toFixed(1)}% of your active book in ${candidate.theme} (${ex.tickers.length} position${ex.tickers.length>1?'s':''}). Adding here ${ex.portfolioPct>=25?'pushes concentration high':ex.portfolioPct>=15?'raises an already-meaningful concentration':'is a modest add'}.` });
+    } else {
+      flags.push({ level: 'info', text: `No current ${candidate.theme} holdings — fresh theme exposure, not a double-up.` });
+    }
+  } else {
+    flags.push({ level: 'caution', text: `No theme tagged — concentration impact can't be assessed.` });
+  }
+
+  if (isEtf) {
+    if (holdingsOverlaps && holdingsOverlaps.length > 0) {
+      flags.push({ level: 'caution', text: `Holds ${holdingsOverlaps.length} name(s) you own directly (${holdingsOverlaps.map(o=>o.ticker).join(', ')}) — partial double-up, not pure diversification.` });
+    }
+    if (f.expense) {
+      const exp = num(f.expense);
+      flags.push({ level: exp > 0.6 ? 'caution' : 'info', text: `Expense ratio ${exp}% — ${exp>0.6?'on the higher side; compounds over the years you hold it':exp<0.2?'low':'moderate for a thematic ETF'}.` });
+    } else {
+      flags.push({ level: 'caution', text: `Expense ratio blank — a core ETF screen left unchecked.` });
+    }
+    if (f.concentration && num(f.concentration) > 60) {
+      flags.push({ level: 'caution', text: `Top-10 concentration ${num(f.concentration)}% — you're buying a few names, not the whole theme.` });
+    }
+  } else {
+    if (!f.pe && !f.valuation) flags.push({ level: 'caution', text: `No P/E or valuation note — valuation discipline unchecked.` });
+    if (!f.moat) flags.push({ level: 'caution', text: `Moat field blank — durability of the edge unexamined.` });
+    if (!f.exitIf) flags.push({ level: 'caution', text: `No exit condition pre-committed — you haven't defined what would break the thesis.` });
+  }
+  if (!f.thesis) flags.push({ level: 'flag', text: `No thesis entered — the most basic question (why own this at all?) is unanswered.` });
+
+  return flags;
+}
+
+function renderQualityFlags(candidate) {
+  // Use cached overlaps if present, else compute from manual holdings field text.
+  let overlaps = [];
+  if (candidate.cachedHoldings && Array.isArray(candidate.cachedHoldings.parsed)) {
+    overlaps = computeHoldingsOverlap(candidate.cachedHoldings.parsed);
+  } else if (candidate.fields && candidate.fields.holdingsTop) {
+    const { parsed } = parseHoldings(candidate.fields.holdingsTop);
+    overlaps = computeHoldingsOverlap(parsed);
+  }
+  const flags = buildQualityFlags(candidate, overlaps);
+  if (flags.length === 0) return '';
+  const colorFor = l => l === 'flag' ? 'var(--color-text-danger)' : l === 'caution' ? '#fbbf24' : 'var(--color-text-tertiary)';
+  const iconFor = l => l === 'flag' ? '●' : l === 'caution' ? '▲' : '·';
+  const rows = flags.map(fl => `<div style="display:flex;gap:6px;margin-bottom:4px;align-items:flex-start"><span style="color:${colorFor(fl.level)};font-size:9px;line-height:1.5;flex-shrink:0">${iconFor(fl.level)}</span><span style="font-size:10px;color:var(--color-text-secondary);line-height:1.45">${esc(fl.text)}</span></div>`).join('');
+  return `<div style="background:var(--color-background-tertiary);border-radius:var(--border-radius-md);padding:8px 10px">
+    <div style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Checkable observations (computed facts — no recommendation)</div>
+    ${rows}
+  </div>`;
+}
+
+// ── Option 2: AI for/against/gaps analysis, with stacked critical-thinking friction ──
+// Friction sequence: (1) show thin/missing inputs FIRST, (2) static "sounds confident
+// regardless of accuracy" banner + the summary, (3) interactive "where could this be wrong?"
+// the user must engage. The model is told NOT to conclude; it argues both sides + gaps +
+// what-would-have-to-be-true conditions.
+
+function qrCountFilled(candidate) {
+  const fields = QR_FIELDS[candidate.type] || [];
+  const filled = fields.filter(f => (candidate.fields[f.key] || '').toString().trim() !== '');
+  const blank = fields.filter(f => (candidate.fields[f.key] || '').toString().trim() === '');
+  return { filled, blank, total: fields.length };
+}
+
+function buildQrAiPrompt(candidate) {
+  const f = candidate.fields || {};
+  const fields = QR_FIELDS[candidate.type] || [];
+  // USER-ENTERED block
+  const entered = fields.filter(fd => (f[fd.key]||'').toString().trim() !== '')
+    .map(fd => `- ${fd.label}: ${f[fd.key]}`).join('\n') || '(none provided)';
+  const blank = fields.filter(fd => (f[fd.key]||'').toString().trim() === '').map(fd => fd.label).join(', ') || '(none)';
+  // COMPUTED FACTS block
+  let computed = [];
+  if (candidate.theme) {
+    const ex = qrThemeExposure(candidate.theme);
+    if (ex) computed.push(`Current ${candidate.theme} exposure: ${ex.portfolioPct.toFixed(1)}% of active portfolio across ${ex.tickers.length} position(s)${ex.tickers.length?' ('+ex.tickers.map(t=>t.ticker).join(', ')+')':''}.`);
+  }
+  let overlaps = [];
+  if (candidate.cachedHoldings && Array.isArray(candidate.cachedHoldings.parsed)) overlaps = computeHoldingsOverlap(candidate.cachedHoldings.parsed);
+  else if (f.holdingsTop) { const r = parseHoldings(f.holdingsTop); overlaps = computeHoldingsOverlap(r.parsed); }
+  if (candidate.type === 'etf') {
+    computed.push(overlaps.length ? `Direct-holding overlap: this ETF holds ${overlaps.map(o=>o.ticker).join(', ')}, which the user owns individually.` : `No direct-holding overlap detected with the user's individual positions.`);
+    computed.push(`(Holdings/weights are from Alpha Vantage — approximate, possibly stale by days, no as-of date.)`);
+  }
+  const computedBlock = computed.length ? computed.map(c=>`- ${c}`).join('\n') : '(none computed)';
+
+  return `You are a critical analyst helping someone pressure-test a potential investment they are considering. You are NOT an advisor and must NOT recommend buying, selling, or holding. Your job is to populate both sides of the debate and expose what's missing — the user weighs it, not you.
+
+You are given two kinds of information, treat them differently:
+- USER-ENTERED: judgments/figures the user typed. May be incomplete, optimistic, or wrong. Do not assume accurate; where a claim is unsupported, say so.
+- COMPUTED FACTS: figures the tracker calculated from the user's actual portfolio. Reliable as arithmetic but reflect approximate, possibly-stale holdings data.
+
+Rules:
+- Do NOT give a conclusion, lean, verdict, score, or recommendation. If you feel one forming, convert it into a condition under "What would have to be true."
+- Distinguish what the user told you from what you're inferring; label inferences as inferences.
+- Do not invent facts about the company/ETF beyond what's provided. If you don't have something, list it as a gap, not a guess.
+- Where the user's own input is thin or blank, name that as a limit on the analysis rather than filling it in.
+- Be specific to THIS candidate using THEIR inputs — no generic boilerplate.
+- Keep each section tight.
+
+CANDIDATE: ${candidate.ticker} (${candidate.type}${candidate.theme?', theme: '+candidate.theme:''}${candidate.sleeve?', sleeve: '+candidate.sleeve:''})
+
+USER-ENTERED:
+${entered}
+
+BLANK / NOT PROVIDED: ${blank}
+
+COMPUTED FACTS:
+${computedBlock}
+
+Output exactly four sections with these headers:
+STRONGEST CASE FOR
+STRONGEST CASE AGAINST
+WHAT YOU HAVEN'T EXAMINED
+WHAT WOULD HAVE TO BE TRUE
+(for a clear yes, and separately a clear no — concrete and checkable)`;
+}
+
+// Stage 1: show thin-inputs warning + confirm before the AI call.
+function startQrAiAnalysis(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  const out = document.getElementById('qr-ai-' + id);
+  if (!out) return;
+  const { filled, blank, total } = qrCountFilled(c);
+  const thin = filled.length < Math.ceil(total / 2);
+  out.innerHTML = `
+    <div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary)">
+      <div style="font-size:10px;font-weight:700;color:#fbbf24;margin-bottom:6px">Before you generate this — read how thin the inputs are</div>
+      <div style="font-size:10px;color:var(--color-text-secondary);line-height:1.5;margin-bottom:8px">
+        This analysis will be built from <strong>${filled.length} of ${total}</strong> fields you filled in.${blank.length ? ` Blank: <span style="color:var(--color-text-tertiary)">${blank.map(b=>esc(b.label)).join(', ')}</span>.` : ''}
+        ${thin ? `<br><strong style="color:#fbbf24">That's thin.</strong> The AI will still produce a confident-sounding analysis — but it can only reason from what you gave it. Sparse input → fluent output that may be hollow.` : ''}
+      </div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">
+        What follows is AI-generated reasoning, not fact. It argues both sides by design and will sound authoritative whether or not it's right. You weigh it; it does not decide.
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="runQrAiAnalysis('${id}')" style="font-size:10px">I understand — generate for/against/gaps</button>
+      <button class="btn btn-sm" onclick="document.getElementById('qr-ai-${id}').innerHTML=''" style="font-size:10px">Cancel</button>
+    </div>`;
+}
+
+// Stage 2: call the model, render the summary + the interactive "where's this wrong?" friction.
+async function runQrAiAnalysis(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  const out = document.getElementById('qr-ai-' + id);
+  if (!out) return;
+  out.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Generating for/against/gaps analysis…</div>`;
+
+  const prompt = buildQrAiPrompt(c);
+  let analysisText = '';
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1200,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await resp.json();
+    analysisText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if (!analysisText) throw new Error('Empty response');
+  } catch (err) {
+    out.innerHTML = `<div style="border:1px solid var(--color-text-danger);border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-danger);line-height:1.5">
+      AI analysis unavailable: ${esc(err.message || 'request failed')}.<br>
+      <span style="color:var(--color-text-tertiary)">This can happen if the API isn't reachable from this deployment. The checkable observations above don't need it — they're computed locally.</span>
+    </div>`;
+    return;
+  }
+
+  const esc2 = s => esc(s).replace(/\n/g, '<br>');
+  out.innerHTML = `
+    <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-tertiary)">
+      <div style="font-size:8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;border-bottom:1px solid var(--color-border-tertiary);padding-bottom:6px">
+        ⚠ AI-generated reasoning — sounds confident regardless of accuracy. Argues both sides by design. Not a recommendation.
+      </div>
+      <div style="font-size:11px;color:var(--color-text-primary);line-height:1.55">${esc2(analysisText)}</div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
+        <div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px">Now push back on it (this is the point):</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:6px">
+          • Which claim above is the AI <em>least</em> equipped to actually know?<br>
+          • What did it treat as fact that was really just something you typed?<br>
+          • If the holdings/weights it reasoned from are stale, which point breaks first?
+        </div>
+        <textarea id="qr-pushback-${id}" rows="2" placeholder="Your critique (saved with the candidate)…" style="width:100%;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:6px 8px;resize:vertical">${esc(c.aiPushback || '')}</textarea>
+        <button class="btn btn-sm" onclick="saveQrPushback('${id}')" style="font-size:9px;margin-top:6px">Save my critique</button>
+      </div>
+    </div>`;
+  // Cache the analysis text on the candidate (so reopening shows it without a re-call).
+  c.aiAnalysis = analysisText;
+  c.aiAnalysisAt = new Date().toISOString();
+  scheduleSave();
+}
+
+function saveQrPushback(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  const ta = document.getElementById('qr-pushback-' + id);
+  if (!c || !ta) return;
+  c.aiPushback = ta.value;
+  scheduleSave();
+  ta.style.borderColor = 'var(--color-text-success)';
+  setTimeout(() => { if (ta) ta.style.borderColor = 'var(--color-border-tertiary)'; }, 1000);
 }
 
 function renderQualityTab() {
