@@ -1017,8 +1017,8 @@
     <button class="tab-btn" onclick="switchTab('analysis')">Analysis and Performance</button>
     <button class="tab-btn" onclick="switchTab('rebalance')">Rebalance &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('themes')">Themes</button>
-    <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('quality')">Quality Review</button>
+    <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Trends</button>
   </div>
 
@@ -5741,11 +5741,12 @@ You are given two kinds of information, treat them differently:
 
 Rules:
 - Do NOT give a conclusion, lean, verdict, score, or recommendation. If you feel one forming, convert it into a condition under "What would have to be true."
-- TWO SOURCES OF FACT ONLY: the USER-ENTERED block and the COMPUTED FACTS block. Your own training/background knowledge is NOT a permitted source of fact. You may use general reasoning and definitions, but you may NOT assert any specific real-world fact that isn't in those two blocks.
-- COMPETITIVE LANDSCAPE: do NOT name specific competitors, products, chips, or market-share dynamics from memory (e.g. naming a rival's specific product as "shipping" or "competitive"). You may say the GENERIC category exists and flag it as something to verify (e.g. "competing products may exist — the user should check who and their traction"), but naming specifics as fact is forbidden. If competitive data isn't in the inputs, it is a GAP, not a claim.
-- LIVE MARKET DATA: you have NO current market data. Do NOT state or estimate market cap, current price, valuation-vs-peers, or "fairly/over/undervalued as of [date]" from memory. If the user didn't provide it, list it as a gap. Never hedge a remembered number with "as of recent data" — omit it entirely.
-- Distinguish what the user told you from what you're inferring; label inferences as inferences. An inference must be reasoning from the provided inputs, NOT a recalled fact dressed as inference.
-- Do not invent facts about the company/ETF beyond what's provided. If you don't have something, list it as a gap, not a guess.
+- THREE KINDS OF CLAIM — label each one's basis so the reader knows what to trust:
+  1. FROM INPUTS: directly restates or arithmetically follows from USER-ENTERED or COMPUTED FACTS. State plainly.
+  2. INFERENCE: your reasoning/interpretation built ON the inputs (not a recalled fact). Prefix inline with "[inference]". An inference reasons from provided numbers; it does NOT introduce outside facts.
+  3. EXTERNAL: any specific real-world fact NOT in the inputs — competitors, products, market share, revenue figures, market cap, ETF weights, prices, sector data, anything you know from training. You ARE allowed to raise these — they add value — but they are UNVERIFIED and possibly stale. Do NOT state them inline in the FOR/AGAINST reasoning. Instead, every external fact goes ONLY in the "CLAIMS TO VERIFY" section (see output format), each tagged ⚠UNVERIFIED.
+- You have NO live data and NO way to cite a source or know a current date. NEVER fabricate a citation, source name+date, or "as of [date]" for an external fact. The honest staleness bound is your training cutoff; state that once in the header line and do not invent per-fact dates.
+- For each external claim in CLAIMS TO VERIFY: state the claim, mark ⚠UNVERIFIED, note WHY it matters to this candidate, and point to WHERE the user would normally confirm it (e.g. "issuer fact sheet", "company 10-Q", "stockanalysis.com") — a pointer, NOT a pretended citation. If you're unsure of the figure, say so ("recalled as roughly X, may be stale").
 - Where the user's own input is thin or blank, name that as a limit on the analysis rather than filling it in.
 - Be specific to THIS candidate using THEIR inputs — no generic boilerplate.
 - Keep each section tight.
@@ -5760,12 +5761,30 @@ BLANK / NOT PROVIDED: ${blank}
 COMPUTED FACTS:
 ${computedBlock}
 
-Output exactly four sections with these headers:
+Begin your output with this exact line:
+NOTE ON EXTERNAL FACTS: anything in CLAIMS TO VERIFY is recalled from training (bounded by my knowledge cutoff), unverified, and possibly stale — confirm before relying on it.
+
+Then output these sections with these exact headers:
+
 STRONGEST CASE FOR
+(from the inputs; label [inference] where you interpret rather than restate)
+
 STRONGEST CASE AGAINST
-WHAT YOU HAVEN'T EXAMINED
+(from the inputs; label [inference] where you interpret rather than restate)
+
+WHERE YOUR THESIS COULD BE WRONG
+(the single strongest disconfirming scenario specific to THIS candidate's thesis as the user framed it — not a generic risk list. State what the user would EXPECT TO OBSERVE if this scenario were already starting to play out, so it's checkable in advance.)
+
+WHAT'S CONSPICUOUSLY ABSENT FROM YOUR REASONING
+(gaps in the user's THESIS/logic — e.g. a quality case with no price-paid discipline, a moat claim with no durability test. NOT a list of blank form fields. Only what's missing from how they're THINKING about it.)
+
 WHAT WOULD HAVE TO BE TRUE
-(for a clear yes, and separately a clear no — concrete and checkable)`;
+(separately for a clear yes and a clear no — concrete and checkable conditions)
+
+CLAIMS TO VERIFY
+(EVERY external/real-world fact you reached for goes here and ONLY here — none inline above. Format each as:
+ ⚠UNVERIFIED — [the claim] — why it matters: [...] — where to confirm: [honest pointer, not a fabricated citation]. 
+ If you reached for no external facts, write "None — analysis used only your inputs.")`;
 }
 
 // Stage 1: show thin-inputs warning + confirm before the AI call.
