@@ -5144,6 +5144,58 @@ function renderStaleBanner() {
 // Field definitions per candidate type. `kind` drives the input control.
 // Free-text judgments are deliberately prominent — the questions matter more
 // than any single number.
+// Per-field explainers for the Quality Review form. Opened via the "?" next to a label.
+// Each: what the metric IS, why it matters for quality, how to read it, and (ONLY where
+// verified against real Schwab screens) where to find it. Where a Schwab location is NOT
+// verified, the explainer says so rather than inventing a path.
+// NOTE: starting with 3 sample fields (gross margin, net margin, ROIC) to lock the format.
+const QR_EXPLAINERS = {
+  grossMargin: {
+    title: 'Gross Margin %',
+    body: `<p><strong>What it is.</strong> Of every $100 in sales, how much is left after only the direct cost of making the product (materials, manufacturing, the chips themselves) — before paying for R&D, salaries, marketing, or taxes. A 74% gross margin means $74 of every $100 in revenue survives that first cut.</p>
+<p><strong>Why it matters for quality.</strong> Gross margin is the cleanest read on <em>pricing power</em> — whether customers pay up for the product because they can't easily get it elsewhere. A high, <em>stable</em> gross margin says the company sets its price rather than the market setting it. It's also harder to manipulate than net margin, because it sits high up the income statement before all the discretionary stuff.</p>
+<p><strong>How to read it.</strong> There's no universal "good" number — it's industry-relative. A software company at 80% is normal; a grocer at 25% is normal. What you're looking for is high <em>for its industry</em> and steady or rising over time. A gross margin that's eroding is an early warning that pricing power is slipping, often before it shows up anywhere else.</p>`
+  },
+  netMargin: {
+    title: 'Net Margin %',
+    body: `<p><strong>What it is.</strong> Of every $100 in sales, how much is left as actual profit after <em>everything</em> — cost of goods, R&D, salaries, interest, taxes, all of it. It's the bottom line as a percentage of the top line. A 63% net margin means $63 of every $100 in revenue ends up as profit.</p>
+<p><strong>Why it matters for quality.</strong> Net margin tells you how much of the business's sales actually become money for owners. Two companies with identical revenue can have wildly different net margins, and the higher-margin one is keeping more of every dollar — usually a sign of either pricing power, cost discipline, or both.</p>
+<p><strong>How to read it.</strong> Like gross margin, it's industry-relative and the <em>trend</em> matters as much as the level. But net margin carries more noise: it can be temporarily inflated by a one-time gain or depressed by a one-time charge, and it's affected by debt (interest) and tax quirks. That's why gross margin is the cleaner pricing-power read and net margin is the "what actually drops to the bottom" read — use them together. A big gap between a healthy gross margin and a thin net margin tells you the costs are piling up <em>below</em> the gross line (heavy R&D, SG&A, or interest).</p>`
+  },
+  roic: {
+    title: 'ROIC % — Return on Invested Capital',
+    body: `<p><strong>What it is.</strong> For every $100 of capital the business has put to work (both borrowed money and shareholders' money), how much profit it generates per year. A ROIC of 101% means the business throws off roughly its entire invested capital base in profit annually — extraordinary, and rare.</p>
+<p><strong>Why it matters for quality.</strong> ROIC is arguably <em>the</em> single quality metric, because it answers the question that actually matters: does this business create value, or just consume capital? A company earning ROIC above its cost of capital (roughly 8–10% for most firms) is genuinely creating wealth. A company earning below it is destroying value even if it's "profitable" on paper. High, durable ROIC is the mathematical fingerprint of a real competitive moat.</p>
+<p><strong>How to read it.</strong> Above ~15% is strong; above ~20% is excellent; numbers like NVDA's 100%+ are exceptional and worth a second look — not because they're fake, but because they're hard to <em>sustain</em>. The key question with very high ROIC is durability: can the business keep earning this, or will competition compete it away? <strong>One watch-out:</strong> ROIC can be flattered by accounting — an asset-light business or one that's bought back lots of stock can show a sky-high ROIC that reflects the capital structure as much as the underlying business quality. High ROIC is a strong signal, but pair it with the moat question (what stops competitors from copying this?).</p>`
+  }
+};
+
+function showQrExplainer(key) {
+  const e = QR_EXPLAINERS[key];
+  if (!e) return;
+  let overlay = document.getElementById('qr-explainer-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'qr-explainer-overlay';
+    overlay.className = 'modal-overlay';
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) closeQrExplainer(); });
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:520px;max-height:80vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px">
+        <div class="modal-title" style="color:#60a5fa">${esc(e.title)}</div>
+        <button class="btn btn-sm" onclick="closeQrExplainer()" style="font-size:11px;flex-shrink:0">✕ Close</button>
+      </div>
+      <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.6">${e.body}</div>
+    </div>`;
+  overlay.classList.remove('hidden');
+}
+function closeQrExplainer() {
+  const overlay = document.getElementById('qr-explainer-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
 const QR_FIELDS = {
   stock: [
     { key: 'thesis',      label: 'Thesis — why own this at all?',                kind: 'textarea', hint: 'One paragraph. If you can\u2019t articulate it, that\u2019s the answer.' },
@@ -5378,7 +5430,8 @@ function renderQrForm() {
       const step = f.kind === 'number' ? ' step="any"' : '';
       input = `<input id="qr-f-${f.key}" type="${t}"${step} value="${esc(val)}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px">`;
     }
-    const fieldBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}</label>${input}${hint}</div>`;
+    const helpBtn = QR_EXPLAINERS[f.key] ? `<button type="button" onclick="showQrExplainer('${f.key}')" title="What is this & how to read it" style="margin-left:6px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;color:var(--color-text-info);font-size:9px;font-weight:700;cursor:pointer;vertical-align:middle">?</button>` : '';
+    const fieldBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}</label>${input}${hint}</div>`;
     // For the ETF holdings field, append fetch + manual-overlap controls + results.
     if (qrType === 'etf' && f.key === 'holdingsTop') {
       if (!avWorkerUrl) loadAvWorkerUrl();
