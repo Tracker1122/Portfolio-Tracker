@@ -1018,6 +1018,7 @@
     <button class="tab-btn" onclick="switchTab('rebalance')">Rebalance &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('themes')">Themes</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
+    <button class="tab-btn" onclick="switchTab('quality')">Quality Review</button>
     <button class="tab-btn" onclick="switchTab('trends')">Trends</button>
   </div>
 
@@ -1460,6 +1461,25 @@
     <div class="section-heading" style="margin-top:8px">Decision Scorecard</div>
     <div class="postsell-cards" id="postsell-cards"></div>
   </div><!-- end tab-postsell -->
+
+  <!-- Quality Review Tab -->
+  <div class="tab-panel" id="tab-quality">
+    <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 14px;padding:0 2px;line-height:1.5;max-width:760px">
+      A structured pre-purchase checklist — it gives you the questions a disciplined buyer asks and organizes your answers, so every candidate runs the same gauntlet your existing positions are judged against. <strong>It does not score or recommend.</strong> You supply the numbers and judgments; the tool remembers them, lets you compare candidates, and shows your existing theme exposure for overlap context. Overlap is theme-level (the tracker knows your holdings, not what's inside an ETF).
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <span style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em">Candidate type</span>
+      <span id="qr-type-stock" onclick="setQrType('stock')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600">Stock</span>
+      <span id="qr-type-etf" onclick="setQrType('etf')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)">ETF</span>
+      <button class="btn btn-sm" onclick="resetQrForm()" style="font-size:10px;margin-left:auto">＋ New / Clear Form</button>
+    </div>
+
+    <div id="qr-form-wrap" style="margin-bottom:24px"></div>
+
+    <div class="section-heading">Saved Candidates</div>
+    <div id="qr-saved-list" style="margin-top:8px"></div>
+  </div><!-- end tab-quality -->
 
   <!-- Trends Tab -->
   <div class="tab-panel" id="tab-trends">
@@ -2111,6 +2131,7 @@ let nextId = 1;
 let spxLive = null;
 let spxLiveDate = null;
 let polygonKey = '';
+let avWorkerUrl = ''; // Cloudflare worker base URL that proxies Alpha Vantage ETF_PROFILE (key stays server-side)
 let saveTimeout = null;
 let cashBuckets = { Taxable: 0, IRA: 0 };
 let cashLedger = [];
@@ -2118,6 +2139,7 @@ let spLots = []; // { date, shares, pricePaid, account } — S&P passive core po
 let spCurrentPrice = 0; // current VOO/SPY price, updated manually
 let snapshots = []; // forward-only history captured by Take Snapshot
 let peDeals = []; // private equity / direct private investments — kept fully separate from public book
+let qualityReviews = []; // saved pre-purchase quality checklists for stock/ETF candidates
 // peDeal shape: { id, company, investmentDate, amountInvested, currentValue, lastValuationDate, stage, notes }
 let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Benchmarks
 let benchmarkPricesDate = null; // ISO timestamp of last benchmark fetch
@@ -2177,6 +2199,7 @@ async function savePositions() {
     localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
     localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
+    localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
     flashSave();
     // Trigger Drive backup (no-op if Drive not connected).
     if (typeof DriveState !== 'undefined' && DriveState.clientId && DriveState.accessToken) {
@@ -2261,7 +2284,12 @@ async function loadPositions() {
       const peParsed = JSON.parse(peRes);
       if (Array.isArray(peParsed.peDeals)) peDeals = peParsed.peDeals;
     }
-  } catch(e) { /* no pe deals yet */ }
+    const qrRes = localStorage.getItem('portfolio-quality-reviews-v1');
+    if (qrRes) {
+      const qrParsed = JSON.parse(qrRes);
+      if (Array.isArray(qrParsed.qualityReviews)) qualityReviews = qrParsed.qualityReviews;
+    }
+  } catch(e) { /* no pe deals / quality reviews yet */ }
 
   if (positions.length === 0) {
     positions = [mkPos(), mkPos(), mkPos()];
@@ -4248,6 +4276,7 @@ function switchTab(name) {
   if (name === 'analysis') { renderSleeveValueAdd(); renderSleevePerformance(); renderThemeIntel(); renderAddCandidatesTable(); }
   if (name === 'rebalance') { renderRebalance(); }
   if (name === 'postsell') renderPostSell();
+  if (name === 'quality') renderQualityTab();
   if (name === 'trends') renderTrends();
   if (name === 'themes') renderThemeUniverse();
   if (name === 'dashboard') syncFixedScrollbar();
@@ -5104,6 +5133,477 @@ function renderStaleBanner() {
 // ─────────────────────────────────────────────
 // Post-Sell Analysis
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Quality Review — pre-purchase structured checklist for stock/ETF candidates.
+// Honest by design: organizes the buyer's own judgments, computes NO score and
+// gives NO recommendation. The only auto-computed thing is theme-exposure overlap
+// against current holdings (the tracker knows your positions, not ETF internals).
+// ─────────────────────────────────────────────
+
+// Field definitions per candidate type. `kind` drives the input control.
+// Free-text judgments are deliberately prominent — the questions matter more
+// than any single number.
+const QR_FIELDS = {
+  stock: [
+    { key: 'thesis',      label: 'Thesis — why own this at all?',                kind: 'textarea', hint: 'One paragraph. If you can\u2019t articulate it, that\u2019s the answer.' },
+    { key: 'moat',        label: 'Moat / durable advantage',                     kind: 'textarea', hint: 'What stops a competitor eating this in 5 years?' },
+    { key: 'pe',          label: 'P/E ratio',                                    kind: 'number',   hint: 'vs sector and vs its own history' },
+    { key: 'revGrowth',   label: 'Revenue growth % (YoY)',                       kind: 'number' },
+    { key: 'margins',     label: 'Operating / net margin %',                     kind: 'text',     hint: 'Trend matters more than level' },
+    { key: 'debt',        label: 'Debt load (D/E or net debt/EBITDA)',           kind: 'text' },
+    { key: 'valuation',   label: 'Valuation sanity-check',                       kind: 'textarea', hint: 'Cheap, fair, or priced for perfection? Why is the price what it is?' },
+    { key: 'exitIf',      label: 'Exit if\u2026',                                kind: 'textarea', hint: 'Pre-commit to what would break the thesis.' },
+    { key: 'risks',       label: 'Key risks / what could go wrong',              kind: 'textarea' },
+  ],
+  etf: [
+    { key: 'thesis',      label: 'Why this ETF — what exposure are you buying?', kind: 'textarea' },
+    { key: 'expense',     label: 'Expense ratio %',                              kind: 'number',   hint: 'Below ~0.20% is cheap for broad; thematic runs higher' },
+    { key: 'aum',         label: 'AUM ($M)',                                     kind: 'number',   hint: 'Small AUM \u2192 closure / liquidity risk' },
+    { key: 'avgVolume',   label: 'Avg daily volume',                             kind: 'text',     hint: 'Thin volume \u2192 wide spreads' },
+    { key: 'holdingsTop', label: 'Top 5\u201310 holdings',                       kind: 'textarea', hint: 'Paste tickers (e.g. \u201cNVDA 22%, MU 4.5%\u201d), not company names. Then use \u201cCheck holdings overlap\u201d below to match against your book.' },
+    { key: 'concentration', label: 'Top-10 concentration %',                     kind: 'number',   hint: 'High % \u2192 you\u2019re buying a few names, not the theme' },
+    { key: 'tracksWhat',  label: 'Index / strategy it tracks',                   kind: 'text' },
+    { key: 'overlapNote', label: 'Overlap with what I already own',              kind: 'textarea', hint: 'See the exposure panel below; note any double-counting.' },
+    { key: 'exitIf',      label: 'Exit if\u2026',                                kind: 'textarea' },
+  ]
+};
+
+let qrType = 'stock';        // current form mode
+let qrEditingId = null;      // id of candidate being edited, or null for new
+
+function setQrType(t) {
+  qrType = t;
+  document.getElementById('qr-type-stock').style.background = t === 'stock' ? 'var(--color-text-info)' : 'transparent';
+  document.getElementById('qr-type-stock').style.color = t === 'stock' ? '#000' : 'var(--color-text-tertiary)';
+  document.getElementById('qr-type-stock').style.border = t === 'stock' ? 'none' : '1px solid var(--color-border-tertiary)';
+  document.getElementById('qr-type-stock').style.fontWeight = t === 'stock' ? '600' : '400';
+  document.getElementById('qr-type-etf').style.background = t === 'etf' ? 'var(--color-text-info)' : 'transparent';
+  document.getElementById('qr-type-etf').style.color = t === 'etf' ? '#000' : 'var(--color-text-tertiary)';
+  document.getElementById('qr-type-etf').style.border = t === 'etf' ? 'none' : '1px solid var(--color-border-tertiary)';
+  document.getElementById('qr-type-etf').style.fontWeight = t === 'etf' ? '600' : '400';
+  renderQrForm();
+}
+
+function resetQrForm() {
+  qrEditingId = null;
+  renderQrForm();
+}
+
+// Compute current theme-exposure overlap for a candidate's theme.
+// Honest: this is YOUR existing $ in that theme, not what's inside the ETF.
+function qrThemeExposure(theme) {
+  if (!theme) return null;
+  const open = positions.filter(p => !p.closed && p.ticker && p.theme === theme);
+  if (open.length === 0) return { theme, total: 0, tickers: [], portfolioPct: 0 };
+  const totalPortfolio = positions.filter(p => !p.closed && p.ticker)
+    .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const byTicker = {};
+  open.forEach(p => {
+    const v = calcPos(p).exitValue || 0;
+    byTicker[p.ticker] = (byTicker[p.ticker] || 0) + v;
+  });
+  const total = Object.values(byTicker).reduce((s, v) => s + v, 0);
+  const tickers = Object.entries(byTicker).sort((a, b) => b[1] - a[1]).map(([t, v]) => ({ ticker: t, value: v }));
+  return { theme, total, tickers, portfolioPct: totalPortfolio > 0 ? (total / totalPortfolio) * 100 : 0 };
+}
+
+// Normalize a ticker for matching (BRK.B / BRK-B / brk b → BRKB).
+function qrNormTicker(t) {
+  return (t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// Parse free-typed holdings text into { ticker, weight }. Honest about failures:
+// returns both what it could parse AND the chunks it couldn't, so the UI can
+// show its work rather than silently dropping company names it can't match.
+function parseHoldings(text) {
+  if (!text || !text.trim()) return { parsed: [], unparsed: [] };
+  const chunks = text.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+  const parsed = [], unparsed = [];
+  chunks.forEach(chunk => {
+    const wMatch = chunk.match(/(\d+(?:\.\d+)?)\s*%/);
+    const weight = wMatch ? parseFloat(wMatch[1]) : null;
+    let ticker = null;
+    for (const tok of chunk.split(/\s+/)) {
+      const clean = tok.replace(/[^A-Za-z.\-]/g, '');
+      if (/^[A-Z]{1,5}([.\-][A-Z])?$/.test(clean)) { ticker = clean; break; }
+    }
+    if (ticker) parsed.push({ ticker, weight });
+    else unparsed.push(chunk);
+  });
+  return { parsed, unparsed };
+}
+
+// Cross-reference parsed ETF holdings against current open positions.
+// Returns the DIRECT overlaps — names you already hold individually that this
+// ETF also holds — i.e. the de-facto double-exposure a theme-level check misses.
+function computeHoldingsOverlap(parsedHoldings) {
+  const open = positions.filter(p => !p.closed && p.ticker);
+  const yourByTicker = {};
+  open.forEach(p => {
+    const v = calcPos(p).exitValue || 0;
+    const k = qrNormTicker(p.ticker);
+    if (!yourByTicker[k]) yourByTicker[k] = { display: p.ticker, value: 0 };
+    yourByTicker[k].value += v;
+  });
+  const overlaps = [];
+  (parsedHoldings || []).forEach(h => {
+    const k = qrNormTicker(h.ticker);
+    if (yourByTicker[k]) {
+      overlaps.push({ ticker: yourByTicker[k].display, weight: h.weight, yourDirectValue: yourByTicker[k].value });
+    }
+  });
+  return overlaps;
+}
+
+// ── Alpha Vantage holdings fetch (via Cloudflare worker) ──
+// The worker proxies AV's ETF_PROFILE endpoint, keeping the AV key server-side and
+// handling CORS. We call <avWorkerUrl>/etf?s=TICKER. The parser below normalizes the
+// AV response into the SAME { parsed:[{ticker,weight}], unparsed:[] } shape the manual
+// parser produces, so computeHoldingsOverlap downstream is unchanged.
+//
+// Data-quality honesty (verified against VanEck/stockanalysis 2026-05): AV holdings
+// are directionally accurate but can lag by a point or two and AV stamps no as-of date.
+// Good enough for overlap detection; NOT exact current weights. Labeled accordingly in UI.
+
+function loadAvWorkerUrl() {
+  try { const u = localStorage.getItem('av_worker_url'); if (u) avWorkerUrl = u; } catch(e) {}
+}
+function saveAvWorkerUrl(u) {
+  avWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
+  try { localStorage.setItem('av_worker_url', avWorkerUrl); } catch(e) {}
+}
+
+// Normalize an Alpha Vantage ETF_PROFILE response into the common shape.
+// Detects the rate-limit "Information"/"Note" message and surfaces it distinctly.
+function parseAvResponse(raw) {
+  let data;
+  try { data = typeof raw === 'string' ? JSON.parse(raw) : raw; }
+  catch (e) { return { error: 'Could not parse response as JSON.', parsed: [], unparsed: [] }; }
+  if (data && (data.Information || data.Note)) {
+    return { rateLimited: true, message: data.Information || data.Note, parsed: [], unparsed: [] };
+  }
+  if (data && data.error) {
+    return { error: data.error, parsed: [], unparsed: [] };
+  }
+  if (!data || !Array.isArray(data.holdings)) {
+    return { error: 'No holdings in response (unexpected shape).', parsed: [], unparsed: [] };
+  }
+  const parsed = [], unparsed = [];
+  data.holdings.forEach(h => {
+    const sym = (h.symbol || '').trim();
+    const w = (h.weight != null && h.weight !== '') ? parseFloat(h.weight) * 100 : null;
+    if (!sym || sym.toLowerCase() === 'n/a' || !/^[A-Z]{1,6}([.\-][A-Z])?$/.test(sym.toUpperCase())) {
+      unparsed.push((h.description || sym || 'unknown') + (w != null ? ' (' + w.toFixed(2) + '%)' : ''));
+      return;
+    }
+    parsed.push({ ticker: sym.toUpperCase(), weight: w != null ? +w.toFixed(2) : null });
+  });
+  const bonus = {
+    expenseRatio: (data.net_expense_ratio != null && data.net_expense_ratio !== '') ? +(parseFloat(data.net_expense_ratio) * 100).toFixed(3) : null,
+    aum: (data.net_assets != null && data.net_assets !== '') ? parseFloat(data.net_assets) : null,
+    dividendYield: (data.dividend_yield != null && data.dividend_yield !== '') ? +(parseFloat(data.dividend_yield) * 100).toFixed(2) : null,
+  };
+  return { parsed, unparsed, bonus };
+}
+
+// Fetch ETF holdings for a ticker through the worker. Returns the parsed shape,
+// or { needsUrl } / { rateLimited } / { error } for the caller to handle.
+async function qrFetchEtfHoldings(ticker) {
+  if (!avWorkerUrl) loadAvWorkerUrl();
+  if (!avWorkerUrl) {
+    return { needsUrl: true, error: 'No data worker URL set. Add it in the field above, or paste holdings manually.', parsed: [], unparsed: [] };
+  }
+  const t = encodeURIComponent((ticker || '').trim().toUpperCase());
+  if (!t) return { error: 'Enter the ETF ticker first.', parsed: [], unparsed: [] };
+  try {
+    const res = await fetch(`${avWorkerUrl}/etf?s=${t}`, { headers: { 'Accept': 'application/json' } });
+    const text = await res.text();
+    const result = parseAvResponse(text);
+    result.fetchedAt = new Date().toISOString();
+    return result;
+  } catch (err) {
+    return { error: 'Fetch failed (worker unreachable or network error): ' + (err.message || ''), parsed: [], unparsed: [] };
+  }
+}
+
+// Render the candidate entry form for the current qrType (and current edit target).
+function renderQrForm() {
+  const wrap = document.getElementById('qr-form-wrap');
+  if (!wrap) return;
+  const fields = QR_FIELDS[qrType];
+  const editing = qrEditingId !== null ? qualityReviews.find(q => q.id === qrEditingId) : null;
+  const v = (editing && editing.type === qrType) ? editing.fields : {};
+  const tickerVal = editing ? (editing.ticker || '') : '';
+  const themeVal = editing ? (editing.theme || '') : '';
+  const sleeveVal = editing ? (editing.sleeve || '') : '';
+
+  // Theme dropdown options (mirror position tagging)
+  const themeOpts = ['<option value="">— Theme —</option>'].concat(
+    Object.entries(THEMES).filter(([_, c]) => c.dropdown).map(([name]) =>
+      `<option value="${esc(name)}" ${themeVal === name ? 'selected' : ''}>${esc(name)}</option>`)
+  ).join('');
+  const sleeveOpts = ['<option value="">— Sleeve —</option>'].concat(
+    SLEEVES.map(s => `<option value="${esc(s)}" ${sleeveVal === s ? 'selected' : ''}>${esc(s)}</option>`)
+  ).join('');
+
+  const fieldHtml = fields.map(f => {
+    const val = v[f.key] != null ? v[f.key] : '';
+    const hint = f.hint ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:2px;font-style:italic">${f.hint}</div>` : '';
+    let input;
+    if (f.kind === 'textarea') {
+      input = `<textarea id="qr-f-${f.key}" rows="2" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
+    } else {
+      const t = f.kind === 'number' ? 'number' : 'text';
+      const step = f.kind === 'number' ? ' step="any"' : '';
+      input = `<input id="qr-f-${f.key}" type="${t}"${step} value="${esc(val)}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px">`;
+    }
+    const fieldBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}</label>${input}${hint}</div>`;
+    // For the ETF holdings field, append fetch + manual-overlap controls + results.
+    if (qrType === 'etf' && f.key === 'holdingsTop') {
+      if (!avWorkerUrl) loadAvWorkerUrl();
+      return fieldBlock + `
+        <div style="margin:-4px 0 12px">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+            <button type="button" class="btn btn-sm btn-primary" onclick="qrFetchAndFillHoldings()" style="font-size:10px">⤓ Fetch holdings (Alpha Vantage)</button>
+            <button type="button" class="btn btn-sm" onclick="runQrHoldingsOverlap()" style="font-size:10px">Check overlap with my book</button>
+          </div>
+          <details style="margin-bottom:6px">
+            <summary style="font-size:8px;color:var(--color-text-tertiary);cursor:pointer">Data worker URL ${avWorkerUrl ? '✓ set' : '— not set'}</summary>
+            <div style="display:flex;gap:6px;margin-top:4px;align-items:center">
+              <input id="qr-worker-url" type="text" value="${esc(avWorkerUrl)}" placeholder="https://your-worker.workers.dev" style="flex:1;min-width:180px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px">
+              <button type="button" class="btn btn-sm" onclick="saveAvWorkerUrl(document.getElementById('qr-worker-url').value); renderQrForm();" style="font-size:9px">Save URL</button>
+            </div>
+            <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px">Your Cloudflare worker that proxies Alpha Vantage. The AV key stays server-side in the worker, never here.</div>
+          </details>
+          <div id="qr-holdings-overlap" style="margin-top:4px"></div>
+        </div>`;
+    }
+    return fieldBlock;
+  }).join('');
+
+  // Live overlap context (re-rendered on theme change)
+  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal)}</div>`;
+
+  wrap.innerHTML = `
+    <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:16px;max-width:760px">
+      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:120px">
+          <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Ticker</label>
+          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
+        </div>
+        <div style="flex:1;min-width:140px">
+          <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Theme</label>
+          <select id="qr-theme" onchange="document.getElementById('qr-overlap-panel').innerHTML = renderQrOverlap(this.value)" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${themeOpts}</select>
+        </div>
+        <div style="flex:1;min-width:140px">
+          <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Sleeve it would join</label>
+          <select id="qr-sleeve" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${sleeveOpts}</select>
+        </div>
+      </div>
+      ${overlapHtml}
+      <div style="margin-top:12px">${fieldHtml}</div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn btn-sm btn-primary" onclick="saveQrCandidate()" style="font-size:11px">${editing ? '✓ Update Candidate' : '＋ Save Candidate'}</button>
+        ${editing ? `<button class="btn btn-sm" onclick="resetQrForm()" style="font-size:11px">Cancel Edit</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderQrOverlap(theme) {
+  if (!theme) return `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">Pick a theme to see your current exposure (overlap context).</div>`;
+  const ex = qrThemeExposure(theme);
+  if (!ex || ex.total === 0) {
+    return `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No current holdings in <strong>${esc(theme)}</strong> — this would be fresh exposure, not a double-up.</div>`;
+  }
+  const tk = ex.tickers.map(t => `${esc(t.ticker)} ${fmtDollarWhole(t.value)}`).join(' · ');
+  return `<div style="font-size:9px;color:var(--color-text-secondary);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);line-height:1.5">
+    You already hold <strong style="color:var(--color-text-primary)">${fmtDollarWhole(ex.total)}</strong> in <strong>${esc(theme)}</strong> (${ex.portfolioPct.toFixed(1)}% of active portfolio): ${tk}.
+    <span style="color:var(--color-text-tertiary);font-style:italic"> Adding here increases concentration in this theme — confirm that\u2019s intended.</span>
+  </div>`;
+}
+
+// Read the ETF holdings field, parse it, and show DIRECT overlaps with the book.
+// Shows its work: lists what matched, and honestly flags lines it couldn't parse.
+function runQrHoldingsOverlap() {
+  const out = document.getElementById('qr-holdings-overlap');
+  const fieldEl = document.getElementById('qr-f-holdingsTop');
+  if (!out || !fieldEl) return;
+  const { parsed, unparsed } = parseHoldings(fieldEl.value);
+  if (parsed.length === 0 && unparsed.length === 0) {
+    out.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Paste the ETF\u2019s top holdings above (tickers, e.g. \u201cNVDA 22%, MU 4.5%\u201d), then check again.</div>`;
+    return;
+  }
+  const overlaps = computeHoldingsOverlap(parsed);
+  let html = '';
+  if (overlaps.length > 0) {
+    const rows = overlaps.map(o => {
+      const w = o.weight != null ? ` <span style="color:var(--color-text-tertiary)">(ETF weight ${o.weight}%)</span>` : '';
+      return `<div style="margin-bottom:3px">\u2022 <strong style="color:var(--color-text-primary)">${esc(o.ticker)}</strong>${w} — you already hold <strong>${fmtDollarWhole(o.yourDirectValue)}</strong> directly</div>`;
+    }).join('');
+    html += `<div style="font-size:9px;color:var(--color-text-secondary);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);line-height:1.5">
+      <div style="color:var(--color-text-danger);font-weight:700;margin-bottom:4px">${overlaps.length} direct overlap${overlaps.length>1?'s':''} with names you already own:</div>
+      ${rows}
+      <div style="color:var(--color-text-tertiary);font-style:italic;margin-top:5px">Buying this ETF adds more exposure to these — it\u2019s partly doubling up, not pure diversification.</div>
+    </div>`;
+  } else if (parsed.length > 0) {
+    html += `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">Parsed ${parsed.length} holding${parsed.length>1?'s':''} (${parsed.map(p=>esc(p.ticker)).join(', ')}) — none overlap names you hold directly. This ETF wouldn\u2019t double up on your individual positions.</div>`;
+  }
+  if (unparsed.length > 0) {
+    html += `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:6px;font-style:italic">Couldn\u2019t read as tickers (so not checked): ${unparsed.map(u=>esc(u)).join(' · ')}. Tip: paste ticker symbols, not full company names.</div>`;
+  }
+  out.innerHTML = html;
+}
+
+// Fetch holdings from the worker, fill the holdings field + bonus fields, then run
+// overlap. Handles all states honestly: needs-URL, rate-limited, error, success.
+async function qrFetchAndFillHoldings() {
+  const out = document.getElementById('qr-holdings-overlap');
+  const tickerEl = document.getElementById('qr-ticker');
+  const fieldEl = document.getElementById('qr-f-holdingsTop');
+  if (!out || !tickerEl || !fieldEl) return;
+  const ticker = (tickerEl.value || '').trim().toUpperCase();
+  if (!ticker) { out.innerHTML = `<div style="font-size:9px;color:var(--color-text-danger)">Enter the ETF ticker above first.</div>`; return; }
+
+  out.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Fetching ${esc(ticker)} holdings…</div>`;
+  const res = await qrFetchEtfHoldings(ticker);
+
+  // State: no worker URL configured
+  if (res.needsUrl) {
+    out.innerHTML = `<div style="font-size:9px;color:var(--color-text-danger);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No data worker URL set. Open “Data worker URL” above and paste your worker address, or just paste holdings manually.</div>`;
+    return;
+  }
+  // State: Alpha Vantage rate limit (25/day free tier)
+  if (res.rateLimited) {
+    out.innerHTML = `<div style="font-size:9px;color:#fbbf24;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);line-height:1.5">Alpha Vantage daily limit hit (free tier ≈25 calls/day). The fetch reached AV fine — just out of quota for now. Wait for the daily reset and retry, or paste holdings manually below.</div>`;
+    return;
+  }
+  // State: error
+  if (res.error) {
+    out.innerHTML = `<div style="font-size:9px;color:var(--color-text-danger);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">${esc(res.error)}</div>`;
+    return;
+  }
+  // Success — fill the holdings textarea with "TICKER weight%" lines (overwrites field).
+  if (res.parsed.length > 0) {
+    fieldEl.value = res.parsed.map(p => p.ticker + (p.weight != null ? ' ' + p.weight + '%' : '')).join(', ');
+    // Auto-fill bonus fields IF present and currently empty (don't clobber user entries).
+    if (res.bonus) {
+      const expEl = document.getElementById('qr-f-expense');
+      const aumEl = document.getElementById('qr-f-aum');
+      if (expEl && !expEl.value && res.bonus.expenseRatio != null) expEl.value = res.bonus.expenseRatio;
+      if (aumEl && !aumEl.value && res.bonus.aum != null) aumEl.value = Math.round(res.bonus.aum / 1e6); // field is in $M
+    }
+    // Stash the fetched data on a hidden marker so saveQrCandidate can cache it.
+    qrLastFetch = { ticker, parsed: res.parsed, unparsed: res.unparsed, bonus: res.bonus, fetchedAt: res.fetchedAt };
+  }
+  // Run overlap against the freshly-filled field, with a fetched-on note.
+  runQrHoldingsOverlap();
+  const fetchedNote = res.fetchedAt ? new Date(res.fetchedAt).toLocaleString() : 'now';
+  const existing = out.innerHTML;
+  out.innerHTML = `<div style="font-size:8px;color:var(--color-text-tertiary);margin-bottom:6px;font-style:italic">Holdings via Alpha Vantage, fetched ${esc(fetchedNote)}. Weights are approximate &amp; point-in-time (AV doesn\u2019t stamp an as-of date; can lag actual by a point or two) — fine for overlap, not exact current weights.</div>` + existing;
+}
+let qrLastFetch = null; // transient cache of the last fetch, attached to candidate on save
+
+function saveQrCandidate() {
+  const ticker = (document.getElementById('qr-ticker').value || '').trim().toUpperCase();
+  if (!ticker) { alert('Enter a ticker for the candidate.'); return; }
+  const theme = document.getElementById('qr-theme').value || '';
+  const sleeve = document.getElementById('qr-sleeve').value || '';
+  const fields = {};
+  QR_FIELDS[qrType].forEach(f => {
+    const el = document.getElementById('qr-f-' + f.key);
+    if (el) fields[f.key] = el.value;
+  });
+  // Attach cached holdings if the last fetch was for THIS ticker (so reopening
+  // doesn't re-spend an AV call, and overlap works offline).
+  const cachedHoldings = (qrLastFetch && qrLastFetch.ticker === ticker) ? {
+    parsed: qrLastFetch.parsed, fetchedAt: qrLastFetch.fetchedAt, source: 'alphavantage'
+  } : null;
+
+  if (qrEditingId !== null) {
+    const c = qualityReviews.find(q => q.id === qrEditingId);
+    if (c) {
+      c.ticker = ticker; c.theme = theme; c.sleeve = sleeve; c.type = qrType; c.fields = fields;
+      if (cachedHoldings) c.cachedHoldings = cachedHoldings;
+      c.updatedAt = new Date().toISOString();
+    }
+    qrEditingId = null;
+  } else {
+    qualityReviews.push({
+      id: 'qr_' + Date.now(),
+      type: qrType, ticker, theme, sleeve, fields,
+      cachedHoldings: cachedHoldings || undefined,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    });
+  }
+  scheduleSave();
+  renderQrForm();
+  renderQrSavedList();
+}
+
+function editQrCandidate(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  qrEditingId = id;
+  setQrType(c.type);  // also re-renders form
+  document.getElementById('tab-quality').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function deleteQrCandidate(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  if (!confirm(`Delete the quality review for ${c.ticker}? This can\u2019t be undone.`)) return;
+  qualityReviews = qualityReviews.filter(q => q.id !== id);
+  if (qrEditingId === id) qrEditingId = null;
+  scheduleSave();
+  renderQrForm();
+  renderQrSavedList();
+}
+
+function renderQrSavedList() {
+  const el = document.getElementById('qr-saved-list');
+  if (!el) return;
+  if (qualityReviews.length === 0) {
+    el.innerHTML = '<div style="color:var(--color-text-tertiary);font-size:11px;padding:14px 0;font-style:italic">No saved candidates yet. Fill in the checklist above and save one.</div>';
+    return;
+  }
+  // Newest first
+  const sorted = [...qualityReviews].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  el.innerHTML = sorted.map(c => {
+    const fields = QR_FIELDS[c.type] || [];
+    const filled = fields.filter(f => (c.fields[f.key] || '').toString().trim() !== '').length;
+    const typeColor = c.type === 'etf' ? 'var(--color-text-info)' : 'var(--color-text-success)';
+    const ex = c.theme ? qrThemeExposure(c.theme) : null;
+    const overlapBadge = (ex && ex.total > 0)
+      ? `<span style="font-size:8px;color:var(--color-text-tertiary)">overlaps ${fmtDollarWhole(ex.total)} in ${esc(c.theme)}</span>`
+      : (c.theme ? `<span style="font-size:8px;color:var(--color-text-success)">fresh ${esc(c.theme)} exposure</span>` : '');
+    const rows = fields.filter(f => (c.fields[f.key] || '').toString().trim() !== '').map(f =>
+      `<div style="margin-bottom:5px"><span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em">${f.label}</span><div style="font-size:11px;color:var(--color-text-primary);white-space:pre-wrap;line-height:1.4">${esc((c.fields[f.key] || '').toString())}</div></div>`
+    ).join('');
+    const updated = c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '';
+    return `<details style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${typeColor};border-radius:var(--border-radius-lg);padding:10px 14px;margin-bottom:10px">
+      <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;list-style:none">
+        <span style="font-size:13px;font-weight:700;color:var(--color-text-primary)">${esc(c.ticker)}</span>
+        <span style="font-size:8px;color:${typeColor};border:1px solid ${typeColor};border-radius:8px;padding:1px 7px;text-transform:uppercase;font-weight:700">${c.type}</span>
+        ${c.sleeve ? `<span style="font-size:8px;color:var(--color-text-tertiary)">${esc(c.sleeve)}</span>` : ''}
+        ${overlapBadge}
+        <span style="font-size:8px;color:var(--color-text-tertiary);margin-left:auto">${filled}/${fields.length} filled · ${updated}</span>
+      </summary>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
+        ${rows || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No fields filled.</div>'}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">Edit</button>
+          <button class="btn btn-sm" onclick="deleteQrCandidate('${c.id}')" style="font-size:10px;color:var(--color-text-danger)">Delete</button>
+        </div>
+      </div>
+    </details>`;
+  }).join('');
+}
+
+function renderQualityTab() {
+  setQrType(qrType);       // ensures toggle state + form render
+  renderQrSavedList();
+}
+
 function renderPostSell() {
   const summaryEl = document.getElementById('postsell-summary');
   const cardsEl = document.getElementById('postsell-cards');
@@ -10670,6 +11170,7 @@ function exportData() {
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
     peDeals,
+    qualityReviews,
     themeUniverseHistory,
     trackRecordMatureOnly, industryAlphaMatureOnly,
     taxProfile,
@@ -10705,6 +11206,7 @@ function importData(input) {
       if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
       if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
       if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
+      if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
       if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
       if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
       if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
@@ -11839,6 +12341,7 @@ function driveBuildBackupPayload() {
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
     peDeals,
+    qualityReviews,
     themeUniverseHistory,
     trackRecordMatureOnly, industryAlphaMatureOnly,
     taxProfile,
@@ -12212,6 +12715,7 @@ async function executeRestore() {
     if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
     if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
     if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
+    if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
     if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
     if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
     if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
@@ -12420,6 +12924,7 @@ async function init() {
     await savePositions();
   }
   loadPolygonKey();
+  loadAvWorkerUrl();
   taxLoadProfile(); // load + apply saved tax profile before first render
   restoreSpxInput();
   renderCashDisplay();
