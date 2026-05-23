@@ -1465,7 +1465,7 @@
   <!-- Quality Review Tab -->
   <div class="tab-panel" id="tab-quality">
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 14px;padding:0 2px;line-height:1.5;max-width:760px">
-      A structured pre-purchase checklist — it gives you the questions a disciplined buyer asks and organizes your answers, so every candidate runs the same gauntlet your existing positions are judged against. <strong>It does not score or recommend.</strong> You supply the numbers and judgments; the tool remembers them, lets you compare candidates, and shows your existing theme exposure for overlap context. Overlap is theme-level (the tracker knows your holdings, not what's inside an ETF).
+      A structured pre-purchase checklist — it gives you the questions a disciplined buyer asks and organizes your answers, so every candidate runs the same gauntlet your existing positions are judged against. Field hints tell you where on Schwab to find each number and what a good/bad value looks like. After saving, each candidate gets <strong>checkable observations</strong> (computed facts, no recommendation) and an optional <strong>AI for/against/gaps analysis</strong> that argues both sides and never concludes — you weigh it. For ETFs it can fetch real holdings and flag overlap with names you hold directly. <strong>It does not score or recommend.</strong>
     </div>
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
@@ -5146,14 +5146,24 @@ function renderStaleBanner() {
 const QR_FIELDS = {
   stock: [
     { key: 'thesis',      label: 'Thesis — why own this at all?',                kind: 'textarea', hint: 'One paragraph. If you can\u2019t articulate it, that\u2019s the answer.' },
-    { key: 'moat',        label: 'Moat / durable advantage',                     kind: 'textarea', hint: 'What stops a competitor eating this in 5 years?' },
-    { key: 'pe',          label: 'P/E ratio',                                    kind: 'number',   hint: 'vs sector and vs its own history' },
-    { key: 'revGrowth',   label: 'Revenue growth % (YoY)',                       kind: 'number' },
-    { key: 'margins',     label: 'Operating / net margin %',                     kind: 'text',     hint: 'Trend matters more than level' },
-    { key: 'debt',        label: 'Debt load (D/E or net debt/EBITDA)',           kind: 'text' },
-    { key: 'valuation',   label: 'Valuation sanity-check',                       kind: 'textarea', hint: 'Cheap, fair, or priced for perfection? Why is the price what it is?' },
-    { key: 'exitIf',      label: 'Exit if\u2026',                                kind: 'textarea', hint: 'Pre-commit to what would break the thesis.' },
-    { key: 'risks',       label: 'Key risks / what could go wrong',              kind: 'textarea' },
+    { key: 'moat',        label: 'Moat / durable advantage (your read)',          kind: 'textarea', hint: 'What stops a competitor eating this in 5 years? Pricing power, network, scale, switching costs?' },
+    { key: 'moatRating',  label: 'Morningstar moat rating',                       kind: 'select',   options: ['', 'None', 'Narrow', 'Wide'], hint: 'Schwab → Ratings & Reports → Morningstar. Independent cross-check on your own read above. Wide = durable edge.' },
+    { key: 'peTrailing',  label: 'P/E trailing (last 4Q)',                        kind: 'number',   hint: 'Schwab: \u201cP/E last 4Q\u201d / \u201cPrice/earnings (TTM)\u201d. Compare to the S&P figure shown alongside it.' },
+    { key: 'peForward',   label: 'P/E forward',                                   kind: 'number',   hint: 'Schwab: \u201cP/E forecast EPS\u201d / \u201cForward P/E\u201d. Lower than trailing means earnings expected to grow.' },
+    { key: 'peg',         label: 'PEG ratio',                                     kind: 'number',   hint: 'Schwab: Company Profile. P/E relative to growth. Under ~1 = cheap for the growth; over ~2 = pricey. The key valuation-vs-growth check.' },
+    { key: 'salesGrowth', label: 'Sales growth % (1yr)',                          kind: 'number',   hint: 'Schwab: \u201c1 year sales growth\u201d. Is the top line actually growing?' },
+    { key: 'epsGrowthFwd',label: 'EPS growth % (3-5yr forecast)',                 kind: 'number',   hint: 'Schwab: Peers & Ratios → \u201cEPS Growth Forecast 3-5 Year\u201d. Forward earnings expectation — anchors the PEG.' },
+    { key: 'grossMargin', label: 'Gross margin %',                                kind: 'number',   hint: 'Schwab: Peers → \u201cGross margin\u201d. High + stable = pricing power. Harder to fake than net margin.' },
+    { key: 'netMargin',   label: 'Net margin %',                                  kind: 'number',   hint: 'Schwab: \u201cNet Profit Margin\u201d. What actually drops to the bottom line.' },
+    { key: 'roic',        label: 'ROIC %',                                        kind: 'number',   hint: 'Return on invested capital — arguably THE quality metric. Above ~15% is strong; it means the business earns well above its cost of capital.' },
+    { key: 'roe',         label: 'ROE %',                                         kind: 'number',   hint: 'Schwab: \u201cReturn on Equity\u201d. Above ~20% is strong — but check it isn\u2019t propped up by heavy debt.' },
+    { key: 'debt',        label: 'Long-term debt / equity %',                     kind: 'number',   hint: 'Schwab: Peers → \u201cLong-Term Debt to Equity (%)\u201d (e.g. NVDA \u2248 3.8%). Low (under ~50%) = lightly levered. High debt magnifies risk.' },
+    { key: 'cashConv',    label: 'Cash conversion — do earnings turn into cash?', kind: 'select',   options: ['', 'Yes — FCF tracks earnings', 'Roughly', 'No / unsure — earnings don\u2019t convert'], hint: 'Quality check ratios miss: a high-margin business whose earnings never become real cash is a red flag. Schwab: Peers → Profitability tab for FCF.' },
+    { key: 'dilution',    label: 'Share count — rising or falling?',              kind: 'select',   options: ['', 'Falling (buybacks)', 'Flat', 'Rising (dilution / heavy SBC)'], hint: 'Schwab: Share Profile → Shares Outstanding, check vs a year ago. Rising count quietly erodes your per-share value — common in stock-comp-heavy tech.' },
+    { key: 'trend',       label: 'Trend — margins/returns up, flat, or down?',    kind: 'select',   options: ['', 'Improving', 'Stable', 'Deteriorating'], hint: 'A snapshot can\u2019t show this — go look at the history. High-and-rising beats high-and-rolling-over. The #1 quality trap is mistaking a peak for a plateau.' },
+    { key: 'valuation',   label: 'Valuation sanity-check (your read)',            kind: 'textarea', hint: 'Cheap, fair, or priced for perfection? Why is the price what it is? A great business at a terrible price is still a bad buy.' },
+    { key: 'exitIf',      label: 'Exit if\u2026',                                kind: 'textarea', hint: 'Pre-commit to what would break the thesis, before you\u2019re emotionally attached.' },
+    { key: 'risks',       label: 'Key risks / what could go wrong',              kind: 'textarea', hint: 'Include things like customer concentration, elevated short interest, regulatory or single-product dependence.' },
   ],
   etf: [
     { key: 'thesis',      label: 'Why this ETF — what exposure are you buying?', kind: 'textarea' },
@@ -5352,6 +5362,9 @@ function renderQrForm() {
     let input;
     if (f.kind === 'textarea') {
       input = `<textarea id="qr-f-${f.key}" rows="2" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
+    } else if (f.kind === 'select') {
+      const opts = (f.options || []).map(o => `<option value="${esc(o)}" ${val === o ? 'selected' : ''}>${o === '' ? '— select —' : esc(o)}</option>`).join('');
+      input = `<select id="qr-f-${f.key}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${opts}</select>`;
     } else {
       const t = f.kind === 'number' ? 'number' : 'text';
       const step = f.kind === 'number' ? ' step="any"' : '';
@@ -5635,9 +5648,22 @@ function buildQualityFlags(candidate, holdingsOverlaps) {
       flags.push({ level: 'caution', text: `Top-10 concentration ${num(f.concentration)}% — you're buying a few names, not the whole theme.` });
     }
   } else {
-    if (!f.pe && !f.valuation) flags.push({ level: 'caution', text: `No P/E or valuation note — valuation discipline unchecked.` });
-    if (!f.moat) flags.push({ level: 'caution', text: `Moat field blank — durability of the edge unexamined.` });
-    if (!f.exitIf) flags.push({ level: 'caution', text: `No exit condition pre-committed — you haven't defined what would break the thesis.` });
+    // Stock quality observations from the tailored fields.
+    const roic = num(f.roic), roe = num(f.roe), gm = num(f.grossMargin), nm = num(f.netMargin);
+    const peg = num(f.peg), debt = num(f.debt);
+    if (f.roic) flags.push({ level: roic >= 15 ? 'info' : roic > 0 ? 'caution' : 'flag', text: `ROIC ${roic}% — ${roic>=15?'strong; earns well above cost of capital':roic>0?'modest; check it clears its cost of capital':'negative; not creating value on capital'}.` });
+    else flags.push({ level: 'caution', text: `ROIC blank — the single best quality metric is unfilled.` });
+    if (f.grossMargin && f.netMargin) flags.push({ level: 'info', text: `Margins: ${gm}% gross / ${nm}% net — ${gm>=50?'high gross margin suggests pricing power':'thinner gross margin; less cushion'}.` });
+    if (f.peg) flags.push({ level: peg <= 1 ? 'info' : peg <= 2 ? 'caution' : 'flag', text: `PEG ${peg} — ${peg<=1?'cheap relative to its growth':peg<=2?'fairly priced for the growth':'expensive even accounting for growth'}.` });
+    else if (!f.peTrailing && !f.valuation) flags.push({ level: 'caution', text: `No PEG, P/E, or valuation note — valuation discipline unchecked.` });
+    if (f.debt) flags.push({ level: debt <= 50 ? 'info' : debt <= 100 ? 'caution' : 'flag', text: `Debt/equity ${debt}% — ${debt<=50?'lightly levered, durable':debt<=100?'moderate leverage':'high leverage magnifies risk'}.` });
+    // Judgment-prompt flags (the qualitative selects)
+    if (f.cashConv && f.cashConv.startsWith('No')) flags.push({ level: 'flag', text: `You flagged earnings don\u2019t convert to cash — a serious quality red flag regardless of how good the margins look.` });
+    if (f.dilution && f.dilution.startsWith('Rising')) flags.push({ level: 'caution', text: `You flagged rising share count — dilution quietly erodes per-share value; weigh against the growth.` });
+    if (f.trend === 'Deteriorating') flags.push({ level: 'flag', text: `You flagged deteriorating trend — high current numbers may be a peak, not a plateau.` });
+    if (f.moatRating === 'None') flags.push({ level: 'caution', text: `Morningstar sees no moat — squares with / challenges your own moat read?` });
+    if (!f.moat && !f.moatRating) flags.push({ level: 'caution', text: `Moat unexamined (neither your read nor the Morningstar rating filled).` });
+    if (!f.exitIf) flags.push({ level: 'caution', text: `No exit condition pre-committed — you haven\u2019t defined what would break the thesis.` });
   }
   if (!f.thesis) flags.push({ level: 'flag', text: `No thesis entered — the most basic question (why own this at all?) is unanswered.` });
 
