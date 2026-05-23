@@ -6065,6 +6065,13 @@ function buildQrAiPrompt(candidate) {
     const ex = qrThemeExposure(candidate.theme);
     if (ex) computed.push(`Current ${candidate.theme} exposure: ${ex.portfolioPct.toFixed(1)}% of active portfolio across ${ex.tickers.length} position(s)${ex.tickers.length?' ('+ex.tickers.map(t=>t.ticker).join(', ')+')':''}.`);
   }
+  if (candidate.sleeve && SLEEVE_PURPOSE[candidate.sleeve]) {
+    const tgt = SLEEVE_TARGETS[candidate.sleeve];
+    const soak = SLEEVE_SOAK[candidate.sleeve];
+    const band = tgt ? ` Target allocation ${tgt.min}–${tgt.max}% of portfolio.` : '';
+    const soakTxt = soak ? ` Soak period ${soak}d (alpha treated as noise before then).` : '';
+    computed.push(`Sleeve "${candidate.sleeve}" — ${SLEEVE_PURPOSE[candidate.sleeve]}${band}${soakTxt}`);
+  }
   let overlaps = [];
   if (candidate.cachedHoldings && Array.isArray(candidate.cachedHoldings.parsed)) overlaps = computeHoldingsOverlap(candidate.cachedHoldings.parsed);
   else if (f.holdingsTop) { const r = parseHoldings(f.holdingsTop); overlaps = computeHoldingsOverlap(r.parsed); }
@@ -6093,6 +6100,8 @@ Rules:
 - You have NO live data and NO way to cite a source or know a current date. NEVER fabricate a citation, source name+date, or "as of [date]" for an external fact. The honest staleness bound is your training cutoff; state that once in the header line and do not invent per-fact dates.
 - For each external claim in CLAIMS TO VERIFY: state the claim, mark ⚠UNVERIFIED, note WHY it matters to this candidate, and point to WHERE the user would normally confirm it (e.g. "issuer fact sheet", "company 10-Q", "stockanalysis.com") — a pointer, NOT a pretended citation. If you're unsure of the figure, say so ("recalled as roughly X, may be stale").
 - Where the user's own input is thin or blank, name that as a limit on the analysis rather than filling it in.
+- USE THE PORTFOLIO CONTEXT, don't just restate it. If a "Current [theme] exposure" fact is present, explicitly weigh the thesis against it: does the user's thesis treat this as fresh exposure when they're already concentrated in the theme? A strong quality case for a name you're already heavy in is a CONCENTRATION decision, not just a quality one — surface that tension if it exists.
+- JUDGE AGAINST THE SLEEVE'S PURPOSE, not a generic yardstick. If a sleeve fact is present, assess whether the candidate fits that sleeve's stated objective, and flag a mismatch. Examples: a "Quality" candidate whose only case is a near-term catalyst (that's thesis-play reasoning, not durability); a "Thesis Plays" candidate with no articulated thesis (the sleeve's whole premise is missing); a "Portfolio Balance Plays" candidate being argued on growth/alpha (a category error — PBP is structural, judged on balance not outperformance). If the candidate fits its sleeve cleanly, say so briefly and move on.
 - Be specific to THIS candidate using THEIR inputs — no generic boilerplate.
 - Keep each section tight.
 
@@ -9792,6 +9801,17 @@ const SLEEVE_SOAK = {
   'Thesis Plays': 180,
   'Quality': 365,
   'Portfolio Balance Plays': 1095,
+};
+
+// One-line purpose per sleeve, for the AI quality prompt so it judges a candidate against
+// the RIGHT objective. Grounded in the tracker's own strategy logic (sleeveVerdict /
+// buildSleeveValueAdd): Thesis Plays & Quality are alpha-judged vs their theme benchmark;
+// PBP is structural and explicitly NEVER judged on alpha. Keep this consistent with
+// SLEEVE_SOAK / SLEEVE_TARGETS — single source of truth for the prompt.
+const SLEEVE_PURPOSE = {
+  'Thesis Plays': 'A conviction/thematic bet — bought because of a specific thesis, judged on whether the pick beats its theme benchmark. Conviction sizing; the thesis is load-bearing.',
+  'Quality': 'A durable compounder meant to be held for the long run (soak aligned to the 1-year tax line). Judged on business durability and beating its theme benchmark over time, not on a near-term catalyst.',
+  'Portfolio Balance Plays': 'STRUCTURAL ballast held for portfolio balance, NOT for alpha — by strategy this sleeve is "held without performance discipline" and is never judged on outperformance. Analyzing it as a growth/quality bet is a category error; the relevant question is whether it actually provides the intended balance/diversification.',
 };
 
 // Sleeve colour palette
