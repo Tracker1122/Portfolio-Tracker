@@ -5211,11 +5211,63 @@ const QR_EXPLAINERS = {
 <p><strong>Why it matters for quality.</strong> It's the scale anchor. Growth rates, margins, and valuation multiples all mean something different at $250B of revenue than at $250M — a 50% growth forecast is far easier to believe for a small company than a giant one, simply because the giant has to add enormous absolute dollars to grow the same percentage. Knowing the absolute size is the context that makes the percentages interpretable.</p>
 <p><strong>How to read it.</strong> On its own it's just a size marker — there's no "good" or "bad" revenue number. Its real use is as a sanity check on the growth story: pair it with the growth-forecast field and ask whether the implied <em>absolute</em> dollar growth is plausible. A company at $250B revenue forecast to grow EPS 50% a year for years is making an extraordinary claim about adding hundreds of billions in sales — the bigger the base, the more skeptical that should make you. <strong>Practical note:</strong> this field also exists so the analysis has the real revenue figure on hand rather than estimating it.</p>`
   },
+
+  // ----- ETF-side definition explainers (session 3) -----
+  expense: {
+    title: 'Expense Ratio %',
+    body: `<p><strong>What it is.</strong> The annual fee the fund charges to run itself, as a percentage of the money you have in it. An expense ratio of 0.20% means $2 a year for every $1,000 invested. It's quietly deducted from the fund's returns rather than billed to you — you never see the charge, you just earn slightly less than the index it tracks.</p>
+<p><strong>Why it matters.</strong> It's the one cost you control with certainty before you ever buy. Unlike the fund's <em>returns</em> (unknowable in advance), the fee is fixed and compounds against you every single year. Over decades, the gap between a 0.05% and a 0.50% fund is enormous — not because 0.45% sounds like much, but because it's skimmed off the whole balance, every year, including the years the market does the heavy lifting. For an index fund, where you're explicitly buying "the market's return minus costs," the fee is one of the few things that reliably separates a good holding from a mediocre one.</p>
+<p><strong>How to read it.</strong> Always read it <em>relative to what the fund does</em>. Broad, plain-vanilla index funds (total market, S&P 500) are commodities and should be dirt cheap — roughly 0.03–0.20%; paying more for one is usually just paying more for the same thing. Thematic, sector, leveraged, or actively-managed funds run higher (0.40–0.75%+), and the real question becomes whether the exposure is worth the premium and whether you could get something similar cheaper. <strong>Watch-out:</strong> a low headline expense ratio isn't the whole cost — for thinly-traded funds the bid-ask spread and tracking error can quietly cost you more than the fee itself, so cheap-but-illiquid can be falsely reassuring.</p>`
+  },
+  aum: {
+    title: 'Assets Under Management (AUM) ($M)',
+    body: `<p><strong>What it is.</strong> The total pool of money invested in the fund, here measured in millions of dollars. An AUM of 500 means the fund holds $500 million; an AUM of 30 means $30 million. It's a rough proxy for how established and widely-held the fund is.</p>
+<p><strong>Why it matters.</strong> Running a fund is a business, and that business is funded by fees on its assets. A fund that never gathers enough assets isn't profitable for its issuer, and unprofitable funds get <em>closed</em> — which doesn't lose your principal but forces an unplanned, possibly taxable exit on the issuer's timetable, not yours, plus the hassle of finding a replacement. Larger AUM also tends to mean tighter bid-ask spreads and closer index tracking, because the fund can trade the underlying holdings in size without moving prices against itself.</p>
+<p><strong>How to read it.</strong> A common rule of thumb is to scrutinize anything under ~$50M (a value of 50 in this field) — that's roughly the level below which closure risk climbs noticeably — and to treat ~$500M+ as comfortably liquid. <strong>The nuance that matters more than the number:</strong> the <em>issuer</em> behind the fund predicts closure at least as well as raw AUM. A small fund from a major, committed issuer is far safer than the same size fund from a small shop experimenting with exotic products — most closures come from issuers exiting a business line, not big houses pruning a slow starter. Also look at the <em>trend</em>: a small fund growing its assets is a different animal from a small fund that's shrinking. So: low AUM is a yellow flag prompting you to check the issuer and the direction of travel, not an automatic disqualifier.</p>`
+  },
+  avgVolume: {
+    title: 'Average Daily Volume',
+    body: `<p><strong>What it is.</strong> Roughly how many shares of the fund change hands on a typical trading day. It's a measure of how actively the fund itself is traded on the market.</p>
+<p><strong>Why it matters.</strong> Volume is your read on how easily you'll get in and out at a fair price. A heavily-traded fund tends to have a narrow bid-ask spread (the gap between what buyers offer and sellers ask), so the act of trading costs you very little. A thinly-traded one can have a wide spread, meaning you effectively lose a slice of your money to the spread every time you transact — a hidden cost that doesn't show up in the expense ratio.</p>
+<p><strong>How to read it.</strong> Higher is generally better for execution, but there's an important <em>ETF-specific catch</em>: an ETF's true tradeable liquidity comes from the liquidity of the stocks it <em>holds</em>, not just its own share volume. A low-volume ETF that holds large, liquid companies can still be traded cheaply, because market makers can create and redeem shares against those underlying holdings. So low volume is a prompt to check the spread directly and glance at what the fund holds — not an automatic problem the way it would be for a single illiquid stock. <strong>Watch-out:</strong> low volume <em>combined</em> with low AUM is the genuinely uncomfortable pairing — that's the "double whammy" where both liquidity and closure risk point the wrong way at once.</p>`
+  },
+  holdingsTop: {
+    title: 'Top 5–10 Holdings',
+    body: `<p><strong>What's being asked.</strong> The largest positions inside the fund and roughly how much each one weighs — what you're <em>actually</em> buying, name by name, underneath the ticker. (You can pull these via the fetch button below, or paste them in as tickers with weights.)</p>
+<p><strong>Why it matters.</strong> The fund's name and its contents can diverge a lot. A "semiconductor" or "AI" ETF might turn out to be a concentrated bet on three or four giant companies you may already own directly — in which case the ETF isn't giving you the diversified <em>theme</em> you thought you were buying, it's doubling down on names you're already exposed to. Looking inside is the only way to know whether you're buying breadth or just repackaging concentration.</p>
+<p><strong>How to answer usefully.</strong> List the top holdings as tickers with weights (e.g. "NVDA 22%, AVGO 8%"), not company names — the tracker matches tickers against your existing book to flag overlap. Then actually <em>read</em> the list with two questions in mind: do I already own these directly (overlap)? and is the fund really a "theme" or just a top-heavy bet on a few names (which the concentration figure quantifies)? <strong>The useful instinct:</strong> if the top few holdings dominate and you own them already, the ETF may be adding cost and complexity without adding much real diversification.</p>`
+  },
+  concentration: {
+    title: 'Top-10 Concentration %',
+    body: `<p><strong>What it is.</strong> The share of the fund's entire portfolio sitting in just its ten largest holdings. A top-10 concentration of 70% means seven of every ten dollars in the fund are riding on ten names; the remaining hundreds of holdings split the last 30%.</p>
+<p><strong>Why it matters.</strong> This is the single number that tells you whether you're buying a <em>theme</em> or a <em>handful of stocks wearing a theme's clothing</em>. People buy sector and thematic ETFs partly for diversification — the idea that you're spread across the whole trend rather than betting on individual winners. High concentration quietly undoes that: your returns will be driven overwhelmingly by a few mega-caps, and the long tail of small holdings barely moves the needle. It also compounds overlap risk — if those few dominant names are ones you already own, the ETF is reinforcing a bet rather than broadening it.</p>
+<p><strong>How to read it.</strong> There's no universal threshold, because it's partly a feature of the strategy — a "top 10 tech" fund is <em>supposed</em> to be concentrated, while a total-market fund should be very spread out. What matters is whether the concentration <em>matches what you think you're buying</em>. If you wanted broad exposure to a theme and the top 10 is 80% of the fund, you're not getting breadth. <strong>Watch-out:</strong> many cap-weighted thematic funds are far more concentrated than their marketing implies, because the biggest companies in any hot theme tend to be enormous — so check this number rather than assuming "ETF = diversified." A note: this figure is often derived from the holdings list rather than looked up directly.</p>`
+  },
+  tracksWhat: {
+    title: 'Index / Strategy It Tracks',
+    body: `<p><strong>What's being asked.</strong> The specific index or rules-based strategy the fund follows — the actual recipe that decides what it owns and in what proportion. Not the marketing label, but the underlying methodology (e.g. "MVIS US Listed Semiconductor 25 Index, cap-weighted, top 25 names").</p>
+<p><strong>Why it matters.</strong> The index <em>is</em> the product. Two ETFs with near-identical names can track different indices and behave quite differently — different inclusion rules, different weighting (cap-weighted vs equal-weighted vs revenue-weighted), different rebalancing. The strategy determines the concentration you just measured, how the fund behaves when a few names run hot, and whether it'll drift over time. Knowing what it tracks is how you understand <em>why</em> it holds what it holds, rather than treating the holdings as arbitrary.</p>
+<p><strong>How to answer usefully.</strong> Name the index and, ideally, its key mechanics: how many holdings, how they're weighted, how often it rebalances. <strong>The questions worth asking:</strong> Is it cap-weighted (so the biggest names dominate and concentration creeps up as they grow) or equal-weighted (more spread, but more turnover)? Does the methodology actually capture the exposure you want, or does a quirky rule pull it somewhere you didn't intend? A fund tracking a well-understood, transparent index is easier to trust than one following a proprietary "smart-beta" strategy whose rules you can't fully see.</p>`
+  },
+  overlapNote: {
+    title: 'Overlap with What I Already Own',
+    body: `<p><strong>What's being asked.</strong> An honest note on how much this fund's holdings double up on positions you already hold — directly or through other funds. The exposure panel below shows your existing dollars in the relevant theme; this field is where you record what that comparison reveals.</p>
+<p><strong>Why it matters.</strong> Overlap is the most common way a portfolio quietly becomes less diversified than it looks. You buy an S&P 500 fund, a tech fund, and a few individual mega-caps, and discover the same handful of giant companies are sitting in all three — so a far larger share of your money is riding on those names than you ever decided to bet. The danger is that it's invisible: each holding looks reasonable on its own, and only by looking <em>across</em> them do you see the real concentration. An ETF that overlaps heavily with what you own may be adding fees and the <em>appearance</em> of diversification while actually amplifying an existing bet.</p>
+<p><strong>How to answer usefully.</strong> Use the holdings list and the overlap check to identify which of the fund's big positions you already hold, and roughly how much that compounds your exposure to those names. <strong>The useful framing:</strong> "this fund is 22% NVDA and I already hold NVDA at 8% of my book, so buying it meaningfully increases my single-name concentration in NVDA" is far more useful than "some overlap." Note whether the overlap defeats your reason for buying — if you wanted <em>new</em> exposure and the fund mostly repackages what you have, that's a real strike against it. A note: this is something you assess from the holdings comparison, not a figure you look up on a fund page.</p>`
+  },
   thesis: {
+    default: {
     title: 'Thesis — why own this at all?',
     body: `<p><strong>What's being asked.</strong> In one paragraph, the actual reason this belongs in your portfolio. Not "it's a great company" — the specific, falsifiable claim about why <em>this business</em> will do well <em>from here</em>.</p>
 <p><strong>Why it matters.</strong> The thesis is the thing everything else is testing. Without it written down, you can't tell later whether you were right, wrong, or just lucky — and you can't notice when the reason you bought has quietly stopped being true. A vague thesis ("AI is the future") can't be checked against reality; a specific one ("this company sells the picks-and-shovels everyone in AI must buy, and switching away is expensive") can.</p>
 <p><strong>How to answer usefully.</strong> Force it to be specific and disprovable. Good thesis statements name a mechanism (why does the advantage exist?) and an expectation (what should happen if you're right?). A useful test: if you can't write it, that's the answer — you don't have a thesis yet, you have a vibe. Another: would a skeptic understand exactly what you're betting on, and what would prove you wrong?</p>`
+    },
+    etf: {
+    title: 'Why this ETF — what exposure are you buying?',
+    body: `<p><strong>What's being asked.</strong> The specific exposure this exchange-traded fund (ETF) gives you, and why you want it. Not "tech is going up" — the particular slice of the market you're buying and the reason owning it as a <em>basket</em> beats either owning the individual names or not bothering at all.</p>
+<p><strong>Why it matters.</strong> With an ETF the thesis question splits in two, and people usually only answer the first. (1) Do I want this <em>exposure</em>? — the theme, sector, or region. (2) Is <em>this fund</em> the right way to get it? — versus a cheaper/broader competitor, versus buying the top holdings directly, versus a different methodology. A vague answer ("I want AI exposure") doesn't tell you whether this specific fund delivers it or just bundles a few mega-caps you could buy yourself for free. The thesis has to justify the <em>wrapper</em>, not just the theme.</p>
+<p><strong>How to answer usefully.</strong> Name the exposure precisely and say why the fund is the right vehicle for it. Strong ETF theses tend to lean on what a fund does that you can't easily do yourself: genuine breadth across a theme (not just the obvious giants), access to a market that's awkward to reach directly, or a rules-based discipline you want enforced. <strong>The test that catches weak ones:</strong> could you replicate most of this fund by buying its top 3–4 holdings — names you may already own? If yes, the thesis needs to explain what the rest of the basket and the structure are adding, or the honest answer is you don't need the fund. Tie it to the concentration and overlap fields below: those are where this thesis gets stress-tested.</p>`
+    }
   },
   moat: {
     title: 'Moat / durable advantage (your read)',
@@ -5296,10 +5348,18 @@ const QR_EXPLAINERS = {
 <p><strong>How to answer usefully.</strong> Don't just restate a multiple — interpret it. "P/E is 33" is a fact; "33x is high, and it only makes sense if the 50% growth forecast actually holds, which I'm not sure about" is a sanity-check. Name what the current price is <em>implicitly assuming</em> about the future, and ask whether those assumptions are reasonable. <strong>The discipline:</strong> if your answer is "fairly valued," push yourself to say <em>by what framework</em> — anchored on what? A sanity-check that rests on a single metric (especially a forecast-dependent one like PEG) is thin. The strongest version names the price, names what the price requires to be true, and judges whether that's plausible.</p>`
   },
   exitIf: {
+    default: {
     title: 'Exit if…',
     body: `<p><strong>What's being asked.</strong> A pre-commitment, written <em>now</em> while you're calm and rational, to the specific conditions that would tell you the thesis is broken and it's time to sell.</p>
 <p><strong>Why it matters.</strong> This is behavioral armor. Once you own something, you get emotionally attached, you rationalize bad news, and you move the goalposts ("I'll sell when it recovers"). Deciding your exit conditions <em>before</em> you're invested — before the emotion and the sunk-cost feeling kick in — is one of the few reliable defenses against your own future biases. It converts selling from an emotional decision into a mechanical one.</p>
 <p><strong>How to answer usefully.</strong> Make it <em>specific and observable</em>, not vague. "If it goes down a lot" is useless — how much, and so what? The strongest exit conditions are tied to the <em>thesis breaking</em>, not just the price moving: "if gross margins compress for three straight quarters," "if the company loses its largest customer," "if revenue growth falls below X%." <strong>The discipline that's easy to miss:</strong> prefer <em>leading</em> signals over <em>lagging</em> ones. "Exit if the company can no longer compete" is true but useless — by the time that's obvious, the damage is done and the stock has already fallen. Better: name the <em>early</em> observable signs that would precede the competitive loss, so you can act before the crowd. An exit condition you can only confirm in hindsight offers no protection.</p>`
+    },
+    etf: {
+    title: 'Exit if…',
+    body: `<p><strong>What's being asked.</strong> A pre-commitment, written <em>now</em>, to the conditions that would make you sell this fund — written while you're clear-headed, before you're holding it and inclined to rationalize.</p>
+<p><strong>Why it matters.</strong> The behavioral logic is the same as for a stock — you're building a defense against your own future biases. But the <em>triggers</em> are different for a fund, and that's the part worth thinking through: an ETF doesn't have earnings or a moat to break, so "the thesis broke" means something else. It usually means either the <em>exposure stopped being what you wanted</em>, or the <em>fund stopped being a good way to get it</em>.</p>
+<p><strong>How to answer usefully.</strong> Make the conditions specific and observable, and aim them at the things that actually go wrong with funds rather than borrowing stock-style triggers. Fund-appropriate exits include: the <em>theme</em> itself stops being something you want exposure to (your top-level reason changed); a materially <em>cheaper or better</em> competitor for the same exposure appears; AUM shrinks toward closure territory or the issuer signals it's de-prioritizing the fund; the methodology drifts or the fund becomes so concentrated it's just a few names you could hold directly; or it's <em>tracking error</em> — the fund persistently lags the index it's supposed to follow. <strong>The instinct to resist:</strong> don't write "exit if it drops 20%" — for a broad fund that's often just the market doing market things, not a broken thesis, and a price-only rule will whipsaw you out of exactly the holdings you bought for the long haul. Tie the exit to the exposure or the wrapper failing, not to ordinary volatility.</p>`
+    }
   },
   risks: {
     title: 'Key risks / what could go wrong',
@@ -5310,7 +5370,11 @@ const QR_EXPLAINERS = {
 };
 
 function showQrExplainer(key) {
-  const e = QR_EXPLAINERS[key];
+  let e = QR_EXPLAINERS[key];
+  if (!e) return;
+  // Type-aware entries: if the entry has no `.body`, it's a {default, etf, ...} branch
+  // keyed by qrType (the current Stock/ETF form mode). Falls back to `default`.
+  if (e && !e.body) e = e[qrType] || e.default;
   if (!e) return;
   let overlay = document.getElementById('qr-explainer-overlay');
   if (!overlay) {
@@ -5338,7 +5402,8 @@ function closeQrExplainer() {
 function showQrLocation(key) {
   const loc = QR_LOCATIONS[key];
   if (!loc) return;
-  const exp = QR_EXPLAINERS[key];
+  let exp = QR_EXPLAINERS[key];
+  if (exp && !exp.body) exp = exp[qrType] || exp.default;
   const title = exp ? exp.title : key;
   const img = QR_PANELS[loc.panel];
   let overlay = document.getElementById('qr-location-overlay');
@@ -5391,9 +5456,9 @@ const QR_FIELDS = {
     { key: 'risks',       label: 'Key risks / what could go wrong',              kind: 'textarea', hint: 'Include things like customer concentration, elevated short interest, regulatory or single-product dependence.' },
   ],
   etf: [
-    { key: 'thesis',      label: 'Why this ETF — what exposure are you buying?', kind: 'textarea' },
+    { key: 'thesis',      label: 'Why this exchange-traded fund (ETF) — what exposure are you buying?', kind: 'textarea' },
     { key: 'expense',     label: 'Expense ratio %',                              kind: 'number',   hint: 'Below ~0.20% is cheap for broad; thematic runs higher' },
-    { key: 'aum',         label: 'AUM ($M)',                                     kind: 'number',   hint: 'Small AUM \u2192 closure / liquidity risk' },
+    { key: 'aum',         label: 'Assets Under Management (AUM) ($M)',            kind: 'number',   hint: 'Under ~$50M (value of 50) \u2192 scrutinize for closure/liquidity risk; issuer strength matters as much as the number' },
     { key: 'avgVolume',   label: 'Avg daily volume',                             kind: 'text',     hint: 'Thin volume \u2192 wide spreads' },
     { key: 'holdingsTop', label: 'Top 5\u201310 holdings',                       kind: 'textarea', hint: 'Paste tickers (e.g. \u201cNVDA 22%, MU 4.5%\u201d), not company names. Then use \u201cCheck holdings overlap\u201d below to match against your book.' },
     { key: 'concentration', label: 'Top-10 concentration %',                     kind: 'number',   hint: 'High % \u2192 you\u2019re buying a few names, not the theme' },
