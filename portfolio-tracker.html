@@ -6352,6 +6352,10 @@ async function runQrAiAnalysis(id) {
 
     analysisText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
     if (!analysisText) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
+    // Anthropic sets stop_reason='max_tokens' when output hit the worker's MAX_TOKENS cap
+    // (i.e. the analysis was cut off mid-thought). Surface this rather than showing a
+    // silently-truncated response. The worker passes the raw API JSON through, so it's here.
+    var aiTruncated = (data.stop_reason === 'max_tokens');
   } catch (err) {
     const info = aiErrorMessage(err);
     out.innerHTML = `<div style="border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:${info.color};line-height:1.5">
@@ -6364,11 +6368,16 @@ async function runQrAiAnalysis(id) {
   }
 
   const esc2 = s => esc(s).replace(/\n/g, '<br>');
+  const truncBanner = (typeof aiTruncated !== 'undefined' && aiTruncated) ? `
+      <div style="font-size:9px;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:6px 8px;margin-bottom:8px;line-height:1.45">
+        ⚠ <strong>Output was cut off at the length limit</strong> — the analysis below is incomplete (the model hit the worker's MAX_TOKENS cap). To get the full output, raise MAX_TOKENS in the Anthropic worker and redeploy it, then re-run.
+      </div>` : '';
   out.innerHTML = `
     <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-tertiary)">
       <div style="font-size:8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;border-bottom:1px solid var(--color-border-tertiary);padding-bottom:6px">
         ⚠ AI-generated reasoning — sounds confident regardless of accuracy. Argues both sides by design. Not a recommendation.
       </div>
+      ${truncBanner}
       <div style="font-size:11px;color:var(--color-text-primary);line-height:1.55">${esc2(analysisText)}</div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
         <div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px">Now push back on it (this is the point):</div>
@@ -6384,6 +6393,7 @@ async function runQrAiAnalysis(id) {
   // Cache the analysis text on the candidate (so reopening shows it without a re-call).
   c.aiAnalysis = analysisText;
   c.aiAnalysisAt = new Date().toISOString();
+  c.aiTruncated = (typeof aiTruncated !== 'undefined' && aiTruncated);
   scheduleSave();
 }
 
