@@ -6052,6 +6052,56 @@ function qrCountFilled(candidate) {
   return { filled, blank, total: fields.length };
 }
 
+// Build the candidate's REALIZED track-record context for the AI prompt.
+// Philosophy (per user): sample SIZE is itself information, not a gate. A thin record
+// isn't "noise to discard" — it's a different KIND of signal (anecdote, distribution,
+// gaps) than a thick one (a base rate). This returns honest, sample-scaled facts and
+// lets the prompt instruct the AI to scale its CLAIM to what the sample supports.
+// Grounded in existing computed functions (calcThemeAlpha, closedHoldingDays); no invented stats.
+function qrTrackRecordContext(candidate) {
+  const closed = positions.filter(p => p.closed && p.ticker);
+  const facts = [];
+  const totalClosed = closed.length;
+  if (totalClosed === 0) {
+    facts.push(`Realized track record: 0 closed positions. You have NO completed trades to learn from yet — every judgment here is untested by your own history. Treat the absence itself as relevant (no demonstrated picking edge either way).`);
+    return facts;
+  }
+  // Sample-size band — drives how strong a claim the AI may make.
+  const band = totalClosed < 5 ? 'ANECDOTE-level (too few to compute a rate; individual stories only)'
+    : totalClosed < 15 ? 'TENDENCY-level (suggestive, not statistically firm)'
+    : totalClosed < 40 ? 'EMERGING base-rate (a real pattern is forming)'
+    : 'BASE-RATE-level (statistically meaningful)';
+  facts.push(`Realized track record: ${totalClosed} closed position(s) total — ${band}.`);
+
+  // Distribution across sleeves and themes (gaps are signal).
+  const bySleeve = {}, byTheme = {};
+  closed.forEach(p => { const s = p.sleeve || '(untagged)'; bySleeve[s] = (bySleeve[s]||0)+1;
+                        const t = p.theme || '(untagged)'; byTheme[t] = (byTheme[t]||0)+1; });
+  facts.push(`Closed by sleeve: ${Object.entries(bySleeve).map(([k,v])=>`${k} ${v}`).join(', ')}. By theme: ${Object.entries(byTheme).map(([k,v])=>`${k} ${v}`).join(', ')}.`);
+
+  // Relevance to THIS candidate: do you have realized experience in its sleeve / theme?
+  if (candidate.sleeve) {
+    const n = bySleeve[candidate.sleeve] || 0;
+    facts.push(n === 0
+      ? `In this candidate's sleeve ("${candidate.sleeve}"): you have NEVER closed a position — zero realized experience exiting this sleeve. That gap is itself worth weighing.`
+      : `In this candidate's sleeve ("${candidate.sleeve}"): ${n} closed — your realized experience here is ${n<3?'minimal (anecdotes)':n<8?'limited':'moderate'}.`);
+  }
+  if (candidate.theme) {
+    const n = byTheme[candidate.theme] || 0;
+    // theme-beat among closed positions in this theme (where computable)
+    const inTheme = closed.filter(p => p.theme === candidate.theme).map(p => calcThemeAlpha(p)).filter(Boolean);
+    const beat = inTheme.filter(a => a.themeAlphaPct > 0).length;
+    if (n === 0) {
+      facts.push(`In this candidate's theme ("${candidate.theme}"): NO closed positions — you have no realized read on whether your picks in this theme beat just buying the sector. Cannot mirror; note the absence.`);
+    } else if (inTheme.length === 0) {
+      facts.push(`In this candidate's theme ("${candidate.theme}"): ${n} closed, but none have computable theme-relative return (missing benchmark data) — no usable mirror here.`);
+    } else {
+      facts.push(`In this candidate's theme ("${candidate.theme}"): of ${inTheme.length} closed position(s) with data, you beat the theme benchmark ${beat}/${inTheme.length} time(s). ${rateVerdict(beat, inTheme.length).text}. ${inTheme.length<5?'ANECDOTE only — do NOT treat as a rate; these are individual outcomes, not a demonstrated edge.':''}`);
+    }
+  }
+  return facts;
+}
+
 function buildQrAiPrompt(candidate) {
   const f = candidate.fields || {};
   const fields = QR_FIELDS[candidate.type] || [];
@@ -6072,6 +6122,8 @@ function buildQrAiPrompt(candidate) {
     const soakTxt = soak ? ` Soak period ${soak}d (alpha treated as noise before then).` : '';
     computed.push(`Sleeve "${candidate.sleeve}" — ${SLEEVE_PURPOSE[candidate.sleeve]}${band}${soakTxt}`);
   }
+  // Realized track-record context (sample-size-aware; gaps are signal too).
+  qrTrackRecordContext(candidate).forEach(t => computed.push(t));
   let overlaps = [];
   if (candidate.cachedHoldings && Array.isArray(candidate.cachedHoldings.parsed)) overlaps = computeHoldingsOverlap(candidate.cachedHoldings.parsed);
   else if (f.holdingsTop) { const r = parseHoldings(f.holdingsTop); overlaps = computeHoldingsOverlap(r.parsed); }
@@ -6102,6 +6154,8 @@ Rules:
 - Where the user's own input is thin or blank, name that as a limit on the analysis rather than filling it in.
 - USE THE PORTFOLIO CONTEXT, don't just restate it. If a "Current [theme] exposure" fact is present, explicitly weigh the thesis against it: does the user's thesis treat this as fresh exposure when they're already concentrated in the theme? A strong quality case for a name you're already heavy in is a CONCENTRATION decision, not just a quality one — surface that tension if it exists.
 - JUDGE AGAINST THE SLEEVE'S PURPOSE, not a generic yardstick. If a sleeve fact is present, assess whether the candidate fits that sleeve's stated objective, and flag a mismatch. Examples: a "Quality" candidate whose only case is a near-term catalyst (that's thesis-play reasoning, not durability); a "Thesis Plays" candidate with no articulated thesis (the sleeve's whole premise is missing); a "Portfolio Balance Plays" candidate being argued on growth/alpha (a category error — PBP is structural, judged on balance not outperformance). If the candidate fits its sleeve cleanly, say so briefly and move on.
+- USE THE REALIZED TRACK RECORD AS A MIRROR, scaled to its sample. The track-record facts describe the user's OWN closed trades. Sample size is information, not a gate — scale your CLAIM to it: at ANECDOTE level (few closes) you may reference specific outcomes and gaps but must NOT state or imply a win-rate, edge, or "you tend to" pattern; at TENDENCY level, you may note a soft lean, hedged; only at BASE-RATE level may you speak of a demonstrated edge. CRUCIALLY: treat DISTRIBUTION and GAPS as their own signal — e.g. "you've never closed a position in this sleeve" or "no realized trades in this theme" is a real, statable fact even at n=0, because it means this judgment is untested by your history. Never discard a thin record as meaningless; never inflate it into a base rate. Where the record is relevant, surface it in CASE FOR/AGAINST or WHAT'S ABSENT (e.g. "your thesis assumes stock-picking skill in a theme where you have no closed trades to confirm it").
+- CHECK TIME-HORIZON COHERENCE. The sleeve implies a holding horizon (e.g. Quality = held past ~1yr, judged on durability; Thesis Plays = conviction bet; PBP = ~3yr structural). Compare that to the user's OWN thesis and exit-if language: if a long-horizon sleeve holds a candidate whose thesis or exit condition is short-horizon (a near-term catalyst, a price-pop exit), that's an internal contradiction worth flagging — they may have mis-sleeved it, or the thesis doesn't match the bucket. Only raise this if the contradiction is actually present in their inputs.
 - Be specific to THIS candidate using THEIR inputs — no generic boilerplate.
 - Keep each section tight.
 
