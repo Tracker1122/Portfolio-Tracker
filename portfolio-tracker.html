@@ -2132,6 +2132,7 @@ let spxLive = null;
 let spxLiveDate = null;
 let polygonKey = '';
 let avWorkerUrl = ''; // Cloudflare worker base URL that proxies Alpha Vantage ETF_PROFILE (key stays server-side)
+let aiWorkerUrl = ''; // Cloudflare worker base URL that proxies the Anthropic Messages API (key stays server-side; CORS fix)
 let saveTimeout = null;
 let cashBuckets = { Taxable: 0, IRA: 0 };
 let cashLedger = [];
@@ -5282,6 +5283,13 @@ function saveAvWorkerUrl(u) {
   avWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
   try { localStorage.setItem('av_worker_url', avWorkerUrl); } catch(e) {}
 }
+function loadAiWorkerUrl() {
+  try { const u = localStorage.getItem('ai_worker_url'); if (u) aiWorkerUrl = u; } catch(e) {}
+}
+function saveAiWorkerUrl(u) {
+  aiWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
+  try { localStorage.setItem('ai_worker_url', aiWorkerUrl); } catch(e) {}
+}
 
 // Normalize an Alpha Vantage ETF_PROFILE response into the common shape.
 // Detects the rate-limit "Information"/"Note" message and surfaces it distinctly.
@@ -5763,6 +5771,7 @@ function startQrAiAnalysis(id) {
   if (!c) return;
   const out = document.getElementById('qr-ai-' + id);
   if (!out) return;
+  if (!aiWorkerUrl) loadAiWorkerUrl();
   const { filled, blank, total } = qrCountFilled(c);
   const thin = filled.length < Math.ceil(total / 2);
   out.innerHTML = `
@@ -5775,9 +5784,94 @@ function startQrAiAnalysis(id) {
       <div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">
         What follows is AI-generated reasoning, not fact. It argues both sides by design and will sound authoritative whether or not it's right. You weigh it; it does not decide.
       </div>
+      <details style="margin-bottom:8px"${aiWorkerUrl ? '' : ' open'}>
+        <summary style="font-size:8px;color:var(--color-text-tertiary);cursor:pointer">AI worker URL ${aiWorkerUrl ? '✓ set' : '— not set (required)'}</summary>
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <input id="qr-ai-worker-url" type="text" value="${esc(aiWorkerUrl)}" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:180px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px">
+          <button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById('qr-ai-worker-url').value); startQrAiAnalysis('${id}')" style="font-size:9px">Save</button>
+        </div>
+      </details>
       <button class="btn btn-sm btn-primary" onclick="runQrAiAnalysis('${id}')" style="font-size:10px">I understand — generate for/against/gaps</button>
       <button class="btn btn-sm" onclick="document.getElementById('qr-ai-${id}').innerHTML=''" style="font-size:10px">Cancel</button>
     </div>`;
+}
+
+// Map an Anthropic/worker failure to a category. We key primarily on the error
+// MESSAGE/TYPE, not just HTTP status, because Anthropic returns 400 for an
+// out-of-credit condition (not the more logical 402/429). See error reference.
+function classifyAiError(status, type, msg) {
+  const m = (msg || '').toLowerCase();
+  const t = (type || '').toLowerCase();
+  if (t === 'authentication_error' || status === 401) return 'auth';
+  if (t === 'permission_error' || status === 403) return 'permission';
+  // Out-of-credit: Anthropic sends 400 invalid_request_error w/ "credit balance is too low".
+  if (m.includes('credit balance') || m.includes('credit_balance') || t === 'billing_error') return 'credit';
+  if (status === 402) return 'billing_or_ratelimit'; // 402 can be credit OR (on some plans) rate-limit
+  if (t === 'rate_limit_error' || status === 429) return 'ratelimit';
+  if (t === 'overloaded_error' || status === 529) return 'overloaded';
+  if (status === 404) return 'worker_url';   // worker reachable but route/URL wrong
+  if (status >= 500 && status < 600) return 'server';
+  if (t === 'invalid_request_error' || status === 400) return 'bad_request';
+  return 'unknown';
+}
+
+// Produce a distinct, honestly-worded message per category. Wording reports what
+// the API SAID (e.g. "Anthropic reports...") rather than asserting it as fact,
+// because credit_balance_too_low has been observed to fire even on funded accounts.
+function aiErrorMessage(err) {
+  const danger = 'var(--color-text-danger)';
+  const amber = '#fbbf24';
+  const raw = err.message || '';
+  switch (err.aiKind) {
+    case 'credit':
+      return { color: amber, title: '💳 Out of API credit (most likely)',
+        detail: "Anthropic reports your credit balance is too low to run this. Add credit at console.anthropic.com → Billing, then try again. (If your balance shows funded, Anthropic has had cases where this fires anyway — wait a few minutes or check the console.)",
+        raw };
+    case 'billing_or_ratelimit':
+      return { color: amber, title: '💳 Billing or rate limit (HTTP 402)',
+        detail: "This usually means out of credit, but on some plan types a 402 is actually a temporary rate limit. Check your balance at console.anthropic.com; if it's funded, wait a minute and retry.",
+        raw };
+    case 'auth':
+      return { color: danger, title: '🔑 API key problem — NOT a credit issue',
+        detail: "The worker's ANTHROPIC_KEY secret is missing, wrong, or revoked. Check the secret in your Cloudflare worker settings. This is not about money.",
+        raw };
+    case 'permission':
+      return { color: danger, title: '🚫 Permission denied — NOT a credit issue',
+        detail: "The key is valid but not allowed to use this model/endpoint (or the org is disabled). Check the key's permissions in the Anthropic console.",
+        raw };
+    case 'ratelimit':
+      return { color: amber, title: '⏳ Rate limited — NOT out of credit',
+        detail: "Too many requests too fast. Your credit is fine; just wait a bit and retry.",
+        raw };
+    case 'overloaded':
+      return { color: amber, title: '🌐 Anthropic temporarily overloaded — NOT your problem',
+        detail: "Server-side capacity (HTTP 529), unrelated to your credit or key. Retry shortly.",
+        raw };
+    case 'network':
+      return { color: danger, title: "📡 Couldn't reach the worker — NOT a credit issue",
+        detail: "The request never got to Cloudflare (offline, wrong worker URL, or CORS). Confirm the AI worker URL is correct and the worker is deployed.",
+        raw };
+    case 'worker_url':
+      return { color: danger, title: '🔗 Worker URL wrong — NOT a credit issue',
+        detail: "Reached Cloudflare but got a 404. Double-check the worker URL you saved (no extra path).",
+        raw };
+    case 'server':
+      return { color: amber, title: '🔧 Server error (worker or Anthropic) — NOT necessarily credit',
+        detail: "A 5xx from the worker or upstream. If it persists, check the worker logs in Cloudflare.",
+        raw };
+    case 'bad_request':
+      return { color: danger, title: '⚠ Request rejected — NOT a credit issue',
+        detail: "Anthropic rejected the request as malformed (often a bad/deprecated model string in the worker, or a too-long prompt). Check the MODEL value in the worker.",
+        raw };
+    case 'empty':
+      return { color: amber, title: '🪫 Model returned nothing',
+        detail: "The call succeeded but came back empty. Credit and key are fine. Try again.",
+        raw: '' };
+    default:
+      return { color: danger, title: 'AI analysis unavailable',
+        detail: "Unclassified failure — see the raw message below. It may or may not be credit-related.",
+        raw };
+  }
 }
 
 // Stage 2: call the model, render the summary + the interactive "where's this wrong?" friction.
@@ -5790,23 +5884,51 @@ async function runQrAiAnalysis(id) {
 
   const prompt = buildQrAiPrompt(c);
   let analysisText = '';
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  if (!aiWorkerUrl) {
+    out.innerHTML = `<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">
+      No AI worker URL set. The Anthropic API can't be called directly from this deployment (CORS), so analysis routes through your Cloudflare worker.<br>
+      <span style="color:var(--color-text-tertiary)">Click "Analyze with AI" again and paste your worker URL in the "AI worker URL" box.</span>
+    </div>`;
+    return;
+  }
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1200,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
-    const data = await resp.json();
+    let resp;
+    try {
+      resp = await fetch(aiWorkerUrl + '/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+    } catch (netErr) {
+      // fetch() itself rejected — never reached the worker (DNS, CORS, offline, bad URL).
+      const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
+    }
+
+    let data = {};
+    try { data = await resp.json(); } catch (_) { /* non-JSON body; handled below via status */ }
+
+    // Anthropic returns its error as { error: { type, message } }, passed through by the worker.
+    // The worker's own guard errors are { error: "string" }. Capture status + type to classify.
+    if (!resp.ok || data.error) {
+      const errObj = (data && typeof data.error === 'object') ? data.error : null;
+      const msg = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
+      const type = errObj ? (errObj.type || '') : '';
+      const e = new Error(msg || ('HTTP ' + resp.status));
+      e.aiKind = classifyAiError(resp.status, type, msg);
+      e.httpStatus = resp.status;
+      throw e;
+    }
+
     analysisText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-    if (!analysisText) throw new Error('Empty response');
+    if (!analysisText) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
   } catch (err) {
-    out.innerHTML = `<div style="border:1px solid var(--color-text-danger);border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-danger);line-height:1.5">
-      AI analysis unavailable: ${esc(err.message || 'request failed')}.<br>
-      <span style="color:var(--color-text-tertiary)">This can happen if the API isn't reachable from this deployment. The checkable observations above don't need it — they're computed locally.</span>
+    const info = aiErrorMessage(err);
+    out.innerHTML = `<div style="border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:${info.color};line-height:1.5">
+      <strong>${info.title}</strong><br>
+      <span style="color:var(--color-text-secondary)">${esc(info.detail)}</span>
+      ${info.raw ? `<br><span style="color:var(--color-text-tertiary);font-size:9px">Raw: ${esc(info.raw)}${err.httpStatus ? ' (HTTP ' + err.httpStatus + ')' : ''}</span>` : ''}
+      <br><span style="color:var(--color-text-tertiary);font-size:9px;font-style:italic">The checkable observations above don't need the AI — they're computed locally.</span>
     </div>`;
     return;
   }
