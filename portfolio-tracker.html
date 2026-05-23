@@ -5169,6 +5169,18 @@ const QR_EXPLAINERS = {
 <p><strong>How to read it.</strong> Above ~15% is strong; above ~20% is excellent; numbers like NVDA's 100%+ are exceptional and worth a second look — not because they're fake, but because they're hard to <em>sustain</em>. The key question with very high ROIC is durability: can the business keep earning this, or will competition compete it away? <strong>One watch-out:</strong> ROIC can be flattered by accounting — an asset-light business or one that's bought back lots of stock can show a sky-high ROIC that reflects the capital structure as much as the underlying business quality. High ROIC is a strong signal, but pair it with the moat question (what stops competitors from copying this?).</p>`
   },
 
+  cashFlowMargin: {
+    title: 'Cash Flow Margin %',
+    body: `<p><strong>What it is.</strong> Of every $100 in sales, how much turns into actual operating cash flow — real money the business generates — rather than just accounting profit. It's the cash-based cousin of net margin.</p>
+<p><strong>Why it matters for quality.</strong> This is the number that makes the "do earnings convert to cash?" question concrete instead of a guess. Net margin can be inflated by accounting choices; cash flow is much harder to fake. A business with a strong cash flow margin is generating spendable money, not just paper profit — and spendable money is what funds dividends, buybacks, R&D, and survival in a downturn.</p>
+<p><strong>How to read it.</strong> The key move is to <em>compare it to net margin</em>. If cash flow margin is roughly in line with (or above) net margin, earnings are converting to cash well — high earnings quality. If cash flow margin is persistently and significantly <em>below</em> net margin, that's the warning sign: reported profits aren't fully materializing as cash, which can signal aggressive revenue recognition, customers who don't pay, or capital being consumed just to stand still. <strong>Watch-out:</strong> a single year can be noisy (timing of payments, one-off working-capital swings); the signal is in whether the two margins track each other <em>over time</em>, not in one snapshot.</p>`
+  },
+  revenueTtm: {
+    title: 'Revenue TTM ($B)',
+    body: `<p><strong>What it is.</strong> Total sales (the top line) over the trailing twelve months, in billions of dollars. "TTM" just means the most recent four quarters added up, so it's always current rather than tied to a calendar year.</p>
+<p><strong>Why it matters for quality.</strong> It's the scale anchor. Growth rates, margins, and valuation multiples all mean something different at $250B of revenue than at $250M — a 50% growth forecast is far easier to believe for a small company than a giant one, simply because the giant has to add enormous absolute dollars to grow the same percentage. Knowing the absolute size is the context that makes the percentages interpretable.</p>
+<p><strong>How to read it.</strong> On its own it's just a size marker — there's no "good" or "bad" revenue number. Its real use is as a sanity check on the growth story: pair it with the growth-forecast field and ask whether the implied <em>absolute</em> dollar growth is plausible. A company at $250B revenue forecast to grow EPS 50% a year for years is making an extraordinary claim about adding hundreds of billions in sales — the bigger the base, the more skeptical that should make you. <strong>Practical note:</strong> this field also exists so the analysis has the real revenue figure on hand rather than estimating it.</p>`
+  },
   thesis: {
     title: 'Thesis — why own this at all?',
     body: `<p><strong>What's being asked.</strong> In one paragraph, the actual reason this belongs in your portfolio. Not "it's a great company" — the specific, falsifiable claim about why <em>this business</em> will do well <em>from here</em>.</p>
@@ -5300,15 +5312,17 @@ const QR_FIELDS = {
     { key: 'moatRating',  label: 'Morningstar moat rating',                       kind: 'select',   options: ['', 'None', 'Narrow', 'Wide'], hint: 'Schwab → Ratings & Reports → Morningstar. Independent cross-check on your own read above. Wide = durable edge.' },
     { key: 'peTrailing',  label: 'P/E trailing (last 4Q)',                        kind: 'number',   hint: 'Schwab: \u201cP/E last 4Q\u201d / \u201cPrice/earnings (TTM)\u201d. Compare to the S&P figure shown alongside it.' },
     { key: 'peForward',   label: 'P/E forward',                                   kind: 'number',   hint: 'Schwab: \u201cP/E forecast EPS\u201d / \u201cForward P/E\u201d. Lower than trailing means earnings expected to grow.' },
-    { key: 'peg',         label: 'PEG ratio',                                     kind: 'number',   hint: 'Schwab: Company Profile. P/E relative to growth. Under ~1 = cheap for the growth; over ~2 = pricey. The key valuation-vs-growth check.' },
-    { key: 'salesGrowth', label: 'Sales growth % (1yr)',                          kind: 'number',   hint: 'Schwab: \u201c1 year sales growth\u201d. Is the top line actually growing?' },
+    { key: 'peg',         label: 'PEG ratio',                                     kind: 'number',   hint: 'Schwab: historical-earnings panel ("Price to Earnings/Growth (PEG)"), or Peers & Ratios → Valuation tab. P/E relative to growth. Under ~1 = cheap for the growth; over ~2 = pricey.' },
+    { key: 'revenueTtm',  label: 'Revenue TTM ($B)',                              kind: 'number',   hint: 'Total sales over the trailing 12 months, in billions. Scale context — and it stops the AI guessing the figure.' },
+    { key: 'salesGrowth', label: 'Sales growth % (1yr)',                          kind: 'number',   hint: 'Schwab: "1 year sales growth". Is the top line actually growing?' },
     { key: 'epsGrowthFwd',label: 'EPS growth % (3-5yr forecast)',                 kind: 'number',   hint: 'Schwab: Peers & Ratios → \u201cEPS Growth Forecast 3-5 Year\u201d. Forward earnings expectation — anchors the PEG.' },
     { key: 'grossMargin', label: 'Gross margin %',                                kind: 'number',   hint: 'Schwab: Peers → \u201cGross margin\u201d. High + stable = pricing power. Harder to fake than net margin.' },
     { key: 'netMargin',   label: 'Net margin %',                                  kind: 'number',   hint: 'Schwab: \u201cNet Profit Margin\u201d. What actually drops to the bottom line.' },
+    { key: 'cashFlowMargin', label: 'Cash flow margin %',                         kind: 'number',   hint: 'Schwab: Peers & Ratios → Profitability tab → "Cash Flow Margin". Compare to net margin: close = earnings convert to cash.' },
     { key: 'roic',        label: 'ROIC %',                                        kind: 'number',   hint: 'Return on invested capital — arguably THE quality metric. Above ~15% is strong; it means the business earns well above its cost of capital.' },
     { key: 'roe',         label: 'ROE %',                                         kind: 'number',   hint: 'Schwab: \u201cReturn on Equity\u201d. Above ~20% is strong — but check it isn\u2019t propped up by heavy debt.' },
     { key: 'debt',        label: 'Long-term debt / equity %',                     kind: 'number',   hint: 'Schwab: Peers → \u201cLong-Term Debt to Equity (%)\u201d (e.g. NVDA \u2248 3.8%). Low (under ~50%) = lightly levered. High debt magnifies risk.' },
-    { key: 'cashConv',    label: 'Cash conversion — do earnings turn into cash?', kind: 'select',   options: ['', 'Yes — FCF tracks earnings', 'Roughly', 'No / unsure — earnings don\u2019t convert'], hint: 'Quality check ratios miss: a high-margin business whose earnings never become real cash is a red flag. Schwab: Peers → Profitability tab for FCF.' },
+    { key: 'cashConv',    label: 'Cash conversion — do earnings turn into cash?', kind: 'select',   options: ['', 'Yes — FCF tracks earnings', 'Roughly', 'No / unsure — earnings don\u2019t convert'], hint: 'Quality check ratios miss: a high-margin business whose earnings never become real cash is a red flag. Schwab: Peers & Ratios → Profitability tab → compare Cash Flow Margin to Net Margin (close = converts well).' },
     { key: 'dilution',    label: 'Share count — rising or falling?',              kind: 'select',   options: ['', 'Falling (buybacks)', 'Flat', 'Rising (dilution / heavy SBC)'], hint: 'Schwab: Share Profile → Shares Outstanding, check vs a year ago. Rising count quietly erodes your per-share value — common in stock-comp-heavy tech.' },
     { key: 'trend',       label: 'Trend — margins/returns up, flat, or down?',    kind: 'select',   options: ['', 'Improving', 'Stable', 'Deteriorating'], hint: 'A snapshot can\u2019t show this — go look at the history. High-and-rising beats high-and-rolling-over. The #1 quality trap is mistaking a peak for a plateau.' },
     { key: 'valuation',   label: 'Valuation sanity-check (your read)',            kind: 'textarea', hint: 'Cheap, fair, or priced for perfection? Why is the price what it is? A great business at a terrible price is still a bad buy.' },
@@ -5808,10 +5822,18 @@ function buildQualityFlags(candidate, holdingsOverlaps) {
   } else {
     // Stock quality observations from the tailored fields.
     const roic = num(f.roic), roe = num(f.roe), gm = num(f.grossMargin), nm = num(f.netMargin);
-    const peg = num(f.peg), debt = num(f.debt);
+    const peg = num(f.peg), debt = num(f.debt), cfm = num(f.cashFlowMargin);
     if (f.roic) flags.push({ level: roic >= 15 ? 'info' : roic > 0 ? 'caution' : 'flag', text: `ROIC ${roic}% — ${roic>=15?'strong; earns well above cost of capital':roic>0?'modest; check it clears its cost of capital':'negative; not creating value on capital'}.` });
     else flags.push({ level: 'caution', text: `ROIC blank — the single best quality metric is unfilled.` });
     if (f.grossMargin && f.netMargin) flags.push({ level: 'info', text: `Margins: ${gm}% gross / ${nm}% net — ${gm>=50?'high gross margin suggests pricing power':'thinner gross margin; less cushion'}.` });
+    // Cash flow margin vs net margin = earnings-quality / cash-conversion read (computed, not judgment)
+    if (f.cashFlowMargin && f.netMargin) {
+      const gap = nm - cfm; // positive gap = cash flow lags earnings
+      const lvl = gap > 15 ? 'flag' : gap > 7 ? 'caution' : 'info';
+      flags.push({ level: lvl, text: `Cash flow margin ${cfm}% vs net margin ${nm}% — ${gap > 15 ? 'cash flow lags earnings markedly; check why profits aren\u2019t converting to cash' : gap > 7 ? 'cash flow runs somewhat below earnings; worth a look' : 'cash flow tracks earnings well; high earnings quality'}.` });
+    } else if (f.cashFlowMargin && !f.netMargin) {
+      flags.push({ level: 'info', text: `Cash flow margin ${cfm}% entered, but net margin blank — fill net margin to judge cash conversion (the comparison is the signal).` });
+    }
     if (f.peg) flags.push({ level: peg <= 1 ? 'info' : peg <= 2 ? 'caution' : 'flag', text: `PEG ${peg} — ${peg<=1?'cheap relative to its growth':peg<=2?'fairly priced for the growth':'expensive even accounting for growth'}.` });
     else if (!f.peTrailing && !f.valuation) flags.push({ level: 'caution', text: `No PEG, P/E, or valuation note — valuation discipline unchecked.` });
     if (f.debt) flags.push({ level: debt <= 50 ? 'info' : debt <= 100 ? 'caution' : 'flag', text: `Debt/equity ${debt}% — ${debt<=50?'lightly levered, durable':debt<=100?'moderate leverage':'high leverage magnifies risk'}.` });
