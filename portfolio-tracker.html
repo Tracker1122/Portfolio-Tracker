@@ -6301,18 +6301,18 @@ function renderQrForm() {
   }).join('');
 
   // Live overlap context (re-rendered on theme change)
-  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal)}</div>`;
+  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal)}</div>`;
 
   wrap.innerHTML = `
     <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:16px;max-width:760px">
       <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
         <div style="flex:1;min-width:120px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Ticker</label>
-          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="var p=document.getElementById('qr-overlap-panel'); var t=document.getElementById('qr-theme'); if(p&&t) p.innerHTML = renderQrOverlap(t.value)" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
+          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="var p=document.getElementById('qr-overlap-panel'); var t=document.getElementById('qr-theme'); if(p&&t) p.innerHTML = renderQrOverlap(t.value, this.value)" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
         </div>
         <div style="flex:1;min-width:140px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Theme</label>
-          <select id="qr-theme" onchange="document.getElementById('qr-overlap-panel').innerHTML = renderQrOverlap(this.value)" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${themeOpts}</select>
+          <select id="qr-theme" onchange="var tk=document.getElementById('qr-ticker'); document.getElementById('qr-overlap-panel').innerHTML = renderQrOverlap(this.value, tk?tk.value:'')" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${themeOpts}</select>
         </div>
         <div style="flex:1;min-width:140px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Sleeve it would join</label>
@@ -6330,11 +6330,16 @@ function renderQrForm() {
   if (qrType === 'etf' && document.getElementById('qr-f-holdingsTop')) renderHoldingsPreview();
 }
 
-function renderQrOverlap(theme) {
+function renderQrOverlap(theme, tickerArg) {
   // Pass-through line: the candidate's own ticker held indirectly inside index/ETF funds.
-  // Read the ticker from the form (panel re-renders on theme change, ticker lives separately).
-  const tkEl = (typeof document !== 'undefined') ? document.getElementById('qr-ticker') : null;
-  const candTicker = tkEl ? (tkEl.value || '').trim().toUpperCase() : '';
+  // On initial render the qr-ticker input doesn't exist in the DOM yet (we're still building the
+  // HTML string that contains it), so prefer an explicitly passed ticker; fall back to the DOM
+  // only for the live oninput/onchange re-renders where the input already exists.
+  let candTicker = (tickerArg || '').trim().toUpperCase();
+  if (!candTicker) {
+    const tkEl = (typeof document !== 'undefined') ? document.getElementById('qr-ticker') : null;
+    candTicker = tkEl ? (tkEl.value || '').trim().toUpperCase() : '';
+  }
   let passThroughHtml = '';
   if (candTicker) {
     const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(candTicker) : [];
@@ -6648,11 +6653,27 @@ function buildQualityFlags(candidate, holdingsOverlaps) {
     flags.push({ level: 'caution', text: `No theme tagged — concentration impact can't be assessed.` });
   }
 
-  // Index look-through: candidate (or its holdings) already owned indirectly via index funds.
+  // Index look-through: candidate already owned indirectly via index funds. ONE consolidated
+  // flag that lands the total (per-fund detail lives in the reframe panel), so this doesn't
+  // spam a separate line per fund.
   if (!isEtf && candidate.ticker) {
-    qrIndexLookthrough(candidate.ticker).forEach(lt => {
-      flags.push({ level: 'info', text: `Index look-through: your ${lt.fund} holding already contains ~$${Math.round(lt.indirectValue).toLocaleString()} of ${lt.ticker} (≈${lt.weightPct}% of ${lt.fund}, approx as of ${lt.asOf}). Your true ${lt.ticker} exposure exceeds your direct position — factor this in before adding.` });
-    });
+    const lts = qrIndexLookthrough(candidate.ticker);
+    if (lts.length) {
+      const embedded = lts.reduce((s, l) => s + l.indirectValue, 0);
+      const candNorm = qrNormTicker(candidate.ticker);
+      const directVal = positions.filter(p => !p.closed && p.ticker && qrNormTicker(p.ticker) === candNorm)
+        .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+      const trueTotal = directVal + embedded;
+      const activeBook = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+      const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+      const spVal = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
+      let cash = 0;
+      try { if (typeof cashBuckets !== 'undefined' && cashBuckets && typeof cashBuckets === 'object') cash = Object.values(cashBuckets).reduce((s,v)=>s+(parseFloat(v)||0),0); } catch(e){}
+      const grandTotal = activeBook + spVal + cash;
+      const pctTotal = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
+      const fundList = lts.map(l => `${l.fund} ~$${Math.round(l.indirectValue).toLocaleString()}`).join(', ');
+      flags.push({ level: 'caution', text: `Index look-through — total ${candidate.ticker} you hold: ~$${Math.round(trueTotal).toLocaleString()} (direct $${Math.round(directVal).toLocaleString()} + ~$${Math.round(embedded).toLocaleString()} inside funds: ${fundList}). That's ~${pctTotal.toFixed(1)}% of your $${Math.round(grandTotal).toLocaleString()} portfolio — your true exposure, well above the direct position. Approximate (fund weights drift).` });
+    }
   }
   if (isEtf) {
     const r = parseHoldings(f.holdingsTop || '');
