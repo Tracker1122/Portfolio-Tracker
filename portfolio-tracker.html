@@ -923,6 +923,8 @@
     width: 40px; height: 14px; border-radius: 7px;
     background: #666; cursor: grab; border: 2px solid #444;
   }
+  .ts-btn:hover { background: var(--color-border-tertiary) !important; color: var(--color-text-primary) !important; }
+  .ts-btn:active { transform: translateY(1px); }
 </style>
 </head>
 <body>
@@ -940,6 +942,12 @@
     <button class="btn btn-sm" onclick="openCSVImport()" title="Bulk import positions from a brokerage CSV (Schwab transaction history, etc.)">📄 Upload CSV</button>
     <button class="btn btn-sm" onclick="exportData()" style="margin-right:4px">⬇ Export Data</button>
     <label class="btn btn-sm" style="cursor:pointer;margin-right:4px">⬆ Import Data<input type="file" accept=".json" style="display:none" onchange="importData(this)"></label>
+    <span id="text-size-control" title="Make everything bigger or smaller (your eyes, your rules)" style="display:inline-flex;align-items:center;gap:2px;border:1px solid var(--color-border-tertiary);border-radius:6px;padding:1px 3px;margin-right:4px">
+      <span style="font-size:11px;color:var(--color-text-tertiary);padding:0 4px;user-select:none">A</span>
+      <button class="ts-btn" onclick="stepTextSize(-1)" title="Smaller" style="background:none;border:none;color:var(--color-text-secondary);cursor:pointer;font-size:13px;font-weight:700;line-height:1;padding:3px 7px;border-radius:4px">−</button>
+      <span id="text-size-readout" style="font-size:10px;color:var(--color-text-secondary);min-width:34px;text-align:center;user-select:none">100%</span>
+      <button class="ts-btn" onclick="stepTextSize(1)" title="Bigger" style="background:none;border:none;color:var(--color-text-secondary);cursor:pointer;font-size:17px;font-weight:700;line-height:1;padding:3px 7px;border-radius:4px">+</button>
+    </span>
   </div>
 </div>
 
@@ -2143,6 +2151,45 @@
 </div>
 
 <script>
+// ─────────────────────────────────────────────
+// Text size (accessibility) — global UI zoom.
+// Scales the whole app via CSS `zoom` on <body>. `zoom` (not transform:scale)
+// because it actually reflows the layout — text rewraps, containers grow — instead
+// of just visually stretching and clipping. Data lives in localStorage and is NOT
+// touched by this; it's purely a render-size preference, persisted separately.
+// Steps are multiplicative so each press feels like an even jump.
+// ─────────────────────────────────────────────
+const TEXT_SIZE_STEPS = [0.85, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0];
+const TEXT_SIZE_KEY = 'portfolio-text-size-v1';
+let textSizeIndex = 1; // default = 1.0 (index into TEXT_SIZE_STEPS)
+function applyTextSize() {
+  const z = TEXT_SIZE_STEPS[textSizeIndex];
+  try { document.body.style.zoom = z; } catch (e) {}
+  const out = document.getElementById('text-size-readout');
+  if (out) out.textContent = Math.round(z * 100) + '%';
+}
+function stepTextSize(dir) {
+  textSizeIndex = Math.max(0, Math.min(TEXT_SIZE_STEPS.length - 1, textSizeIndex + dir));
+  try { localStorage.setItem(TEXT_SIZE_KEY, String(textSizeIndex)); } catch (e) {}
+  applyTextSize();
+}
+function loadTextSize() {
+  try {
+    const raw = localStorage.getItem(TEXT_SIZE_KEY);
+    if (raw !== null) {
+      const i = parseInt(raw, 10);
+      if (!isNaN(i) && i >= 0 && i < TEXT_SIZE_STEPS.length) textSizeIndex = i;
+    }
+  } catch (e) {}
+  applyTextSize();
+}
+// Apply ASAP (before full load) so the page doesn't flash at the wrong size,
+// then again on DOMContentLoaded to populate the readout once the control exists.
+loadTextSize();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', loadTextSize);
+}
+
 // ─────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────
