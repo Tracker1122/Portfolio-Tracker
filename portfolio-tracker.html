@@ -6273,19 +6273,40 @@ function renderDistributionTab() {
   // ── Horizontal bars: one readable row per top name (name · bar · %), sorted desc. ──
   // Bars are scaled to the LARGEST shown name (not to total) so small differences are visible;
   // the % label is always vs. total so the numbers stay honest.
-  const palette = ['#60a5fa','#34d399','#f59e0b','#f472b6','#a78bfa','#38bdf8','#facc15','#fb923c','#c084fc','#4ade80','#fca5a5','#94a3b8'];
+  // COLOR ENCODES SOURCE (stocks-only mode): blue = held directly (active pick), teal = direct +
+  // also inside funds (doubling up), grey = only inside funds (passive index drift you didn't pick).
+  // In funds mode the rows include fund blocks themselves, where "source" isn't a clean 3-way split,
+  // so we fall back to one calm accent color rather than mislabel.
+  const SRC_COLOR = { DIRECT: '#60a5fa', BOTH: '#34d399', VIA: '#94a3b8' };
+  const srcBucket = (sources) => {
+    const keys = Object.keys(sources || {});
+    const direct = keys.includes('Direct');
+    const via = keys.some(k => k.startsWith('via '));
+    if (direct && via) return 'BOTH';
+    if (direct) return 'DIRECT';
+    if (via) return 'VIA';
+    return 'DIRECT'; // lone fallback (e.g. Cash) — treat as a plain accent bar
+  };
   const maxPct = top.length ? pctOf(top[0].value) : 1;
-  const barRows = top.map((r, i) => {
+  const barRows = top.map((r) => {
     const p = pctOf(r.value);
     const w = maxPct > 0 ? (p / maxPct) * 100 : 0;
+    const color = stocksOnly ? SRC_COLOR[srcBucket(r.sources)] : '#60a5fa';
     return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
       <div style="flex:0 0 96px;font-size:12px;font-weight:600;color:var(--color-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(r.display)}">${esc(r.display)}</div>
       <div style="flex:1;background:var(--color-background-secondary);border-radius:3px;height:16px;position:relative;overflow:hidden">
-        <div style="width:${w.toFixed(1)}%;background:${palette[i % palette.length]};height:100%;border-radius:3px"></div>
+        <div style="width:${w.toFixed(1)}%;background:${color};height:100%;border-radius:3px"></div>
       </div>
       <div style="flex:0 0 46px;text-align:right;font-size:12px;color:var(--color-text-secondary)">${p.toFixed(1)}%</div>
     </div>`;
   }).join('');
+
+  // Legend for the source colors — only meaningful in stocks-only mode.
+  const barLegend = stocksOnly ? `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;font-size:11px;color:var(--color-text-secondary)">
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:#60a5fa"></span>Held directly</span>
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:#34d399"></span>Direct + inside funds</span>
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:#94a3b8"></span>Only inside funds (passive)</span>
+  </div>` : '';
 
   const fundsNote = Object.entries(activeFunds).map(([f,info])=>`${esc(f)} (~${fmtDollarWhole(info.value)}, as of ${esc(info.asOf||'?')})`).join(' · ') || 'none yet — paste fund holdings in Quality Review → Index look-through';
 
@@ -6311,6 +6332,7 @@ function renderDistributionTab() {
     <div style="font-size:11px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:12px">${intro}</div>
     ${metricCards}
     <div class="section-heading">${stocksOnly ? 'Top holdings — by company' : 'Top holdings — look-through'}</div>
+    ${barLegend}
     <div style="margin:8px 0 18px">${barRows || '<div style="font-size:11px;color:var(--color-text-tertiary)">No holdings to chart.</div>'}</div>
     <details style="margin-bottom:20px">
       <summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;padding:4px 0">Show all ${rows.length} rows (full table with values + source) ▾</summary>
