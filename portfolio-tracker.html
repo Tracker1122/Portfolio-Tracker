@@ -1147,78 +1147,6 @@
     </div>
     <div id="industry-ref-panel" style="margin:8px 0 12px"></div>
 
-    <!-- Trade Simulator Ribbon -->
-    <div style="margin:10px 0 12px">
-      <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);overflow:hidden">
-        <div style="display:flex;align-items:center;gap:12px;padding:8px 14px;cursor:pointer" onclick="toggleSimulator()">
-          <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-success)">⚡ Simulate a Trade</span>
-          <span id="sim-trade-count" style="font-size:9px;color:var(--color-text-tertiary)"></span>
-          <span id="sim-toggle-arrow" style="font-size:10px;color:var(--color-text-tertiary);margin-left:auto">▸</span>
-        </div>
-        <div id="sim-panel" style="display:none;padding:0 14px 14px">
-
-          <!-- Trade queue -->
-          <div id="sim-trade-list" style="margin-bottom:10px"></div>
-
-          <!-- Add next trade row -->
-          <div id="sim-add-row" style="background:var(--color-background-tertiary);border-radius:var(--border-radius-md);padding:10px;margin-bottom:8px">
-            <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px" id="sim-step-label">Trade 1</div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-              <div>
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Action</div>
-                <select id="sim-action" class="modal-select" style="width:72px" onchange="updateSimAddRow()">
-                  <option value="buy">Buy</option>
-                  <option value="sell">Sell</option>
-                </select>
-              </div>
-              <div id="sim-capital-source-wrap">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Funded by</div>
-                <select id="sim-capital-source" class="modal-select" style="width:120px" onchange="updateSimAddRow()">
-                  <option value="new">New Capital</option>
-                  <option value="cash-taxable">Taxable Cash</option>
-                  <option value="cash-ira">IRA Cash</option>
-                </select>
-              </div>
-              <div id="sim-ticker-wrap">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Ticker</div>
-                <input id="sim-ticker" class="modal-input" type="text" placeholder="e.g. NVDA" style="width:72px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
-              </div>
-              <div id="sim-sell-ticker-wrap" style="display:none">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Ticker</div>
-                <select id="sim-sell-ticker" class="modal-select" style="width:220px" onchange="updateSimAddRow()">
-                  <option value="">— Pick —</option>
-                </select>
-              </div>
-              <div id="sim-proceeds-wrap" style="display:none">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Proceeds go to</div>
-                <select id="sim-proceeds-dest" class="modal-select" style="width:150px">
-                  <option value="reinvest">Reinvesting</option>
-                  <option value="index">Buying Index</option>
-                  <option value="out">Pulling Out</option>
-                  <option value="undecided">Undecided</option>
-                </select>
-              </div>
-              <div id="sim-theme-wrap">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Industry</div>
-                <select id="sim-theme" class="modal-select" style="width:150px">
-                  <option value="">— Industry —</option>
-                </select>
-              </div>
-              <div>
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Amount $</div>
-                <input id="sim-amount" class="modal-input" type="number" min="0" step="100" placeholder="e.g. 10000" style="width:100px">
-              </div>
-              <button id="sim-add-btn" class="btn btn-sm btn-primary" onclick="addSimTrade()" style="margin-bottom:1px">+ Add Trade</button>
-              <button class="btn btn-sm" onclick="clearSimulator()" style="margin-bottom:1px">Clear All</button>
-            </div>
-          </div>
-
-          <div id="sim-result"></div>
-
-        </div>
-      </div>
-    </div>
-
     <!-- Cash Buckets -->
     <div class="section-heading">Undeployed Cash</div>
     <div id="cash-panel" style="margin-bottom:20px">
@@ -1485,12 +1413,90 @@
         oninput="sliderScroll('rebal-table-wrap', this)">
     </div>
 
-    <!-- Tax Profile & Implications -->
-    <div class="section-heading" style="margin-top:28px">Tax Profile</div>
-    <div id="tax-profile-panel" class="tax-profile-panel"></div>
+    <!-- Approaching Long-Term -->
+    <div class="section-heading" style="margin-top:28px">Approaching Long-Term</div>
     <div id="tax-implications-panel" class="tax-implications-panel"></div>
+
+    <!-- Realized Gains Ledger -->
     <div class="section-heading" style="margin-top:24px">Realized Gains Ledger</div>
     <div id="realized-ledger-inline"></div>
+
+    <!-- Simulate a Trade (moved here from the dashboard) -->
+    <div class="section-heading" style="margin-top:28px">Simulate a Trade</div>
+    <div style="margin:6px 0 12px">
+      <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);overflow:hidden">
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 14px;cursor:pointer" onclick="toggleSimulator()">
+          <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-success)">⚡ Simulate a Trade</span>
+          <span id="sim-trade-count" style="font-size:9px;color:var(--color-text-tertiary)"></span>
+          <span id="sim-toggle-arrow" style="font-size:10px;color:var(--color-text-tertiary);margin-left:auto">▸</span>
+        </div>
+        <div id="sim-panel" style="display:none;padding:0 14px 14px">
+
+          <!-- Trade queue -->
+          <div id="sim-trade-list" style="margin-bottom:10px"></div>
+
+          <!-- Add next trade row -->
+          <div id="sim-add-row" style="background:var(--color-background-tertiary);border-radius:var(--border-radius-md);padding:10px;margin-bottom:8px">
+            <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px" id="sim-step-label">Trade 1</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <div>
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Action</div>
+                <select id="sim-action" class="modal-select" style="width:72px" onchange="updateSimAddRow()">
+                  <option value="buy">Buy</option>
+                  <option value="sell">Sell</option>
+                </select>
+              </div>
+              <div id="sim-capital-source-wrap">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Funded by</div>
+                <select id="sim-capital-source" class="modal-select" style="width:120px" onchange="updateSimAddRow()">
+                  <option value="new">New Capital</option>
+                  <option value="cash-taxable">Taxable Cash</option>
+                  <option value="cash-ira">IRA Cash</option>
+                </select>
+              </div>
+              <div id="sim-ticker-wrap">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Ticker</div>
+                <input id="sim-ticker" class="modal-input" type="text" placeholder="e.g. NVDA" style="width:72px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+              </div>
+              <div id="sim-sell-ticker-wrap" style="display:none">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Ticker</div>
+                <select id="sim-sell-ticker" class="modal-select" style="width:220px" onchange="updateSimAddRow()">
+                  <option value="">— Pick —</option>
+                </select>
+              </div>
+              <div id="sim-proceeds-wrap" style="display:none">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Proceeds go to</div>
+                <select id="sim-proceeds-dest" class="modal-select" style="width:150px">
+                  <option value="reinvest">Reinvesting</option>
+                  <option value="index">Buying Index</option>
+                  <option value="out">Pulling Out</option>
+                  <option value="undecided">Undecided</option>
+                </select>
+              </div>
+              <div id="sim-theme-wrap">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Industry</div>
+                <select id="sim-theme" class="modal-select" style="width:150px">
+                  <option value="">— Industry —</option>
+                </select>
+              </div>
+              <div>
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Amount $</div>
+                <input id="sim-amount" class="modal-input" type="number" min="0" step="100" placeholder="e.g. 10000" style="width:100px">
+              </div>
+              <button id="sim-add-btn" class="btn btn-sm btn-primary" onclick="addSimTrade()" style="margin-bottom:1px">+ Add Trade</button>
+              <button class="btn btn-sm" onclick="clearSimulator()" style="margin-bottom:1px">Clear All</button>
+            </div>
+          </div>
+
+          <div id="sim-result"></div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Tax Profile -->
+    <div class="section-heading" style="margin-top:28px">Tax Profile</div>
+    <div id="tax-profile-panel" class="tax-profile-panel"></div>
   </div><!-- end tab-rebalance -->
 
   <!-- Post-Sell Analysis Tab -->
@@ -2940,7 +2946,6 @@ function renderTaxImplications() {
 
   // Sell-now-vs-wait (positions approaching long-term)
   if (sellWaitRows.length > 0) {
-    html += `<div class="section-heading" style="font-size:11px;margin:16px 0 8px">Approaching Long-Term — Sell Now vs. Wait</div>`;
     html += `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">Open taxable gainers held under 1 year. Waiting until the long-term threshold drops the rate from ${(stRate*100).toFixed(0)}% to ${(ltRate*100).toFixed(0)}%.</div>`;
     html += `<table class="tax-imp-table"><thead><tr>
       <th>Position</th><th>Held</th><th>Days to LT</th><th>Unreal. gain</th><th>Tax now (ST)</th><th>Tax if LT</th><th>Save by waiting</th>
@@ -2960,28 +2965,11 @@ function renderTaxImplications() {
     html += `</tbody></table>`;
   }
 
-  // Harvest candidates
-  if (harvestCandidates.length > 0) {
-    html += `<div class="section-heading" style="font-size:11px;margin:20px 0 8px">Tax-Loss Harvest Candidates</div>`;
-    html += `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">Open taxable positions sitting at a loss. Realizing the loss can offset gains. ⚠ = potential wash sale (same ticker bought within ±30 days) — estimate only.</div>`;
-    html += `<table class="tax-imp-table"><thead><tr>
-      <th>Position</th><th>Unrealized loss</th><th>Est. tax offset value</th><th>Wash-sale flag</th>
-    </tr></thead><tbody>`;
-    harvestCandidates.forEach(h => {
-      // Offset value uses ST rate as the conservative "best case" (offsetting ST gains)
-      const offsetVal = h.loss * stRate;
-      html += `<tr>
-        <td>${h.ticker} <span style="color:var(--color-text-tertiary);font-weight:400">${h.account}</span></td>
-        <td style="color:var(--color-text-danger)">${fmtDollarWhole(h.loss)}</td>
-        <td style="color:var(--color-text-success)">~${fmtDollarWhole(offsetVal)}</td>
-        <td>${h.washRisk ? '<span style="color:var(--color-text-danger)">⚠ possible</span>' : '<span style="color:var(--color-text-tertiary)">clear</span>'}</td>
-      </tr>`;
-    });
-    html += `</tbody></table>`;
-  }
+  // Harvest candidates section removed per layout request — harvest data is still computed
+  // above but no longer rendered here.
 
-  if (sellWaitRows.length === 0 && harvestCandidates.length === 0 && ytdLT === 0 && ytdST === 0) {
-    html += `<div style="font-size:11px;color:var(--color-text-tertiary);padding:12px 0">No taxable gains, harvest candidates, or positions approaching long-term right now. Tax implications will populate as you hold and trade.</div>`;
+  if (sellWaitRows.length === 0 && ytdLT === 0 && ytdST === 0) {
+    html += `<div style="font-size:11px;color:var(--color-text-tertiary);padding:12px 0">No positions approaching long-term right now. This will populate as you hold positions nearing the 1-year mark.</div>`;
   }
 
   panel.innerHTML = html;
@@ -4365,7 +4353,7 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   if (name === 'analysis') { renderSleeveValueAdd(); renderSleevePerformance(); renderThemeIntel(); renderAddCandidatesTable(); }
-  if (name === 'rebalance') { renderRebalance(); }
+  if (name === 'rebalance') { renderRebalance(); if (typeof renderTaxSection === 'function') renderTaxSection(); }
   if (name === 'postsell') renderPostSell();
   if (name === 'quality') renderQualityTab();
   if (name === 'distribution') renderDistributionTab();
