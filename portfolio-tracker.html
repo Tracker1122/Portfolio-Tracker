@@ -6119,6 +6119,46 @@ function qrNormTicker(t) {
 // {canon, label}. Small static list of S&P dual-class pairs — stable, rarely changes; update if
 // a new dual-class name enters the index. Only used for the distribution/true-exposure rollup,
 // NOT for position matching (where the exact ticker still matters).
+// Company-name → ticker map for the megacaps these growth/tech funds are built from. Keyed on
+// the name strings sources like stockanalysis.com use, matched LOOSELY (case-insensitive, with
+// Inc/Corp/Co/etc. suffixes stripped). Lets you paste "NVIDIA 13.75%, Apple 11.77%…" — the form
+// you actually get selecting an on-page holdings table — instead of needing tickers. Covers the
+// ~30 names that dominate the WEIGHT of these funds (the long tail stays flagged-if-unmatched,
+// which is fine — small positions barely move the overlap math). NOT exhaustive by design.
+// Dual-class names (Alphabet) map to one class and get merged downstream by DUAL_CLASS_MAP.
+const COMPANY_NAME_MAP = {
+  'NVIDIA': 'NVDA', 'APPLE': 'AAPL', 'MICROSOFT': 'MSFT', 'ALPHABET': 'GOOGL', 'GOOGLE': 'GOOGL',
+  'AMAZON': 'AMZN', 'AMAZON.COM': 'AMZN', 'BROADCOM': 'AVGO', 'META': 'META', 'META PLATFORMS': 'META',
+  'FACEBOOK': 'META', 'TESLA': 'TSLA', 'ELI LILLY': 'LLY', 'LILLY': 'LLY',
+  'ADVANCED MICRO DEVICES': 'AMD', 'VISA': 'V', 'MASTERCARD': 'MA', 'NETFLIX': 'NFLX',
+  'LAM RESEARCH': 'LRCX', 'BERKSHIRE HATHAWAY': 'BRK.B', 'BERKSHIRE': 'BRK.B',
+  'JPMORGAN': 'JPM', 'JPMORGAN CHASE': 'JPM', 'EXXON': 'XOM', 'EXXON MOBIL': 'XOM',
+  'COSTCO': 'COST', 'COSTCO WHOLESALE': 'COST', 'WALMART': 'WMT', 'ORACLE': 'ORCL',
+  'TAIWAN SEMICONDUCTOR': 'TSM', 'TAIWAN SEMICONDUCTOR MANUFACTURING': 'TSM',
+  'MICRON': 'MU', 'MICRON TECHNOLOGY': 'MU', 'QUALCOMM': 'QCOM', 'TEXAS INSTRUMENTS': 'TXN',
+  'APPLIED MATERIALS': 'AMAT', 'KLA': 'KLAC', 'ASML': 'ASML', 'ARM': 'ARM', 'ARM HOLDINGS': 'ARM',
+  'PALANTIR': 'PLTR', 'CROWDSTRIKE': 'CRWD', 'PALO ALTO NETWORKS': 'PANW', 'SERVICENOW': 'NOW',
+  'ADOBE': 'ADBE', 'SALESFORCE': 'CRM', 'INTUIT': 'INTU', 'AMERICAN EXPRESS': 'AXP',
+  'MORGAN STANLEY': 'MS', 'NETFLIX INC': 'NFLX',
+};
+// Resolve a free-text company name to a ticker, or null. Strips common corporate suffixes and
+// matches case-insensitively so "NVIDIA Corporation", "NVIDIA Corp", "Nvidia" all hit NVDA.
+function resolveCompanyName(name) {
+  if (!name) return null;
+  let n = name.toUpperCase().trim()
+    .replace(/[.,]/g, ' ')
+    .replace(/\b(CORPORATION|CORP|INCORPORATED|INC|COMPANY|CO|LTD|PLC|LLC|HOLDINGS|GROUP|CLASS [A-C]|THE)\b/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  if (COMPANY_NAME_MAP[n]) return COMPANY_NAME_MAP[n];
+  // try progressively shorter prefixes (e.g. "META PLATFORMS" → "META")
+  const words = n.split(' ');
+  for (let len = words.length; len >= 1; len--) {
+    const key = words.slice(0, len).join(' ');
+    if (COMPANY_NAME_MAP[key]) return COMPANY_NAME_MAP[key];
+  }
+  return null;
+}
+
 const DUAL_CLASS_MAP = {
   GOOGL: { canon: 'GOOGL', label: 'GOOGL/GOOG (Alphabet)' },
   GOOG:  { canon: 'GOOGL', label: 'GOOGL/GOOG (Alphabet)' },
@@ -6143,7 +6183,12 @@ function qrCanonical(ticker) {
 // show its work rather than silently dropping company names it can't match.
 function parseHoldings(text) {
   if (!text || !text.trim()) return { parsed: [], unparsed: [] };
-  const chunks = text.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+  // Split into holding chunks. Newlines and semicolons are always separators. Commas are
+  // trickier: they separate "NVDA 5%, AAPL 4%" entries BUT also appear inside company names
+  // ("Amazon.com, Inc."). So neutralize a comma that's immediately followed by a corporate
+  // suffix (Inc/Corp/Co/…) before splitting, keeping "Amazon.com, Inc. 5.11%" as one chunk.
+  const protectedText = text.replace(/,\s*(Inc|Incorporated|Corp|Corporation|Co|Company|Ltd|Limited|PLC|LLC|LP|NV|SA|AG|Class\s+[A-C])\b/gi, ' $1');
+  const chunks = protectedText.split(/[\n;,]+/).map(s => s.trim()).filter(Boolean);
   const parsed = [], unparsed = [];
   const seen = {};
   chunks.forEach(chunk => {
@@ -6173,6 +6218,16 @@ function parseHoldings(text) {
       if (!clean) continue;
       if (FILLER.has(clean.toUpperCase())) continue;          // skip Inc / Corp / ETF etc.
       if (/^[A-Z]{1,5}([.\-][A-Z]{1,2})?$/.test(clean)) { ticker = clean.toUpperCase(); break; }
+    }
+    // Fallback: no ticker token found — try resolving the chunk as a COMPANY NAME (e.g. a paste
+    // of "NVIDIA 13.75%" from an on-page holdings table). Strip the weight + numeric tokens first.
+    if (!ticker) {
+      const nameText = chunk
+        .replace(/[+\-]?\d+(?:\.\d+)?\s*%/g, ' ')   // drop the weight
+        .replace(/\$?\d[\d,]*\.?\d*[KMB]?/gi, ' ')  // drop money/share counts
+        .replace(/\s+/g, ' ').trim();
+      const resolved = resolveCompanyName(nameText);
+      if (resolved) ticker = resolved;
     }
     if (ticker) {
       // de-dupe (a holding pasted twice, or matched twice) — keep first weight seen
