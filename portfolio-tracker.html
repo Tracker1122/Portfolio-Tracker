@@ -6540,6 +6540,35 @@ function qrOpenHoldingsSource(ev) {
   window.open(url, '_blank', 'noopener');
 }
 
+// ETF roll-up summary: "lands the plane" for an ETF candidate the way the per-name roll-up does
+// for a stock. For each of the ETF's parsed holdings, checks whether you ALREADY hold that name
+// — directly AND/OR inside your index funds (true exposure) — and sums the ETF weight that lands
+// on names you're already exposed to. Returns the headline % + the names, split into "direct"
+// vs "via funds (incl. VOO)" so you see both the literal overlap and the hidden one.
+function qrEtfOverlapSummary(parsed) {
+  const open = positions.filter(p => !p.closed && p.ticker);
+  const directNorms = new Set(open.map(p => qrNormTicker(p.ticker)));
+  const directVal = {};
+  open.forEach(p => { const k = qrNormTicker(p.ticker); directVal[k] = (directVal[k]||0) + (calcPos(p).exitValue||0); });
+
+  let overlapWeight = 0;        // ETF weight on names you hold ANY way (direct or via funds)
+  const names = [];             // {ticker, etfWeight, direct$, viaFunds$, total$}
+  (parsed || []).forEach(h => {
+    if (h.weight == null) return;
+    const k = qrNormTicker(h.ticker);
+    const direct = directVal[k] || 0;
+    const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(h.ticker) : [];
+    const viaFunds = lts.reduce((s,l)=>s+l.indirectValue, 0);
+    if (direct > 0 || viaFunds > 0) {
+      overlapWeight += h.weight;
+      names.push({ ticker: h.ticker, etfWeight: h.weight, direct, viaFunds, total: direct + viaFunds });
+    }
+  });
+  names.sort((a,b)=>b.etfWeight - a.etfWeight);
+  const parsedWeight = (parsed||[]).reduce((s,h)=>s+(h.weight||0),0);
+  return { overlapPct: +overlapWeight.toFixed(1), names, parsedWeight: +parsedWeight.toFixed(1) };
+}
+
 // Read the ETF holdings field, parse it, and show DIRECT overlaps with the book.
 function runQrHoldingsOverlap() {
   const out = document.getElementById('qr-holdings-overlap');
@@ -6552,6 +6581,27 @@ function runQrHoldingsOverlap() {
   }
   const overlaps = computeHoldingsOverlap(parsed);
   let html = '';
+
+  // ── Roll-up summary (lands the plane for an ETF, like the stock roll-up) ──
+  const sum = qrEtfOverlapSummary(parsed);
+  if (sum.names.length > 0) {
+    const lvl = sum.overlapPct >= 40 ? '#ef4444' : sum.overlapPct >= 20 ? '#fbbf24' : 'var(--color-text-secondary)';
+    const verb = sum.overlapPct >= 40 ? 'largely compounds' : sum.overlapPct >= 20 ? 'partly compounds' : 'modestly adds to';
+    // Direct vs via-funds split
+    const directNames = sum.names.filter(n => n.direct > 0);
+    const viaOnlyNames = sum.names.filter(n => n.direct === 0 && n.viaFunds > 0);
+    const biggest = sum.names.slice(0, 3).map(n => {
+      const where = n.direct > 0 && n.viaFunds > 0 ? 'direct + funds' : n.direct > 0 ? 'direct' : 'via funds';
+      return `${esc(n.ticker)} (${n.etfWeight}% of ETF; you already hold ~${fmtDollarWhole(n.total)} ${where})`;
+    }).join(', ');
+    html += `<div style="font-size:10px;color:var(--color-text-primary);padding:9px 11px;background:rgba(251,191,36,0.10);border:1px solid #fbbf24;border-left:3px solid #fbbf24;border-radius:var(--border-radius-md);line-height:1.55;margin-bottom:8px">
+      <div style="font-weight:700;margin-bottom:3px">~${sum.overlapPct}% of ${esc((document.getElementById('qr-ticker')||{}).value||'this ETF').toUpperCase()} overlaps names you already hold — buying it ${verb} existing exposure, not pure diversification.</div>
+      <div style="font-size:9px;color:var(--color-text-secondary)">Of the ${sum.parsedWeight}% of the fund you\u2019ve described, ~${sum.overlapPct}% sits in names already in your book (directly or inside your index funds). Biggest overlaps: ${biggest}.</div>
+      ${viaOnlyNames.length ? `<div style="font-size:9px;color:#fbbf24;margin-top:4px">Note: ${viaOnlyNames.map(n=>esc(n.ticker)).join(', ')} you hold little/none of directly but already own via your funds (mostly VOO) — this ETF would deepen exposure you may not realize you have.</div>` : ''}
+      <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:4px">Approximate — fund weights drift; covers the holdings you pasted (~${sum.parsedWeight}% of the fund).</div>
+    </div>`;
+  }
+
   if (overlaps.length > 0) {
     const rows = overlaps.map(o => {
       const w = o.weight != null ? ` <span style="color:var(--color-text-tertiary)">(ETF weight ${o.weight}%)</span>` : '';
