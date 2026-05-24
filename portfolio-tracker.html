@@ -5591,7 +5591,7 @@ function qrCheckStage1() {
   const th = document.getElementById('qr-theme');
   const sl = document.getElementById('qr-sleeve');
   const panel = document.getElementById('qr-overlap-panel');
-  if (panel && th) panel.innerHTML = renderQrOverlap(th.value, tk ? tk.value : '');
+  if (panel && th) panel.innerHTML = renderQrOverlap(th.value, tk ? tk.value : '', sl ? sl.value : '');
   // Keep the stock swap panel (sibling of the overlap panel) in sync with the buy ticker/sleeve.
   if (qrType === 'stock' && document.getElementById('qr-stock-swap')) {
     const newBuy = tk ? tk.value.trim().toUpperCase() : '';
@@ -5610,8 +5610,7 @@ function qrCheckStage1() {
 // Commit stage 1: save the candidate (so it's recorded even if you stop here) and reveal stage 2.
 function qrUnlockStage2() {
   qrStage2Unlocked = true;
-  saveQrCandidate(true); // keepForm = stay in the form / keep editing this candidate
-  renderQrForm();        // re-render now showing stage 2
+  saveQrCandidate(true); // keepForm = stay in the form; saveQrCandidate re-renders (showing stage 2)
 }
 
 function setQrType(t) {
@@ -5651,6 +5650,21 @@ function qrThemeExposure(theme) {
   const total = Object.values(byTicker).reduce((s, v) => s + v, 0);
   const tickers = Object.entries(byTicker).sort((a, b) => b[1] - a[1]).map(([t, v]) => ({ ticker: t, value: v }));
   return { theme, total, tickers, portfolioPct: totalPortfolio > 0 ? (total / totalPortfolio) * 100 : 0 };
+}
+
+// Sleeve concentration — same shape as qrThemeExposure but grouped by sleeve. Used to surface
+// "how full is the sleeve this candidate would join" alongside theme concentration.
+function qrSleeveExposure(sleeve) {
+  if (!sleeve) return null;
+  const open = positions.filter(p => !p.closed && p.ticker && p.sleeve === sleeve);
+  const totalPortfolio = positions.filter(p => !p.closed && p.ticker)
+    .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  if (open.length === 0) return { sleeve, total: 0, tickers: [], portfolioPct: 0 };
+  const byTicker = {};
+  open.forEach(p => { const v = calcPos(p).exitValue || 0; byTicker[p.ticker] = (byTicker[p.ticker] || 0) + v; });
+  const total = Object.values(byTicker).reduce((s, v) => s + v, 0);
+  const tickers = Object.entries(byTicker).sort((a, b) => b[1] - a[1]).map(([t, v]) => ({ ticker: t, value: v }));
+  return { sleeve, total, tickers, portfolioPct: totalPortfolio > 0 ? (total / totalPortfolio) * 100 : 0 };
 }
 
 // ── Index look-through editor (Quality tab → advanced) ──
@@ -6662,7 +6676,7 @@ function renderQrForm() {
   ).join('');
 
   // Live overlap context (auto-fires once the 3 identifying fields are set)
-  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal)}</div>`
+  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal, sleeveVal)}</div>`
     + (qrType === 'stock' ? `<div id="qr-stock-swap" style="margin-top:8px"></div>` : '');
 
   // Two-stage form. Stage 1 = identifying fields (ticker/theme/sleeve, + ETF holdings) and the
@@ -6755,7 +6769,7 @@ function renderQrForm() {
   qrCheckStage1();
 }
 
-function renderQrOverlap(theme, tickerArg) {
+function renderQrOverlap(theme, tickerArg, sleeveArg) {
   // Pass-through line: the candidate's own ticker held indirectly inside index/ETF funds.
   // On initial render the qr-ticker input doesn't exist in the DOM yet (we're still building the
   // HTML string that contains it), so prefer an explicitly passed ticker; fall back to the DOM
@@ -6765,6 +6779,24 @@ function renderQrOverlap(theme, tickerArg) {
     const tkEl = (typeof document !== 'undefined') ? document.getElementById('qr-ticker') : null;
     candTicker = tkEl ? (tkEl.value || '').trim().toUpperCase() : '';
   }
+
+  // ── Direct-overlap line: do you ALREADY hold this candidate's own ticker directly? ──
+  // Mirrors the ETF candidate's "direct overlaps" callout, but for the single name being added.
+  // Shows $ held directly across lots + the account tag(s), so "buying X" is honestly framed as
+  // "adding to X you already own" when that's the case.
+  let directOwnHtml = '';
+  if (candTicker) {
+    const candNorm = qrNormTicker(candTicker);
+    const ownLots = positions.filter(p => !p.closed && p.ticker && qrNormTicker(p.ticker) === candNorm);
+    const directOwn = ownLots.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+    if (directOwn > 0) {
+      const tag = (typeof acctTag === 'function') ? acctTag(candNorm) : '';
+      directOwnHtml = `<div style="font-size:10px;color:var(--color-text-primary);padding:8px 10px;background:rgba(239,68,68,0.10);border-left:3px solid #ef4444;border-radius:var(--border-radius-md);margin-bottom:6px;line-height:1.5">
+        <strong style="color:#ef4444">You already hold ${esc(candTicker)} directly — ~${fmtDollarWhole(directOwn)}${tag}.</strong>
+        Buying more adds to an existing direct position, not a new name. Evaluate the <em>add</em>, not the name in isolation.</div>`;
+    }
+  }
+
   let passThroughHtml = '';
   if (candTicker) {
     const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(candTicker) : [];
@@ -6800,14 +6832,41 @@ function renderQrOverlap(theme, tickerArg) {
     }
   }
 
+  // ── Sleeve concentration line (mirrors the theme box, for the sleeve this would join) ──
+  // Sleeves have target ranges (SLEEVE_TARGETS); surface how full the sleeve already is so the
+  // candidate is judged against its sleeve budget, not just its theme.
+  let sleeveHtml = '';
+  const sleeveName = (sleeveArg || '').trim();
+  if (sleeveName && typeof qrSleeveExposure === 'function') {
+    const sx = qrSleeveExposure(sleeveName);
+    if (sx) {
+      const sp = sx.portfolioPct;
+      const tgt = (typeof SLEEVE_TARGETS !== 'undefined' && SLEEVE_TARGETS[sleeveName]) ? SLEEVE_TARGETS[sleeveName] : null;
+      let accent, bg, weight, lead, ctx;
+      const overMax = tgt && sp > tgt.max;
+      const inRange = tgt && sp >= tgt.min && sp <= tgt.max;
+      if (overMax) { accent = '#ef4444'; bg = 'rgba(239,68,68,0.10)'; weight = '700'; lead = `⚠ ${esc(sleeveName)} is already ${sp.toFixed(1)}% of your active book — above its ${tgt.min}–${tgt.max}% target.`; ctx = `Adding here pushes a sleeve that's already over its intended ceiling. Worth a deliberate reason.`; }
+      else if (inRange) { accent = '#fbbf24'; bg = 'rgba(251,191,36,0.10)'; weight = '700'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your active book — inside its ${tgt.min}–${tgt.max}% target.`; ctx = `Room is limited; adding here uses up the sleeve's remaining budget.`; }
+      else if (tgt) { accent = 'var(--color-border-tertiary)'; bg = 'var(--color-background-tertiary)'; weight = '400'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your active book — below its ${tgt.min}–${tgt.max}% target.`; ctx = `This sleeve has headroom; adding here moves toward its target weight.`; }
+      else { accent = 'var(--color-border-tertiary)'; bg = 'var(--color-background-tertiary)'; weight = '400'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your active book.`; ctx = ''; }
+      const sTk = sx.tickers.length ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">Sleeve holdings: ${sx.tickers.map(t => `${esc(t.ticker)} ${fmtDollarWhole(t.value)}`).join(' · ')}.</div>` : '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No current holdings in this sleeve — this would be its first.</div>';
+      sleeveHtml = `<div style="font-size:10px;color:var(--color-text-secondary);padding:9px 11px;background:${bg};border:1px solid ${accent};border-left:3px solid ${accent};border-radius:var(--border-radius-md);line-height:1.55;margin-top:6px">
+        <div style="font-weight:${weight};color:var(--color-text-primary);margin-bottom:3px">${lead}</div>
+        ${ctx ? `<div>${ctx}</div>` : ''}${sTk}</div>`;
+    }
+  }
+
+  // Extra blocks shown alongside the theme box (direct-own at top, sleeve below).
+  const extras = (inner) => `<div>${directOwnHtml}${inner}${sleeveHtml}${passThroughHtml}</div>`;
+
   if (!theme) {
     const base = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">Pick a theme to see your current exposure (overlap context).</div>`;
-    return passThroughHtml ? `<div>${base}${passThroughHtml}</div>` : base;
+    return (directOwnHtml || sleeveHtml || passThroughHtml) ? extras(base) : base;
   }
   const ex = qrThemeExposure(theme);
   if (!ex || ex.total === 0) {
-    const base = `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No current <strong>direct</strong> holdings in <strong>${esc(theme)}</strong> — this would be fresh <em>direct</em> exposure.${passThroughHtml?' But note the pass-through below — you may already own this name via funds.':' The question here is genuinely "is this a good position?"'}</div>`;
-    return passThroughHtml ? `<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:2px">${base}${passThroughHtml}</div>` : base;
+    const base = `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No current <strong>direct</strong> holdings in <strong>${esc(theme)}</strong> — this would be fresh <em>direct</em> theme exposure.</div>`;
+    return (directOwnHtml || sleeveHtml || passThroughHtml) ? extras(base) : base;
   }
   const pct = ex.portfolioPct;
   const tk = ex.tickers.map(t => `${esc(t.ticker)} ${fmtDollarWhole(t.value)}`).join(' · ');
@@ -6828,12 +6887,13 @@ function renderQrOverlap(theme, tickerArg) {
     label = `You hold ${pct.toFixed(1)}% of your active book in ${esc(theme)} (direct positions) — a modest existing weight.`;
     reframe = `Adding here is still mostly a standalone judgment, but keep the running total in mind.`;
   }
-  return `<div style="font-size:10px;color:var(--color-text-secondary);padding:9px 11px;background:${bg};border:1px solid ${accent};border-left:3px solid ${accent};border-radius:var(--border-radius-md);line-height:1.55">
+  const themeBox = `<div style="font-size:10px;color:var(--color-text-secondary);padding:9px 11px;background:${bg};border:1px solid ${accent};border-left:3px solid ${accent};border-radius:var(--border-radius-md);line-height:1.55">
     <div style="font-weight:${weight};color:var(--color-text-primary);margin-bottom:3px">${label}</div>
     <div style="margin-bottom:4px">${reframe}</div>
     <div style="font-size:9px;color:var(--color-text-tertiary)">Holdings: ${tk}.</div>
     ${passThroughHtml}
   </div>`;
+  return `<div>${directOwnHtml}${themeBox}${sleeveHtml}</div>`;
 }
 
 // Live preview of how the holdings paste is being parsed — shown on every input so the
@@ -7435,17 +7495,13 @@ function saveQrCandidate(keepForm) {
     });
   }
   scheduleSave();
-  if (keepForm) {
-    // Stage-1 commit: keep editing this candidate (so stage-2 edits update the same record),
-    // don't reset the form. Caller re-renders.
-    qrEditingId = savedId;
-    renderQrSavedList();
-  } else {
-    qrEditingId = null;
-    qrStage2Unlocked = false;
-    renderQrForm();
-    renderQrSavedList();
-  }
+  // Stay on the saved candidate after BOTH stage-1 commit and final update — so the analysis
+  // (overlap box, pass-through, etc.) persists instead of vanishing when the form clears.
+  // Starting a fresh candidate is done explicitly via "New / Clear Form" (resetQrForm).
+  qrEditingId = savedId;
+  if (!keepForm) qrStage2Unlocked = true; // a fully-saved candidate shows its complete form
+  renderQrForm();
+  renderQrSavedList();
 }
 
 function editQrCandidate(id) {
