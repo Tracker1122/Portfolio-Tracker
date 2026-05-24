@@ -5547,6 +5547,12 @@ function qrCheckStage1() {
   const sl = document.getElementById('qr-sleeve');
   const panel = document.getElementById('qr-overlap-panel');
   if (panel && th) panel.innerHTML = renderQrOverlap(th.value, tk ? tk.value : '');
+  // Keep the stock swap panel (sibling of the overlap panel) in sync with the buy ticker/sleeve.
+  if (qrType === 'stock' && document.getElementById('qr-stock-swap')) {
+    const newBuy = tk ? tk.value.trim().toUpperCase() : '';
+    if (qrNormTicker(newBuy) !== qrNormTicker(qrSwapState.buyTicker)) qrSwapState.sells = []; // buy target changed → reset sells
+    qrRenderStockSwap();
+  }
   const ready = tk && tk.value.trim() && th && th.value && sl && sl.value
     && (qrType !== 'etf' || (document.getElementById('qr-f-holdingsTop') || {}).value);
   const btn = document.getElementById('qr-stage1-continue');
@@ -5574,6 +5580,7 @@ function setQrType(t) {
   document.getElementById('qr-type-etf').style.border = t === 'etf' ? 'none' : '1px solid var(--color-border-tertiary)';
   document.getElementById('qr-type-etf').style.fontWeight = t === 'etf' ? '600' : '400';
   if (qrEditingId === null) qrStage2Unlocked = false; // fresh form starts at stage 1
+  qrSwapState = { buyTicker: '', sells: [] }; // reset swap hypothetical on type switch
   renderQrForm();
 }
 
@@ -5657,7 +5664,12 @@ function renderIndexEditor() {
         ${rows || '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">No tickers yet \u2014 paste the fund\u2019s holdings below, or add them one at a time.</div>'}
         <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--color-border-tertiary)">
           <div style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Paste holdings (ticker + weight, from the fund\u2019s page) — replaces this fund\u2019s list</div>
-          <textarea id="qr-idx-paste-${esc(fund)}" rows="2" placeholder="NVDA 22%, TSM 10%, AVGO 7%…" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
+          <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:5px">
+            Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${esc(fund)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(fund)} holdings →</a>
+            <span>opens it on stockanalysis.com (free); copy the table and paste — row #, name & shares are ignored automatically.</span>
+          </div>
+          <textarea id="qr-idx-paste-${esc(fund)}" rows="2" oninput="renderIndexPastePreview('${esc(fund)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, TSM 10% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
+          <div id="qr-idx-preview-${esc(fund)}" style="margin-top:5px"></div>
           <div style="display:flex;gap:5px;align-items:center;margin-top:4px">
             <button class="btn btn-sm btn-primary" onclick="pasteIndexHoldings('${esc(fund)}')" style="font-size:9px">Parse &amp; replace list</button>
             <span style="font-size:8px;color:var(--color-text-tertiary)">or add one at a time:</span>
@@ -5719,6 +5731,35 @@ function pasteIndexHoldings(fund) {
   const msg2 = document.getElementById('qr-idx-paste-msg-' + fund);
   if (msg2) msg2.innerHTML = `<div style="font-size:9px;color:var(--color-text-success)">✓ Stored ${parsed.length} holding${parsed.length>1?'s':''} for ${esc(fund)}.${noW?` (${noW} had no weight — they won't contribute to exposure math.)`:''}${unparsed.length?` <span style="color:#fbbf24">${unparsed.length} line(s) skipped: ${unparsed.map(u=>esc(u)).join(' · ')}</span>`:''}</div>`;
 }
+
+// Open the fund's holdings page on stockanalysis.com (free, no login) so its top holdings are
+// one click from copy-paste — same convenience as the Quality Review ETF flow.
+function qrOpenIndexSource(ev, fund) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  const tk = (fund || '').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '');
+  const url = tk ? `https://stockanalysis.com/etf/${encodeURIComponent(tk)}/holdings/` : 'https://stockanalysis.com/etf/';
+  window.open(url, '_blank', 'noopener');
+}
+
+// Live preview of what the paste parses to (chips), so you can verify ticker+weight BEFORE
+// committing — mirrors renderHoldingsPreview in the Quality Review flow. Uses the same
+// hardened parseHoldings, so raw table rows (row #, name, shares) are handled identically.
+function renderIndexPastePreview(fund) {
+  const ta = document.getElementById('qr-idx-paste-' + fund);
+  const out = document.getElementById('qr-idx-preview-' + fund);
+  if (!ta || !out) return;
+  const text = (ta.value || '').trim();
+  if (!text) { out.innerHTML = ''; return; }
+  const { parsed, unparsed } = parseHoldings(text);
+  if (!parsed.length && !unparsed.length) { out.innerHTML = ''; return; }
+  const coverage = parsed.reduce((s,p)=>s+(p.weight||0),0);
+  const chips = parsed.map(p => `<span style="display:inline-block;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:1px 7px;margin:0 4px 3px 0;font-size:9px"><strong style="color:var(--color-text-primary)">${esc(p.ticker)}</strong> <span style="color:var(--color-text-tertiary)">${p.weight!=null?p.weight+'%':'—'}</span></span>`).join('');
+  out.innerHTML = `
+    <div style="font-size:8px;color:var(--color-text-success);margin-bottom:3px">Will read ${parsed.length} holding${parsed.length>1?'s':''} (${coverage.toFixed(1)}% of fund) — verify, then “Parse &amp; replace”:</div>
+    <div>${chips}</div>
+    ${unparsed.length?`<div style="font-size:8px;color:#fbbf24;margin-top:2px">${unparsed.length} line(s) won\u2019t be read: ${unparsed.map(u=>esc(u)).join(' · ')}</div>`:''}`;
+}
+
 function addIndexTicker(fund) {
   const t = getIndexLookthrough(); if (!t[fund]) return;
   const tkEl = document.getElementById('qr-idx-add-tk-' + fund);
@@ -6345,7 +6386,8 @@ function renderQrForm() {
   ).join('');
 
   // Live overlap context (auto-fires once the 3 identifying fields are set)
-  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal)}</div>`;
+  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal)}</div>`
+    + (qrType === 'stock' ? `<div id="qr-stock-swap" style="margin-top:8px"></div>` : '');
 
   // Two-stage form. Stage 1 = identifying fields (ticker/theme/sleeve, + ETF holdings) and the
   // auto-firing exposure panel. Stage 2 = the rest of the qualitative fields + final save.
@@ -6588,6 +6630,139 @@ function qrEtfOverlapSummary(parsed) {
 }
 
 // ── Rotation simulator ──────────────────────────────────────────────────────
+// ── Stock-to-stock swap simulator ──
+// "Sell these holdings to buy stock Y." Mirrors the ETF rotation but for a single-stock buy:
+// the proceeds go into ONE name's direct bucket (not decomposed across a fund). Shows the same
+// honest lenses that APPLY to a single stock — true-exposure change (incl. the "selling direct
+// X doesn't kill your VOO-embedded X, and buying Y may add to Y you already hold via funds"
+// insight), tax (account-aware), sleeve impact, position count. No overlap roll-up (a single
+// stock has nothing to overlap — that metric is ETF-only and would be meaningless here).
+let qrSwapState = { buyTicker: '', sells: [] }; // sells = array of normalized tickers
+
+function qrSimulateStockSwap(buyTicker, sellNormsSet) {
+  let proceeds = 0, estTax = 0, taxableGain = 0, hasIRA = false, missingDate = false, anyLoss = false;
+  let shelteredProceeds = 0, taxableProceeds = 0;
+  positions.filter(p => !p.closed && p.ticker && sellNormsSet.has(qrNormTicker(p.ticker)))
+    .forEach(p => {
+      const c = calcPos(p); const v = c.exitValue || 0; proceeds += v;
+      const isIRA = (p.account||'').toLowerCase() === 'ira';
+      const rate = taxRateForOpen(p);
+      if (isIRA) { hasIRA = true; shelteredProceeds += v; } else { taxableProceeds += v; }
+      if (!p.dateBought && !isIRA) missingDate = true;
+      if (c.gainLoss > 0) { if (!isIRA) taxableGain += c.gainLoss; estTax += c.gainLoss * rate; }
+      else if (c.gainLoss < 0 && !isIRA) anyLoss = true;
+    });
+  const netProceeds = proceeds - estTax;
+
+  const buyNorm = qrNormTicker(buyTicker);
+  const affected = {};
+  const ensure = (tk) => { const k = qrNormTicker(tk); if (!affected[k]) affected[k] = { display: tk, dBefore:0, dAfter:0, fBefore:0, fAfter:0 }; return affected[k]; };
+  const namesToCheck = new Set([...sellNormsSet]); namesToCheck.add(buyNorm);
+  namesToCheck.forEach(k => {
+    const isBuy = (k === buyNorm);
+    const display = isBuy ? buyTicker.toUpperCase() : (() => {
+      const p = positions.find(pp => !pp.closed && pp.ticker && qrNormTicker(pp.ticker) === k);
+      return p ? p.ticker : k;
+    })();
+    const a = ensure(display);
+    const dv = positions.filter(p=>!p.closed&&p.ticker&&qrNormTicker(p.ticker)===k).reduce((s,p)=>s+(calcPos(p).exitValue||0),0);
+    a.dBefore += dv;
+    a.dAfter += sellNormsSet.has(k) ? 0 : dv;
+    const via = qrIndexLookthrough(display).reduce((s,l)=>s+l.indirectValue, 0);
+    a.fBefore += via; a.fAfter += via;
+  });
+  { const a = ensure(buyTicker.toUpperCase()); a.dAfter += netProceeds; }
+
+  const rows = Object.values(affected).map(a => ({
+    display: a.display, before: a.dBefore + a.fBefore, after: a.dAfter + a.fAfter,
+    dBefore: a.dBefore, dAfter: a.dAfter, fBefore: a.fBefore, fAfter: a.fAfter,
+    change: (a.dAfter + a.fAfter) - (a.dBefore + a.fBefore),
+  })).filter(r => r.before > 0 || r.after > 0).sort((x,y)=>y.before - x.before);
+
+  const sleeveBefore = {}, sleeveAfter = {};
+  positions.filter(p=>!p.closed&&p.ticker).forEach(p=>{ const sl=p.sleeve||'(unassigned)'; const v=calcPos(p).exitValue||0; sleeveBefore[sl]=(sleeveBefore[sl]||0)+v; sleeveAfter[sl]=(sleeveAfter[sl]||0)+v; });
+  positions.filter(p=>!p.closed&&p.ticker&&sellNormsSet.has(qrNormTicker(p.ticker))).forEach(p=>{ const sl=p.sleeve||'(unassigned)'; sleeveAfter[sl]=(sleeveAfter[sl]||0)-(calcPos(p).exitValue||0); });
+  const targetSleeve = (document.getElementById('qr-sleeve') ? document.getElementById('qr-sleeve').value : '') || '(unassigned)';
+  sleeveAfter[targetSleeve] = (sleeveAfter[targetSleeve]||0) + netProceeds;
+  const sleeveRows = Object.keys(sleeveBefore).map(sl=>({ sleeve:sl, before:sleeveBefore[sl]||0, after:sleeveAfter[sl]||0, change:(sleeveAfter[sl]||0)-(sleeveBefore[sl]||0) })).filter(r=>Math.abs(r.change)>=1).sort((a,b)=>Math.abs(b.change)-Math.abs(a.change));
+
+  const posBefore = positions.filter(p=>!p.closed&&p.ticker).length;
+  const soldCount = positions.filter(p=>!p.closed&&p.ticker&&sellNormsSet.has(qrNormTicker(p.ticker))).length;
+  const buyAlreadyHeld = positions.some(p=>!p.closed&&p.ticker&&qrNormTicker(p.ticker)===buyNorm);
+  const posAfter = posBefore - soldCount + (buyAlreadyHeld ? 0 : 1);
+
+  return { rows, proceeds, netProceeds, estTax, taxableGain, hasIRA, missingDate, anyLoss, shelteredProceeds, taxableProceeds, sleeveRows, targetSleeve, posBefore, posAfter, soldCount, buyAlreadyHeld };
+}
+
+function qrSwapAddSell() {
+  const sel = document.getElementById('qr-swap-add');
+  if (!sel || !sel.value) return;
+  const norm = sel.value;
+  if (!qrSwapState.sells.includes(norm)) qrSwapState.sells.push(norm);
+  sel.value = '';
+  qrRenderStockSwap();
+}
+function qrSwapRemoveSell(norm) { qrSwapState.sells = qrSwapState.sells.filter(n => n !== norm); qrRenderStockSwap(); }
+
+function qrRenderStockSwap() {
+  const host = document.getElementById('qr-stock-swap');
+  if (!host) return;
+  const buyTicker = ((document.getElementById('qr-ticker')||{}).value || '').trim().toUpperCase();
+  if (!buyTicker) { host.innerHTML = ''; return; }
+  qrSwapState.buyTicker = buyTicker;
+
+  const held = {};
+  positions.filter(p=>!p.closed&&p.ticker).forEach(p=>{ const k=qrNormTicker(p.ticker); if (k===qrNormTicker(buyTicker)) return; if(!held[k]) held[k]={display:p.ticker,val:0}; held[k].val += calcPos(p).exitValue||0; });
+  const addOpts = Object.keys(held).filter(k=>!qrSwapState.sells.includes(k))
+    .sort((a,b)=>held[b].val-held[a].val)
+    .map(k=>`<option value="${esc(k)}">${esc(held[k].display)} (${fmtDollarWhole(held[k].val)})</option>`).join('');
+
+  const chips = qrSwapState.sells.map(k => {
+    const h = held[k] || { display:k, val:0 };
+    return `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:12px;padding:2px 8px;margin:0 5px 4px 0;font-size:10px">
+      ${esc(h.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(h.val)}</span>
+      <button type="button" onclick="qrSwapRemoveSell('${esc(k)}')" style="border:none;background:none;color:var(--color-text-tertiary);cursor:pointer;font-size:12px;padding:0;line-height:1">×</button></span>`;
+  }).join('');
+
+  let impact = '';
+  if (qrSwapState.sells.length > 0) {
+    const sim = qrSimulateStockSwap(buyTicker, new Set(qrSwapState.sells));
+    let taxNote;
+    if (sim.estTax > 0) { taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains → ~${fmtDollarWhole(sim.netProceeds)} net into ${esc(buyTicker)}`; if (sim.shelteredProceeds>0) taxNote += `. ${fmtDollarWhole(sim.shelteredProceeds)} is IRA — sold tax-free`; }
+    else if (sim.hasIRA && sim.taxableProceeds===0) taxNote = `no tax — entirely IRA (sheltered)`;
+    else if (sim.hasIRA) taxNote = `no taxable gain on the ${fmtDollarWhole(sim.taxableProceeds)} taxable portion; ${fmtDollarWhole(sim.shelteredProceeds)} is IRA (tax-free)`;
+    else if (sim.anyLoss) taxNote = `no tax (sales at a loss)`;
+    else taxNote = `no taxable gain`;
+
+    const expRows = sim.rows.slice(0,15).map(r=>{ const chg=Math.round(r.change); const col=Math.abs(chg)<500?'var(--color-text-tertiary)':chg>0?'var(--color-text-success)':'var(--color-text-danger)'; const tiny=Math.abs(chg)<1000&&r.before>5000?' <span style="color:#fbbf24">← barely moves</span>':''; return `<tr><td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td><td style="padding:3px 8px;text-align:right;color:${col}">${(chg>=0?'+':'')+fmtDollarWhole(chg)}${tiny}</td></tr>`; }).join('');
+    const slRows = sim.sleeveRows.map(r=>{ const chg=Math.round(r.change); const col=Math.abs(chg)<500?'var(--color-text-tertiary)':chg>0?'var(--color-text-success)':'var(--color-text-danger)'; const isT=r.sleeve===sim.targetSleeve; return `<tr><td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.sleeve)}${isT?` <span style="color:var(--color-text-info);font-size:8px">← ${esc(buyTicker)} joins</span>`:''}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td><td style="padding:3px 8px;text-align:right;color:${col}">${(chg>=0?'+':'')+fmtDollarWhole(chg)}</td></tr>`; }).join('');
+    const buyRow = sim.rows.find(r=>qrNormTicker(r.display)===qrNormTicker(buyTicker));
+    const buyInsight = (buyRow && buyRow.fBefore > 0) ? `Note: you already hold ~${fmtDollarWhole(buyRow.fBefore)} of ${esc(buyTicker)} via your funds (mostly VOO) — this buy adds to existing exposure, not brand-new.` : '';
+    impact = `
+      <div style="font-size:9px;color:var(--color-text-secondary);margin:8px 0 4px">Selling ${fmtDollarWhole(sim.proceeds)} across ${sim.soldCount} position(s) → buying ${esc(buyTicker)}. Positions: ${sim.posBefore} → ${sim.posAfter}.</div>
+      <div style="font-size:9px;margin:0 0 6px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name (true exposure)</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th></tr></thead><tbody>${expRows}</tbody></table></div>
+      ${buyInsight?`<div style="font-size:8px;color:#fbbf24;margin-top:5px">${buyInsight}</div>`:''}
+      ${sim.sleeveRows.length?`<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">Sleeve impact (your direct book)</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Sleeve</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th></tr></thead><tbody>${slRows}</tbody></table></div>`:''}
+      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">Selling direct X doesn\u2019t zero your X held inside VOO; buying ${esc(buyTicker)} may add to ${esc(buyTicker)} you already own via funds. Approximate — fund weights drift, tax is an estimate from your active profile (not advice).</div>`;
+  } else {
+    impact = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Add holdings you\u2019d sell to fund buying ${esc(buyTicker)} — see the true-exposure, tax, and sleeve impact.</div>`;
+  }
+
+  host.innerHTML = `
+    <div style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md)">
+      <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">Hypothetical: sell holdings → buy ${esc(buyTicker)}</div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+        <select id="qr-swap-add" onchange="qrSwapAddSell()" style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 6px;cursor:pointer">
+          <option value="">+ add a holding to sell…</option>${addOpts}
+        </select>
+      </div>
+      <div>${chips}</div>
+      ${impact}
+    </div>`;
+}
+
+// ── Rotation simulator ──
 // "What if I sold these direct positions and bought this ETF with the proceeds?" Recomputes
 // TRUE exposure (direct + via funds) before vs after, so you see the honest, often-deflating
 // truth: rotating overlapping picks into the index barely lowers your exposure to those names
@@ -6602,17 +6777,21 @@ function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
   // Tax = gain × the position's rate (ST/LT by holding period; IRA sheltered = 0). Losses don't
   // generate tax here (matches the app's applyTaxToGain convention — no loss-harvest credit modeled).
   let proceeds = 0, estTax = 0, taxableGain = 0, hasIRA = false, missingDate = false, anyLoss = false;
+  let shelteredProceeds = 0, taxableProceeds = 0;
   positions.filter(p => !p.closed && p.ticker && sellNormsSet.has(qrNormTicker(p.ticker)))
     .forEach(p => {
       const c = calcPos(p);
-      proceeds += c.exitValue || 0;
+      const v = c.exitValue || 0;
+      proceeds += v;
+      const isIRA = (p.account||'').toLowerCase() === 'ira';
       const rate = taxRateForOpen(p);
-      if ((p.account||'').toLowerCase() === 'ira') hasIRA = true;
-      if (!p.dateBought) missingDate = true;
+      if (isIRA) { hasIRA = true; shelteredProceeds += v; }
+      else { taxableProceeds += v; }
+      if (!p.dateBought && !isIRA) missingDate = true;
       if (c.gainLoss > 0) {
-        taxableGain += c.gainLoss;
-        estTax += c.gainLoss * rate;
-      } else if (c.gainLoss < 0) {
+        if (!isIRA) taxableGain += c.gainLoss;  // IRA gains aren't taxed at sale
+        estTax += c.gainLoss > 0 ? c.gainLoss * rate : 0; // rate is 0 for IRA anyway
+      } else if (c.gainLoss < 0 && !isIRA) {
         anyLoss = true;
       }
     });
@@ -6678,7 +6857,30 @@ function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
   const gainEtf = etfAlreadyHeld > 0 ? 0 : 1;
   const posAfter = posBefore - soldCount + gainEtf;
 
-  return { rows, proceeds, posBefore, posAfter, soldCount, estTax, taxableGain, hasIRA, missingDate, anyLoss };
+  // ── Sleeve impact ── Sleeves organize your DIRECT book, so measure sleeve shifts on direct
+  // dollars (the VOO-embedded exposure isn't sleeve-assigned). Selling a position removes its
+  // value from its sleeve; the NET proceeds (after tax leaves the book) land in the sleeve the
+  // candidate ETF would join. Tax exits the portfolio entirely.
+  const sleeveBefore = {}, sleeveAfter = {};
+  positions.filter(p => !p.closed && p.ticker).forEach(p => {
+    const sl = p.sleeve || '(unassigned)';
+    const v = calcPos(p).exitValue || 0;
+    sleeveBefore[sl] = (sleeveBefore[sl]||0) + v;
+    sleeveAfter[sl]  = (sleeveAfter[sl]||0) + v;
+  });
+  // Remove sold positions from their sleeves in the AFTER picture.
+  positions.filter(p => !p.closed && p.ticker && sellNormsSet.has(qrNormTicker(p.ticker))).forEach(p => {
+    const sl = p.sleeve || '(unassigned)';
+    sleeveAfter[sl] = (sleeveAfter[sl]||0) - (calcPos(p).exitValue || 0);
+  });
+  // Add net proceeds to the candidate ETF's target sleeve.
+  const targetSleeve = ((typeof document !== 'undefined' && document.getElementById('qr-sleeve')) ? document.getElementById('qr-sleeve').value : '') || '(unassigned)';
+  sleeveAfter[targetSleeve] = (sleeveAfter[targetSleeve]||0) + (proceeds - estTax);
+  const sleeveRows = Object.keys(sleeveBefore).map(sl => ({
+    sleeve: sl, before: sleeveBefore[sl]||0, after: sleeveAfter[sl]||0, change: (sleeveAfter[sl]||0) - (sleeveBefore[sl]||0)
+  })).filter(r => Math.abs(r.change) >= 1).sort((a,b)=>Math.abs(b.change)-Math.abs(a.change));
+
+  return { rows, proceeds, posBefore, posAfter, soldCount, estTax, taxableGain, hasIRA, missingDate, anyLoss, shelteredProceeds, taxableProceeds, sleeveRows, targetSleeve };
 }
 
 // Render the rotation checklist + before/after table into #qr-rotation. Reads which direct
@@ -6704,12 +6906,22 @@ function qrRenderRotation() {
   if (checked.size > 0) {
     const sim = qrSimulateRotation(parsed, etfTicker, checked);
     const netProceeds = sim.proceeds - sim.estTax;
-    const taxNote = sim.estTax > 0
-      ? `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of gains → ~${fmtDollarWhole(netProceeds)} net to reinvest`
-      : (sim.hasIRA ? `no tax (IRA — sheltered)` : (sim.anyLoss ? `no tax (sales at a loss)` : `no taxable gain`));
+    let taxNote;
+    if (sim.estTax > 0) {
+      taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains → ~${fmtDollarWhole(netProceeds)} net to reinvest`;
+      if (sim.shelteredProceeds > 0) taxNote += `. ${fmtDollarWhole(sim.shelteredProceeds)} of the sale is in your IRA — sold tax-free`;
+    } else if (sim.hasIRA && sim.taxableProceeds === 0) {
+      taxNote = `no tax — the entire sale is in your IRA (sheltered)`;
+    } else if (sim.hasIRA) {
+      taxNote = `no taxable gain on the ${fmtDollarWhole(sim.taxableProceeds)} taxable portion; ${fmtDollarWhole(sim.shelteredProceeds)} is IRA (tax-free)`;
+    } else if (sim.anyLoss) {
+      taxNote = `no tax (sales at a loss)`;
+    } else {
+      taxNote = `no taxable gain`;
+    }
     const body = sim.rows.slice(0, 15).map(r => {
       const chg = Math.round(r.change);
-      const chgColor = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg < 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const chgColor = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
       const chgTxt = (chg>=0?'+':'') + fmtDollarWhole(chg);
       const tiny = Math.abs(chg) < 1000 && r.before > 5000 ? ' <span style="color:#fbbf24">← barely moves</span>' : '';
       return `<tr>
@@ -6729,7 +6941,26 @@ function qrRenderRotation() {
           <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
           <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
         </tr></thead><tbody>${body}</tbody></table></div>
-      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">The point: for names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal, not de-concentration. ` : ''}Rotating mainly trades per-name control for diffuse index exposure. Approximate — fund weights drift, tax is an estimate from your active profile (not advice).</div>`;
+      ${sim.sleeveRows.length ? `
+      <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">Sleeve impact (your direct book)</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
+        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Sleeve</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
+        </tr></thead><tbody>${sim.sleeveRows.map(r => {
+          const chg = Math.round(r.change);
+          const col = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+          const isTarget = r.sleeve === sim.targetSleeve;
+          return `<tr>
+            <td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.sleeve)}${isTarget?` <span style="color:var(--color-text-info);font-size:8px">← ${esc(etfTicker)} joins</span>`:''}</td>
+            <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
+            <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
+            <td style="padding:3px 8px;text-align:right;color:${col}">${(chg>=0?'+':'')+fmtDollarWhole(chg)}</td>
+          </tr>`;
+        }).join('')}</tbody></table></div>` : ''}
+      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">The point: for names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal, not de-concentration. ` : ''}Rotating also shifts weight between sleeves (above) — selling moves dollars out of the sold names\u2019 sleeves into ${esc(etfTicker)}\u2019s sleeve. Approximate — fund weights drift, tax is an estimate from your active profile (not advice).</div>`;
   } else {
     tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above to model rotating them into ${esc(etfTicker)}.</div>`;
   }
