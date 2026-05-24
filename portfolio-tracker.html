@@ -6574,6 +6574,137 @@ function qrEtfOverlapSummary(parsed) {
   return { overlapPct: +overlapWeight.toFixed(1), names, parsedWeight: +parsedWeight.toFixed(1) };
 }
 
+// ── Rotation simulator ──────────────────────────────────────────────────────
+// "What if I sold these direct positions and bought this ETF with the proceeds?" Recomputes
+// TRUE exposure (direct + via funds) before vs after, so you see the honest, often-deflating
+// truth: rotating overlapping picks into the index barely lowers your exposure to those names
+// (the ETF hands most of it back), it mainly trades concentrated control for diffuse index
+// exposure. `sellTickers` = the (normalized) direct positions being rotated out; `etfTicker` =
+// the fund being rotated into; `parsed` = that ETF's pasted holdings (ticker+weight).
+// Holds transient state so checkbox toggles can re-render without re-parsing.
+let qrRotationState = { parsed: [], etfTicker: '', candidates: [] };
+
+function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
+  // Proceeds from selling the checked direct positions.
+  let proceeds = 0;
+  positions.filter(p => !p.closed && p.ticker && sellNormsSet.has(qrNormTicker(p.ticker)))
+    .forEach(p => { proceeds += calcPos(p).exitValue || 0; });
+
+  // BEFORE: current true exposure per affected name. AFTER: same, but with the sold positions'
+  // direct value removed AND the ETF position grown by `proceeds` (so its decomposition gives
+  // back the overlapping names proportionally). We model the ETF growth by adding, per ETF
+  // holding, proceeds * weight/100 to that name's "via funds" bucket.
+  const etfNorm = qrNormTicker(etfTicker);
+  const etfAlreadyHeld = indexFundHeldValue(etfTicker); // usually 0 (it's a candidate)
+  // Build the set of names we report on: the sold names + the ETF's holdings (the names that
+  // change). For each, compute before/after direct and via-funds.
+  const affected = {};
+  const ensure = (tk) => { const k = qrNormTicker(tk); if (!affected[k]) affected[k] = { display: tk, dBefore:0, dAfter:0, fBefore:0, fAfter:0 }; return affected[k]; };
+
+  // Current direct values
+  positions.filter(p => !p.closed && p.ticker).forEach(p => {
+    const k = qrNormTicker(p.ticker);
+    const v = calcPos(p).exitValue || 0;
+    // only track names that are either being sold or are in the ETF (others are unaffected)
+    // we'll filter later; for now record direct for sold names
+    if (sellNormsSet.has(k)) { const a = ensure(p.ticker); a.dBefore += v; a.dAfter += 0; }
+  });
+  // Current via-funds (look-through) for each ETF holding + each sold name
+  const namesToCheck = new Set([...sellNormsSet]);
+  parsed.forEach(h => namesToCheck.add(qrNormTicker(h.ticker)));
+  namesToCheck.forEach(k => {
+    // find a display ticker
+    const fromParsed = parsed.find(h => qrNormTicker(h.ticker) === k);
+    const display = fromParsed ? fromParsed.ticker : (affected[k] ? affected[k].display : k);
+    const a = ensure(display);
+    const lts = qrIndexLookthrough(display);
+    const via = lts.reduce((s,l)=>s+l.indirectValue, 0);
+    a.fBefore += via;
+    a.fAfter += via; // funds unchanged except the new ETF money, added next
+    // direct before/after for names NOT in the sell set (unchanged direct)
+    if (!sellNormsSet.has(k)) {
+      const dv = positions.filter(p=>!p.closed&&p.ticker&&qrNormTicker(p.ticker)===k).reduce((s,p)=>s+(calcPos(p).exitValue||0),0);
+      a.dBefore += dv; a.dAfter += dv;
+    }
+  });
+  // Add the new ETF money's decomposition to AFTER via-funds.
+  parsed.forEach(h => {
+    if (h.weight == null) return;
+    const a = ensure(h.ticker);
+    a.fAfter += proceeds * (h.weight / 100);
+  });
+
+  const rows = Object.values(affected).map(a => ({
+    display: a.display,
+    before: a.dBefore + a.fBefore,
+    after: a.dAfter + a.fAfter,
+    dBefore: a.dBefore, dAfter: a.dAfter,
+    fBefore: a.fBefore, fAfter: a.fAfter,
+    change: (a.dAfter + a.fAfter) - (a.dBefore + a.fBefore),
+  })).filter(r => r.before > 0 || r.after > 0).sort((x,y)=>y.before - x.before);
+
+  // Position count change: lose the sold names, gain QQQ if not already held.
+  const posBefore = positions.filter(p=>!p.closed&&p.ticker).length;
+  const soldCount = positions.filter(p=>!p.closed&&p.ticker&&sellNormsSet.has(qrNormTicker(p.ticker))).length;
+  const gainEtf = etfAlreadyHeld > 0 ? 0 : 1;
+  const posAfter = posBefore - soldCount + gainEtf;
+
+  return { rows, proceeds, posBefore, posAfter, soldCount };
+}
+
+// Render the rotation checklist + before/after table into #qr-rotation. Reads which direct
+// overlap names are checked; recomputes on every toggle.
+function qrToggleRotation() { qrRenderRotation(); }
+function qrRenderRotation() {
+  const host = document.getElementById('qr-rotation');
+  if (!host) return;
+  const { parsed, etfTicker, candidates } = qrRotationState;
+  if (!candidates.length) { host.innerHTML = ''; return; }
+  const checked = new Set();
+  candidates.forEach(c => {
+    const el = document.getElementById('qr-rot-' + c.norm);
+    if (el && el.checked) checked.add(c.norm);
+  });
+  const checklist = candidates.map(c =>
+    `<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;font-size:10px;cursor:pointer;color:var(--color-text-secondary)">
+      <input type="checkbox" id="qr-rot-${c.norm}" ${checked.has(c.norm)?'checked':''} onchange="qrToggleRotation()" style="cursor:pointer">
+      ${esc(c.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(c.directValue)}</span>
+    </label>`).join('');
+
+  let tableHtml = '';
+  if (checked.size > 0) {
+    const sim = qrSimulateRotation(parsed, etfTicker, checked);
+    const body = sim.rows.slice(0, 15).map(r => {
+      const chg = Math.round(r.change);
+      const chgColor = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg < 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const chgTxt = (chg>=0?'+':'') + fmtDollarWhole(chg);
+      const tiny = Math.abs(chg) < 1000 && r.before > 5000 ? ' <span style="color:#fbbf24">← barely moves</span>' : '';
+      return `<tr>
+        <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
+        <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
+        <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
+        <td style="padding:3px 8px;text-align:right;color:${chgColor}">${chgTxt}${tiny}</td>
+      </tr>`;
+    }).join('');
+    tableHtml = `
+      <div style="font-size:9px;color:var(--color-text-secondary);margin:8px 0 4px">Selling ${fmtDollarWhole(sim.proceeds)} across ${sim.soldCount} position(s) → buying ${esc(etfTicker)}. Positions: ${sim.posBefore} → ${sim.posAfter}.</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
+        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name (true exposure)</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
+        </tr></thead><tbody>${body}</tbody></table></div>
+      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">The point: for names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back, and VOO still holds them. Rotating mainly trades per-name control for diffuse index exposure and cuts your position count, not your concentration. Approximate (fund weights drift).</div>`;
+  } else {
+    tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above to model rotating them into ${esc(etfTicker)}.</div>`;
+  }
+  host.innerHTML = `
+    <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">Hypothetical: rotate direct holdings → ${esc(etfTicker)}</div>
+    <div style="margin-bottom:2px">${checklist}</div>
+    ${tableHtml}`;
+}
+
 // Read the ETF holdings field, parse it, and show DIRECT overlaps with the book.
 function runQrHoldingsOverlap() {
   const out = document.getElementById('qr-holdings-overlap');
@@ -6607,6 +6738,19 @@ function runQrHoldingsOverlap() {
     </div>`;
   }
 
+  // ── Rotation hypothetical: rotate direct overlap names INTO this ETF ──
+  // Candidates = names you hold DIRECTLY that this ETF also holds (rotating a name the ETF
+  // doesn't hold wouldn't be "into the overlap"). Populate state + a container; the interactive
+  // table renders via qrRenderRotation reading the checkboxes.
+  const etfTicker = ((document.getElementById('qr-ticker')||{}).value || 'this ETF').toUpperCase();
+  const rotCandidates = overlaps
+    .filter(o => o.yourDirectValue > 0)
+    .map(o => ({ norm: qrNormTicker(o.ticker), display: o.ticker, directValue: o.yourDirectValue }));
+  qrRotationState = { parsed, etfTicker, candidates: rotCandidates };
+  if (rotCandidates.length > 0) {
+    html += `<div id="qr-rotation" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:8px"></div>`;
+  }
+
   if (overlaps.length > 0) {
     const rows = overlaps.map(o => {
       const w = o.weight != null ? ` <span style="color:var(--color-text-tertiary)">(ETF weight ${o.weight}%)</span>` : '';
@@ -6628,6 +6772,7 @@ function runQrHoldingsOverlap() {
     </div>`;
   }
   out.innerHTML = html;
+  qrRenderRotation(); // populate the rotation panel now that its container is in the DOM
 }
 
 // Fetch holdings from the worker, fill the holdings field + bonus fields, then run
