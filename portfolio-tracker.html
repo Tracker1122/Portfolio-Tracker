@@ -1147,6 +1147,9 @@
     </div>
     <div id="industry-ref-panel" style="margin:8px 0 12px"></div>
 
+    <!-- True Exposure (condensed bar chart; full view in Distribution tab) -->
+    <div id="true-exposure-panel" style="margin:0 0 20px"></div>
+
     <!-- Cash Buckets -->
     <div class="section-heading">Undeployed Cash</div>
     <div id="cash-panel" style="margin-bottom:20px">
@@ -1326,8 +1329,6 @@
       <input type="range" class="scroll-slider" id="closed-slider" min="0" value="0" step="1"
         oninput="sliderScroll('closed-table-wrapper', this)">
     </div>
-
-    <div id="true-exposure-panel" style="margin-top:20px"></div>
 
   </div><!-- end tab-dashboard -->
 
@@ -6066,47 +6067,41 @@ function computeTrueExposure() {
   return { rows, activeFunds };
 }
 
+let dashExposureMode = 'stocks'; // dashboard True Exposure toggle, independent of the Distribution tab's
+function setDashExposureMode(m) { dashExposureMode = m; renderTrueExposurePanel(); }
+
 function renderTrueExposurePanel() {
   const out = document.getElementById('true-exposure-panel');
   if (!out) return;
-  const { rows, activeFunds } = computeTrueExposure();
-  if (!activeFunds.length) {
-    out.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">True-exposure look-through: add your basket funds' holdings in Quality Review → "Index look-through tables" to see combined direct + embedded exposure here.</div>`;
+  // Use the SAME distribution computation + shared bar renderer as the Distribution tab, so this
+  // condensed dashboard view can't drift from the full one. Condensed = top 8, no metric cards,
+  // no full table (that lives in the Distribution tab, linked below).
+  const stocksOnly = dashExposureMode === 'stocks';
+  const dist = computePortfolioDistribution(stocksOnly);
+  const { rows, total, activeFunds } = dist;
+  if (!total || total <= 0 || !Object.keys(activeFunds).length) {
+    out.innerHTML = `<div class="section-heading">True Exposure — direct + inside your funds</div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Add your basket funds' holdings in Quality Review → "Index look-through tables" to see combined direct + embedded exposure here.</div>`;
     return;
   }
-  // Only show names with meaningful exposure or a direct holding; cap the list.
-  const shown = rows.filter(r => r.total >= 1000 || r.direct > 0).slice(0, 25);
-  const fundsNote = activeFunds.map(f => `${esc(f.fund)} (~${fmtDollarWhole(f.value)}, as of ${esc(f.asOf||'?')})`).join(' · ');
-  const body = shown.map(r => {
-    const viaParts = Object.entries(r.viaFunds).map(([f, d]) => `${esc(f)} ${fmtDollarWhole(d)}`).join(' + ');
-    const directPart = r.direct > 0 ? `direct ${fmtDollarWhole(r.direct)}` : '';
-    const breakdown = [directPart, viaParts].filter(Boolean).join(' + ');
-    return `<tr>
-      <td style="padding:4px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
-      <td style="padding:4px 8px;text-align:right;font-weight:600;color:var(--color-text-primary)">${fmtDollarWhole(r.total)}</td>
-      <td style="padding:4px 8px;text-align:right;color:var(--color-text-secondary)">${r.direct>0?fmtDollarWhole(r.direct):'—'}</td>
-      <td style="padding:4px 8px;text-align:right;color:var(--color-text-secondary)">${r.embedded>0?fmtDollarWhole(r.embedded):'—'}</td>
-      <td style="padding:4px 8px;font-size:8px;color:var(--color-text-tertiary)">${breakdown}</td>
-    </tr>`;
-  }).join('');
+  const pctOf = (v) => (v / total) * 100;
+  const top = rows.slice(0, 8);
+  const { barsHtml, legendHtml } = renderDistributionBars(top, stocksOnly, pctOf, { topN: 8, labelWidth: 90, barHeight: 14, fontSize: 11 });
+
+  const toggle = `<div style="display:flex;gap:4px;margin-bottom:10px">
+    <button onclick="setDashExposureMode('stocks')" style="font-size:10px;padding:3px 11px;border-radius:14px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${stocksOnly?'var(--color-text-info)':'transparent'};color:${stocksOnly?'#000':'var(--color-text-tertiary)'};font-weight:${stocksOnly?'600':'400'}">Stocks only</button>
+    <button onclick="setDashExposureMode('funds')" style="font-size:10px;padding:3px 11px;border-radius:14px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${!stocksOnly?'var(--color-text-info)':'transparent'};color:${!stocksOnly?'#000':'var(--color-text-tertiary)'};font-weight:${!stocksOnly?'600':'400'}">Show funds</button>
+  </div>`;
+
   out.innerHTML = `
     <div class="section-heading">True Exposure — direct + inside your funds</div>
     <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin:4px 0 8px">
-      Your real per-name exposure: what you hold directly PLUS what you hold indirectly inside basket funds you own.
-      Embedded figures are <strong>approximate</strong> (fund weights drift). Funds included: ${fundsNote}.
+      Your real per-name exposure, top 8: <span style="color:#60a5fa">held directly</span> + <span style="color:#34d399">inside funds you own</span>. Embedded figures are approximate (weights drift).
     </div>
-    <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:10px">
-        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
-          <th style="padding:4px 8px;text-align:left;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">Name</th>
-          <th style="padding:4px 8px;text-align:right;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">True Total</th>
-          <th style="padding:4px 8px;text-align:right;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">Direct</th>
-          <th style="padding:4px 8px;text-align:right;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">Via funds</th>
-          <th style="padding:4px 8px;text-align:left;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">Breakdown</th>
-        </tr></thead>
-        <tbody>${body}</tbody>
-      </table>
-    </div>`;
+    ${toggle}
+    ${legendHtml}
+    <div style="margin:8px 0 8px">${barsHtml || '<div style="font-size:11px;color:var(--color-text-tertiary)">No holdings to chart.</div>'}</div>
+    <a href="#" onclick="switchTab('distribution');return false" style="font-size:10px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">Full breakdown in Distribution →</a>`;
 }
 
 // PORTFOLIO DISTRIBUTION: a RE-SLICING of your whole portfolio (positions + Passive Core + cash)
@@ -6194,6 +6189,62 @@ function computePortfolioDistribution(stocksOnly) {
 
 let distributionMode = 'stocks'; // 'stocks' (single tickers only) or 'funds' (show fund blocks)
 function setDistributionMode(m) { distributionMode = m; renderDistributionTab(); }
+
+// SHARED split-bar renderer — used by BOTH the Distribution tab and the condensed dashboard
+// panel, so the two can't drift. Takes already-computed distribution rows (sorted desc by value),
+// the stocksOnly flag, and a pctOf(value)->% function. opts: { topN, labelWidth, barHeight,
+// fontSize, showLegend }. Returns { barsHtml, legendHtml }. Blue = held directly (exact),
+// green = inside funds (approx); resting readout is % of portfolio, hover shows the $ split.
+function renderDistributionBars(rows, stocksOnly, pctOf, opts) {
+  opts = opts || {};
+  const topN = opts.topN || 12;
+  const labelWidth = opts.labelWidth || 96;
+  const barHeight = opts.barHeight || 16;
+  const fontSize = opts.fontSize || 12;
+  const COL_DIRECT = '#60a5fa';   // blue — held directly (exact)
+  const COL_VIA    = '#34d399';   // green — inside funds (approximate)
+  const splitSources = (sources) => {
+    let direct = 0, via = 0;
+    for (const [k, v] of Object.entries(sources || {})) {
+      if (k.startsWith('via ')) via += v; else direct += v; // 'Direct', 'Cash', etc. → direct side
+    }
+    return { direct, via };
+  };
+  const top = rows.slice(0, topN);
+  const maxPct = top.length ? pctOf(top[0].value) : 1;
+  const barsHtml = top.map((r) => {
+    const p = pctOf(r.value);
+    const w = maxPct > 0 ? (p / maxPct) * 100 : 0;
+    let segments, tip = '';
+    if (stocksOnly) {
+      const { direct, via } = splitSources(r.sources);
+      const tot = direct + via;
+      const dPct = tot > 0 ? (direct / tot) * 100 : 100;
+      const vPct = 100 - dPct;
+      segments = `<div style="width:${dPct.toFixed(1)}%;background:${COL_DIRECT};height:100%"></div><div style="width:${vPct.toFixed(1)}%;background:${COL_VIA};height:100%"></div>`;
+      const directLine = `<span style="color:${COL_DIRECT}">■</span> Direct: ${fmtDollarWhole(direct)} (${Math.round(dPct)}%) <span style="color:var(--color-text-tertiary)">· exact</span>`;
+      const viaLine = `<span style="color:${COL_VIA}">■</span> Inside funds: ${fmtDollarWhole(via)} (${Math.round(vPct)}%) <span style="color:var(--color-text-tertiary)">· approx</span>`;
+      tip = `<div class="dist-bar-tip"><div style="font-weight:700;margin-bottom:3px;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio)</div><div>${directLine}</div><div>${viaLine}</div></div>`;
+    } else {
+      segments = `<div style="width:100%;background:${COL_DIRECT};height:100%"></div>`;
+      tip = `<div class="dist-bar-tip"><div style="font-weight:700;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio)</div></div>`;
+    }
+    return `<div class="dist-bar-row" style="display:flex;align-items:center;gap:8px;margin-bottom:5px;position:relative">
+      <div style="flex:0 0 ${labelWidth}px;font-size:${fontSize}px;font-weight:600;color:var(--color-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(r.display)}">${esc(r.display)}</div>
+      <div style="flex:1;background:var(--color-background-secondary);border-radius:3px;height:${barHeight}px;position:relative;overflow:hidden">
+        <div style="width:${w.toFixed(1)}%;height:100%;display:flex;border-radius:3px;overflow:hidden">${segments}</div>
+      </div>
+      <div style="flex:0 0 48px;text-align:right;font-size:${fontSize}px;color:var(--color-text-secondary)">${p.toFixed(1)}%</div>
+      ${tip}
+    </div>`;
+  }).join('');
+  const legendHtml = (stocksOnly && opts.showLegend !== false) ? `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;font-size:11px;color:var(--color-text-secondary)">
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:${COL_DIRECT}"></span>Held directly (exact)</span>
+    <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:${COL_VIA}"></span>Inside funds — VOO / ETFs (approx)</span>
+    <span style="color:var(--color-text-tertiary);font-style:italic">hover a bar for the $ breakdown</span>
+  </div>` : '';
+  return { barsHtml, legendHtml };
+}
 
 function renderDistributionTab() {
   const out = document.getElementById('distribution-content');
@@ -6283,57 +6334,10 @@ function renderDistributionTab() {
   // ── Horizontal bars: one readable row per top name (name · split-bar · %), sorted desc. ──
   // Bars are scaled to the LARGEST shown name (not to total) so small differences are visible;
   // the % label is always vs. total so the numbers stay honest.
-  // EACH BAR IS SPLIT (stocks-only mode): blue segment = the part you hold DIRECTLY (exact),
-  // green segment = the part embedded inside your funds — VOO/ETFs (approximate). Shows composition
-  // at a glance, so a name like NVDA that's mostly inside-VOO reads very differently from a pure
-  // direct pick. The resting readout is JUST the % of portfolio (clean); hover the row for the
-  // direct/funds breakdown in dollars and %. In funds mode rows include fund blocks themselves
-  // (no direct/via split), so we draw one calm accent bar.
-  const COL_DIRECT = '#60a5fa';   // blue — held directly (exact)
-  const COL_VIA    = '#34d399';   // green — inside funds (approximate)
-  // Recover the direct vs. via-funds dollar split from the row's source tags.
-  const splitSources = (sources) => {
-    let direct = 0, via = 0;
-    for (const [k, v] of Object.entries(sources || {})) {
-      if (k.startsWith('via ')) via += v; else direct += v; // 'Direct', 'Cash', etc. → direct side
-    }
-    return { direct, via };
-  };
-  const maxPct = top.length ? pctOf(top[0].value) : 1;
-  const barRows = top.map((r) => {
-    const p = pctOf(r.value);
-    const w = maxPct > 0 ? (p / maxPct) * 100 : 0;
-    let segments, tip = '';
-    if (stocksOnly) {
-      const { direct, via } = splitSources(r.sources);
-      const tot = direct + via;
-      const dPct = tot > 0 ? (direct / tot) * 100 : 100;
-      const vPct = 100 - dPct;
-      segments = `<div style="width:${dPct.toFixed(1)}%;background:${COL_DIRECT};height:100%"></div><div style="width:${vPct.toFixed(1)}%;background:${COL_VIA};height:100%"></div>`;
-      // Hover tooltip: portfolio %, then the direct/funds breakdown in $ and %.
-      const directLine = `<span style="color:${COL_DIRECT}">■</span> Direct: ${fmtDollarWhole(direct)} (${Math.round(dPct)}%) <span style="color:var(--color-text-tertiary)">· exact</span>`;
-      const viaLine = `<span style="color:${COL_VIA}">■</span> Inside funds: ${fmtDollarWhole(via)} (${Math.round(vPct)}%) <span style="color:var(--color-text-tertiary)">· approx</span>`;
-      tip = `<div class="dist-bar-tip"><div style="font-weight:700;margin-bottom:3px;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio)</div><div>${directLine}</div><div>${viaLine}</div></div>`;
-    } else {
-      segments = `<div style="width:100%;background:${COL_DIRECT};height:100%"></div>`;
-      tip = `<div class="dist-bar-tip"><div style="font-weight:700;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio)</div></div>`;
-    }
-    return `<div class="dist-bar-row" style="display:flex;align-items:center;gap:8px;margin-bottom:5px;position:relative">
-      <div style="flex:0 0 96px;font-size:12px;font-weight:600;color:var(--color-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(r.display)}">${esc(r.display)}</div>
-      <div style="flex:1;background:var(--color-background-secondary);border-radius:3px;height:16px;position:relative;overflow:hidden">
-        <div style="width:${w.toFixed(1)}%;height:100%;display:flex;border-radius:3px;overflow:hidden">${segments}</div>
-      </div>
-      <div style="flex:0 0 48px;text-align:right;font-size:12px;color:var(--color-text-secondary)">${p.toFixed(1)}%</div>
-      ${tip}
-    </div>`;
-  }).join('');
-
-  // Legend for the split segments — only meaningful in stocks-only mode.
-  const barLegend = stocksOnly ? `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;font-size:11px;color:var(--color-text-secondary)">
-    <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:${COL_DIRECT}"></span>Held directly (exact)</span>
-    <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:${COL_VIA}"></span>Inside funds — VOO / ETFs (approx)</span>
-    <span style="color:var(--color-text-tertiary);font-style:italic">hover a bar for the $ breakdown</span>
-  </div>` : '';
+  // EACH BAR IS SPLIT (stocks-only mode): blue = held DIRECTLY (exact), green = embedded inside
+  // your funds (approx). Resting readout is JUST % of portfolio; hover for the $ breakdown.
+  // Rendered via the shared helper so the dashboard's condensed version stays identical.
+  const { barsHtml: barRows, legendHtml: barLegend } = renderDistributionBars(top, stocksOnly, pctOf, { topN: top.length, labelWidth: 96, barHeight: 16, fontSize: 12 });
 
   const fundsNote = Object.entries(activeFunds).map(([f,info])=>`${esc(f)} (~${fmtDollarWhole(info.value)}, as of ${esc(info.asOf||'?')})`).join(' · ') || 'none yet — paste fund holdings in Quality Review → Index look-through';
 
