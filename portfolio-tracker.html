@@ -5523,6 +5523,32 @@ const QR_FIELDS = {
 
 let qrType = 'stock';        // current form mode
 let qrEditingId = null;      // id of candidate being edited, or null for new
+let qrStage2Unlocked = false; // two-stage form: stage 2 (full fields + save) hidden until
+                              // the 3 identifying fields are committed via "Save & continue"
+
+// Re-render the auto-firing exposure panel from the current stage-1 field values, and
+// enable/disable the "Save & continue" button based on whether the 3 required fields are set.
+function qrCheckStage1() {
+  const tk = document.getElementById('qr-ticker');
+  const th = document.getElementById('qr-theme');
+  const sl = document.getElementById('qr-sleeve');
+  const panel = document.getElementById('qr-overlap-panel');
+  if (panel && th) panel.innerHTML = renderQrOverlap(th.value, tk ? tk.value : '');
+  const ready = tk && tk.value.trim() && th && th.value && sl && sl.value
+    && (qrType !== 'etf' || (document.getElementById('qr-f-holdingsTop') || {}).value);
+  const btn = document.getElementById('qr-stage1-continue');
+  if (btn) {
+    btn.disabled = !ready;
+    btn.style.opacity = ready ? '1' : '0.4';
+    btn.style.cursor = ready ? 'pointer' : 'not-allowed';
+  }
+}
+// Commit stage 1: save the candidate (so it's recorded even if you stop here) and reveal stage 2.
+function qrUnlockStage2() {
+  qrStage2Unlocked = true;
+  saveQrCandidate(true); // keepForm = stay in the form / keep editing this candidate
+  renderQrForm();        // re-render now showing stage 2
+}
 
 function setQrType(t) {
   qrType = t;
@@ -5534,11 +5560,13 @@ function setQrType(t) {
   document.getElementById('qr-type-etf').style.color = t === 'etf' ? '#000' : 'var(--color-text-tertiary)';
   document.getElementById('qr-type-etf').style.border = t === 'etf' ? 'none' : '1px solid var(--color-border-tertiary)';
   document.getElementById('qr-type-etf').style.fontWeight = t === 'etf' ? '600' : '400';
+  if (qrEditingId === null) qrStage2Unlocked = false; // fresh form starts at stage 1
   renderQrForm();
 }
 
 function resetQrForm() {
   qrEditingId = null;
+  qrStage2Unlocked = false;
   renderQrForm();
 }
 
@@ -5805,18 +5833,19 @@ function computeTrueExposure() {
     const n = qrNormTicker(p.ticker);
     if (basketNorms.has(n)) return; // don't list the ETF itself as a "name"
     const v = (calcPos(p).exitValue || 0);
-    if (!byName[n]) byName[n] = { display: p.ticker, direct: 0, viaFunds: {}, embedded: 0 };
-    byName[n].direct += v;
+    const c = qrCanonical(p.ticker);
+    if (!byName[c.key]) byName[c.key] = { display: c.display, direct: 0, viaFunds: {}, embedded: 0 };
+    byName[c.key].direct += v;
   });
   // Embedded holdings from each active fund.
   activeFunds.forEach(({ fund, value, weights }) => {
     for (const [tk, w] of Object.entries(weights)) {
       if (w == null) continue;
-      const n = qrNormTicker(tk);
       const dollars = value * (w / 100);
-      if (!byName[n]) byName[n] = { display: tk, direct: 0, viaFunds: {}, embedded: 0 };
-      byName[n].viaFunds[fund] = (byName[n].viaFunds[fund] || 0) + dollars;
-      byName[n].embedded += dollars;
+      const c = qrCanonical(tk);
+      if (!byName[c.key]) byName[c.key] = { display: c.display, direct: 0, viaFunds: {}, embedded: 0 };
+      byName[c.key].viaFunds[fund] = (byName[c.key].viaFunds[fund] || 0) + dollars;
+      byName[c.key].embedded += dollars;
     }
   });
   const rows = Object.values(byName).map(r => ({ ...r, total: r.direct + r.embedded }))
@@ -5882,12 +5911,15 @@ function computePortfolioDistribution(stocksOnly) {
     if (val > 0 && tbl.weights && Object.keys(tbl.weights).length) activeFunds[fund] = { value: val, weights: tbl.weights, asOf: tbl.asOf };
   }
   const activeFundNorms = new Set(Object.keys(activeFunds).map(qrNormTicker));
-  const slices = {}; // norm -> { display, value, sources:{} }
+  const slices = {}; // canonical key -> { display, value, sources:{} }
   const add = (display, val, sourceLabel) => {
-    const n = qrNormTicker(display);
-    if (!slices[n]) slices[n] = { display, value: 0, sources: {} };
-    slices[n].value += val;
-    slices[n].sources[sourceLabel] = (slices[n].sources[sourceLabel] || 0) + val;
+    // For real stock tickers, collapse dual-class shares (GOOGL/GOOG) to one company row.
+    // Block labels (e.g. "VOO — other holdings") aren't tickers — pass them through untouched.
+    const isBlock = / /.test(display) || /other holdings/i.test(display);
+    const { key, display: disp } = isBlock ? { key: qrNormTicker(display), display } : qrCanonical(display);
+    if (!slices[key]) slices[key] = { display: disp, value: 0, sources: {} };
+    slices[key].value += val;
+    slices[key].sources[sourceLabel] = (slices[key].sources[sourceLabel] || 0) + val;
   };
   // Stocks-only remainder buckets: kept SEPARATE on purpose.
   //  - vooTail: VOO's small holdings beyond the tracked top names — PERMANENT, never itemized.
@@ -6081,6 +6113,31 @@ function qrNormTicker(t) {
   return (t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+// Dual-class share equivalence: same company, multiple tickers (VOO holds both classes as
+// separate line items). For EXPOSURE aggregation we treat them as one company so concentration
+// isn't understated by splitting (e.g. GOOGL + GOOG = Alphabet). Map of normalized-ticker ->
+// {canon, label}. Small static list of S&P dual-class pairs — stable, rarely changes; update if
+// a new dual-class name enters the index. Only used for the distribution/true-exposure rollup,
+// NOT for position matching (where the exact ticker still matters).
+const DUAL_CLASS_MAP = {
+  GOOGL: { canon: 'GOOGL', label: 'GOOGL/GOOG (Alphabet)' },
+  GOOG:  { canon: 'GOOGL', label: 'GOOGL/GOOG (Alphabet)' },
+  FOXA:  { canon: 'FOXA',  label: 'FOXA/FOX (Fox)' },
+  FOX:   { canon: 'FOXA',  label: 'FOXA/FOX (Fox)' },
+  NWSA:  { canon: 'NWSA',  label: 'NWSA/NWS (News Corp)' },
+  NWS:   { canon: 'NWSA',  label: 'NWSA/NWS (News Corp)' },
+  UAA:   { canon: 'UAA',   label: 'UAA/UA (Under Armour)' },
+  UA:    { canon: 'UAA',   label: 'UAA/UA (Under Armour)' },
+};
+// Returns {key, display} to aggregate a ticker under. For dual-class names, collapses both
+// classes to one canonical key and a combined display label; otherwise passes through.
+function qrCanonical(ticker) {
+  const n = qrNormTicker(ticker);
+  const m = DUAL_CLASS_MAP[n];
+  if (m) return { key: qrNormTicker(m.canon), display: m.label };
+  return { key: n, display: ticker };
+}
+
 // Parse free-typed holdings text into { ticker, weight }. Honest about failures:
 // returns both what it could parse AND the chunks it couldn't, so the UI can
 // show its work rather than silently dropping company names it can't match.
@@ -6262,7 +6319,18 @@ function renderQrForm() {
     SLEEVES.map(s => `<option value="${esc(s)}" ${sleeveVal === s ? 'selected' : ''}>${esc(s)}</option>`)
   ).join('');
 
-  const fieldHtml = fields.map(f => {
+  // Live overlap context (auto-fires once the 3 identifying fields are set)
+  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal)}</div>`;
+
+  // Two-stage form. Stage 1 = identifying fields (ticker/theme/sleeve, + ETF holdings) and the
+  // auto-firing exposure panel. Stage 2 = the rest of the qualitative fields + final save.
+  // When editing an existing candidate, stage 2 is always shown (you're past the checkpoint).
+  const stage2 = editing ? true : qrStage2Unlocked;
+
+  // For an ETF, the holdings paste belongs to stage 1 (the verdict needs it). Pull that field's
+  // block out and render it in stage 1; everything else is stage 2.
+  const isEtfHoldingsField = (f) => qrType === 'etf' && f.key === 'holdingsTop';
+  const renderField = (f) => {
     const val = v[f.key] != null ? v[f.key] : '';
     const hint = f.hint ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:2px;font-style:italic">${f.hint}</div>` : '';
     let input;
@@ -6278,15 +6346,8 @@ function renderQrForm() {
     }
     const helpBtn = QR_EXPLAINERS[f.key] ? `<button type="button" onclick="showQrExplainer('${f.key}')" title="What is this & how to read it" style="margin-left:6px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;color:var(--color-text-info);font-size:9px;font-weight:700;cursor:pointer;vertical-align:middle">?</button>` : '';
     const locBtn = QR_LOCATIONS[f.key] ? `<button type="button" onclick="showQrLocation('${f.key}')" title="Where to find it in Schwab" style="margin-left:4px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;font-size:9px;cursor:pointer;vertical-align:middle">📍</button>` : '';
-    const fieldBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${input}${hint}</div>`;
-    // For the ETF holdings field, append the manual overlap-check control + results.
-    // (Auto-fetch removed: ETF holdings are premium-gated on the free tiers of every
-    //  provider we tried — AV and FMP both. Manual paste from the fund's Schwab holdings
-    //  page is the path; the overlap check runs against whatever you paste.)
-    if (qrType === 'etf' && f.key === 'holdingsTop') {
-      // Override the generic textarea with one that live-previews the parse on every input,
-      // so you can verify ticker+weight against the Schwab screen before relying on it.
-      const holdingsTextarea = `<textarea id="qr-f-${f.key}" rows="3" oninput="renderHoldingsPreview()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
+    if (isEtfHoldingsField(f)) {
+      const holdingsTextarea = `<textarea id="qr-f-${f.key}" rows="3" oninput="renderHoldingsPreview(); qrCheckStage1()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
       const holdingsBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${holdingsTextarea}${hint}</div>`;
       return holdingsBlock + `
         <div style="margin:-4px 0 12px">
@@ -6297,37 +6358,49 @@ function renderQrForm() {
           <div id="qr-holdings-overlap" style="margin-top:4px"></div>
         </div>`;
     }
-    return fieldBlock;
-  }).join('');
+    return `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${input}${hint}</div>`;
+  };
 
-  // Live overlap context (re-rendered on theme change)
-  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal)}</div>`;
+  const stage1ExtraHtml = (qrType === 'etf')
+    ? fields.filter(isEtfHoldingsField).map(renderField).join('')
+    : '';
+  const stage2FieldsHtml = fields.filter(f => !isEtfHoldingsField(f)).map(renderField).join('');
+
+  const stage2Html = stage2 ? `
+      <div style="margin-top:12px">${stage2FieldsHtml}</div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn btn-sm btn-primary" onclick="saveQrCandidate()" style="font-size:11px">${editing ? '✓ Update Candidate' : '✓ Done — save candidate'}</button>
+        <button class="btn btn-sm" onclick="resetQrForm()" style="font-size:11px">${editing ? 'Cancel Edit' : 'Clear'}</button>
+      </div>`
+    : `
+      <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
+        <button id="qr-stage1-continue" class="btn btn-sm btn-primary" disabled onclick="qrUnlockStage2()" style="font-size:11px;opacity:0.4;cursor:not-allowed">Save & continue ↓</button>
+        <span style="font-size:9px;color:var(--color-text-tertiary)">Set ticker, theme${qrType==='etf'?', holdings':''} & sleeve to see your exposure above, then continue to add detail (optional).</span>
+      </div>`;
 
   wrap.innerHTML = `
     <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:16px;max-width:760px">
       <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
         <div style="flex:1;min-width:120px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Ticker</label>
-          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="var p=document.getElementById('qr-overlap-panel'); var t=document.getElementById('qr-theme'); if(p&&t) p.innerHTML = renderQrOverlap(t.value, this.value)" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
+          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="qrCheckStage1()" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
         </div>
         <div style="flex:1;min-width:140px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Theme</label>
-          <select id="qr-theme" onchange="var tk=document.getElementById('qr-ticker'); document.getElementById('qr-overlap-panel').innerHTML = renderQrOverlap(this.value, tk?tk.value:'')" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${themeOpts}</select>
+          <select id="qr-theme" onchange="qrCheckStage1()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${themeOpts}</select>
         </div>
         <div style="flex:1;min-width:140px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Sleeve it would join</label>
-          <select id="qr-sleeve" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${sleeveOpts}</select>
+          <select id="qr-sleeve" onchange="qrCheckStage1()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${sleeveOpts}</select>
         </div>
       </div>
+      ${stage1ExtraHtml}
       ${overlapHtml}
-      <div style="margin-top:12px">${fieldHtml}</div>
-      <div style="display:flex;gap:8px;margin-top:6px">
-        <button class="btn btn-sm btn-primary" onclick="saveQrCandidate()" style="font-size:11px">${editing ? '✓ Update Candidate' : '＋ Save Candidate'}</button>
-        ${editing ? `<button class="btn btn-sm" onclick="resetQrForm()" style="font-size:11px">Cancel Edit</button>` : ''}
-      </div>
+      ${stage2Html}
     </div>`;
-  // If editing an ETF candidate that already has pasted holdings, show the parse preview now.
+  // Initial state: set the continue button's enabled state, and (ETF) show holdings preview.
   if (qrType === 'etf' && document.getElementById('qr-f-holdingsTop')) renderHoldingsPreview();
+  qrCheckStage1();
 }
 
 function renderQrOverlap(theme, tickerArg) {
@@ -6535,7 +6608,7 @@ async function qrFetchAndFillHoldings() {
 }
 let qrLastFetch = null; // transient cache of the last fetch, attached to candidate on save
 
-function saveQrCandidate() {
+function saveQrCandidate(keepForm) {
   const ticker = (document.getElementById('qr-ticker').value || '').trim().toUpperCase();
   if (!ticker) { alert('Enter a ticker for the candidate.'); return; }
   const theme = document.getElementById('qr-theme').value || '';
@@ -6545,12 +6618,11 @@ function saveQrCandidate() {
     const el = document.getElementById('qr-f-' + f.key);
     if (el) fields[f.key] = el.value;
   });
-  // Attach cached holdings if the last fetch was for THIS ticker (so reopening
-  // doesn't re-spend an AV call, and overlap works offline).
   const cachedHoldings = (qrLastFetch && qrLastFetch.ticker === ticker) ? {
     parsed: qrLastFetch.parsed, fetchedAt: qrLastFetch.fetchedAt, source: 'alphavantage'
   } : null;
 
+  let savedId = qrEditingId;
   if (qrEditingId !== null) {
     const c = qualityReviews.find(q => q.id === qrEditingId);
     if (c) {
@@ -6558,18 +6630,27 @@ function saveQrCandidate() {
       if (cachedHoldings) c.cachedHoldings = cachedHoldings;
       c.updatedAt = new Date().toISOString();
     }
-    qrEditingId = null;
   } else {
+    savedId = 'qr_' + Date.now();
     qualityReviews.push({
-      id: 'qr_' + Date.now(),
+      id: savedId,
       type: qrType, ticker, theme, sleeve, fields,
       cachedHoldings: cachedHoldings || undefined,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
     });
   }
   scheduleSave();
-  renderQrForm();
-  renderQrSavedList();
+  if (keepForm) {
+    // Stage-1 commit: keep editing this candidate (so stage-2 edits update the same record),
+    // don't reset the form. Caller re-renders.
+    qrEditingId = savedId;
+    renderQrSavedList();
+  } else {
+    qrEditingId = null;
+    qrStage2Unlocked = false;
+    renderQrForm();
+    renderQrSavedList();
+  }
 }
 
 function editQrCandidate(id) {
