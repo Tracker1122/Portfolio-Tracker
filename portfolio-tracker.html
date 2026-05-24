@@ -5635,9 +5635,27 @@ function renderIndexEditor() {
     const tbl = tables[fund];
     const held = indexFundHeldValue(fund);
     const hasHoldings = tbl.weights && Object.keys(tbl.weights).length > 0;
+    // Coverage: how much of your $ in this fund the stored weights represent vs. not mapped here
+    // (foreign listings, long tail, uncaptured). Built up front so it can live next to the held
+    // note — it's one thought ("you hold $X, and here's how much of it is actually mapped").
+    // Labeled "by stored weight" not "of holdings" because hand-edited weights (e.g. folding swap
+    // exposure into a name) can exceed the literal holdings.
+    let coverageNote = '';
+    if (held > 0 && hasHoldings) {
+      const sumW = Object.values(tbl.weights).reduce((s,w)=>s+(parseFloat(w)||0),0);
+      if (sumW > 100.5) {
+        coverageNote = ` <span style="color:#fbbf24">· stored weights total ${sumW.toFixed(0)}% (>100%, a name was hand-raised to fold in extra exposure)</span>`;
+      } else {
+        const repVal = held * Math.min(sumW,100) / 100;
+        const unmapped = Math.max(0, held - repVal);
+        const pctMapped = Math.min(sumW,100).toFixed(0);
+        const pctUnmapped = Math.max(0, 100 - Math.min(sumW,100)).toFixed(0);
+        coverageNote = ` <span style="color:var(--color-text-secondary)">· ~${fmtDollarWhole(repVal)} (${pctMapped}%) mapped, ~${fmtDollarWhole(unmapped)} (${pctUnmapped}%) not${pctUnmapped>=40?` (long tail / unmappable foreign — exposure math only reflects the mapped part)`:''}</span>`;
+      }
+    }
     const heldNote = held > 0
       ? (hasHoldings
-          ? `<span style="color:var(--color-text-success)">✓ you hold ~${fmtDollarWhole(held)} \u2014 look-through active</span>`
+          ? `<span style="color:var(--color-text-success)">✓ you hold ~${fmtDollarWhole(held)} \u2014 look-through active</span>${coverageNote}`
           : `<span style="color:#fbbf24">✓ you hold ~${fmtDollarWhole(held)} \u2014 paste its holdings below to enable look-through</span>`)
       : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 look-through inactive until you own it</span>`;
     const ageDays = (() => { try { return tbl.asOf ? Math.round((Date.now() - new Date(tbl.asOf).getTime()) / 86400000) : null; } catch(e){ return null; } })();
@@ -5662,26 +5680,6 @@ function renderIndexEditor() {
           ${stale?`<span style="font-size:9px;color:#fbbf24">⚠ ${ageDays} days old \u2014 may have drifted; refresh from the fund\u2019s page</span>`:''}
         </div>
         ${rows || '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">No tickers yet \u2014 paste the fund\u2019s holdings below, or add them one at a time.</div>'}
-        ${(() => {
-          // Coverage line: how much of your $ in this fund is represented by the stored weights
-          // vs. not mapped here (foreign listings, the long tail, anything you didn't capture).
-          // Only meaningful when you hold the fund AND have stored some weights. Honest about the
-          // fact that hand-edited weights (e.g. folding swap exposure into a name) can push the
-          // sum past the literal holdings — so we label it "by stored weight," not "of holdings."
-          if (!(held > 0 && hasHoldings)) return '';
-          const sumW = Object.values(tbl.weights).reduce((s,w)=>s+(parseFloat(w)||0),0);
-          const repVal = held * Math.min(sumW,100) / 100;
-          const overWeight = sumW > 100.5;
-          const unmapped = Math.max(0, held - repVal);
-          const pctMapped = Math.min(sumW,100).toFixed(0);
-          const pctUnmapped = Math.max(0, 100 - Math.min(sumW,100)).toFixed(0);
-          if (overWeight) {
-            return `<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">Stored weights total ${sumW.toFixed(1)}% (>100%) — likely because a name was hand-raised to fold in extra exposure (e.g. swaps). Treated as fully mapped; the literal holdings would sum to ≤100%.</div>`;
-          }
-          return `<div style="font-size:9px;color:var(--color-text-secondary);margin-bottom:6px">
-            Of your ~${fmtDollarWhole(held)} in ${esc(fund)}, these holdings represent ~${fmtDollarWhole(repVal)} (${pctMapped}% by stored weight); ~${fmtDollarWhole(unmapped)} (${pctUnmapped}%) is in names not mapped here${pctUnmapped>=40?` <span style="color:var(--color-text-tertiary)">(often a long tail or unmappable foreign listings — exposure math only reflects the mapped part)</span>`:''}.
-          </div>`;
-        })()}
         <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--color-border-tertiary)">
           <div style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Paste holdings (ticker + weight, from the fund\u2019s page) — replaces this fund\u2019s list</div>
           <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:5px">
