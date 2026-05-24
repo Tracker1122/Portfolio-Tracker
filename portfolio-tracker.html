@@ -5559,16 +5559,32 @@ function renderIndexEditor() {
   const out = document.getElementById('qr-index-editor');
   if (!out) return;
   const tables = getIndexLookthrough();
-  const funds = Object.keys(tables);
+  // Auto-include every ETF the user actually holds (isETF flag on positions) — no need to
+  // manually "add" SMH/GRID etc.; the tracker knows you hold them. Create empty placeholder
+  // tables for held ETFs that don't have one yet, so a card shows (awaiting a holdings paste).
+  const heldEtfTickers = [...new Set(
+    positions.filter(p => !p.closed && p.ticker && p.isETF === true).map(p => (p.ticker || '').toUpperCase())
+  )];
+  heldEtfTickers.forEach(tk => {
+    if (!tables[tk]) tables[tk] = { asOf: '', weights: {}, _auto: true };
+  });
+  // Order: held funds first (most relevant), then any unheld tables (e.g. seeded VOO not yet held).
+  const funds = Object.keys(tables).sort((a, b) => {
+    const ha = indexFundHeldValue(a) > 0 ? 0 : 1, hb = indexFundHeldValue(b) > 0 ? 0 : 1;
+    return ha - hb;
+  });
   const today = new Date().toISOString().slice(0, 10);
   let html = '';
   funds.forEach(fund => {
     const tbl = tables[fund];
     const held = indexFundHeldValue(fund);
+    const hasHoldings = tbl.weights && Object.keys(tbl.weights).length > 0;
     const heldNote = held > 0
-      ? `<span style="color:var(--color-text-success)">✓ you hold ~${fmtDollarWhole(held)} \u2014 look-through active</span>`
+      ? (hasHoldings
+          ? `<span style="color:var(--color-text-success)">✓ you hold ~${fmtDollarWhole(held)} \u2014 look-through active</span>`
+          : `<span style="color:#fbbf24">✓ you hold ~${fmtDollarWhole(held)} \u2014 paste its holdings below to enable look-through</span>`)
       : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 look-through inactive until you own it</span>`;
-    const ageDays = (() => { try { return Math.round((Date.now() - new Date(tbl.asOf).getTime()) / 86400000); } catch(e){ return null; } })();
+    const ageDays = (() => { try { return tbl.asOf ? Math.round((Date.now() - new Date(tbl.asOf).getTime()) / 86400000) : null; } catch(e){ return null; } })();
     const stale = ageDays != null && ageDays > 120;
     const rows = Object.entries(tbl.weights || {}).sort((a,b)=>b[1]-a[1]).map(([tk, w]) => `
       <div style="display:flex;gap:5px;align-items:center;margin-bottom:3px">
@@ -5607,9 +5623,10 @@ function renderIndexEditor() {
       </div>`;
   });
   html += `
+    <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;line-height:1.5">ETFs you hold appear above automatically. Use this only to add a fund the tracker doesn\u2019t flag as held (e.g. VOO if it\u2019s not auto-detected, or a fund held in another account).</div>
     <div style="display:flex;gap:5px;align-items:center;margin-top:4px">
-      <input id="qr-idx-new-fund" type="text" placeholder="New fund ticker (e.g. VTI)" style="width:150px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 6px;text-transform:uppercase">
-      <button class="btn btn-sm btn-primary" onclick="addIndexFund()" style="font-size:9px">+ Add index fund</button>
+      <input id="qr-idx-new-fund" type="text" placeholder="Add another fund (e.g. VTI)" style="width:150px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 6px;text-transform:uppercase">
+      <button class="btn btn-sm btn-primary" onclick="addIndexFund()" style="font-size:9px">+ Add fund manually</button>
     </div>`;
   out.innerHTML = html;
 }
