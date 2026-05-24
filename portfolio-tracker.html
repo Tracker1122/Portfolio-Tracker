@@ -6359,7 +6359,7 @@ function renderQrForm() {
     const helpBtn = QR_EXPLAINERS[f.key] ? `<button type="button" onclick="showQrExplainer('${f.key}')" title="What is this & how to read it" style="margin-left:6px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;color:var(--color-text-info);font-size:9px;font-weight:700;cursor:pointer;vertical-align:middle">?</button>` : '';
     const locBtn = QR_LOCATIONS[f.key] ? `<button type="button" onclick="showQrLocation('${f.key}')" title="Where to find it in Schwab" style="margin-left:4px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;font-size:9px;cursor:pointer;vertical-align:middle">📍</button>` : '';
     if (isEtfHoldingsField(f)) {
-      const holdingsTextarea = `<textarea id="qr-f-${f.key}" rows="3" oninput="renderHoldingsPreview(); qrCheckStage1()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
+      const holdingsTextarea = `<textarea id="qr-f-${f.key}" rows="3" oninput="renderHoldingsPreview(); qrCheckStage1(); runQrHoldingsOverlap()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
       const holdingsBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${holdingsTextarea}${hint}</div>`;
       return holdingsBlock + `
         <div style="margin:-4px 0 12px">
@@ -6369,7 +6369,8 @@ function renderQrForm() {
           </div>
           <div id="qr-holdings-preview" style="margin-bottom:6px"></div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-            <button type="button" class="btn btn-sm btn-primary" onclick="runQrHoldingsOverlap()" style="font-size:10px">Check overlap with my book</button>
+            <button type="button" class="btn btn-sm" onclick="runQrHoldingsOverlap()" style="font-size:10px">↻ Re-check overlap</button>
+            <span style="font-size:8px;color:var(--color-text-tertiary)">overlap updates automatically as you paste</span>
           </div>
           <div id="qr-holdings-overlap" style="margin-top:4px"></div>
         </div>`;
@@ -6415,7 +6416,11 @@ function renderQrForm() {
       ${stage2Html}
     </div>`;
   // Initial state: set the continue button's enabled state, and (ETF) show holdings preview.
-  if (qrType === 'etf' && document.getElementById('qr-f-holdingsTop')) renderHoldingsPreview();
+  if (qrType === 'etf' && document.getElementById('qr-f-holdingsTop')) {
+    renderHoldingsPreview();
+    // If holdings are already present (editing a saved ETF), fire the overlap roll-up on load.
+    if ((document.getElementById('qr-f-holdingsTop').value || '').trim()) runQrHoldingsOverlap();
+  }
   qrCheckStage1();
 }
 
