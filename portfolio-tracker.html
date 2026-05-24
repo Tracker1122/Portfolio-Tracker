@@ -6978,12 +6978,12 @@ function qrRenderStockSwap() {
   positions.filter(p=>!p.closed&&p.ticker).forEach(p=>{ const k=qrNormTicker(p.ticker); if (k===qrNormTicker(buyTicker)) return; if(!held[k]) held[k]={display:p.ticker,val:0}; held[k].val += calcPos(p).exitValue||0; });
   const addOpts = Object.keys(held).filter(k=>!qrSwapState.sells.includes(k))
     .sort((a,b)=>held[b].val-held[a].val)
-    .map(k=>`<option value="${esc(k)}">${esc(held[k].display)} (${fmtDollarWhole(held[k].val)})</option>`).join('');
+    .map(k=>`<option value="${esc(k)}">${esc(held[k].display)} (${fmtDollarWhole(held[k].val)})${acctTextTag(k)}</option>`).join('');
 
   const chips = qrSwapState.sells.map(k => {
     const h = held[k] || { display:k, val:0 };
     return `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:12px;padding:2px 8px;margin:0 5px 4px 0;font-size:10px">
-      ${esc(h.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(h.val)}</span>
+      ${esc(h.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(h.val)}</span>${acctTag(k)}
       <button type="button" onclick="qrSwapRemoveSell('${esc(k)}')" style="border:none;background:none;color:var(--color-text-tertiary);cursor:pointer;font-size:12px;padding:0;line-height:1">×</button></span>`;
   }).join('');
 
@@ -7149,6 +7149,32 @@ function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
 // Render the rotation checklist + before/after table into #qr-rotation. Reads which direct
 // overlap names are checked; recomputes on every toggle.
 function qrToggleRotation() { qrRenderRotation(); }
+// Small account-location pill(s) for a normalized ticker, read from its OPEN direct lots.
+// A ticker can span accounts (e.g. MSFT held in both Taxable and IRA) — the swap/rotation
+// selectors sell ALL lots of a name, so the tag must report the real mix, not a single guess.
+// IRA = tax-sheltered (green); Taxable (neutral grey). Split = both pills.
+function acctTag(norm) {
+  const lots = positions.filter(p => !p.closed && p.ticker && qrNormTicker(p.ticker) === norm);
+  if (!lots.length) return '';
+  let hasIRA = false, hasTaxable = false;
+  lots.forEach(p => { if ((p.account || '').toUpperCase().includes('IRA')) hasIRA = true; else hasTaxable = true; });
+  const pill = (txt, bg, fg) => `<span style="font-size:8px;font-weight:700;letter-spacing:0.03em;padding:1px 5px;border-radius:3px;background:${bg};color:${fg};margin-left:3px">${txt}</span>`;
+  let out = '';
+  if (hasTaxable) out += pill('TAXABLE', 'rgba(148,163,184,0.18)', '#cbd5e1');
+  if (hasIRA) out += pill('IRA', 'rgba(52,211,153,0.16)', '#34d399');
+  return out;
+}
+// Plain-text version (no HTML) for <option> labels, where markup is stripped by the browser.
+function acctTextTag(norm) {
+  const lots = positions.filter(p => !p.closed && p.ticker && qrNormTicker(p.ticker) === norm);
+  if (!lots.length) return '';
+  let hasIRA = false, hasTaxable = false;
+  lots.forEach(p => { if ((p.account || '').toUpperCase().includes('IRA')) hasIRA = true; else hasTaxable = true; });
+  const parts = [];
+  if (hasTaxable) parts.push('Taxable');
+  if (hasIRA) parts.push('IRA');
+  return parts.length ? ' · ' + parts.join(' + ') : '';
+}
 function qrRenderRotation() {
   const host = document.getElementById('qr-rotation');
   if (!host) return;
@@ -7162,7 +7188,7 @@ function qrRenderRotation() {
   const checklist = candidates.map(c =>
     `<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;font-size:10px;cursor:pointer;color:var(--color-text-secondary)">
       <input type="checkbox" id="qr-rot-${c.norm}" ${checked.has(c.norm)?'checked':''} onchange="qrToggleRotation()" style="cursor:pointer">
-      ${esc(c.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(c.directValue)}</span>
+      ${esc(c.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(c.directValue)}</span>${acctTag(c.norm)}
     </label>`).join('');
 
   let tableHtml = '';
@@ -7282,7 +7308,7 @@ function runQrHoldingsOverlap() {
   if (overlaps.length > 0) {
     const rows = overlaps.map(o => {
       const w = o.weight != null ? ` <span style="color:var(--color-text-tertiary)">(ETF weight ${o.weight}%)</span>` : '';
-      return `<div style="margin-bottom:3px">\u2022 <strong style="color:var(--color-text-primary)">${esc(o.ticker)}</strong>${w} — you already hold <strong>${fmtDollarWhole(o.yourDirectValue)}</strong> directly</div>`;
+      return `<div style="margin-bottom:3px">\u2022 <strong style="color:var(--color-text-primary)">${esc(o.ticker)}</strong>${w} — you already hold <strong>${fmtDollarWhole(o.yourDirectValue)}</strong> directly${acctTag(qrNormTicker(o.ticker))}</div>`;
     }).join('');
     html += `<div style="font-size:9px;color:var(--color-text-secondary);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);line-height:1.5">
       <div style="color:var(--color-text-danger);font-weight:700;margin-bottom:4px">${overlaps.length} direct overlap${overlaps.length>1?'s':''} with names you already own:</div>
