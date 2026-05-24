@@ -6339,10 +6339,34 @@ function renderQrOverlap(theme) {
   if (candTicker) {
     const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(candTicker) : [];
     if (lts.length) {
-      const total = lts.reduce((s, l) => s + l.indirectValue, 0);
+      const embedded = lts.reduce((s, l) => s + l.indirectValue, 0);
       const parts = lts.map(l => `~${fmtDollarWhole(l.indirectValue)} inside ${esc(l.fund)}`).join(' + ');
+      // Direct holding of this candidate (managed positions), summed across lots.
+      const candNorm = qrNormTicker(candTicker);
+      const directVal = positions.filter(p => !p.closed && p.ticker && qrNormTicker(p.ticker) === candNorm)
+        .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+      const trueTotal = directVal + embedded;
+      // Denominators. Grand total = active positions + Passive Core (VOO). Active book = positions only.
+      const activeBook = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+      const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+      const spVal = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
+      let cash = 0;
+      try { if (typeof cashBuckets !== 'undefined' && cashBuckets && typeof cashBuckets === 'object') cash = Object.values(cashBuckets).reduce((s,v)=>s+(parseFloat(v)||0),0); } catch(e){}
+      const grandTotal = activeBook + spVal + cash;
+      const pctTotal = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
+      // % of active book: only the DIRECT portion is clean against the active-book denominator
+      // (the embedded part lives in VOO, which isn't in the active book). So state the direct
+      // share of the active book separately rather than dividing the combined total by it.
+      const pctActiveDirect = activeBook > 0 ? (directVal / activeBook) * 100 : 0;
+
       passThroughHtml = `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--color-border-tertiary);font-size:9px;color:#fbbf24;line-height:1.5">
-        <strong>Pass-through exposure (not counted above):</strong> you already hold <strong>${esc(candTicker)}</strong> indirectly — ${parts} = <strong>~${fmtDollarWhole(total)}</strong> via funds you own. Your true ${esc(candTicker)} exposure is higher than your direct position, and the theme % above (direct only) understates it. Approximate \u2014 from your index look-through tables.</div>`;
+        <strong>Pass-through exposure (not counted above):</strong> you already hold <strong>${esc(candTicker)}</strong> indirectly — ${parts} = <strong>~${fmtDollarWhole(embedded)}</strong> via funds you own.
+        <div style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(251,191,36,0.3);color:var(--color-text-primary);font-size:10px">
+          <strong>Total ${esc(candTicker)} you hold: ~${fmtDollarWhole(trueTotal)}</strong> — direct ${fmtDollarWhole(directVal)} + ${fmtDollarWhole(embedded)} inside funds.
+          That's <strong>${pctTotal.toFixed(1)}%</strong> of your ${fmtDollarWhole(grandTotal)} portfolio${directVal>0?` (your direct position alone is ${pctActiveDirect.toFixed(1)}% of your active book)`:''}.
+        </div>
+        <div style="margin-top:3px;color:var(--color-text-tertiary);font-size:8px">Approximate — fund totals are exact, the split into names uses look-through weights that drift.</div>
+      </div>`;
     }
   }
 
