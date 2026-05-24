@@ -6193,7 +6193,7 @@ function renderDistributionTab() {
       <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
       <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.value)}</td>
       <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${pct.toFixed(1)}%</td>
-      <td style="padding:3px 8px;font-size:8px;color:var(--color-text-tertiary)">${esc(src)}</td>
+      <td style="padding:3px 8px;font-size:10px;color:var(--color-text-tertiary)">${esc(src)}</td>
     </tr>`;
   }).join('');
 
@@ -6217,10 +6217,41 @@ function renderDistributionTab() {
     }
   }
 
+  // ── Summary metrics (what a distribution view is actually FOR) ──
+  const pctOf = (v) => (v / total) * 100;
+  const top5pct = rows.slice(0, 5).reduce((s, r) => s + pctOf(r.value), 0);
   const top = rows.slice(0, 12);
+  const largest = rows[0] || null;
+  // "Names tracked" = itemized stock rows (exclude the Cash row and fund blocks in funds mode).
+  const nameCount = rows.filter(r => !/^cash$/i.test(r.display) && !/other holdings/i.test(r.display)).length;
+  const metric = (label, val, sub) => `<div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md,8px);padding:10px 12px">
+    <div style="font-size:11px;color:var(--color-text-tertiary)">${label}</div>
+    <div style="font-size:20px;font-weight:700;color:var(--color-text-primary);line-height:1.3">${val}</div>
+    ${sub ? `<div style="font-size:10px;color:var(--color-text-tertiary)">${sub}</div>` : ''}
+  </div>`;
+  const metricCards = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:16px">
+    ${metric('Names tracked', nameCount, stocksOnly ? 'distinct companies' : 'rows shown')}
+    ${metric('Top 5 concentration', top5pct.toFixed(1) + '%', 'of total portfolio')}
+    ${metric('Largest', largest ? esc(largest.display) : '—', largest ? pctOf(largest.value).toFixed(1) + '% of total' : '')}
+    ${stocksOnly && vooTailValue > 0 ? metric('VOO untracked tail', pctOf(vooTailValue).toFixed(1) + '%', 'inside VOO, not itemized') : metric('Decomposed funds', Object.keys(activeFunds).length, 'with pasted holdings')}
+  </div>`;
+
+  // ── Horizontal bars: one readable row per top name (name · bar · %), sorted desc. ──
+  // Bars are scaled to the LARGEST shown name (not to total) so small differences are visible;
+  // the % label is always vs. total so the numbers stay honest.
   const palette = ['#60a5fa','#34d399','#f59e0b','#f472b6','#a78bfa','#38bdf8','#facc15','#fb923c','#c084fc','#4ade80','#fca5a5','#94a3b8'];
-  const bar = top.map((r,i)=>`<div style="width:${((r.value/total)*100).toFixed(2)}%;background:${palette[i%palette.length]};height:18px" title="${esc(r.display)} ${((r.value/total)*100).toFixed(1)}%"></div>`).join('');
-  const legend = top.map((r,i)=>`<span style="font-size:9px;color:var(--color-text-secondary);margin-right:10px;white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;background:${palette[i%palette.length]};border-radius:2px;margin-right:3px"></span>${esc(r.display)} ${((r.value/total)*100).toFixed(1)}%</span>`).join('');
+  const maxPct = top.length ? pctOf(top[0].value) : 1;
+  const barRows = top.map((r, i) => {
+    const p = pctOf(r.value);
+    const w = maxPct > 0 ? (p / maxPct) * 100 : 0;
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+      <div style="flex:0 0 96px;font-size:12px;font-weight:600;color:var(--color-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(r.display)}">${esc(r.display)}</div>
+      <div style="flex:1;background:var(--color-background-secondary);border-radius:3px;height:16px;position:relative;overflow:hidden">
+        <div style="width:${w.toFixed(1)}%;background:${palette[i % palette.length]};height:100%;border-radius:3px"></div>
+      </div>
+      <div style="flex:0 0 46px;text-align:right;font-size:12px;color:var(--color-text-secondary)">${p.toFixed(1)}%</div>
+    </div>`;
+  }).join('');
 
   const fundsNote = Object.entries(activeFunds).map(([f,info])=>`${esc(f)} (~${fmtDollarWhole(info.value)}, as of ${esc(info.asOf||'?')})`).join(' · ') || 'none yet — paste fund holdings in Quality Review → Index look-through';
 
@@ -6243,33 +6274,36 @@ function renderDistributionTab() {
 
   out.innerHTML = `
     ${toggle}
-    <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">${intro}</div>
-    <div style="display:flex;height:18px;border-radius:4px;overflow:hidden;margin-bottom:6px">${bar}</div>
-    <div style="margin-bottom:16px;line-height:1.9">${legend}</div>
-    <div class="section-heading">${stocksOnly ? 'True distribution — by company (single tickers)' : 'True distribution — top holdings (look-through)'}</div>
-    <div style="overflow-x:auto;margin-bottom:20px">
-      <table style="width:100%;border-collapse:collapse;font-size:10px">
-        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
-          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Value</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">% of total</th>
-          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Source</th>
-        </tr></thead>
-        <tbody>${distBody}${remainderRows}</tbody>
-      </table>
-    </div>
+    <div style="font-size:11px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:12px">${intro}</div>
+    ${metricCards}
+    <div class="section-heading">${stocksOnly ? 'Top holdings — by company' : 'Top holdings — look-through'}</div>
+    <div style="margin:8px 0 18px">${barRows || '<div style="font-size:11px;color:var(--color-text-tertiary)">No holdings to chart.</div>'}</div>
+    <details style="margin-bottom:20px">
+      <summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;padding:4px 0">Show all ${rows.length} rows (full table with values + source) ▾</summary>
+      <div style="overflow-x:auto;margin-top:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+            <th style="padding:4px 8px;text-align:left;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Name</th>
+            <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Value</th>
+            <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">% of total</th>
+            <th style="padding:4px 8px;text-align:left;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Source</th>
+          </tr></thead>
+          <tbody>${distBody}${remainderRows}</tbody>
+        </table>
+      </div>
+    </details>
     <div class="section-heading">Fund / ETF performance</div>
-    <div style="font-size:9px;color:var(--color-text-tertiary);margin:4px 0 6px">How your basket funds themselves have performed (the names inside them aren't tracked individually — that needs per-stock price data the tracker doesn't have).</div>
+    <div style="font-size:10px;color:var(--color-text-tertiary);margin:4px 0 6px">How your basket funds themselves have performed (the names inside them aren't tracked individually — that needs per-stock price data the tracker doesn't have).</div>
     <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:10px">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
-          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Fund</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Invested</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Value</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">G/L</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Return</th>
+          <th style="padding:4px 8px;text-align:left;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Fund</th>
+          <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Invested</th>
+          <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Value</th>
+          <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">G/L</th>
+          <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Return</th>
         </tr></thead>
-        <tbody>${perfBody || '<tr><td colspan="5" style="padding:8px;color:var(--color-text-tertiary);font-size:9px">No funds held.</td></tr>'}</tbody>
+        <tbody>${perfBody || '<tr><td colspan="5" style="padding:8px;color:var(--color-text-tertiary);font-size:10px">No funds held.</td></tr>'}</tbody>
       </table>
     </div>`;
   if (typeof renderIndexEditor === 'function') renderIndexEditor();
