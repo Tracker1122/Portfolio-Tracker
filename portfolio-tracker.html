@@ -3268,6 +3268,19 @@ function closedHoldingDays(pos) {
   return Math.floor((sell - buy) / 86400000);
 }
 
+// Tax rate for a HYPOTHETICAL sale today of an OPEN position (rotation sim). Same logic as
+// taxRateFor but measures the holding period from dateBought → today (the position has no
+// sellDate yet). IRA = 0; taxable = ST if held ≤365d, LT if >365d; missing date → ST (worst case).
+function taxRateForOpen(pos) {
+  const acct = (pos.account || '').toLowerCase();
+  if (acct === 'ira') return 0;
+  if (!pos.dateBought) return TAX_RATE_ST;
+  const buy = new Date(pos.dateBought);
+  if (isNaN(buy)) return TAX_RATE_ST;
+  const days = Math.floor((Date.now() - buy) / 86400000);
+  return days > 365 ? TAX_RATE_LT : TAX_RATE_ST;
+}
+
 // Tax rate applied to a closed position based on holding period and account.
 // IRA accounts have zero tax drag (sheltered). Taxable: ST if <365d held, LT otherwise.
 // Missing dates → conservatively treated as ST (the worse case).
@@ -6585,10 +6598,24 @@ function qrEtfOverlapSummary(parsed) {
 let qrRotationState = { parsed: [], etfTicker: '', candidates: [] };
 
 function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
-  // Proceeds from selling the checked direct positions.
-  let proceeds = 0;
+  // Proceeds from selling the checked direct positions, plus the estimated tax on doing so.
+  // Tax = gain × the position's rate (ST/LT by holding period; IRA sheltered = 0). Losses don't
+  // generate tax here (matches the app's applyTaxToGain convention — no loss-harvest credit modeled).
+  let proceeds = 0, estTax = 0, taxableGain = 0, hasIRA = false, missingDate = false, anyLoss = false;
   positions.filter(p => !p.closed && p.ticker && sellNormsSet.has(qrNormTicker(p.ticker)))
-    .forEach(p => { proceeds += calcPos(p).exitValue || 0; });
+    .forEach(p => {
+      const c = calcPos(p);
+      proceeds += c.exitValue || 0;
+      const rate = taxRateForOpen(p);
+      if ((p.account||'').toLowerCase() === 'ira') hasIRA = true;
+      if (!p.dateBought) missingDate = true;
+      if (c.gainLoss > 0) {
+        taxableGain += c.gainLoss;
+        estTax += c.gainLoss * rate;
+      } else if (c.gainLoss < 0) {
+        anyLoss = true;
+      }
+    });
 
   // BEFORE: current true exposure per affected name. AFTER: same, but with the sold positions'
   // direct value removed AND the ETF position grown by `proceeds` (so its decomposition gives
@@ -6627,11 +6654,13 @@ function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
       a.dBefore += dv; a.dAfter += dv;
     }
   });
-  // Add the new ETF money's decomposition to AFTER via-funds.
+  // Add the new ETF money's decomposition to AFTER via-funds. Reinvest NET of tax (you sell,
+  // pay the tax, put what's left into the ETF) — the honest default for a taxable account.
+  const netProceeds = proceeds - estTax;
   parsed.forEach(h => {
     if (h.weight == null) return;
     const a = ensure(h.ticker);
-    a.fAfter += proceeds * (h.weight / 100);
+    a.fAfter += netProceeds * (h.weight / 100);
   });
 
   const rows = Object.values(affected).map(a => ({
@@ -6649,7 +6678,7 @@ function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
   const gainEtf = etfAlreadyHeld > 0 ? 0 : 1;
   const posAfter = posBefore - soldCount + gainEtf;
 
-  return { rows, proceeds, posBefore, posAfter, soldCount };
+  return { rows, proceeds, posBefore, posAfter, soldCount, estTax, taxableGain, hasIRA, missingDate, anyLoss };
 }
 
 // Render the rotation checklist + before/after table into #qr-rotation. Reads which direct
@@ -6674,6 +6703,10 @@ function qrRenderRotation() {
   let tableHtml = '';
   if (checked.size > 0) {
     const sim = qrSimulateRotation(parsed, etfTicker, checked);
+    const netProceeds = sim.proceeds - sim.estTax;
+    const taxNote = sim.estTax > 0
+      ? `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of gains → ~${fmtDollarWhole(netProceeds)} net to reinvest`
+      : (sim.hasIRA ? `no tax (IRA — sheltered)` : (sim.anyLoss ? `no tax (sales at a loss)` : `no taxable gain`));
     const body = sim.rows.slice(0, 15).map(r => {
       const chg = Math.round(r.change);
       const chgColor = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg < 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
@@ -6688,6 +6721,7 @@ function qrRenderRotation() {
     }).join('');
     tableHtml = `
       <div style="font-size:9px;color:var(--color-text-secondary);margin:8px 0 4px">Selling ${fmtDollarWhole(sim.proceeds)} across ${sim.soldCount} position(s) → buying ${esc(etfTicker)}. Positions: ${sim.posBefore} → ${sim.posAfter}.</div>
+      <div style="font-size:9px;margin:0 0 6px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
         <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
           <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name (true exposure)</th>
@@ -6695,7 +6729,7 @@ function qrRenderRotation() {
           <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
           <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
         </tr></thead><tbody>${body}</tbody></table></div>
-      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">The point: for names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back, and VOO still holds them. Rotating mainly trades per-name control for diffuse index exposure and cuts your position count, not your concentration. Approximate (fund weights drift).</div>`;
+      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">The point: for names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal, not de-concentration. ` : ''}Rotating mainly trades per-name control for diffuse index exposure. Approximate — fund weights drift, tax is an estimate from your active profile (not advice).</div>`;
   } else {
     tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above to model rotating them into ${esc(etfTicker)}.</div>`;
   }
