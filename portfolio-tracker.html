@@ -6842,11 +6842,12 @@ function buildQualityFlags(candidate, holdingsOverlaps) {
   if (isEtf) {
     const r = parseHoldings(f.holdingsTop || '');
     if (r.parsed.length) {
-      const ov = qrEtfIndexOverlap(r.parsed, null);
-      if (ov.anyIndexHeld && ov.rows.length) {
-        const lvl = ov.overlapPct >= 40 ? 'flag' : ov.overlapPct >= 20 ? 'caution' : 'info';
-        const names = ov.rows.slice(0, 6).map(x => `${x.ticker} ${x.etfWeight}%`).join(', ');
-        flags.push({ level: lvl, text: `Index overlap: ~${ov.overlapPct}% of this ETF is in names you already own via your index fund(s) (${ov.rows.map(x=>x.viaFunds[0]).filter((v,i,a)=>a.indexOf(v)===i).join('/')}). Overlapping: ${names}. Buying it ${ov.overlapPct>=40?'largely compounds':ov.overlapPct>=20?'partly compounds':'modestly adds to'} exposure you already carry — the "new" diversification is smaller than it looks.` });
+      const s = qrEtfOverlapSummary(r.parsed);
+      if (s.names.length) {
+        const lvl = s.overlapPct >= 40 ? 'flag' : s.overlapPct >= 20 ? 'caution' : 'info';
+        const names = s.names.slice(0, 6).map(n => `${n.ticker} ${n.etfWeight}%`).join(', ');
+        const viaOnly = s.names.filter(n => n.direct === 0 && n.viaFunds > 0).map(n => n.ticker);
+        flags.push({ level: lvl, text: `ETF overlap: ~${s.overlapPct}% of this ETF is in names you already hold (directly or via your funds, mostly VOO). Overlapping: ${names}. Buying it ${s.overlapPct>=40?'largely compounds':s.overlapPct>=20?'partly compounds':'modestly adds to'} existing exposure.${viaOnly.length?` ${viaOnly.join(', ')} you own mainly via funds, not directly — hidden exposure this would deepen.`:''}` });
       }
     }
   }
@@ -7010,10 +7011,16 @@ function buildQrAiPrompt(candidate) {
   if (candidate.type === 'etf') {
     const r = parseHoldings(candidate.fields && candidate.fields.holdingsTop || '');
     if (r.parsed.length) {
-      const ov = qrEtfIndexOverlap(r.parsed, null);
-      if (ov.anyIndexHeld && ov.rows.length) {
-        const names = ov.rows.slice(0, 8).map(x => `${x.ticker} (${x.etfWeight}% of ETF, also via ${x.viaFunds.join('/')})`).join('; ');
-        computed.push(`Index overlap: ~${ov.overlapPct}% of this ETF sits in names you ALREADY own through your index fund(s) — buying it partly compounds existing exposure rather than adding new. Overlapping names: ${names}. The "new" diversification is smaller than the headline suggests.`);
+      // Use the SAME true-exposure summary the on-screen roll-up uses, so the AI reasons from
+      // the identical overlap % (direct + via VOO/funds), not a narrower index-only figure.
+      const s = qrEtfOverlapSummary(r.parsed);
+      if (s.names.length) {
+        const detail = s.names.slice(0, 8).map(n => {
+          const where = n.direct > 0 && n.viaFunds > 0 ? 'direct + funds' : n.direct > 0 ? 'direct only' : 'via funds only';
+          return `${n.ticker} (${n.etfWeight}% of ETF; you already hold ~$${Math.round(n.total).toLocaleString()} ${where})`;
+        }).join('; ');
+        const viaOnly = s.names.filter(n => n.direct === 0 && n.viaFunds > 0).map(n => n.ticker);
+        computed.push(`ETF overlap with the user's TRUE exposure: ~${s.overlapPct}% of this ETF (of the ${s.parsedWeight}% of the fund described) sits in names the user ALREADY holds — directly and/or inside their index funds (mostly VOO). Buying it ${s.overlapPct>=40?'largely compounds':s.overlapPct>=20?'partly compounds':'modestly adds to'} existing exposure rather than adding new. Overlapping names: ${detail}.${viaOnly.length?` IMPORTANT — ${viaOnly.join(', ')} the user holds little/none of DIRECTLY but already owns via funds, so this purchase deepens hidden exposure they may not perceive from their positions list.`:''} (Approximate — fund weights drift; based on pasted holdings covering ~${s.parsedWeight}% of the fund.)`);
       }
     }
   }
