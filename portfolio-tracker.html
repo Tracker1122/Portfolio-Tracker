@@ -1018,6 +1018,7 @@
     <button class="tab-btn" onclick="switchTab('rebalance')">Rebalance &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('themes')">Themes</button>
     <button class="tab-btn" onclick="switchTab('quality')">Quality Review</button>
+    <button class="tab-btn" onclick="switchTab('distribution')">Distribution</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Trends</button>
   </div>
@@ -1385,6 +1386,12 @@
     <div id="true-exposure-panel" style="margin-top:20px"></div>
 
   </div><!-- end tab-dashboard -->
+
+  <!-- Distribution Tab -->
+  <div class="tab-panel" id="tab-distribution">
+    <div class="section-heading">True Portfolio Distribution</div>
+    <div id="distribution-content"></div>
+  </div><!-- end tab-distribution -->
 
   <!-- Analysis and Performance Tab -->
   <div class="tab-panel" id="tab-analysis">
@@ -4291,6 +4298,7 @@ function switchTab(name) {
   if (name === 'rebalance') { renderRebalance(); }
   if (name === 'postsell') renderPostSell();
   if (name === 'quality') renderQualityTab();
+  if (name === 'distribution') renderDistributionTab();
   if (name === 'trends') renderTrends();
   if (name === 'themes') renderThemeUniverse();
   if (name === 'dashboard') syncFixedScrollbar();
@@ -5853,6 +5861,150 @@ function renderTrueExposurePanel() {
     </div>`;
 }
 
+// PORTFOLIO DISTRIBUTION: a RE-SLICING of your whole portfolio (positions + Passive Core + cash)
+// that decomposes basket funds into their named holdings. Unlike computeTrueExposure (which sums
+// direct+embedded PER NAME), this must reconcile to 100% — so funds are SPLIT into their pieces,
+// not added on top. Funds without pasted holdings stay as a single undecomposed block (shown
+// honestly, never silently dropped). Direct + fund totals are exact; the within-fund split is
+// approximate (weights drift).
+function computePortfolioDistribution() {
+  const tables = getIndexLookthrough();
+  const activeFunds = {}; // fund -> {value, weights} for funds held WITH pasted holdings
+  for (const [fund, tbl] of Object.entries(tables)) {
+    const val = indexFundHeldValue(fund);
+    if (val > 0 && tbl.weights && Object.keys(tbl.weights).length) activeFunds[fund] = { value: val, weights: tbl.weights, asOf: tbl.asOf };
+  }
+  const activeFundNorms = new Set(Object.keys(activeFunds).map(qrNormTicker));
+  const slices = {}; // norm -> { display, value, sources:{} }
+  const add = (display, val, sourceLabel) => {
+    const n = qrNormTicker(display);
+    if (!slices[n]) slices[n] = { display, value: 0, sources: {} };
+    slices[n].value += val;
+    slices[n].sources[sourceLabel] = (slices[n].sources[sourceLabel] || 0) + val;
+  };
+  // 1) Direct managed positions. If a position IS a decomposed basket fund, skip it here
+  //    (it'll be decomposed below). If it's a held ETF WITHOUT pasted holdings, keep it as a
+  //    single block (can't decompose).
+  let undecomposedFundValue = 0;
+  positions.filter(p => !p.closed && p.ticker).forEach(p => {
+    const n = qrNormTicker(p.ticker);
+    const v = calcPos(p).exitValue || 0;
+    if (activeFundNorms.has(n)) return; // decomposed below
+    add(p.ticker, v, p.isETF ? 'ETF (not decomposed)' : 'Direct');
+    if (p.isETF) undecomposedFundValue += v;
+  });
+  // 2) Passive Core (VOO) + any other decomposed funds: split into named holdings + remainder.
+  Object.entries(activeFunds).forEach(([fund, info]) => {
+    let named = 0;
+    for (const [tk, w] of Object.entries(info.weights)) {
+      if (w == null) continue;
+      const dollars = info.value * (w / 100);
+      named += dollars;
+      add(tk, dollars, 'via ' + fund);
+    }
+    const remainder = info.value - named;
+    if (remainder > 0) add(fund + ' — other holdings', remainder, 'via ' + fund + ' (untracked tail)');
+  });
+  // 3) Cash, if tracked. cashBuckets is an object keyed by account ({Taxable, IRA}).
+  let cash = 0;
+  try {
+    if (typeof cashBuckets !== 'undefined' && cashBuckets && typeof cashBuckets === 'object') {
+      cash = Object.values(cashBuckets).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+    }
+  } catch(e){}
+  if (cash > 0) add('Cash', cash, 'Cash');
+
+  const rows = Object.values(slices).sort((a,b)=>b.value-a.value);
+  const total = rows.reduce((s,r)=>s+r.value,0);
+  return { rows, total, activeFunds, undecomposedFundValue };
+}
+
+function renderDistributionTab() {
+  const out = document.getElementById('distribution-content');
+  if (!out) return;
+  const { rows, total, activeFunds } = computePortfolioDistribution();
+  if (total <= 0) { out.innerHTML = '<div style="color:var(--color-text-tertiary);font-size:11px;padding:20px 0">No holdings to distribute yet.</div>'; return; }
+
+  // ETF/fund performance section (uses data we have: Passive Core for VOO, position math for ETFs).
+  const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+  const perfRows = [];
+  if (sp && sp.totalShares > 0) {
+    const ret = sp.totalInvested > 0 && sp.price > 0 ? (sp.gl / sp.totalInvested) * 100 : null;
+    perfRows.push({ fund: 'VOO (Passive Core)', invested: sp.totalInvested, value: sp.price>0?sp.currentValue:sp.totalInvested, gl: sp.gl, ret });
+  }
+  // Held ETFs (positions flagged isETF) — aggregate by ticker
+  const etfAgg = {};
+  positions.filter(p=>!p.closed && p.ticker && p.isETF===true).forEach(p=>{
+    const c=calcPos(p); const inv=(parseFloat(p.shares)||0)*(parseFloat(p.pricePaid)||0); const val=c.exitValue||0;
+    const k=p.ticker.toUpperCase();
+    if(!etfAgg[k]) etfAgg[k]={fund:k,invested:0,value:0};
+    etfAgg[k].invested+=inv; etfAgg[k].value+=val;
+  });
+  Object.values(etfAgg).forEach(e=>{ e.gl=e.value-e.invested; e.ret=e.invested>0?(e.gl/e.invested)*100:null; perfRows.push(e); });
+
+  const distBody = rows.slice(0, 40).map(r => {
+    const pct = (r.value / total) * 100;
+    const src = Object.keys(r.sources).join(', ');
+    return `<tr>
+      <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
+      <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.value)}</td>
+      <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${pct.toFixed(1)}%</td>
+      <td style="padding:3px 8px;font-size:8px;color:var(--color-text-tertiary)">${esc(src)}</td>
+    </tr>`;
+  }).join('');
+
+  // simple inline bar for the top 12
+  const top = rows.slice(0, 12);
+  const palette = ['#60a5fa','#34d399','#f59e0b','#f472b6','#a78bfa','#38bdf8','#facc15','#fb923c','#c084fc','#4ade80','#fca5a5','#94a3b8'];
+  const bar = top.map((r,i)=>`<div style="width:${((r.value/total)*100).toFixed(2)}%;background:${palette[i%palette.length]};height:18px" title="${esc(r.display)} ${((r.value/total)*100).toFixed(1)}%"></div>`).join('');
+  const legend = top.map((r,i)=>`<span style="font-size:9px;color:var(--color-text-secondary);margin-right:10px;white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;background:${palette[i%palette.length]};border-radius:2px;margin-right:3px"></span>${esc(r.display)} ${((r.value/total)*100).toFixed(1)}%</span>`).join('');
+
+  const fundsNote = Object.entries(activeFunds).map(([f,info])=>`${esc(f)} (~${fmtDollarWhole(info.value)}, as of ${esc(info.asOf||'?')})`).join(' · ') || 'none yet — paste fund holdings in Quality Review → Index look-through';
+
+  const perfBody = perfRows.sort((a,b)=>b.value-a.value).map(p=>`<tr>
+    <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(p.fund)}</td>
+    <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(p.invested)}</td>
+    <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(p.value)}</td>
+    <td style="padding:3px 8px;text-align:right;color:${p.gl>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${p.gl>=0?'+':''}${fmtDollarWhole(p.gl)}</td>
+    <td style="padding:3px 8px;text-align:right;color:${(p.ret||0)>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${p.ret!=null?(p.ret>=0?'+':'')+p.ret.toFixed(1)+'%':'—'}</td>
+  </tr>`).join('');
+
+  out.innerHTML = `
+    <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
+      Your portfolio re-sliced into true holdings: basket funds decomposed into their names, combined with your direct positions and cash.
+      Fund totals and direct positions are <strong>exact</strong>; the split of a fund into its names is <strong>approximate</strong> (weights drift).
+      Funds without pasted holdings appear as a single undecomposed block. Funds decomposed: ${fundsNote}.
+    </div>
+    <div style="display:flex;height:18px;border-radius:4px;overflow:hidden;margin-bottom:6px">${bar}</div>
+    <div style="margin-bottom:16px;line-height:1.9">${legend}</div>
+    <div class="section-heading">True distribution — top holdings (look-through)</div>
+    <div style="overflow-x:auto;margin-bottom:20px">
+      <table style="width:100%;border-collapse:collapse;font-size:10px">
+        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Value</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">% of total</th>
+          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Source</th>
+        </tr></thead>
+        <tbody>${distBody}</tbody>
+      </table>
+    </div>
+    <div class="section-heading">Fund / ETF performance</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin:4px 0 6px">How your basket funds themselves have performed (the names inside them aren't tracked individually — that needs per-stock price data the tracker doesn't have).</div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:10px">
+        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Fund</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Invested</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Value</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">G/L</th>
+          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Return</th>
+        </tr></thead>
+        <tbody>${perfBody || '<tr><td colspan="5" style="padding:8px;color:var(--color-text-tertiary);font-size:9px">No funds held.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
 
 // Normalize a ticker for matching (BRK.B / BRK-B / brk b → BRKB).
 function qrNormTicker(t) {
@@ -6086,7 +6238,7 @@ function renderQrForm() {
       <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
         <div style="flex:1;min-width:120px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Ticker</label>
-          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
+          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="var p=document.getElementById('qr-overlap-panel'); var t=document.getElementById('qr-theme'); if(p&&t) p.innerHTML = renderQrOverlap(t.value)" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
         </div>
         <div style="flex:1;min-width:140px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Theme</label>
@@ -6109,10 +6261,29 @@ function renderQrForm() {
 }
 
 function renderQrOverlap(theme) {
-  if (!theme) return `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">Pick a theme to see your current exposure (overlap context).</div>`;
+  // Pass-through line: the candidate's own ticker held indirectly inside index/ETF funds.
+  // Read the ticker from the form (panel re-renders on theme change, ticker lives separately).
+  const tkEl = (typeof document !== 'undefined') ? document.getElementById('qr-ticker') : null;
+  const candTicker = tkEl ? (tkEl.value || '').trim().toUpperCase() : '';
+  let passThroughHtml = '';
+  if (candTicker) {
+    const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(candTicker) : [];
+    if (lts.length) {
+      const total = lts.reduce((s, l) => s + l.indirectValue, 0);
+      const parts = lts.map(l => `~${fmtDollarWhole(l.indirectValue)} inside ${esc(l.fund)}`).join(' + ');
+      passThroughHtml = `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--color-border-tertiary);font-size:9px;color:#fbbf24;line-height:1.5">
+        <strong>Pass-through exposure (not counted above):</strong> you already hold <strong>${esc(candTicker)}</strong> indirectly — ${parts} = <strong>~${fmtDollarWhole(total)}</strong> via funds you own. Your true ${esc(candTicker)} exposure is higher than your direct position, and the theme % above (direct only) understates it. Approximate \u2014 from your index look-through tables.</div>`;
+    }
+  }
+
+  if (!theme) {
+    const base = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">Pick a theme to see your current exposure (overlap context).</div>`;
+    return passThroughHtml ? `<div>${base}${passThroughHtml}</div>` : base;
+  }
   const ex = qrThemeExposure(theme);
   if (!ex || ex.total === 0) {
-    return `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No current holdings in <strong>${esc(theme)}</strong> — this would be <strong>fresh exposure</strong>, not a double-up. The question here is genuinely "is this a good position?"</strong></div>`;
+    const base = `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No current <strong>direct</strong> holdings in <strong>${esc(theme)}</strong> — this would be fresh <em>direct</em> exposure.${passThroughHtml?' But note the pass-through below — you may already own this name via funds.':' The question here is genuinely "is this a good position?"'}</div>`;
+    return passThroughHtml ? `<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:2px">${base}${passThroughHtml}</div>` : base;
   }
   const pct = ex.portfolioPct;
   const tk = ex.tickers.map(t => `${esc(t.ticker)} ${fmtDollarWhole(t.value)}`).join(' · ');
@@ -6122,21 +6293,22 @@ function renderQrOverlap(theme) {
   let accent, bg, label, reframe, weight;
   if (pct >= 25) {
     accent = '#ef4444'; bg = 'rgba(239,68,68,0.12)'; weight = '700';
-    label = `⚠ HIGH CONCENTRATION — ${pct.toFixed(1)}% of your active book is already in ${esc(theme)}`;
+    label = `⚠ HIGH CONCENTRATION — ${pct.toFixed(1)}% of your active book is already in ${esc(theme)} (direct positions)`;
     reframe = `This is no longer "is ${esc(theme)} a good bet?" — you've answered that ${ex.tickers.length} time(s). The real decision is <strong>sizing</strong>: does adding here deepen a concentration you've consciously chosen, or one that's drifting past your intended ceiling? A great position can still be the wrong <em>add</em>.`;
   } else if (pct >= 15) {
     accent = '#fbbf24'; bg = 'rgba(251,191,36,0.10)'; weight = '700';
-    label = `${pct.toFixed(1)}% of your active book is already in ${esc(theme)}`;
+    label = `${pct.toFixed(1)}% of your active book is already in ${esc(theme)} (direct positions)`;
     reframe = `Reframe before you decide: this isn't just "is this a good position?" — it's "is <strong>more</strong> ${esc(theme)} the right sizing?" You already hold this theme at a meaningful weight, so evaluate the <em>add</em>, not the name in isolation.`;
   } else {
     accent = 'var(--color-border-tertiary)'; bg = 'var(--color-background-tertiary)'; weight = '400';
-    label = `You hold ${pct.toFixed(1)}% of your active book in ${esc(theme)} — a modest existing weight.`;
+    label = `You hold ${pct.toFixed(1)}% of your active book in ${esc(theme)} (direct positions) — a modest existing weight.`;
     reframe = `Adding here is still mostly a standalone judgment, but keep the running total in mind.`;
   }
   return `<div style="font-size:10px;color:var(--color-text-secondary);padding:9px 11px;background:${bg};border:1px solid ${accent};border-left:3px solid ${accent};border-radius:var(--border-radius-md);line-height:1.55">
     <div style="font-weight:${weight};color:var(--color-text-primary);margin-bottom:3px">${label}</div>
     <div style="margin-bottom:4px">${reframe}</div>
     <div style="font-size:9px;color:var(--color-text-tertiary)">Holdings: ${tk}.</div>
+    ${passThroughHtml}
   </div>`;
 }
 
