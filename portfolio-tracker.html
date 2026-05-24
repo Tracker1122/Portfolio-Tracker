@@ -1391,6 +1391,17 @@
   <div class="tab-panel" id="tab-distribution">
     <div class="section-heading">True Portfolio Distribution</div>
     <div id="distribution-content"></div>
+
+    <details style="margin-top:28px;border-top:1px solid var(--color-border-tertiary);padding-top:12px">
+      <summary style="font-size:11px;color:var(--color-text-secondary);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Index look-through tables (advanced)</summary>
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin:8px 0">
+        Paste your funds\u2019 holdings here to decompose them into stocks above. When you hold a broad index fund (VOO, VTI, QQQ…)
+        or an ETF, you already own its names inside it. Pasting the holdings dissolves that fund into single tickers in the
+        distribution and feeds the hidden-exposure flags on the Quality Review tab. Weights are approximate \u2014 refresh them
+        when they drift (e.g. from the fund\u2019s Schwab holdings page). Look-through only fires for funds you actually hold.
+      </div>
+      <div id="qr-index-editor"></div>
+    </details>
   </div><!-- end tab-distribution -->
 
   <!-- Analysis and Performance Tab -->
@@ -1488,17 +1499,6 @@
 
     <div class="section-heading">Saved Candidates</div>
     <div id="qr-saved-list" style="margin-top:8px"></div>
-
-    <details style="margin-top:24px;border-top:1px solid var(--color-border-tertiary);padding-top:12px">
-      <summary style="font-size:11px;color:var(--color-text-secondary);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Index look-through tables (advanced)</summary>
-      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin:8px 0">
-        When you hold a broad index fund (VOO, VTI, QQQ…), you already own its top names inside it.
-        These tables let the tracker flag hidden/compounded exposure when you buy a stock that\u2019s in your index,
-        or an ETF whose holdings overlap it. Weights are approximate \u2014 update them when they drift
-        (e.g. from the fund\u2019s Schwab holdings page). The look-through only fires for funds you actually hold.
-      </div>
-      <div id="qr-index-editor"></div>
-    </details>
   </div><!-- end tab-quality -->
 
   <!-- Trends Tab -->
@@ -5666,8 +5666,15 @@ function pasteIndexHoldings(fund) {
   t[fund].asOf = new Date().toISOString().slice(0, 10);
   saveIndexLookthrough();
   const noW = parsed.filter(p => p.weight == null).length;
-  renderIndexEditor(); // rebuild so the new rows show
-  // set the message AFTER re-render (re-render rebuilds the container and would wipe it)
+  // Re-render: if the editor lives under the Distribution tab, refreshing that tab rebuilds
+  // both the distribution table (so the fund dissolves into stocks immediately) AND the editor.
+  // Otherwise just rebuild the editor. Either way, set the success message LAST so it survives.
+  const distTab = document.getElementById('tab-distribution');
+  if (distTab && distTab.classList.contains('active') && typeof renderDistributionTab === 'function') {
+    renderDistributionTab();
+  } else {
+    renderIndexEditor();
+  }
   const msg2 = document.getElementById('qr-idx-paste-msg-' + fund);
   if (msg2) msg2.innerHTML = `<div style="font-size:9px;color:var(--color-text-success)">✓ Stored ${parsed.length} holding${parsed.length>1?'s':''} for ${esc(fund)}.${noW?` (${noW} had no weight — they won't contribute to exposure math.)`:''}${unparsed.length?` <span style="color:#fbbf24">${unparsed.length} line(s) skipped: ${unparsed.map(u=>esc(u)).join(' · ')}</span>`:''}</div>`;
 }
@@ -5867,7 +5874,7 @@ function renderTrueExposurePanel() {
 // not added on top. Funds without pasted holdings stay as a single undecomposed block (shown
 // honestly, never silently dropped). Direct + fund totals are exact; the within-fund split is
 // approximate (weights drift).
-function computePortfolioDistribution() {
+function computePortfolioDistribution(stocksOnly) {
   const tables = getIndexLookthrough();
   const activeFunds = {}; // fund -> {value, weights} for funds held WITH pasted holdings
   for (const [fund, tbl] of Object.entries(tables)) {
@@ -5882,30 +5889,51 @@ function computePortfolioDistribution() {
     slices[n].value += val;
     slices[n].sources[sourceLabel] = (slices[n].sources[sourceLabel] || 0) + val;
   };
-  // 1) Direct managed positions. If a position IS a decomposed basket fund, skip it here
-  //    (it'll be decomposed below). If it's a held ETF WITHOUT pasted holdings, keep it as a
-  //    single block (can't decompose).
-  let undecomposedFundValue = 0;
+  // Stocks-only remainder buckets: kept SEPARATE on purpose.
+  //  - vooTail: VOO's small holdings beyond the tracked top names — PERMANENT, never itemized.
+  //  - undecomposedEtfs: held ETFs whose holdings haven't been pasted — TEMPORARY, your to-do;
+  //    shrinks as you paste, hits zero when every equity ETF is decomposed.
+  let vooTailValue = 0;
+  const undecomposedEtfList = []; // {fund, value}
+  let undecomposedEtfValue = 0;
+
+  // 1) Direct managed positions.
   positions.filter(p => !p.closed && p.ticker).forEach(p => {
     const n = qrNormTicker(p.ticker);
     const v = calcPos(p).exitValue || 0;
-    if (activeFundNorms.has(n)) return; // decomposed below
-    add(p.ticker, v, p.isETF ? 'ETF (not decomposed)' : 'Direct');
-    if (p.isETF) undecomposedFundValue += v;
+    if (activeFundNorms.has(n)) return; // this fund is decomposed below
+    if (p.isETF) {
+      // undecomposed ETF
+      if (stocksOnly) {
+        undecomposedEtfValue += v;
+        const ex = undecomposedEtfList.find(e => qrNormTicker(e.fund) === n);
+        if (ex) ex.value += v; else undecomposedEtfList.push({ fund: p.ticker, value: v });
+      } else {
+        add(p.ticker, v, 'ETF (not decomposed)');
+      }
+    } else {
+      add(p.ticker, v, 'Direct'); // a real single stock — always a row
+    }
   });
-  // 2) Passive Core (VOO) + any other decomposed funds: split into named holdings + remainder.
+  // 2) Decomposed funds (VOO + any pasted ETF): split into named stock holdings + tail.
   Object.entries(activeFunds).forEach(([fund, info]) => {
     let named = 0;
     for (const [tk, w] of Object.entries(info.weights)) {
       if (w == null) continue;
       const dollars = info.value * (w / 100);
       named += dollars;
-      add(tk, dollars, 'via ' + fund);
+      add(tk, dollars, 'via ' + fund); // stock row (merges with direct if same name)
     }
     const remainder = info.value - named;
-    if (remainder > 0) add(fund + ' — other holdings', remainder, 'via ' + fund + ' (untracked tail)');
+    if (remainder > 0) {
+      if (stocksOnly) {
+        vooTailValue += remainder; // roll all untracked tails into the permanent bucket
+      } else {
+        add(fund + ' — other holdings', remainder, 'via ' + fund + ' (untracked tail)');
+      }
+    }
   });
-  // 3) Cash, if tracked. cashBuckets is an object keyed by account ({Taxable, IRA}).
+  // 3) Cash.
   let cash = 0;
   try {
     if (typeof cashBuckets !== 'undefined' && cashBuckets && typeof cashBuckets === 'object') {
@@ -5915,14 +5943,20 @@ function computePortfolioDistribution() {
   if (cash > 0) add('Cash', cash, 'Cash');
 
   const rows = Object.values(slices).sort((a,b)=>b.value-a.value);
-  const total = rows.reduce((s,r)=>s+r.value,0);
-  return { rows, total, activeFunds, undecomposedFundValue };
+  const total = rows.reduce((s,r)=>s+r.value,0)
+    + (stocksOnly ? vooTailValue + undecomposedEtfValue : 0);
+  return { rows, total, activeFunds, vooTailValue, undecomposedEtfValue, undecomposedEtfList };
 }
+
+let distributionMode = 'stocks'; // 'stocks' (single tickers only) or 'funds' (show fund blocks)
+function setDistributionMode(m) { distributionMode = m; renderDistributionTab(); }
 
 function renderDistributionTab() {
   const out = document.getElementById('distribution-content');
   if (!out) return;
-  const { rows, total, activeFunds } = computePortfolioDistribution();
+  const stocksOnly = distributionMode === 'stocks';
+  const dist = computePortfolioDistribution(stocksOnly);
+  const { rows, total, activeFunds, vooTailValue, undecomposedEtfValue, undecomposedEtfList } = dist;
   if (total <= 0) { out.innerHTML = '<div style="color:var(--color-text-tertiary);font-size:11px;padding:20px 0">No holdings to distribute yet.</div>'; return; }
 
   // ETF/fund performance section (uses data we have: Passive Core for VOO, position math for ETFs).
@@ -5932,7 +5966,6 @@ function renderDistributionTab() {
     const ret = sp.totalInvested > 0 && sp.price > 0 ? (sp.gl / sp.totalInvested) * 100 : null;
     perfRows.push({ fund: 'VOO (Passive Core)', invested: sp.totalInvested, value: sp.price>0?sp.currentValue:sp.totalInvested, gl: sp.gl, ret });
   }
-  // Held ETFs (positions flagged isETF) — aggregate by ticker
   const etfAgg = {};
   positions.filter(p=>!p.closed && p.ticker && p.isETF===true).forEach(p=>{
     const c=calcPos(p); const inv=(parseFloat(p.shares)||0)*(parseFloat(p.pricePaid)||0); const val=c.exitValue||0;
@@ -5942,9 +5975,20 @@ function renderDistributionTab() {
   });
   Object.values(etfAgg).forEach(e=>{ e.gl=e.value-e.invested; e.ret=e.invested>0?(e.gl/e.invested)*100:null; perfRows.push(e); });
 
-  const distBody = rows.slice(0, 40).map(r => {
+  // Plain-English source label for stocks-only mode.
+  const srcLabel = (sources) => {
+    const keys = Object.keys(sources);
+    const direct = keys.includes('Direct');
+    const viaFunds = keys.filter(k => k.startsWith('via ')).map(k => k.slice(4));
+    if (direct && viaFunds.length) return 'You own it directly + inside ' + viaFunds.join(', ');
+    if (direct) return 'You own it directly';
+    if (viaFunds.length) return 'Held inside ' + viaFunds.join(', ');
+    return keys.join(', ');
+  };
+
+  const distBody = rows.slice(0, 45).map(r => {
     const pct = (r.value / total) * 100;
-    const src = Object.keys(r.sources).join(', ');
+    const src = stocksOnly ? srcLabel(r.sources) : Object.keys(r.sources).join(', ');
     return `<tr>
       <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
       <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.value)}</td>
@@ -5953,7 +5997,26 @@ function renderDistributionTab() {
     </tr>`;
   }).join('');
 
-  // simple inline bar for the top 12
+  // Remainder lines (stocks-only): permanent VOO tail + temporary un-pasted-ETF to-do.
+  let remainderRows = '';
+  if (stocksOnly) {
+    if (undecomposedEtfValue > 0) {
+      const funds = undecomposedEtfList.map(e => `${esc(e.fund)} ${fmtDollarWhole(e.value)}`).join(', ');
+      remainderRows += `<tr style="border-top:1px dashed var(--color-border-tertiary)">
+        <td style="padding:5px 8px;font-weight:600;color:#fbbf24">⏳ Not yet decomposed</td>
+        <td style="padding:5px 8px;text-align:right;color:#fbbf24">${fmtDollarWhole(undecomposedEtfValue)}</td>
+        <td style="padding:5px 8px;text-align:right;color:#fbbf24">${((undecomposedEtfValue/total)*100).toFixed(1)}%</td>
+        <td style="padding:5px 8px;font-size:8px;color:var(--color-text-tertiary)">Paste these funds' holdings to dissolve into stocks: ${funds}</td></tr>`;
+    }
+    if (vooTailValue > 0) {
+      remainderRows += `<tr>
+        <td style="padding:5px 8px;color:var(--color-text-secondary)">VOO untracked tail</td>
+        <td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(vooTailValue)}</td>
+        <td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">${((vooTailValue/total)*100).toFixed(1)}%</td>
+        <td style="padding:5px 8px;font-size:8px;color:var(--color-text-tertiary)">VOO's smaller holdings beyond the tracked top names — not itemized (permanent)</td></tr>`;
+    }
+  }
+
   const top = rows.slice(0, 12);
   const palette = ['#60a5fa','#34d399','#f59e0b','#f472b6','#a78bfa','#38bdf8','#facc15','#fb923c','#c084fc','#4ade80','#fca5a5','#94a3b8'];
   const bar = top.map((r,i)=>`<div style="width:${((r.value/total)*100).toFixed(2)}%;background:${palette[i%palette.length]};height:18px" title="${esc(r.display)} ${((r.value/total)*100).toFixed(1)}%"></div>`).join('');
@@ -5969,15 +6032,21 @@ function renderDistributionTab() {
     <td style="padding:3px 8px;text-align:right;color:${(p.ret||0)>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${p.ret!=null?(p.ret>=0?'+':'')+p.ret.toFixed(1)+'%':'—'}</td>
   </tr>`).join('');
 
+  const toggle = `<div style="display:flex;gap:4px;margin-bottom:10px">
+    <button onclick="setDistributionMode('stocks')" style="font-size:10px;padding:4px 12px;border-radius:14px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${stocksOnly?'var(--color-text-info)':'transparent'};color:${stocksOnly?'#000':'var(--color-text-tertiary)'};font-weight:${stocksOnly?'600':'400'}">Stocks only</button>
+    <button onclick="setDistributionMode('funds')" style="font-size:10px;padding:4px 12px;border-radius:14px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${!stocksOnly?'var(--color-text-info)':'transparent'};color:${!stocksOnly?'#000':'var(--color-text-tertiary)'};font-weight:${!stocksOnly?'600':'400'}">Show funds</button>
+  </div>`;
+
+  const intro = stocksOnly
+    ? `Every holding rolled up to single companies: your direct positions + what you hold inside VOO and any decomposed ETF, combined into one line per stock. Direct positions are <strong>exact</strong>; the part inside funds is <strong>approximate</strong> (weights drift). Anything that can't be itemized into a specific stock sits in the two lines at the bottom.`
+    : `Your portfolio re-sliced into true holdings: basket funds decomposed into their names, combined with your direct positions and cash. Fund totals and direct positions are <strong>exact</strong>; the split of a fund into its names is <strong>approximate</strong>. ETFs without pasted holdings appear as a single block. Funds decomposed: ${fundsNote}.`;
+
   out.innerHTML = `
-    <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
-      Your portfolio re-sliced into true holdings: basket funds decomposed into their names, combined with your direct positions and cash.
-      Fund totals and direct positions are <strong>exact</strong>; the split of a fund into its names is <strong>approximate</strong> (weights drift).
-      Funds without pasted holdings appear as a single undecomposed block. Funds decomposed: ${fundsNote}.
-    </div>
+    ${toggle}
+    <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">${intro}</div>
     <div style="display:flex;height:18px;border-radius:4px;overflow:hidden;margin-bottom:6px">${bar}</div>
     <div style="margin-bottom:16px;line-height:1.9">${legend}</div>
-    <div class="section-heading">True distribution — top holdings (look-through)</div>
+    <div class="section-heading">${stocksOnly ? 'True distribution — by company (single tickers)' : 'True distribution — top holdings (look-through)'}</div>
     <div style="overflow-x:auto;margin-bottom:20px">
       <table style="width:100%;border-collapse:collapse;font-size:10px">
         <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
@@ -5986,7 +6055,7 @@ function renderDistributionTab() {
           <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">% of total</th>
           <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Source</th>
         </tr></thead>
-        <tbody>${distBody}</tbody>
+        <tbody>${distBody}${remainderRows}</tbody>
       </table>
     </div>
     <div class="section-heading">Fund / ETF performance</div>
@@ -6003,6 +6072,7 @@ function renderDistributionTab() {
         <tbody>${perfBody || '<tr><td colspan="5" style="padding:8px;color:var(--color-text-tertiary);font-size:9px">No funds held.</td></tr>'}</tbody>
       </table>
     </div>`;
+  if (typeof renderIndexEditor === 'function') renderIndexEditor();
 }
 
 
@@ -7034,7 +7104,6 @@ function saveQrPushback(id) {
 function renderQualityTab() {
   setQrType(qrType);       // ensures toggle state + form render
   renderQrSavedList();
-  renderIndexEditor();
 }
 
 function renderPostSell() {
