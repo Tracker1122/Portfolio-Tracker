@@ -5662,6 +5662,26 @@ function renderIndexEditor() {
           ${stale?`<span style="font-size:9px;color:#fbbf24">⚠ ${ageDays} days old \u2014 may have drifted; refresh from the fund\u2019s page</span>`:''}
         </div>
         ${rows || '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">No tickers yet \u2014 paste the fund\u2019s holdings below, or add them one at a time.</div>'}
+        ${(() => {
+          // Coverage line: how much of your $ in this fund is represented by the stored weights
+          // vs. not mapped here (foreign listings, the long tail, anything you didn't capture).
+          // Only meaningful when you hold the fund AND have stored some weights. Honest about the
+          // fact that hand-edited weights (e.g. folding swap exposure into a name) can push the
+          // sum past the literal holdings — so we label it "by stored weight," not "of holdings."
+          if (!(held > 0 && hasHoldings)) return '';
+          const sumW = Object.values(tbl.weights).reduce((s,w)=>s+(parseFloat(w)||0),0);
+          const repVal = held * Math.min(sumW,100) / 100;
+          const overWeight = sumW > 100.5;
+          const unmapped = Math.max(0, held - repVal);
+          const pctMapped = Math.min(sumW,100).toFixed(0);
+          const pctUnmapped = Math.max(0, 100 - Math.min(sumW,100)).toFixed(0);
+          if (overWeight) {
+            return `<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">Stored weights total ${sumW.toFixed(1)}% (>100%) — likely because a name was hand-raised to fold in extra exposure (e.g. swaps). Treated as fully mapped; the literal holdings would sum to ≤100%.</div>`;
+          }
+          return `<div style="font-size:9px;color:var(--color-text-secondary);margin-bottom:6px">
+            Of your ~${fmtDollarWhole(held)} in ${esc(fund)}, these holdings represent ~${fmtDollarWhole(repVal)} (${pctMapped}% by stored weight); ~${fmtDollarWhole(unmapped)} (${pctUnmapped}%) is in names not mapped here${pctUnmapped>=40?` <span style="color:var(--color-text-tertiary)">(often a long tail or unmappable foreign listings — exposure math only reflects the mapped part)</span>`:''}.
+          </div>`;
+        })()}
         <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--color-border-tertiary)">
           <div style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Paste holdings (ticker + weight, from the fund\u2019s page) — replaces this fund\u2019s list</div>
           <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:5px">
