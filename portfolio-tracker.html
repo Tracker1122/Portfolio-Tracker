@@ -6351,6 +6351,10 @@ function renderQrForm() {
       const holdingsBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${holdingsTextarea}${hint}</div>`;
       return holdingsBlock + `
         <div style="margin:-4px 0 12px">
+          <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:6px">
+            Need the list? <a href="#" onclick="qrOpenHoldingsSource(event)" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get top-10 holdings →</a>
+            <span style="color:var(--color-text-tertiary)">opens this fund on stockanalysis.com (free); copy the ticker + % column and paste above.</span>
+          </div>
           <div id="qr-holdings-preview" style="margin-bottom:6px"></div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
             <button type="button" class="btn btn-sm btn-primary" onclick="runQrHoldingsOverlap()" style="font-size:10px">Check overlap with my book</button>
@@ -6511,8 +6515,20 @@ function renderHoldingsPreview() {
   out.innerHTML = html;
 }
 
+// Open a free holdings source for the candidate's ticker in a new tab, so the top-10 is one
+// click away to copy-paste. stockanalysis.com lists ETF holdings (ticker + weight) without a
+// login. If no ticker yet, open the ETF screener. (Just a link — nothing fetched/scraped, so
+// nothing to silently break; if their URL structure ever changes you'd just see a 404 and
+// navigate manually.)
+function qrOpenHoldingsSource(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  const tkEl = document.getElementById('qr-ticker');
+  const tk = tkEl ? (tkEl.value || '').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '') : '';
+  const url = tk ? `https://stockanalysis.com/etf/${encodeURIComponent(tk)}/holdings/` : 'https://stockanalysis.com/etf/';
+  window.open(url, '_blank', 'noopener');
+}
+
 // Read the ETF holdings field, parse it, and show DIRECT overlaps with the book.
-// Shows its work: lists what matched, and honestly flags lines it couldn't parse.
 function runQrHoldingsOverlap() {
   const out = document.getElementById('qr-holdings-overlap');
   const fieldEl = document.getElementById('qr-f-holdingsTop');
