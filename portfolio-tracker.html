@@ -1446,43 +1446,35 @@
                   <option value="sell">Sell</option>
                 </select>
               </div>
-              <div id="sim-capital-source-wrap">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Funded by</div>
-                <select id="sim-capital-source" class="modal-select" style="width:120px" onchange="updateSimAddRow()">
-                  <option value="new">New Capital</option>
-                  <option value="cash-taxable">Taxable Cash</option>
-                  <option value="cash-ira">IRA Cash</option>
+              <!-- BUY fields -->
+              <div id="sim-buykind-wrap">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Type</div>
+                <select id="sim-buykind" class="modal-select" style="width:90px" onchange="updateSimAddRow()">
+                  <option value="stock">Stock</option>
+                  <option value="etf">ETF / fund</option>
                 </select>
               </div>
               <div id="sim-ticker-wrap">
                 <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Ticker</div>
-                <input id="sim-ticker" class="modal-input" type="text" placeholder="e.g. NVDA" style="width:72px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+                <input id="sim-ticker" class="modal-input" type="text" placeholder="e.g. NVDA" style="width:90px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
               </div>
-              <div id="sim-sell-ticker-wrap" style="display:none">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Ticker</div>
-                <select id="sim-sell-ticker" class="modal-select" style="width:220px" onchange="updateSimAddRow()">
-                  <option value="">— Pick —</option>
-                </select>
-              </div>
-              <div id="sim-proceeds-wrap" style="display:none">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Proceeds go to</div>
-                <select id="sim-proceeds-dest" class="modal-select" style="width:150px">
-                  <option value="reinvest">Reinvesting</option>
-                  <option value="index">Buying Index</option>
-                  <option value="out">Pulling Out</option>
-                  <option value="undecided">Undecided</option>
-                </select>
-              </div>
-              <div id="sim-theme-wrap">
-                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Industry</div>
-                <select id="sim-theme" class="modal-select" style="width:150px">
-                  <option value="">— Industry —</option>
-                </select>
-              </div>
-              <div>
+              <div id="sim-buyamount-wrap">
                 <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Amount $</div>
                 <input id="sim-amount" class="modal-input" type="number" min="0" step="100" placeholder="e.g. 10000" style="width:100px">
               </div>
+              <!-- SELL fields -->
+              <div id="sim-sell-lot-wrap" style="display:none">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Position / lot to sell</div>
+                <select id="sim-sell-lot" class="modal-select" style="width:280px" onchange="updateSimAddRow()">
+                  <option value="">— Pick a lot —</option>
+                </select>
+              </div>
+              <div id="sim-sell-shares-wrap" style="display:none">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Shares <span id="sim-sell-shares-max" style="text-transform:none;letter-spacing:0;color:var(--color-text-tertiary)"></span></div>
+                <input id="sim-sell-shares" class="modal-input" type="number" min="0" step="any" placeholder="#" style="width:80px" oninput="updateSimSellPreview()">
+              </div>
+              <div id="sim-sell-preview" style="font-size:9px;color:var(--color-text-tertiary);align-self:center;max-width:170px;line-height:1.4"></div>
+
               <button id="sim-add-btn" class="btn btn-sm btn-primary" onclick="addSimTrade()" style="margin-bottom:1px">+ Add Trade</button>
               <button class="btn btn-sm" onclick="clearSimulator()" style="margin-bottom:1px">Clear All</button>
             </div>
@@ -9520,7 +9512,18 @@ function showThesisModal(note) {
 // ─────────────────────────────────────────────
 // Multi-Trade Simulator
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// TRADE SIMULATOR (v1 — true-exposure rebuild)
+// Multi-trade queue. Each trade is one of:
+//   buy stock: {action:'buy', kind:'stock', ticker, amount}
+//   buy etf:   {action:'buy', kind:'etf',   ticker, amount}   (decomposed via look-through if available; else opaque block)
+//   sell lot:  {action:'sell', lotId, shares}                 (N shares from ONE specific position lot)
+// The engine builds a true-exposure baseline (direct + embedded per name) and applies the queue
+// in sequence, returning before→after per name plus account-aware tax. Built + Node-verified
+// against real data before wiring the UI (sim_engine_proto).
+// ─────────────────────────────────────────────
 let simTrades = []; // array of trade objects
+let editingTradeIndex = null;
 
 function toggleSimulator() {
   const panel = document.getElementById('sim-panel');
@@ -9528,110 +9531,99 @@ function toggleSimulator() {
   const isOpen = panel.style.display === 'none';
   panel.style.display = isOpen ? 'block' : 'none';
   if (arrow) arrow.textContent = isOpen ? '▾' : '▸';
-  if (isOpen) {
-    populateSellTickers();
-    const themeEl = document.getElementById('sim-theme');
-    if (themeEl && themeEl.options.length <= 1) {
-      // Derive dropdown options from canonical THEMES config (filter dropdown:true entries).
-      // Order preserved as defined in THEMES — existing themes first, then universe additions, then escape hatches.
-      const themes = Object.entries(THEMES).filter(([_, cfg]) => cfg.dropdown).map(([name]) => name);
-      themes.forEach(t => { const opt = document.createElement('option'); opt.value = t; opt.textContent = t; themeEl.appendChild(opt); });
-    }
-  }
+  if (isOpen) { populateSellLots(); updateSimAddRow(); renderSimResult(); }
 }
 
-function populateSellTickers() {
-  const sel = document.getElementById('sim-sell-ticker');
-  const open = positions.filter(p => !p.closed && p.ticker);
-  const tickers = {};
-  open.forEach(p => {
-    const v = calcPos(p).exitValue || 0;
-    if (!tickers[p.ticker]) tickers[p.ticker] = { value: 0, theme: p.theme || '', account: p.account || 'Taxable' };
-    tickers[p.ticker].value += v;
-    // If mixed accounts, flag it
-    if (tickers[p.ticker].account !== p.account) tickers[p.ticker].account = 'Mixed';
-  });
-  sel.innerHTML = '<option value="">— Pick —</option>' +
-    Object.entries(tickers).sort((a,b) => b[1].value - a[1].value)
-      .map(([t, d]) => {
-        const acctLabel = d.account.toUpperCase().includes('IRA') ? 'IRA' : 'Taxable';
-        return `<option value="${t}" data-theme="${d.theme}" data-value="${d.value.toFixed(0)}" data-account="${d.account}">${t} · ${acctLabel} · ${fmtDollarWhole(d.value)}</option>`;
-      })
-      .join('');
+// Populate the sell dropdown with one entry PER LOT (not per ticker) so each account's lot is a
+// distinct, precisely-taxable line. A ticker held in two accounts (e.g. MSFT taxable + IRA)
+// appears twice, tagged. Value/shares/price are stashed as data-* for the share-input preview.
+function populateSellLots() {
+  const sel = document.getElementById('sim-sell-lot');
+  if (!sel) return;
+  const lots = positions.filter(p => !p.closed && p.ticker && (parseFloat(p.shares) || 0) > 0)
+    .sort((a, b) => (calcPos(b).exitValue || 0) - (calcPos(a).exitValue || 0));
+  sel.innerHTML = '<option value="">— Pick a lot —</option>' + lots.map(p => {
+    const sh = parseFloat(p.shares) || 0;
+    const px = parseFloat(p.exitPrice) || 0;
+    const val = sh * px;
+    const acct = (p.account || '').toUpperCase().includes('IRA') ? 'IRA' : 'Taxable';
+    const dt = p.dateBought ? ` · ${p.dateBought}` : '';
+    return `<option value="${p.id}" data-shares="${sh}" data-price="${px}">${esc(p.ticker)} · ${acct} · ${sh} sh${dt} · ${fmtDollarWhole(val)}</option>`;
+  }).join('');
 }
 
 function updateSimAddRow() {
-  const action = document.getElementById('sim-action').value;
+  const action = (document.getElementById('sim-action') || {}).value;
   const isBuy = action === 'buy';
-  document.getElementById('sim-capital-source-wrap').style.display = isBuy ? 'block' : 'none';
-  document.getElementById('sim-ticker-wrap').style.display = isBuy ? 'block' : 'none';
-  document.getElementById('sim-sell-ticker-wrap').style.display = isBuy ? 'none' : 'block';
-  document.getElementById('sim-proceeds-wrap').style.display = isBuy ? 'none' : 'block';
-  document.getElementById('sim-theme-wrap').style.display = isBuy ? 'flex' : 'none';
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? 'block' : 'none'; };
+  show('sim-buykind-wrap', isBuy);
+  show('sim-ticker-wrap', isBuy);
+  show('sim-buyamount-wrap', isBuy);
+  show('sim-sell-lot-wrap', !isBuy);
+  show('sim-sell-shares-wrap', !isBuy);
+  if (!isBuy) updateSimSellPreview();
+  else { const pv = document.getElementById('sim-sell-preview'); if (pv) pv.innerHTML = ''; }
 }
 
-let editingTradeIndex = null;
+// Live preview under the Shares field: shows $ proceeds and (if taxable) the realized gain that
+// selling that many shares of the chosen lot would create. Caps shares at the lot's count.
+function updateSimSellPreview() {
+  const sel = document.getElementById('sim-sell-lot');
+  const shEl = document.getElementById('sim-sell-shares');
+  const maxEl = document.getElementById('sim-sell-shares-max');
+  const pv = document.getElementById('sim-sell-preview');
+  if (!sel || !shEl || !pv) return;
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !opt.value) { pv.innerHTML = ''; if (maxEl) maxEl.textContent = ''; return; }
+  const lotShares = parseFloat(opt.dataset.shares) || 0;
+  const px = parseFloat(opt.dataset.price) || 0;
+  if (maxEl) maxEl.textContent = `(max ${lotShares})`;
+  let sh = parseFloat(shEl.value) || 0;
+  if (sh > lotShares) { sh = lotShares; shEl.value = lotShares; }
+  if (sh <= 0) { pv.innerHTML = ''; return; }
+  const lot = positions.find(p => p.id == opt.value);
+  const proceeds = sh * px;
+  const pp = lot ? (parseFloat(lot.pricePaid) || 0) : 0;
+  const gain = sh * (px - pp);
+  const isIRA = lot && (lot.account || '').toUpperCase().includes('IRA');
+  let taxTxt;
+  if (isIRA) taxTxt = '<span style="color:var(--color-text-tertiary)">IRA — no tax</span>';
+  else if (gain > 0) { const rate = (typeof taxRateForOpen === 'function') ? taxRateForOpen(lot) : 0; taxTxt = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(gain * rate)} tax</span> on ${fmtDollarWhole(gain)} gain`; }
+  else taxTxt = `<span style="color:var(--color-text-success)">${fmtDollarWhole(gain)} loss</span>`;
+  pv.innerHTML = `${fmtDollarWhole(proceeds)} proceeds · ${taxTxt}`;
+}
 
 function addSimTrade() {
   const action = document.getElementById('sim-action').value;
-  const isBuy = action === 'buy';
-  const amount = parseFloat(document.getElementById('sim-amount').value) || 0;
-  if (amount <= 0) return;
-
   let trade;
-  if (isBuy) {
+  if (action === 'buy') {
+    const kind = document.getElementById('sim-buykind').value;
     const ticker = document.getElementById('sim-ticker').value.trim().toUpperCase();
-    const theme = document.getElementById('sim-theme').value;
-    const capitalSrc = document.getElementById('sim-capital-source').value;
-    if (!theme) { alert('Please select a theme'); return; }
-    trade = { action: 'buy', ticker, theme, amount, capitalSrc };
+    const amount = parseFloat(document.getElementById('sim-amount').value) || 0;
+    if (!ticker) { alert('Enter a ticker to buy.'); return; }
+    if (amount <= 0) { alert('Enter an amount to buy.'); return; }
+    trade = { action: 'buy', kind, ticker, amount };
   } else {
-    const sel = document.getElementById('sim-sell-ticker');
+    const sel = document.getElementById('sim-sell-lot');
     const opt = sel.options[sel.selectedIndex];
-    if (!opt || !opt.value) return;
-    const proceedsDest = document.getElementById('sim-proceeds-dest').value;
-    trade = { action: 'sell', ticker: opt.value, theme: opt.dataset.theme || '', amount, proceedsDest };
+    if (!opt || !opt.value) { alert('Pick a lot to sell.'); return; }
+    const lotShares = parseFloat(opt.dataset.shares) || 0;
+    let shares = parseFloat(document.getElementById('sim-sell-shares').value) || 0;
+    if (shares <= 0) { alert('Enter how many shares to sell.'); return; }
+    if (shares > lotShares) shares = lotShares;
+    trade = { action: 'sell', lotId: parseInt(opt.value, 10), shares };
   }
-
-  if (editingTradeIndex !== null) {
-    simTrades[editingTradeIndex] = trade;
-    editingTradeIndex = null;
-    document.getElementById('sim-add-btn').textContent = '+ Add Trade';
-  } else {
-    simTrades.push(trade);
-  }
-
-  document.getElementById('sim-amount').value = '';
+  if (editingTradeIndex !== null) { simTrades[editingTradeIndex] = trade; editingTradeIndex = null; document.getElementById('sim-add-btn').textContent = '+ Add Trade'; }
+  else simTrades.push(trade);
+  // reset inputs
   document.getElementById('sim-ticker').value = '';
-  document.getElementById('sim-theme').value = '';
-  document.getElementById('sim-sell-ticker').value = '';
+  document.getElementById('sim-amount').value = '';
+  document.getElementById('sim-sell-shares').value = '';
+  document.getElementById('sim-sell-lot').value = '';
   document.getElementById('sim-step-label').textContent = `Trade ${simTrades.length + 1}`;
   document.getElementById('sim-trade-count').textContent = `(${simTrades.length} queued)`;
   updateSimAddRow();
   renderSimResult();
-}
-
-function editSimTrade(i) {
-  const t = simTrades[i];
-  editingTradeIndex = i;
-
-  document.getElementById('sim-action').value = t.action;
-  updateSimAddRow();
-
-  if (t.action === 'buy') {
-    document.getElementById('sim-ticker').value = t.ticker || '';
-    document.getElementById('sim-theme').value = t.theme || '';
-    document.getElementById('sim-capital-source').value = t.capitalSrc || 'new';
-  } else {
-    const sel = document.getElementById('sim-sell-ticker');
-    for (let j = 0; j < sel.options.length; j++) {
-      if (sel.options[j].value === t.ticker) { sel.selectedIndex = j; break; }
-    }
-    document.getElementById('sim-proceeds-dest').value = t.proceedsDest || 'reinvest';
-  }
-  document.getElementById('sim-amount').value = t.amount;
-  document.getElementById('sim-step-label').textContent = `Editing Trade ${i + 1}`;
-  document.getElementById('sim-add-btn').textContent = '✓ Update Trade';
 }
 
 function removeSimTrade(i) {
@@ -9644,242 +9636,150 @@ function removeSimTrade(i) {
 function clearSimulator() {
   simTrades = [];
   editingTradeIndex = null;
-  document.getElementById('sim-amount').value = '';
-  document.getElementById('sim-ticker').value = '';
-  document.getElementById('sim-theme').value = '';
-  document.getElementById('sim-sell-ticker').value = '';
-  document.getElementById('sim-result').innerHTML = '';
-  document.getElementById('sim-trade-list').innerHTML = '';
-  document.getElementById('sim-step-label').textContent = 'Trade 1';
-  document.getElementById('sim-trade-count').textContent = '';
-  const btn = document.getElementById('sim-add-btn');
-  if (btn) btn.textContent = '+ Add Trade';
+  ['sim-ticker','sim-amount','sim-sell-shares'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const lotSel = document.getElementById('sim-sell-lot'); if (lotSel) lotSel.value = '';
+  const r = document.getElementById('sim-result'); if (r) r.innerHTML = '';
+  const l = document.getElementById('sim-trade-list'); if (l) l.innerHTML = '';
+  const sl = document.getElementById('sim-step-label'); if (sl) sl.textContent = 'Trade 1';
+  const tc = document.getElementById('sim-trade-count'); if (tc) tc.textContent = '';
+  const btn = document.getElementById('sim-add-btn'); if (btn) btn.textContent = '+ Add Trade';
+  const pv = document.getElementById('sim-sell-preview'); if (pv) pv.innerHTML = '';
+}
+
+// ── THE ENGINE ── apply a queue of trades to a true-exposure baseline. Pure function of
+// (positions, look-through, queue). Node-verified in isolation before wiring.
+function simulateQueue(trades) {
+  const tables = getIndexLookthrough();
+  const activeFunds = [];
+  for (const [fund, tbl] of Object.entries(tables)) {
+    const v = indexFundHeldValue(fund);
+    if (v > 0 && tbl.weights && Object.keys(tbl.weights).length) activeFunds.push({ fund, value: v, weights: tbl.weights });
+  }
+  const basketNorms = new Set(activeFunds.map(f => qrNormTicker(f.fund)));
+  basketNorms.add(qrNormTicker('VOO'));
+  const exp = {}; // norm -> {display, direct, embedded}
+  const ens = (disp) => { const k = qrNormTicker(disp); if (!exp[k]) exp[k] = { display: disp, direct: 0, embedded: 0 }; return exp[k]; };
+  positions.filter(p => !p.closed && p.ticker).forEach(p => { const k = qrNormTicker(p.ticker); if (basketNorms.has(k)) return; ens(p.ticker).direct += calcPos(p).exitValue || 0; });
+  activeFunds.forEach(({ value, weights }) => { for (const [tk, w] of Object.entries(weights)) { if (w == null) continue; ens(tk).embedded += value * (w / 100); } });
+  const before = {}; for (const [k, v] of Object.entries(exp)) before[k] = { ...v };
+
+  let taxableGain = 0, estTax = 0, shelteredProceeds = 0, taxableProceeds = 0, anyLoss = false, hasIRA = false;
+  const opaqueBlocks = []; // {ticker, amount} — ETF buys with no look-through table
+  let cashIn = 0, cashOut = 0; // net new capital required (buys) vs proceeds (sells)
+
+  trades.forEach(t => {
+    if (t.action === 'buy') {
+      cashIn += t.amount;
+      if (t.kind === 'stock') { ens(t.ticker).direct += t.amount; }
+      else {
+        const tbl = tables[t.ticker.toUpperCase()];
+        if (tbl && tbl.weights && Object.keys(tbl.weights).length) {
+          for (const [tk, w] of Object.entries(tbl.weights)) { if (w == null) continue; ens(tk).embedded += t.amount * (w / 100); }
+        } else { opaqueBlocks.push({ ticker: t.ticker.toUpperCase(), amount: t.amount }); }
+      }
+    } else {
+      const lot = positions.find(p => p.id === t.lotId);
+      if (!lot) return;
+      const sh = Math.min(parseFloat(t.shares) || 0, parseFloat(lot.shares) || 0);
+      const px = parseFloat(lot.exitPrice) || 0, pp = parseFloat(lot.pricePaid) || 0;
+      const proceeds = sh * px, gain = sh * (px - pp);
+      const k = qrNormTicker(lot.ticker);
+      if (exp[k]) exp[k].direct = Math.max(0, exp[k].direct - proceeds);
+      cashOut += proceeds;
+      const isIRA = (lot.account || '').toUpperCase().includes('IRA');
+      if (isIRA) { hasIRA = true; shelteredProceeds += proceeds; }
+      else {
+        taxableProceeds += proceeds;
+        if (gain > 0) { taxableGain += gain; estTax += gain * ((typeof taxRateForOpen === 'function') ? taxRateForOpen(lot) : 0); }
+        else if (gain < 0) anyLoss = true;
+      }
+    }
+  });
+
+  const allKeys = new Set([...Object.keys(before), ...Object.keys(exp)]);
+  const rows = [...allKeys].map(k => {
+    const b = before[k] || { display: (exp[k] || {}).display, direct: 0, embedded: 0 };
+    const a = exp[k] || { display: b.display, direct: 0, embedded: 0 };
+    const bt = b.direct + b.embedded, at = a.direct + a.embedded;
+    return { display: a.display || b.display, before: bt, after: at, change: at - bt, dBefore: b.direct, dAfter: a.direct, eBefore: b.embedded, eAfter: a.embedded };
+  }).filter(r => r.before > 1 || r.after > 1).sort((x, y) => y.after - x.after);
+
+  return { rows, taxableGain, estTax, shelteredProceeds, taxableProceeds, anyLoss, hasIRA, opaqueBlocks, cashIn, cashOut };
 }
 
 function renderSimResult() {
   const listEl = document.getElementById('sim-trade-list');
   const resultEl = document.getElementById('sim-result');
+  if (!listEl || !resultEl) return;
   if (simTrades.length === 0) { listEl.innerHTML = ''; resultEl.innerHTML = ''; return; }
 
-  // Render trade queue
+  // Trade queue display
   listEl.innerHTML = simTrades.map((t, i) => {
-    const label = t.action === 'buy'
-      ? `Buy ${t.ticker || '?'} · ${t.theme} · ${fmtDollarWhole(t.amount)} · ${t.capitalSrc === 'new' ? 'New Capital' : t.capitalSrc === 'cash-taxable' ? 'Taxable Cash' : 'IRA Cash'}`
-      : `Sell ${t.ticker} · ${fmtDollarWhole(t.amount)} · ${t.proceedsDest}`;
-    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;margin-bottom:4px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;cursor:pointer" onclick="editSimTrade(${i})">
-      <span style="color:var(--color-text-tertiary);min-width:14px">${i+1}.</span>
-      <span style="color:${t.action==='buy'?'var(--color-text-success)':'var(--color-text-danger)'};font-weight:600">${t.action.toUpperCase()}</span>
+    let label;
+    if (t.action === 'buy') label = `Buy ${esc(t.ticker)} <span style="color:var(--color-text-tertiary)">(${t.kind === 'etf' ? 'ETF' : 'stock'})</span> · ${fmtDollarWhole(t.amount)}`;
+    else {
+      const lot = positions.find(p => p.id === t.lotId);
+      const tk = lot ? lot.ticker : '?';
+      const acct = lot && (lot.account || '').toUpperCase().includes('IRA') ? 'IRA' : 'Taxable';
+      label = `Sell ${t.shares} sh ${esc(tk)} <span style="color:var(--color-text-tertiary)">(${acct})</span>`;
+    }
+    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;margin-bottom:4px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:11px">
+      <span style="color:var(--color-text-tertiary);min-width:14px">${i + 1}.</span>
+      <span style="color:${t.action === 'buy' ? 'var(--color-text-success)' : 'var(--color-text-danger)'};font-weight:600">${t.action.toUpperCase()}</span>
       <span style="color:var(--color-text-secondary);flex:1">${label}</span>
-      <span style="font-size:9px;color:var(--color-text-tertiary);margin-right:4px">click to edit</span>
-      <button onclick="event.stopPropagation();removeSimTrade(${i})" style="background:none;border:none;color:var(--color-text-tertiary);cursor:pointer;font-size:10px;padding:0">✕</button>
+      <button onclick="removeSimTrade(${i})" style="background:none;border:none;color:var(--color-text-tertiary);cursor:pointer;font-size:11px;padding:0">✕</button>
     </div>`;
   }).join('');
 
-  // Build sequential state
-  const today = new Date();
-  const taxYear = today.getFullYear();
-  // Fallbacks match Oregon-calibrated TAX_RATE_ST/LT constants (36/27) for consistency with Track Record.
-  const stRate = (parseFloat(document.getElementById('rate-st')?.value) || (TAX_RATE_ST * 100)) / 100;
-  const ltRate = (parseFloat(document.getElementById('rate-lt')?.value) || (TAX_RATE_LT * 100)) / 100;
+  const sim = simulateQueue(simTrades);
 
-  // Initial state
-  const open = positions.filter(p => !p.closed && p.ticker && p.theme);
-  const initThemes = {};
-  open.forEach(p => { const v = calcPos(p).exitValue || 0; initThemes[p.theme] = (initThemes[p.theme]||0) + v; });
-  const initInvested = open.reduce((s,p) => s+(calcPos(p).exitValue||0), 0);
-  const initCashT = cashBuckets.Taxable || 0;
-  const initCashI = cashBuckets.IRA || 0;
+  // Only show names that actually MOVED (plus keep them sorted by after-value).
+  const moved = sim.rows.filter(r => Math.abs(r.change) > 1);
+  const expBody = moved.slice(0, 25).map(r => {
+    const chg = Math.round(r.change);
+    const col = Math.abs(chg) < 250 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const tiny = (Math.abs(chg) < 1000 && r.before > 5000) ? ' <span style="color:#fbbf24">← barely moves</span>' : '';
+    return `<tr>
+      <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
+      <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
+      <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
+      <td style="padding:3px 8px;text-align:right;color:${col}">${chg >= 0 ? '+' : ''}${fmtDollarWhole(chg)}${tiny}</td>
+    </tr>`;
+  }).join('');
 
-  // Tax year baseline
-  let ltGains = 0, stGains = 0, harvested = 0;
-  positions.filter(p => p.closed && p.ticker && p.sellDate).forEach(p => {
-    if (new Date(p.sellDate).getFullYear() !== taxYear) return;
-    if ((p.account||'').toUpperCase().includes('IRA')) return;
-    const g = calcPos(p).gainLoss;
-    const bd = p.dateBought ? new Date(p.dateBought) : null;
-    const sd = new Date(p.sellDate);
-    const days = bd ? Math.floor((sd-bd)/86400000) : 0;
-    if (g > 0) { if (days > 365) ltGains += g; else stGains += g; }
-    else if (g < 0) harvested += Math.abs(g);
-  });
+  // Tax summary
+  let taxNote;
+  if (sim.estTax > 0) { taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains`; if (sim.shelteredProceeds > 0) taxNote += ` · ${fmtDollarWhole(sim.shelteredProceeds)} of sales are in your IRA (tax-free)`; }
+  else if (sim.hasIRA && sim.taxableProceeds === 0) taxNote = `no tax — sales are entirely in your IRA (sheltered)`;
+  else if (sim.anyLoss && sim.taxableGain === 0) taxNote = `no tax (sales at a loss)`;
+  else if (sim.cashOut === 0) taxNote = `no sales — no realized tax`;
+  else taxNote = `no taxable gain`;
 
-  // Capital flow baseline
-  let rotated = cashLedger.filter(e=>e.type==='deployment').reduce((s,e)=>s+e.amount,0);
-  let indexed = cashLedger.filter(e=>e.type==='indexed').reduce((s,e)=>s+e.amount,0);
-  let pulledOut = cashLedger.filter(e=>e.type==='pullout').reduce((s,e)=>s+e.amount,0);
-  let totalIn = cashLedger.filter(e=>['sale','deposit'].includes(e.type)).reduce((s,e)=>s+e.amount,0);
+  // Opaque ETF blocks (no look-through) — let the user fill them in via the existing flow.
+  let opaqueNote = '';
+  if (sim.opaqueBlocks.length) {
+    opaqueNote = sim.opaqueBlocks.map(b => `<div style="font-size:10px;color:#fbbf24;margin-top:4px">
+      ⚠ ${esc(b.ticker)} (${fmtDollarWhole(b.amount)}) added as an opaque block — no holdings pasted, so its per-name impact isn't shown.
+      <a href="#" onclick="qrOpenIndexSource(event,'${esc(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a>
+      then paste them in Distribution → look-through to decompose it.</div>`).join('');
+  }
 
-  // Apply trades sequentially
-  let state = { themes: {...initThemes}, cashT: initCashT, cashI: initCashI, ltGains, stGains, harvested, rotated, indexed, pulledOut, totalIn };
-
-  simTrades.forEach(t => {
-    if (t.action === 'buy') {
-      state.themes[t.theme] = (state.themes[t.theme]||0) + t.amount;
-      if (t.capitalSrc === 'cash-taxable') { state.cashT = Math.max(0, state.cashT - t.amount); state.rotated += t.amount; }
-      else if (t.capitalSrc === 'cash-ira') { state.cashI = Math.max(0, state.cashI - t.amount); state.rotated += t.amount; }
-    } else {
-      // Find position for tax calc
-      const pos = positions.find(p => !p.closed && p.ticker === t.ticker);
-      state.themes[t.theme] = Math.max(0, (state.themes[t.theme]||0) - t.amount);
-      state.totalIn += t.amount;
-
-      if (t.proceedsDest === 'reinvest' || t.proceedsDest === 'undecided') state.cashT += t.amount;
-      else if (t.proceedsDest === 'index') state.indexed += t.amount;
-      else if (t.proceedsDest === 'out') state.pulledOut += t.amount;
-
-      // Tax
-      if (pos && !(pos.account||'').toUpperCase().includes('IRA')) {
-        const c = calcPos(pos);
-        const gl = c.gainLoss;
-        const bd = pos.dateBought ? new Date(pos.dateBought) : null;
-        const days = bd ? Math.floor((today - bd)/86400000) : 0;
-        if (gl > 0) { if (days > 365) state.ltGains += gl; else state.stGains += gl; }
-        else if (gl < 0) state.harvested += Math.abs(gl);
-      }
-    }
-  });
-
-  // Build bars
-  const initTotal = initInvested + initCashT + initCashI;
-  const finalTotal = Object.values(state.themes).reduce((s,v)=>s+v,0) + state.cashT + state.cashI;
-
-  const buildDelta = (initMap, finalMap, initCashT, initCashI, finalCashT, finalCashI, initTotal, finalTotal) => {
-    const allThemes = new Set([...Object.keys(initMap), ...Object.keys(finalMap)]);
-    const initCash = initCashT + initCashI;
-    const finalCash = finalCashT + finalCashI;
-
-    const rows = [...allThemes].map(theme => {
-      const before = initTotal > 0 ? ((initMap[theme]||0) / initTotal) * 100 : 0;
-      const after = finalTotal > 0 ? ((finalMap[theme]||0) / finalTotal) * 100 : 0;
-      const delta = after - before;
-      const beforeVal = initMap[theme] || 0;
-      const afterVal = finalMap[theme] || 0;
-      return { theme, before, after, delta, beforeVal, afterVal };
-    }).filter(r => Math.abs(r.delta) > 0.05 || Math.abs(r.beforeVal - r.afterVal) > 10)
-      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
-
-    // Cash row
-    const cashBefore = initTotal > 0 ? (initCash / initTotal) * 100 : 0;
-    const cashAfter = finalTotal > 0 ? (finalCash / finalTotal) * 100 : 0;
-    const cashDeltaPct = cashAfter - cashBefore;
-
-    const themeRows = rows.map(r => {
-      const color = THEME_COLORS[r.theme] || '#94a3b8';
-      const deltaColor = r.delta > 0 ? 'var(--color-text-danger)' : 'var(--color-text-success)';
-      const arrow = r.delta > 0 ? '↑' : '↓';
-      const barMax = Math.max(...rows.map(x => Math.abs(x.delta)), Math.abs(cashDeltaPct), 1);
-      const barWidth = Math.min(100, (Math.abs(r.delta) / barMax) * 100);
-      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--color-border-tertiary)">
-        <div style="width:10px;height:10px;border-radius:2px;background:${color};flex-shrink:0"></div>
-        <div style="flex:1;font-size:11px;color:var(--color-text-secondary)">${r.theme}</div>
-        <div style="font-size:10px;color:var(--color-text-tertiary);width:48px;text-align:right">${r.before.toFixed(1)}%</div>
-        <div style="font-size:10px;color:var(--color-text-tertiary)">→</div>
-        <div style="font-size:10px;color:var(--color-text-secondary);width:48px">${r.after.toFixed(1)}%</div>
-        <div style="width:80px">
-          <div style="height:6px;border-radius:3px;background:${r.delta>0?'var(--color-text-danger)':'var(--color-text-success)'};width:${barWidth.toFixed(1)}%;opacity:0.7"></div>
-        </div>
-        <div style="font-size:11px;font-weight:700;color:${deltaColor};width:52px;text-align:right">${arrow} ${Math.abs(r.delta).toFixed(1)}pp</div>
-        <div style="font-size:10px;color:var(--color-text-tertiary);width:80px;text-align:right">${fmtDollarWhole(r.beforeVal)} → ${fmtDollarWhole(r.afterVal)}</div>
-      </div>`;
-    }).join('');
-
-    const cashRow = Math.abs(cashDeltaPct) > 0.05 ? `
-      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--color-border-tertiary)">
-        <div style="width:10px;height:10px;border-radius:2px;background:#3a3a3a;border:1px solid #555;flex-shrink:0"></div>
-        <div style="flex:1;font-size:11px;color:var(--color-text-secondary)">Cash</div>
-        <div style="font-size:10px;color:var(--color-text-tertiary);width:48px;text-align:right">${cashBefore.toFixed(1)}%</div>
-        <div style="font-size:10px;color:var(--color-text-tertiary)">→</div>
-        <div style="font-size:10px;color:var(--color-text-secondary);width:48px">${cashAfter.toFixed(1)}%</div>
-        <div style="width:80px">
-          <div style="height:6px;border-radius:3px;background:var(--color-text-secondary);width:${Math.min(100,(Math.abs(cashDeltaPct)/Math.max(...rows.map(x=>Math.abs(x.delta)),Math.abs(cashDeltaPct),1))*100).toFixed(1)}%;opacity:0.5"></div>
-        </div>
-        <div style="font-size:11px;font-weight:700;color:var(--color-text-secondary);width:52px;text-align:right">${cashDeltaPct>0?'↑':'↓'} ${Math.abs(cashDeltaPct).toFixed(1)}pp</div>
-        <div style="font-size:10px;color:var(--color-text-tertiary);width:80px;text-align:right">${fmtDollarWhole(initCash)} → ${fmtDollarWhole(finalCash)}</div>
-      </div>` : '';
-
-    if (!themeRows && !cashRow) return '<div style="font-size:10px;color:var(--color-text-tertiary);padding:8px 0">No meaningful concentration changes.</div>';
-
-    return `<div style="margin-bottom:8px">
-      <div style="display:flex;gap:8px;padding:3px 0;margin-bottom:2px">
-        <div style="width:10px;flex-shrink:0"></div>
-        <div style="flex:1;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em">Industry</div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);width:48px;text-align:right">Before</div>
-        <div style="width:14px"></div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);width:48px">After</div>
-        <div style="width:80px"></div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);width:52px;text-align:right">Change</div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);width:80px;text-align:right">$ Before → After</div>
-      </div>
-      ${themeRows}${cashRow}
-    </div>`;
-  };
-
-  const deltaView = buildDelta(initThemes, state.themes, initCashT, initCashI, state.cashT, state.cashI, initTotal, finalTotal);
-
-  // Tax delta
-  const calcNet = (lt, st, harv) => Math.max(0, lt*ltRate + st*stRate - harv);
-  const initNet = calcNet(ltGains, stGains, harvested);
-  const finalNet = calcNet(state.ltGains, state.stGains, state.harvested);
-
-  // Final state stacked bar
-  const buildFinalBar = (themeMap, cashT, cashI, grand) => {
-    if (grand <= 0) return '';
-    const sorted = Object.entries(themeMap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
-    const segs = sorted.map(([theme,v]) => {
-      const pct = (v/grand)*100;
-      if (pct < 0.1) return '';
-      const color = THEME_COLORS[theme]||'#94a3b8';
-      return `<div style="width:${pct.toFixed(2)}%;background:${color};height:28px;flex-shrink:0;position:relative" title="${theme}: ${pct.toFixed(1)}% · ${fmtDollarWhole(v)}"></div>`;
-    }).join('');
-    const totalCash = cashT + cashI;
-    const cashSeg = totalCash > 0 ? `<div style="width:${((totalCash/grand)*100).toFixed(2)}%;background:#3a3a3a;height:28px;flex-shrink:0;border-left:1px solid #555" title="Cash: ${fmtDollarWhole(totalCash)}"></div>` : '';
-
-    const legend = sorted.map(([theme,v]) => {
-      const pct = (v/grand)*100;
-      const color = THEME_COLORS[theme]||'#94a3b8';
-      return `<div style="display:flex;align-items:center;gap:4px;font-size:9px;color:var(--color-text-secondary)">
-        <div style="width:8px;height:8px;border-radius:2px;background:${color};flex-shrink:0"></div>
-        <span>${theme} ${pct.toFixed(1)}%</span>
-      </div>`;
-    }).join('') + (totalCash > 0 ? `<div style="display:flex;align-items:center;gap:4px;font-size:9px;color:var(--color-text-secondary)">
-      <div style="width:8px;height:8px;border-radius:2px;background:#3a3a3a;border:1px solid #555;flex-shrink:0"></div>
-      <span>Cash ${((totalCash/grand)*100).toFixed(1)}%</span>
-    </div>` : '');
-
-    return `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--color-border-tertiary)">
-      <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Final Managed Composition · ${fmtDollarWhole(grand)}</div>
-      <div style="display:flex;height:28px;border-radius:var(--border-radius-md);overflow:hidden;width:100%;margin-bottom:8px">${segs}${cashSeg}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px 14px">${legend}</div>
-    </div>`;
-  };
-
-  const finalBar = buildFinalBar(state.themes, state.cashT, state.cashI, finalTotal);
+  const netCash = sim.cashOut - sim.cashIn;
+  const cashLine = `Sells raise ${fmtDollarWhole(sim.cashOut)} · buys need ${fmtDollarWhole(sim.cashIn)} · net ${netCash >= 0 ? 'freed' : 'required'}: ${fmtDollarWhole(Math.abs(netCash))}`;
 
   resultEl.innerHTML = `
-    <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:6px">Portfolio: ${fmtDollarWhole(initTotal)} → ${fmtDollarWhole(finalTotal)} · ${simTrades.length} trade${simTrades.length>1?'s':''}</div>
-    ${deltaView}
-    ${finalBar}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
-      <div style="padding:8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">
-        <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Capital Flow</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px">
-          <div><span style="color:var(--color-text-tertiary)">Rotated </span><span style="color:var(--color-text-info)">${fmtDollarWhole(rotated)} → ${fmtDollarWhole(state.rotated)}</span></div>
-          <div><span style="color:var(--color-text-tertiary)">→ Index </span><span style="color:#fbbf24">${fmtDollarWhole(indexed)} → ${fmtDollarWhole(state.indexed)}</span></div>
-          <div><span style="color:var(--color-text-tertiary)">Pulled Out </span><span style="color:var(--color-text-danger)">${fmtDollarWhole(pulledOut)} → ${fmtDollarWhole(state.pulledOut)}</span></div>
-          <div><span style="color:var(--color-text-tertiary)">Taxable Cash </span><span style="color:var(--color-text-secondary)">${fmtDollarWhole(initCashT)} → ${fmtDollarWhole(state.cashT)}</span></div>
-          <div><span style="color:var(--color-text-tertiary)">IRA Cash </span><span style="color:var(--color-text-secondary)">${fmtDollarWhole(initCashI)} → ${fmtDollarWhole(state.cashI)}</span></div>
-        </div>
-      </div>
-      <div style="padding:8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">
-        <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">${taxYear} Tax Impact</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px">
-          <div><span style="color:var(--color-text-tertiary)">LT Gains </span><span style="color:${state.ltGains>ltGains?'var(--color-text-danger)':'var(--color-text-tertiary)'}">${fmtDollarWhole(ltGains)} → ${fmtDollarWhole(state.ltGains)}</span></div>
-          <div><span style="color:var(--color-text-tertiary)">ST Gains </span><span style="color:${state.stGains>stGains?'var(--color-text-danger)':'var(--color-text-tertiary)'}">${fmtDollarWhole(stGains)} → ${fmtDollarWhole(state.stGains)}</span></div>
-          <div><span style="color:var(--color-text-tertiary)">Harvested </span><span style="color:${state.harvested>harvested?'var(--color-text-success)':'var(--color-text-tertiary)'}">${fmtDollarWhole(harvested)} → ${fmtDollarWhole(state.harvested)}</span></div>
-          <div><span style="color:var(--color-text-tertiary)">Net Tax </span><span style="font-weight:700;color:${finalNet>initNet?'var(--color-text-danger)':'var(--color-text-success)'}">${fmtDollarWhole(initNet)} → ${fmtDollarWhole(finalNet)}</span></div>
-        </div>
-      </div>
-    </div>`;
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin:8px 0 4px">${simTrades.length} trade${simTrades.length > 1 ? 's' : ''} queued · ${cashLine}</div>
+    <div style="font-size:10px;margin:0 0 8px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
+    ${opaqueNote}
+    <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">True exposure — names that move (direct + inside funds)</div>
+    ${moved.length ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+        <th style="padding:3px 8px;text-align:left;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Name</th>
+        <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
+        <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
+        <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
+      </tr></thead><tbody>${expBody}</tbody></table></div>` : '<div style="font-size:10px;color:var(--color-text-tertiary);padding:6px 0">No name-level exposure change yet — add trades above.</div>'}
+    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">True exposure = what you hold directly + what you hold inside your funds. Selling a direct position only removes the direct part — the slice inside VOO/ETFs stays. Direct dollars are exact; the fund-embedded part is approximate (weights drift). Tax is an estimate from your active profile, not advice.</div>`;
 }
 
 function renderSleeveRef() {
@@ -10126,9 +10026,6 @@ function renderIndustryRef() {
   refreshPpLegendExample();
 }
 
-  const action = document.getElementById('sim-action').value;
-  const isBuy = action === 'buy';
-  const capitalSrc = document.getElementById('sim-capital-source')?.value || 'new';
 // ─────────────────────────────────────────────
 // Card Hover Overlays
 // ─────────────────────────────────────────────
