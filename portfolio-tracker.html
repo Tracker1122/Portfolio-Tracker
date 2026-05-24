@@ -5183,7 +5183,7 @@ const QR_LOCATIONS = {
   // ----- ETF-side locations (session 3) -----
   expense: { panel: 'etf_fund_highlights', text: 'ETF quote page → Holdings section → click "Show More" / expand → the "Fund Highlights" box (top-right) → "Gross Expense Ratio" (SMH 0.35%). This is the annual fund fee.' },
   aum: { panel: 'etf_fund_highlights', text: 'Same place as the expense ratio: Holdings section (expanded) → "Fund Highlights" box → "Total Assets" (SMH $58.8B). That dollar figure IS the AUM — note the field here is in $M, so $58.8B = 58800.' },
-  holdingsTop: { panel: 'etf_holdings_table', text: 'ETF quote page → Holdings → "Equities" table. Use the Symbol and "% of Net Assets" columns (SMH: NVDA 17.52%, TSM 9.69%, INTC 7.68%…). Paste tickers with weights. (The "Check holdings overlap" button below can also auto-fetch these.)' },
+  holdingsTop: { panel: 'etf_holdings_table', text: 'ETF quote page → Holdings → "Equities" table. Use the Symbol and "% of Net Assets" columns (SMH: NVDA 17.52%, TSM 9.69%, INTC 7.68%…). Paste the ticker + weight for each holding into the field; the overlap check matches them against your book.' },
   concentration: { panel: 'etf_concentration', text: 'ETF quote page → Holdings table → the bold line just under the last row: "X% of portfolio in top 10 holdings" (SMH 72.51%). Schwab states this directly — you don’t have to add up the weights yourself.' },
   avgVolume: { panel: 'etf_technicals', text: 'ETF quote page → Technicals panel → "90-Day Average Volume" (SMH 9,158,767) or "10-Day Average Volume" (SMH 11,040,104). You’re only after the volume figure as a liquidity check — ignore the RSI/MACD/moving-average items in this panel (those are timing signals, deliberately excluded from this assessment).' },
   tracksWhat: { panel: 'etf_strategy', text: 'ETF quote page → "Fund Strategy" box (right column). It names the index in the description (SMH: "MVIS® US Listed Semiconductor 25 Index") and key mechanics — e.g. "at least 80% of total assets" in benchmark securities, and that the fund is "non-diversified".' },
@@ -5490,7 +5490,7 @@ const QR_FIELDS = {
     { key: 'expense',     label: 'Expense ratio %',                              kind: 'number',   hint: 'Below ~0.20% is cheap for broad; thematic runs higher' },
     { key: 'aum',         label: 'Assets Under Management (AUM) ($M)',            kind: 'number',   hint: 'Under ~$50M (value of 50) \u2192 scrutinize for closure/liquidity risk; issuer strength matters as much as the number' },
     { key: 'avgVolume',   label: 'Avg daily volume',                             kind: 'text',     hint: 'Thin volume \u2192 wide spreads' },
-    { key: 'holdingsTop', label: 'Top 5\u201310 holdings',                       kind: 'textarea', hint: 'Paste tickers (e.g. \u201cNVDA 22%, MU 4.5%\u201d), not company names. Then use \u201cCheck holdings overlap\u201d below to match against your book.' },
+    { key: 'holdingsTop', label: 'Top 5\u201310 holdings',                       kind: 'textarea', hint: 'Paste from the fund\u2019s Schwab holdings table \u2014 ticker + weight, e.g. \u201cNVDA 17.5%, MU 4.5%\u201d (one per line or comma-separated). Use tickers, not company names. Then \u201cCheck overlap with my book\u201d below; it will flag any lines it couldn\u2019t read.' },
     { key: 'concentration', label: 'Top-10 concentration %',                     kind: 'number',   hint: 'High % \u2192 you\u2019re buying a few names, not the theme' },
     { key: 'navReturn1y',   label: 'NAV return %, 1-Yr',                          kind: 'number',   hint: 'Schwab: Quarterly/Monthly Total Returns \u2192 the "SMH NAV" row, 1-Yr column. Use the SAME period as the price return below.' },
     { key: 'priceReturn1y', label: 'Market Price return %, 1-Yr',                 kind: 'number',   hint: 'Schwab: same returns panel \u2192 the "SMH Market Price" row, 1-Yr column. The tracker subtracts the two to show the tracking gap.' },
@@ -5551,16 +5551,41 @@ function parseHoldings(text) {
   if (!text || !text.trim()) return { parsed: [], unparsed: [] };
   const chunks = text.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
   const parsed = [], unparsed = [];
+  const seen = {};
   chunks.forEach(chunk => {
-    const wMatch = chunk.match(/(\d+(?:\.\d+)?)\s*%/);
-    const weight = wMatch ? parseFloat(wMatch[1]) : null;
-    let ticker = null;
-    for (const tok of chunk.split(/\s+/)) {
-      const clean = tok.replace(/[^A-Za-z.\-]/g, '');
-      if (/^[A-Z]{1,5}([.\-][A-Z])?$/.test(clean)) { ticker = clean; break; }
+    // Schwab rows look like: "NVDA  NVIDIA Corp  +17.52%  49.2M  $10.9B  +20.38% ..."
+    // (Symbol, Description, % of Net Assets, Shares, Market Value, return columns).
+    // The WEIGHT is the FIRST percentage on the row; later %s are returns. The TICKER is
+    // typically the first short all-caps token. We strip money/share tokens ($10.9B, 49.2M)
+    // so they can't be mistaken for tickers, and take the first %, not the last.
+    const tokens = chunk.split(/\s+/);
+    // Weight = the first standalone percentage in the row (Schwab's "% of Net Assets" comes
+    // before the return columns). Ignore a leading +/- sign.
+    let weight = null;
+    for (const tok of tokens) {
+      const m = tok.match(/^[+\-]?(\d+(?:\.\d+)?)\s*%$/);
+      if (m) { weight = parseFloat(m[1]); break; }
     }
-    if (ticker) parsed.push({ ticker, weight });
-    else unparsed.push(chunk);
+    // Find the ticker: first token that looks like a symbol, AFTER discarding obvious
+    // non-tickers — money ($10.9B), share counts (49.2M / 1,234,567), percentages, and
+    // common all-caps filler words that aren't tickers.
+    const FILLER = new Set(['ETF','INC','CORP','LTD','PLC','ADR','REIT','CO','THE','CLASS','NV','SA','AG']);
+    let ticker = null;
+    for (const tok of tokens) {
+      // skip money, shares, percents, plain numbers
+      if (/[$%]/.test(tok)) continue;
+      if (/^\d[\d,]*\.?\d*[KMB]?$/i.test(tok)) continue;      // 49.2M, $10.9B handled above, 1,234,567
+      const clean = tok.replace(/[^A-Za-z.\-]/g, '');
+      if (!clean) continue;
+      if (FILLER.has(clean.toUpperCase())) continue;          // skip Inc / Corp / ETF etc.
+      if (/^[A-Z]{1,5}([.\-][A-Z]{1,2})?$/.test(clean)) { ticker = clean.toUpperCase(); break; }
+    }
+    if (ticker) {
+      // de-dupe (a holding pasted twice, or matched twice) — keep first weight seen
+      if (!seen[ticker]) { seen[ticker] = true; parsed.push({ ticker, weight }); }
+    } else {
+      unparsed.push(chunk);
+    }
   });
   return { parsed, unparsed };
 }
@@ -5619,7 +5644,22 @@ function parseAvResponse(raw) {
   try { data = typeof raw === 'string' ? JSON.parse(raw) : raw; }
   catch (e) { return { error: 'Could not parse response as JSON.', parsed: [], unparsed: [] }; }
   if (data && (data.Information || data.Note)) {
-    return { rateLimited: true, message: data.Information || data.Note, parsed: [], unparsed: [] };
+    const msg = data.Information || data.Note;
+    const low = msg.toLowerCase();
+    // AV uses Information/Note for SEVERAL things — don't assume it's always the daily cap.
+    // Real daily/rate cap → waiting helps. Premium-endpoint or key issue → waiting does NOT help.
+    let avKind;
+    // ORDER MATTERS: AV appends a "subscribe to premium" upsell to its RATE-LIMIT messages
+    // too, so "premium"/"subscribe" can't be the discriminator. Rate-limit messages reliably
+    // carry per-day / per-minute / frequency phrasing; check that FIRST.
+    if (low.includes('per day') || low.includes('per minute') || low.includes('requests per day') || low.includes('call frequency') || low.includes('calls per') || low.includes('rate limit') || low.includes('25 requests')) {
+      avKind = 'ratelimit';   // genuine throttle/cap — waiting helps
+    } else if (low.includes('premium endpoint') || low.includes('premium plans') || low.includes('not available') || (low.includes('premium') && low.includes('unlock'))) {
+      avKind = 'premium';     // endpoint not on this key's plan — a reset will never fix it
+    } else {
+      avKind = 'other';       // invalid key, bad param, etc. — surface verbatim
+    }
+    return { rateLimited: avKind === 'ratelimit', avKind, message: msg, parsed: [], unparsed: [] };
   }
   if (data && data.error) {
     return { error: data.error, parsed: [], unparsed: [] };
@@ -5702,23 +5742,16 @@ function renderQrForm() {
     const helpBtn = QR_EXPLAINERS[f.key] ? `<button type="button" onclick="showQrExplainer('${f.key}')" title="What is this & how to read it" style="margin-left:6px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;color:var(--color-text-info);font-size:9px;font-weight:700;cursor:pointer;vertical-align:middle">?</button>` : '';
     const locBtn = QR_LOCATIONS[f.key] ? `<button type="button" onclick="showQrLocation('${f.key}')" title="Where to find it in Schwab" style="margin-left:4px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;font-size:9px;cursor:pointer;vertical-align:middle">📍</button>` : '';
     const fieldBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${input}${hint}</div>`;
-    // For the ETF holdings field, append fetch + manual-overlap controls + results.
+    // For the ETF holdings field, append the manual overlap-check control + results.
+    // (Auto-fetch removed: ETF holdings are premium-gated on the free tiers of every
+    //  provider we tried — AV and FMP both. Manual paste from the fund's Schwab holdings
+    //  page is the path; the overlap check runs against whatever you paste.)
     if (qrType === 'etf' && f.key === 'holdingsTop') {
-      if (!avWorkerUrl) loadAvWorkerUrl();
       return fieldBlock + `
         <div style="margin:-4px 0 12px">
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-            <button type="button" class="btn btn-sm btn-primary" onclick="qrFetchAndFillHoldings()" style="font-size:10px">⤓ Fetch holdings (Alpha Vantage)</button>
-            <button type="button" class="btn btn-sm" onclick="runQrHoldingsOverlap()" style="font-size:10px">Check overlap with my book</button>
+            <button type="button" class="btn btn-sm btn-primary" onclick="runQrHoldingsOverlap()" style="font-size:10px">Check overlap with my book</button>
           </div>
-          <details style="margin-bottom:6px">
-            <summary style="font-size:8px;color:var(--color-text-tertiary);cursor:pointer">Data worker URL ${avWorkerUrl ? '✓ set' : '— not set'}</summary>
-            <div style="display:flex;gap:6px;margin-top:4px;align-items:center">
-              <input id="qr-worker-url" type="text" value="${esc(avWorkerUrl)}" placeholder="https://your-worker.workers.dev" style="flex:1;min-width:180px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px">
-              <button type="button" class="btn btn-sm" onclick="saveAvWorkerUrl(document.getElementById('qr-worker-url').value); renderQrForm();" style="font-size:9px">Save URL</button>
-            </div>
-            <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px">Your Cloudflare worker that proxies Alpha Vantage. The AV key stays server-side in the worker, never here.</div>
-          </details>
           <div id="qr-holdings-overlap" style="margin-top:4px"></div>
         </div>`;
     }
@@ -5812,7 +5845,11 @@ function runQrHoldingsOverlap() {
     html += `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">Parsed ${parsed.length} holding${parsed.length>1?'s':''} (${parsed.map(p=>esc(p.ticker)).join(', ')}) — none overlap names you hold directly. This ETF wouldn\u2019t double up on your individual positions.</div>`;
   }
   if (unparsed.length > 0) {
-    html += `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:6px;font-style:italic">Couldn\u2019t read as tickers (so not checked): ${unparsed.map(u=>esc(u)).join(' · ')}. Tip: paste ticker symbols, not full company names.</div>`;
+    html += `<div style="font-size:9px;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;margin-top:6px;line-height:1.5">
+      <strong>⚠ ${unparsed.length} line${unparsed.length>1?'s':''} couldn\u2019t be read as a ticker — NOT included in the overlap check:</strong>
+      <div style="color:var(--color-text-secondary);margin-top:3px">${unparsed.map(u=>esc(u)).join(' · ')}</div>
+      <div style="color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Fix these so the check is complete: each line needs a ticker symbol (e.g. NVDA), not a company name. A missed line is a holding the overlap check silently ignored.</div>
+    </div>`;
   }
   out.innerHTML = html;
 }
@@ -5835,9 +5872,21 @@ async function qrFetchAndFillHoldings() {
     out.innerHTML = `<div style="font-size:9px;color:var(--color-text-danger);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No data worker URL set. Open “Data worker URL” above and paste your worker address, or just paste holdings manually.</div>`;
     return;
   }
-  // State: Alpha Vantage rate limit (25/day free tier)
-  if (res.rateLimited) {
-    out.innerHTML = `<div style="font-size:9px;color:#fbbf24;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);line-height:1.5">Alpha Vantage daily limit hit (free tier ≈25 calls/day). The fetch reached AV fine — just out of quota for now. Wait for the daily reset and retry, or paste holdings manually below.</div>`;
+  // State: Alpha Vantage returned an Information/Note (could be cap, premium, or other).
+  // Show AV's ACTUAL words rather than assuming it's the daily cap.
+  if (res.avKind) {
+    let guidance;
+    if (res.avKind === 'premium') {
+      guidance = `This reads like a <strong>premium-endpoint</strong> message, not a daily cap — Alpha Vantage's ETF holdings/profile data is not on all free keys. If so, <strong>waiting will NOT fix it</strong> (it'll recur every fetch). Options: paste holdings manually below, or check whether your AV plan covers ETF_PROFILE.`;
+    } else if (res.avKind === 'ratelimit') {
+      guidance = `This is a genuine rate/quota limit — the fetch reached AV fine, you're just throttled. Free tier is ~25 calls/day and ~5/minute. Wait for the reset (or a minute, if it's the per-minute limit) and retry, or paste holdings manually below.`;
+    } else {
+      guidance = `Alpha Vantage returned a message that isn't clearly a quota limit — it could be an invalid key, an unsupported ticker, or a bad parameter. Waiting may not help. Read AV's exact words above; if it's not about rate limits, paste holdings manually below.`;
+    }
+    out.innerHTML = `<div style="font-size:9px;color:#fbbf24;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);line-height:1.5">
+      <div style="color:var(--color-text-secondary);margin-bottom:4px"><strong>Alpha Vantage says:</strong> <span style="color:var(--color-text-primary)">${esc(res.message || '(no message text)')}</span></div>
+      <div>${guidance}</div>
+    </div>`;
     return;
   }
   // State: error
@@ -6176,7 +6225,7 @@ Rules:
 - USE THE REALIZED TRACK RECORD AS A MIRROR, scaled to its sample. The track-record facts describe the user's OWN closed trades. Sample size is information, not a gate — scale your CLAIM to it: at ANECDOTE level (few closes) you may reference specific outcomes and gaps but must NOT state or imply a win-rate, edge, or "you tend to" pattern; at TENDENCY level, you may note a soft lean, hedged; only at BASE-RATE level may you speak of a demonstrated edge. CRUCIALLY: treat DISTRIBUTION and GAPS as their own signal — e.g. "you've never closed a position in this sleeve" or "no realized trades in this theme" is a real, statable fact even at n=0, because it means this judgment is untested by your history. Never discard a thin record as meaningless; never inflate it into a base rate. Where the record is relevant, surface it in CASE FOR/AGAINST or WHAT'S ABSENT (e.g. "your thesis assumes stock-picking skill in a theme where you have no closed trades to confirm it").
 - CHECK TIME-HORIZON COHERENCE. The sleeve implies a holding horizon (e.g. Quality = held past ~1yr, judged on durability; Thesis Plays = conviction bet; PBP = ~3yr structural). Compare that to the user's OWN thesis and exit-if language: if a long-horizon sleeve holds a candidate whose thesis or exit condition is short-horizon (a near-term catalyst, a price-pop exit), that's an internal contradiction worth flagging — they may have mis-sleeved it, or the thesis doesn't match the bucket. Only raise this if the contradiction is actually present in their inputs.
 - Be specific to THIS candidate using THEIR inputs — no generic boilerplate.
-- WRITE FOR A LEARNER — EXPAND ACRONYMS, DON'T DEFINE THEM. The reader is coming up to speed on fundamentals. EVERY time you use a metric acronym, write its expansion in parentheses: "ROIC (return on invested capital)", "PEG (price/earnings-to-growth ratio)", "P/E (price-to-earnings ratio)", "ROE (return on equity)", "FCF (free cash flow)", "D/E (debt-to-equity)", "TTM (trailing twelve months)", "NAV (net asset value)", "AUM (assets under management)", "SG&A (selling, general & administrative)". Expand on every occurrence, not just the first — the reader shouldn't have to scroll back. CRITICAL: only EXPAND the letters; do NOT explain what the metric means or how to read it. The first time a metric appears, append "(see the ? explainer for this field)" so the reader gets the definition from the trusted static source — never define the concept yourself inline (definitions you generate can drift; the ? explainers are the authoritative source). Also avoid the bare word "Financials" as a section label for the entered numbers — say "the entered metrics" or "the financial figures".
+- WRITE FOR A LEARNER — EXPAND ACRONYMS, DON'T DEFINE THEM. The reader is coming up to speed on fundamentals. EVERY time you use a metric acronym, write its expansion in parentheses: "ROIC (return on invested capital)", "PEG (price/earnings-to-growth ratio)", "P/E (price-to-earnings ratio)", "ROE (return on equity)", "FCF (free cash flow)", "D/E (debt-to-equity)", "TTM (trailing twelve months)", "NAV (net asset value)", "AUM (assets under management)", "SG&A (selling, general & administrative)". Expand on every occurrence, not just the first — the reader shouldn't have to scroll back. CRITICAL: only EXPAND the letters — do NOT explain what the metric means, how to read it, or where to look it up. No definitions, no "see the explainer" pointers, nothing beyond the parenthetical expansion of the letters (definitions you generate can drift; the static explainers are the authoritative source, and the reader knows where they are). Also avoid the bare word "Financials" as a section label for the entered numbers — say "the entered metrics" or "the financial figures".
 - Keep each section tight.
 
 CANDIDATE: ${candidate.ticker} (${candidate.type}${candidate.theme?', theme: '+candidate.theme:''}${candidate.sleeve?', sleeve: '+candidate.sleeve:''})
