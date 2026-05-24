@@ -5680,6 +5680,7 @@ function renderIndexEditor() {
           ${stale?`<span style="font-size:9px;color:#fbbf24">⚠ ${ageDays} days old \u2014 may have drifted; refresh from the fund\u2019s page</span>`:''}
         </div>
         ${rows || '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">No tickers yet \u2014 paste the fund\u2019s holdings below, or add them one at a time.</div>'}
+        ${hasHoldings ? `<button class="btn btn-sm" onclick="clearIndexHoldings('${esc(fund)}')" title="Remove all holdings for ${esc(fund)} (your position is untouched)" style="font-size:9px;padding:1px 8px;margin-top:2px;color:var(--color-text-danger)">Clear all holdings</button>` : ''}
         <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--color-border-tertiary)">
           <div style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Paste holdings (ticker + weight, from the fund\u2019s page) — replaces this fund\u2019s list</div>
           <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:5px">
@@ -5701,12 +5702,30 @@ function renderIndexEditor() {
         <div id="qr-idx-paste-msg-${esc(fund)}" style="margin-top:4px"></div>
       </div>`;
   });
+  // Escape hatch (C): flag a held position as an ETF if the ETF box wasn't checked at add-time.
+  // Lists open positions NOT already flagged isETF and not already a fund card. Marking one
+  // creates its look-through card via the auto-scan on re-render.
+  const flaggedOrCarded = new Set([...heldEtfTickers, ...Object.keys(tables)].map(t => t.toUpperCase()));
+  const unflagged = [...new Set(
+    positions.filter(p => !p.closed && p.ticker && p.isETF !== true)
+      .map(p => (p.ticker || '').toUpperCase())
+  )].filter(tk => !flaggedOrCarded.has(tk)).sort();
+  const markEtfHtml = unflagged.length ? `
+    <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:10px;line-height:1.5">Bought an ETF but it\u2019s not showing a card? It may not be flagged as an ETF. Mark it here to enable look-through (this just sets its ETF flag — nothing else changes):</div>
+    <div style="display:flex;gap:5px;align-items:center;margin-top:4px">
+      <select id="qr-idx-mark-etf" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 6px;cursor:pointer">
+        <option value="">— a holding to mark as an ETF —</option>
+        ${unflagged.map(tk => `<option value="${esc(tk)}">${esc(tk)}</option>`).join('')}
+      </select>
+      <button class="btn btn-sm" onclick="var s=document.getElementById('qr-idx-mark-etf'); if(s&&s.value) markPositionAsEtf(s.value)" style="font-size:9px">Mark as ETF →</button>
+    </div>` : '';
   html += `
     <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;line-height:1.5">ETFs you hold appear above automatically. Use this only to add a fund the tracker doesn\u2019t flag as held (e.g. VOO if it\u2019s not auto-detected, or a fund held in another account).</div>
     <div style="display:flex;gap:5px;align-items:center;margin-top:4px">
       <input id="qr-idx-new-fund" type="text" placeholder="Add another fund (e.g. VTI)" style="width:150px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 6px;text-transform:uppercase">
       <button class="btn btn-sm btn-primary" onclick="addIndexFund()" style="font-size:9px">+ Add fund manually</button>
-    </div>`;
+    </div>
+    ${markEtfHtml}`;
   out.innerHTML = html;
 }
 function setIndexWeight(fund, tk, val) {
@@ -5716,9 +5735,33 @@ function setIndexWeight(fund, tk, val) {
   t[fund].asOf = new Date().toISOString().slice(0,10); // auto-stamp; user can override via date field
   saveIndexLookthrough(); renderIndexEditor();
 }
+// Flag a held position as an ETF from the look-through editor — the escape hatch for when the
+// ETF box wasn't checked at add-time (or the position predates the flag). Sets isETF on every
+// open lot of the ticker, persists, and re-renders — which auto-creates its look-through card
+// via the existing isETF scan. Does NOT change anything else about the position.
+function markPositionAsEtf(ticker) {
+  if (!ticker) return;
+  const tk = ticker.toUpperCase();
+  let n = 0;
+  positions.forEach(p => { if (!p.closed && p.ticker && p.ticker.toUpperCase() === tk) { p.isETF = true; n++; } });
+  if (n === 0) return;
+  scheduleSave();
+  renderIndexEditor();
+}
+
 function deleteIndexTicker(fund, tk) {
   const t = getIndexLookthrough(); if (!t[fund]) return;
   delete t[fund].weights[tk]; saveIndexLookthrough(); renderIndexEditor();
+}
+// Clear ALL stored holdings for a fund in one click (the clear-and-re-paste cycle). Destructive —
+// confirms first. Doesn't touch your actual position in the fund, only its look-through breakdown.
+function clearIndexHoldings(fund) {
+  const t = getIndexLookthrough(); if (!t[fund] || !t[fund].weights) return;
+  const n = Object.keys(t[fund].weights).length;
+  if (n === 0) return;
+  if (!confirm(`Clear all ${n} stored holding${n>1?'s':''} for ${fund}? This only clears its look-through breakdown — your actual ${fund} position is untouched. You can re-paste fresh holdings after.`)) return;
+  t[fund].weights = {};
+  saveIndexLookthrough(); renderIndexEditor();
 }
 function pasteIndexHoldings(fund) {
   const t = getIndexLookthrough(); if (!t[fund]) return;
@@ -6227,14 +6270,21 @@ function parseHoldings(text) {
   const seen = {};
 
   // Validate a candidate symbol as a clean, mappable US ticker. Rejects exchange-prefixed
-  // foreign listings (KRX: 000660, TYO: 285A), "n/a" swap markers, Treasury codes (B.0 ...),
-  // and anything with a space/colon/digit-only form. Accepts 1-5 all-caps letters with an
-  // optional single dot/dash class suffix (BRK.B, FGXXX, SNDK, MU).
+  // foreign listings whether glued (KRX: 000660) or split into a bare exchange code (TSX, ETR),
+  // foreign-exchange suffixes (FTC.L = London, .TO = Toronto), "n/a" swap markers, Treasury
+  // codes, and anything with a space/colon/digit form. Accepts 1-5 all-caps letters with an
+  // optional single US class suffix (BRK.B, FGXXX, SNDK, MU).
+  // Known non-US exchange MICs/codes that appear as a symbol prefix on stockanalysis listings.
+  const EXCHANGE_CODES = new Set(['TSX','TSXV','ETR','FRA','KRX','TYO','TPE','LSE','HKG','SHA','SHE','SWX','EPA','BIT','BME','AMS','STO','CPH','HEL','OSL','ASX','NSE','BSE','SGX','TSE','JPX','MIL','VIE','WSE']);
+  // Foreign single-letter/short exchange suffixes after a dot (London .L, Toronto .TO, etc.).
+  const FOREIGN_SUFFIX = /\.(L|TO|V|HK|T|F|DE|PA|MI|AS|SW|ST|CO|HE|OL|AX|SI|KS|KQ|TW|TWO|SS|SZ|BO|NS)$/i;
   const isCleanTicker = (s) => {
     if (!s) return false;
-    const t = s.trim();
-    if (/[:\s]/.test(t)) return false;               // exchange prefix or multi-word → not a US ticker
+    let t = s.trim().replace(/:$/, '');               // strip a trailing colon ("TSX:" → "TSX")
+    if (/[:\s]/.test(t)) return false;                // still has a colon/space → exchange prefix or multi-word
     if (/^n\/?a$/i.test(t)) return false;             // "n/a"
+    if (EXCHANGE_CODES.has(t.toUpperCase())) return false; // bare exchange code (TSX, ETR, KRX…)
+    if (FOREIGN_SUFFIX.test(t)) return false;         // foreign-listing suffix (FTC.L, X.TO…)
     return /^[A-Z]{1,5}([.\-][A-Z]{1,2})?$/.test(t.toUpperCase()) && /[A-Z]/i.test(t);
   };
   const firstWeight = (str) => { const m = str.match(/[+\-]?(\d+(?:\.\d+)?)\s*%/); return m ? parseFloat(m[1]) : null; };
@@ -6248,10 +6298,14 @@ function parseHoldings(text) {
     protectedText.split(/\n+/).map(s => s.trim()).filter(Boolean).forEach(line => {
       const fields = line.split(/\t+/).map(f => f.trim());
       const weight = firstWeight(line);
-      // Find the symbol: the first field that's a clean ticker. (Usually field index 1, after
-      // the row number, but scan in case the leading number is absent.)
-      let sym = null;
-      for (const f of fields) { if (isCleanTicker(f)) { sym = f.toUpperCase(); break; } }
+      // The Symbol is a SPECIFIC column, not "any ticker-shaped field". stockanalysis rows are
+      // [No, Symbol, Name, %Weight, Shares] → symbol is field[1] (or field[0] if no row number).
+      // Pin to that column rather than scanning all fields — scanning is what let a foreign
+      // listing's code through (e.g. picking up "VNP" from a "TSX: VNP" symbol, or an exchange
+      // code). If the designated symbol field isn't a clean US ticker, skip the row.
+      const looksLikeRowNum = fields.length > 1 && /^\d+$/.test(fields[0]);
+      const symField = looksLikeRowNum ? (fields[1] || '') : (fields[0] || '');
+      const sym = isCleanTicker(symField) ? symField.trim().replace(/:$/, '').toUpperCase() : null;
       if (sym) {
         if (!seen[sym]) { seen[sym] = true; parsed.push({ ticker: sym, weight }); }
       } else {
