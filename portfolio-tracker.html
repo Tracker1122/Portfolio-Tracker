@@ -1400,16 +1400,18 @@
     <div class="section-heading">True Portfolio Distribution</div>
     <div id="distribution-content"></div>
 
-    <details style="margin-top:28px;border-top:1px solid var(--color-border-tertiary);padding-top:12px">
-      <summary style="font-size:11px;color:var(--color-text-secondary);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Index look-through tables (advanced)</summary>
+    <details id="lookthrough-details" style="margin-top:28px;border-top:1px solid var(--color-border-tertiary);padding-top:12px">
+      <summary id="lookthrough-summary" style="font-size:11px;color:var(--color-text-secondary);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Index look-through tables (advanced)</summary>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin:8px 0">
-        Paste your funds\u2019 holdings here to decompose them into stocks above. When you hold a broad index fund (VOO, VTI, QQQ…)
+        Paste your funds’ holdings here to decompose them into stocks above. When you hold a broad index fund (VOO, VTI, QQQ…)
         or an ETF, you already own its names inside it. Pasting the holdings dissolves that fund into single tickers in the
-        distribution and feeds the hidden-exposure flags on the Quality Review tab. Weights are approximate \u2014 refresh them
-        when they drift (e.g. from the fund\u2019s Schwab holdings page). Look-through only fires for funds you actually hold.
+        distribution and feeds the hidden-exposure flags on the Quality Review tab. Weights are approximate — refresh them
+        when they drift (e.g. from the fund’s Schwab holdings page). Look-through only fires for funds you actually hold.
       </div>
       <div id="qr-index-editor"></div>
     </details>
+
+    <div id="distribution-fund-perf"></div>
   </div><!-- end tab-distribution -->
 
   <!-- Analysis and Performance Tab -->
@@ -5678,10 +5680,16 @@ function renderIndexEditor() {
   });
   const today = new Date().toISOString().slice(0, 10);
   let html = '';
+  // Count funds you HOLD but whose look-through table is completely empty (no weights yet).
+  // This is the "I just added an ETF and haven't pasted its holdings" state — surfaced as a
+  // caution triangle on the collapsed section header so it can't silently sit blank.
+  const blankHeldFunds = [];
   funds.forEach(fund => {
     const tbl = tables[fund];
     const held = indexFundHeldValue(fund);
     const hasHoldings = tbl.weights && Object.keys(tbl.weights).length > 0;
+    const blankOnPurpose = tbl.blankOnPurpose === true;
+    if (held > 0 && !hasHoldings && !blankOnPurpose) blankHeldFunds.push(fund);
     // Coverage: how much of your $ in this fund the stored weights represent vs. not mapped here
     // (foreign listings, long tail, uncaptured). Built up front so it can live next to the held
     // note — it's one thought ("you hold $X, and here's how much of it is actually mapped").
@@ -5700,10 +5708,13 @@ function renderIndexEditor() {
         coverageNote = ` <span style="color:var(--color-text-secondary)">· ~${fmtDollarWhole(repVal)} (${pctMapped}%) mapped, ~${fmtDollarWhole(unmapped)} (${pctUnmapped}%) not${pctUnmapped>=40?` (long tail / unmappable foreign — exposure math only reflects the mapped part)`:''}</span>`;
       }
     }
+    const blankOnPurposeNote = tbl.blankOnPurpose === true;
     const heldNote = held > 0
       ? (hasHoldings
           ? `<span style="color:var(--color-text-success)">✓ you hold ~${fmtDollarWhole(held)} \u2014 look-through active</span>${coverageNote}`
-          : `<span style="color:#fbbf24">✓ you hold ~${fmtDollarWhole(held)} \u2014 paste its holdings below to enable look-through</span>`)
+          : (blankOnPurposeNote
+              ? `<span style="color:var(--color-text-tertiary)">✓ you hold ~${fmtDollarWhole(held)} \u2014 marked blank on purpose (no decomposition needed)</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${esc(fund)}')" style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">undo</a>`
+              : `<span style="color:#fbbf24">✓ you hold ~${fmtDollarWhole(held)} \u2014 paste its holdings below to enable look-through</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${esc(fund)}')" style="font-size:9px;color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="If this fund doesn't need decomposing (e.g. gold, cash, a commodity), mark it so it stops flagging as a to-do">mark blank on purpose</a>`))
       : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 look-through inactive until you own it</span>`;
     const ageDays = (() => { try { return tbl.asOf ? Math.round((Date.now() - new Date(tbl.asOf).getTime()) / 86400000) : null; } catch(e){ return null; } })();
     const stale = ageDays != null && ageDays > 120;
@@ -5780,6 +5791,18 @@ function renderIndexEditor() {
     </div>
     ${markEtfHtml}`;
   out.innerHTML = html;
+
+  // Update the collapsible section header with a caution triangle if any held fund is still blank.
+  const summaryEl = document.getElementById('lookthrough-summary');
+  if (summaryEl) {
+    const base = 'Index look-through tables (advanced)';
+    if (blankHeldFunds.length) {
+      const plural = blankHeldFunds.length > 1 ? 's' : '';
+      summaryEl.innerHTML = `<span style="color:#fbbf24;font-weight:700;margin-right:6px" title="${blankHeldFunds.length} held ETF${plural} (${esc(blankHeldFunds.join(', '))}) ${blankHeldFunds.length>1?'have':'has'} no holdings pasted yet — open to add them">⚠</span>${base} <span style="color:#fbbf24;text-transform:none;letter-spacing:0;font-weight:400">— ${blankHeldFunds.length} ETF${plural} need${blankHeldFunds.length>1?'':'s'} holdings</span>`;
+    } else {
+      summaryEl.textContent = base;
+    }
+  }
 }
 function setIndexWeight(fund, tk, val) {
   const t = getIndexLookthrough(); if (!t[fund]) return;
@@ -5816,6 +5839,16 @@ function clearIndexHoldings(fund) {
   t[fund].weights = {};
   saveIndexLookthrough(); renderIndexEditor();
 }
+// Toggle a held-but-empty fund as "intentionally blank" so it stops raising the new-ETF
+// caution flag (e.g. GLD = gold, or any commodity/cash fund with nothing to decompose).
+// Persisted on the fund's lookthrough entry; pasting holdings later auto-clears it.
+function toggleBlankOnPurpose(event, fund) {
+  if (event && event.preventDefault) event.preventDefault();
+  const t = getIndexLookthrough();
+  if (!t[fund]) t[fund] = { asOf: '', weights: {} };
+  t[fund].blankOnPurpose = !t[fund].blankOnPurpose;
+  saveIndexLookthrough(); renderIndexEditor();
+}
 function pasteIndexHoldings(fund) {
   const t = getIndexLookthrough(); if (!t[fund]) return;
   const ta = document.getElementById('qr-idx-paste-' + fund);
@@ -5831,6 +5864,7 @@ function pasteIndexHoldings(fund) {
   parsed.forEach(p => { if (p.weight != null) weights[p.ticker] = p.weight; else weights[p.ticker] = weights[p.ticker] || null; });
   t[fund].weights = weights;
   t[fund].asOf = new Date().toISOString().slice(0, 10);
+  if (t[fund].blankOnPurpose) delete t[fund].blankOnPurpose; // no longer blank — it has holdings now
   saveIndexLookthrough();
   const noW = parsed.filter(p => p.weight == null).length;
   // Re-render: if the editor lives under the Distribution tab, refreshing that tab rebuilds
@@ -6291,8 +6325,15 @@ function renderDistributionTab() {
           <tbody>${distBody}${remainderRows}</tbody>
         </table>
       </div>
-    </details>
-    <div class="section-heading">Fund / ETF performance</div>
+    </details>`;
+
+  // Fund/ETF performance renders into its OWN div, which sits AFTER the look-through editor
+  // in the tab markup — so the look-through tables (and their new-ETF caution flag) always
+  // appear above fund performance and can't get lost at the very bottom.
+  const fundPerfEl = document.getElementById('distribution-fund-perf');
+  if (fundPerfEl) {
+    fundPerfEl.innerHTML = `
+    <div class="section-heading" style="margin-top:24px">Fund / ETF performance</div>
     <div style="font-size:10px;color:var(--color-text-tertiary);margin:4px 0 6px">How your basket funds themselves have performed (the names inside them aren't tracked individually — that needs per-stock price data the tracker doesn't have).</div>
     <div style="overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;font-size:11px">
@@ -6306,6 +6347,7 @@ function renderDistributionTab() {
         <tbody>${perfBody || '<tr><td colspan="5" style="padding:8px;color:var(--color-text-tertiary);font-size:10px">No funds held.</td></tr>'}</tbody>
       </table>
     </div>`;
+  }
   if (typeof renderIndexEditor === 'function') renderIndexEditor();
 }
 
