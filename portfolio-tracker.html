@@ -9532,6 +9532,10 @@ function showThesisModal(note) {
 // ─────────────────────────────────────────────
 let simTrades = []; // array of trade objects
 let editingTradeIndex = null;
+// Scenario-local ETF holdings for opaque buys, pasted right in the simulator. Keyed by ticker:
+// { QQQ: [{ticker, weight}, ...] }. TEMPORARY — never persisted, never touches the Distribution
+// look-through tables (those are for funds you actually OWN). Wiped by Clear All / on reload.
+let simTempHoldings = {};
 
 function toggleSimulator() {
   const panel = document.getElementById('sim-panel');
@@ -9683,6 +9687,7 @@ function removeSimTrade(i) {
 
 function clearSimulator() {
   simTrades = [];
+  simTempHoldings = {};
   editingTradeIndex = null;
   ['sim-ticker','sim-amount','sim-sell-shares'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   const lotSel = document.getElementById('sim-sell-lot'); if (lotSel) lotSel.value = '';
@@ -9738,23 +9743,33 @@ function simulateQueue(trades) {
         themeAfter[th] = (themeAfter[th] || 0) + t.amount;
         sleeveAfter[sl] = (sleeveAfter[sl] || 0) + t.amount;
       } else {
-        const tbl = tables[t.ticker.toUpperCase()];
+        const etfU = t.ticker.toUpperCase();
+        const tbl = tables[etfU];
+        // Weights come from EITHER the real look-through table (a fund you own) OR temporary
+        // sim-only holdings pasted right here (a hypothetical fund you're considering). Temp
+        // holdings are scenario-local — they never touch getIndexLookthrough()/localStorage.
+        let weightsList = null; // [[ticker, weight], ...]
         if (tbl && tbl.weights && Object.keys(tbl.weights).length) {
-          for (const [tk, w] of Object.entries(tbl.weights)) { if (w == null) continue; ens(tk).embedded += t.amount * (w / 100); }
-          // Overlap: how much of this ETF buy lands in names you already hold (direct or embedded).
+          weightsList = Object.entries(tbl.weights);
+        } else if (simTempHoldings[etfU] && simTempHoldings[etfU].length) {
+          weightsList = simTempHoldings[etfU].filter(h => h.weight != null).map(h => [h.ticker, h.weight]);
+        }
+        if (weightsList && weightsList.length) {
+          for (const [tk, w] of weightsList) { if (w == null) continue; ens(tk).embedded += t.amount * (w / 100); }
+          // Overlap: how much of this ETF buy lands in names you already hold (direct or embedded
+          // in your REAL book — hypothetical fund vs. real holdings).
           let overlapW = 0;
-          for (const [tk, w] of Object.entries(tbl.weights)) {
+          for (const [tk, w] of weightsList) {
             if (w == null) continue;
             const nk = qrNormTicker(tk);
             const heldBefore = (before[nk] ? before[nk].direct + before[nk].embedded : 0);
             if (heldBefore > 0) overlapW += w;
           }
-          if (overlapW > 0) etfOverlaps.push({ ticker: t.ticker.toUpperCase(), amount: t.amount, overlapPct: +overlapW.toFixed(1), overlapDollars: Math.round(t.amount * overlapW / 100) });
-          // ETF buys still join a theme/sleeve if tagged (treated as one block in those views).
+          if (overlapW > 0) etfOverlaps.push({ ticker: etfU, amount: t.amount, overlapPct: +overlapW.toFixed(1), overlapDollars: Math.round(t.amount * overlapW / 100), temp: !tbl });
           themeAfter[th] = (themeAfter[th] || 0) + t.amount;
           sleeveAfter[sl] = (sleeveAfter[sl] || 0) + t.amount;
         } else {
-          opaqueBlocks.push({ ticker: t.ticker.toUpperCase(), amount: t.amount });
+          opaqueBlocks.push({ ticker: etfU, amount: t.amount });
           themeAfter[th] = (themeAfter[th] || 0) + t.amount;
           sleeveAfter[sl] = (sleeveAfter[sl] || 0) + t.amount;
         }
@@ -9809,6 +9824,45 @@ function simulateQueue(trades) {
   return { rows, taxableGain, estTax, shelteredProceeds, taxableProceeds, anyLoss, hasIRA, opaqueBlocks, etfOverlaps, themeRows, sleeveRows, cashIn, cashOut };
 }
 
+// Live preview of a temp-ETF paste (chips + coverage + skipped lines) — mirrors
+// renderIndexPastePreview in Distribution, using the SAME hardened parseHoldings so raw
+// stockanalysis rows (row #, name, shares, CUSIPs, foreign listings) are handled identically.
+function renderSimHoldingsPreview(ticker) {
+  const ta = document.getElementById('sim-temp-paste-' + ticker);
+  const out = document.getElementById('sim-temp-preview-' + ticker);
+  if (!ta || !out) return;
+  const text = (ta.value || '').trim();
+  if (!text) { out.innerHTML = ''; return; }
+  const { parsed, unparsed } = parseHoldings(text);
+  if (!parsed.length && !unparsed.length) { out.innerHTML = ''; return; }
+  const coverage = parsed.reduce((s, p) => s + (p.weight || 0), 0);
+  const chips = parsed.map(p => `<span style="display:inline-block;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:1px 7px;margin:0 4px 3px 0;font-size:9px"><strong style="color:var(--color-text-primary)">${esc(p.ticker)}</strong> <span style="color:var(--color-text-tertiary)">${p.weight != null ? p.weight + '%' : '—'}</span></span>`).join('');
+  out.innerHTML = `
+    <div style="font-size:8px;color:var(--color-text-success);margin-bottom:3px">Will read ${parsed.length} holding${parsed.length > 1 ? 's' : ''} (${coverage.toFixed(1)}% of fund) — verify, then “Parse &amp; use”:</div>
+    <div>${chips}</div>
+    ${unparsed.length ? `<div style="font-size:8px;color:#fbbf24;margin-top:2px">${unparsed.length} line(s) won\u2019t be read: ${unparsed.map(u => esc(u)).join(' · ')}</div>` : ''}`;
+}
+
+// Commit a temp-ETF paste into scenario-local holdings (NOT the persistent look-through table),
+// then re-render so the opaque block decomposes into per-name exposure + overlap for THIS scenario.
+function applySimTempHoldings(ticker) {
+  const ta = document.getElementById('sim-temp-paste-' + ticker);
+  if (!ta) return;
+  const { parsed, unparsed } = parseHoldings(ta.value || '');
+  if (!parsed.length) {
+    const out = document.getElementById('sim-temp-preview-' + ticker);
+    if (out) out.innerHTML = `<div style="font-size:9px;color:#fbbf24">Nothing parsed — paste ticker + weight rows (e.g. "NVDA 22%").</div>`;
+    return;
+  }
+  simTempHoldings[ticker.toUpperCase()] = parsed.filter(p => p.weight != null).map(p => ({ ticker: p.ticker, weight: p.weight }));
+  renderSimResult();
+}
+
+function clearSimTempHoldings(ticker) {
+  delete simTempHoldings[ticker.toUpperCase()];
+  renderSimResult();
+}
+
 function renderSimResult() {
   const listEl = document.getElementById('sim-trade-list');
   const resultEl = document.getElementById('sim-result');
@@ -9857,13 +9911,23 @@ function renderSimResult() {
   else if (sim.cashOut === 0) taxNote = `no sales — no realized tax`;
   else taxNote = `no taxable gain`;
 
-  // Opaque ETF blocks (no look-through) — let the user fill them in via the existing flow.
+  // Opaque ETF blocks (no holdings yet) — paste holdings inline, TEMPORARILY, right here.
+  // Mirrors the Distribution look-through paste (same parser, same chip preview), but stays
+  // scenario-local: it never saves to the Distribution tables (that's for funds you OWN).
   let opaqueNote = '';
   if (sim.opaqueBlocks.length) {
-    opaqueNote = sim.opaqueBlocks.map(b => `<div style="font-size:10px;color:#fbbf24;margin-top:4px">
-      ⚠ ${esc(b.ticker)} (${fmtDollarWhole(b.amount)}) added as an opaque block — no holdings pasted, so its per-name impact isn't shown.
-      <a href="#" onclick="qrOpenIndexSource(event,'${esc(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a>
-      then paste them in Distribution → look-through to decompose it.</div>`).join('');
+    opaqueNote = sim.opaqueBlocks.map(b => `<div style="font-size:10px;color:var(--color-text-primary);padding:8px 10px;background:rgba(251,191,36,0.08);border-left:3px solid #fbbf24;border-radius:var(--border-radius-md);margin-top:6px;line-height:1.5">
+      <div style="color:#fbbf24">⚠ ${esc(b.ticker)} (${fmtDollarWhole(b.amount)}) is an opaque block — paste its top holdings below to see its true per-name impact + overlap for this scenario. <span style="color:var(--color-text-tertiary)">(Temporary — not saved; saving a fund's holdings happens in Distribution once you actually own it.)</span></div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin:5px 0 3px">Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${esc(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a> — copy the ticker + % column and paste here.</div>
+      <textarea id="sim-temp-paste-${esc(b.ticker)}" rows="2" oninput="renderSimHoldingsPreview('${esc(b.ticker)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, MSFT 10% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
+      <div id="sim-temp-preview-${esc(b.ticker)}" style="margin-top:5px"></div>
+      <div style="margin-top:4px"><button class="btn btn-sm btn-primary" onclick="applySimTempHoldings('${esc(b.ticker)}')" style="font-size:9px">Parse &amp; use (this scenario only)</button></div>
+    </div>`).join('');
+  }
+  // For temp-decomposed ETFs, offer a clear/undo so the user can revert to opaque.
+  const tempActive = Object.keys(simTempHoldings).filter(tk => simTrades.some(t => t.action === 'buy' && t.kind === 'etf' && t.ticker.toUpperCase() === tk));
+  if (tempActive.length) {
+    opaqueNote += tempActive.map(tk => `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">✓ ${esc(tk)} decomposed from pasted holdings (scenario-only). <a href="#" onclick="clearSimTempHoldings('${esc(tk)}');return false" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">clear</a></div>`).join('');
   }
 
   const netCash = sim.cashOut - sim.cashIn;
