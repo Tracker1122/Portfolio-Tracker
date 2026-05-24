@@ -1382,6 +1382,8 @@
         oninput="sliderScroll('closed-table-wrapper', this)">
     </div>
 
+    <div id="true-exposure-panel" style="margin-top:20px"></div>
+
   </div><!-- end tab-dashboard -->
 
   <!-- Analysis and Performance Tab -->
@@ -1479,6 +1481,17 @@
 
     <div class="section-heading">Saved Candidates</div>
     <div id="qr-saved-list" style="margin-top:8px"></div>
+
+    <details style="margin-top:24px;border-top:1px solid var(--color-border-tertiary);padding-top:12px">
+      <summary style="font-size:11px;color:var(--color-text-secondary);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Index look-through tables (advanced)</summary>
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin:8px 0">
+        When you hold a broad index fund (VOO, VTI, QQQ…), you already own its top names inside it.
+        These tables let the tracker flag hidden/compounded exposure when you buy a stock that\u2019s in your index,
+        or an ETF whose holdings overlap it. Weights are approximate \u2014 update them when they drift
+        (e.g. from the fund\u2019s Schwab holdings page). The look-through only fires for funds you actually hold.
+      </div>
+      <div id="qr-index-editor"></div>
+    </details>
   </div><!-- end tab-quality -->
 
   <!-- Trends Tab -->
@@ -5539,6 +5552,291 @@ function qrThemeExposure(theme) {
   return { theme, total, tickers, portfolioPct: totalPortfolio > 0 ? (total / totalPortfolio) * 100 : 0 };
 }
 
+// ── Index look-through editor (Quality tab → advanced) ──
+// Renders one editable card per index fund: each holding's ticker + % (editable/deletable),
+// an "as of" date, add-ticker, and add/remove whole funds. Persists to localStorage.
+function renderIndexEditor() {
+  const out = document.getElementById('qr-index-editor');
+  if (!out) return;
+  const tables = getIndexLookthrough();
+  const funds = Object.keys(tables);
+  const today = new Date().toISOString().slice(0, 10);
+  let html = '';
+  funds.forEach(fund => {
+    const tbl = tables[fund];
+    const held = indexFundHeldValue(fund);
+    const heldNote = held > 0
+      ? `<span style="color:var(--color-text-success)">✓ you hold ~${fmtDollarWhole(held)} \u2014 look-through active</span>`
+      : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 look-through inactive until you own it</span>`;
+    const ageDays = (() => { try { return Math.round((Date.now() - new Date(tbl.asOf).getTime()) / 86400000); } catch(e){ return null; } })();
+    const stale = ageDays != null && ageDays > 120;
+    const rows = Object.entries(tbl.weights || {}).sort((a,b)=>b[1]-a[1]).map(([tk, w]) => `
+      <div style="display:flex;gap:5px;align-items:center;margin-bottom:3px">
+        <span style="font-size:10px;color:var(--color-text-primary);min-width:54px;font-weight:600">${esc(tk)}</span>
+        <input type="number" step="0.01" value="${w}" onchange="setIndexWeight('${esc(fund)}','${esc(tk)}',this.value)" style="width:64px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:2px 5px">
+        <span style="font-size:9px;color:var(--color-text-tertiary)">%</span>
+        <button class="btn btn-sm" onclick="deleteIndexTicker('${esc(fund)}','${esc(tk)}')" title="Remove ${esc(tk)}" style="font-size:9px;padding:1px 6px;color:var(--color-text-danger)">✕</button>
+      </div>`).join('');
+    html += `
+      <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+          <strong style="font-size:12px;color:var(--color-text-primary)">${esc(fund)}</strong>
+          <span style="font-size:9px">${heldNote}</span>
+          <button class="btn btn-sm" onclick="deleteIndexFund('${esc(fund)}')" style="font-size:9px;margin-left:auto;color:var(--color-text-danger)">Remove fund</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+          <span style="font-size:9px;color:var(--color-text-tertiary)">Weights as of</span>
+          <input type="date" value="${esc(tbl.asOf || today)}" onchange="setIndexAsOf('${esc(fund)}',this.value)" style="background:var(--color-background-tertiary);border:1px solid ${stale?'#fbbf24':'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:9px;padding:2px 5px">
+          ${stale?`<span style="font-size:9px;color:#fbbf24">⚠ ${ageDays} days old \u2014 may have drifted; refresh from the fund\u2019s page</span>`:''}
+        </div>
+        ${rows || '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">No tickers yet \u2014 paste the fund\u2019s holdings below, or add them one at a time.</div>'}
+        <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--color-border-tertiary)">
+          <div style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Paste holdings (ticker + weight, from the fund\u2019s page) — replaces this fund\u2019s list</div>
+          <textarea id="qr-idx-paste-${esc(fund)}" rows="2" placeholder="NVDA 22%, TSM 10%, AVGO 7%…" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
+          <div style="display:flex;gap:5px;align-items:center;margin-top:4px">
+            <button class="btn btn-sm btn-primary" onclick="pasteIndexHoldings('${esc(fund)}')" style="font-size:9px">Parse &amp; replace list</button>
+            <span style="font-size:8px;color:var(--color-text-tertiary)">or add one at a time:</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:5px;align-items:center;margin-top:6px">
+          <input id="qr-idx-add-tk-${esc(fund)}" type="text" placeholder="TICKER" style="width:70px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:2px 5px;text-transform:uppercase">
+          <input id="qr-idx-add-w-${esc(fund)}" type="number" step="0.01" placeholder="%" style="width:58px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:2px 5px">
+          <button class="btn btn-sm" onclick="addIndexTicker('${esc(fund)}')" style="font-size:9px">+ Add ticker</button>
+        </div>
+        <div id="qr-idx-paste-msg-${esc(fund)}" style="margin-top:4px"></div>
+      </div>`;
+  });
+  html += `
+    <div style="display:flex;gap:5px;align-items:center;margin-top:4px">
+      <input id="qr-idx-new-fund" type="text" placeholder="New fund ticker (e.g. VTI)" style="width:150px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 6px;text-transform:uppercase">
+      <button class="btn btn-sm btn-primary" onclick="addIndexFund()" style="font-size:9px">+ Add index fund</button>
+    </div>`;
+  out.innerHTML = html;
+}
+function setIndexWeight(fund, tk, val) {
+  const t = getIndexLookthrough(); if (!t[fund]) return;
+  const w = parseFloat(val); if (isNaN(w)) return;
+  t[fund].weights[tk] = +w.toFixed(2);
+  t[fund].asOf = new Date().toISOString().slice(0,10); // auto-stamp; user can override via date field
+  saveIndexLookthrough(); renderIndexEditor();
+}
+function deleteIndexTicker(fund, tk) {
+  const t = getIndexLookthrough(); if (!t[fund]) return;
+  delete t[fund].weights[tk]; saveIndexLookthrough(); renderIndexEditor();
+}
+function pasteIndexHoldings(fund) {
+  const t = getIndexLookthrough(); if (!t[fund]) return;
+  const ta = document.getElementById('qr-idx-paste-' + fund);
+  const msg = document.getElementById('qr-idx-paste-msg-' + fund);
+  if (!ta) return;
+  const { parsed, unparsed } = parseHoldings(ta.value || '');
+  if (!parsed.length) {
+    if (msg) msg.innerHTML = `<div style="font-size:9px;color:#fbbf24">Nothing parsed — paste ticker + weight rows (e.g. "NVDA 22%").</div>`;
+    return;
+  }
+  // Replace this fund's weights with the pasted set (paste = authoritative refresh).
+  const weights = {};
+  parsed.forEach(p => { if (p.weight != null) weights[p.ticker] = p.weight; else weights[p.ticker] = weights[p.ticker] || null; });
+  t[fund].weights = weights;
+  t[fund].asOf = new Date().toISOString().slice(0, 10);
+  saveIndexLookthrough();
+  const noW = parsed.filter(p => p.weight == null).length;
+  renderIndexEditor(); // rebuild so the new rows show
+  // set the message AFTER re-render (re-render rebuilds the container and would wipe it)
+  const msg2 = document.getElementById('qr-idx-paste-msg-' + fund);
+  if (msg2) msg2.innerHTML = `<div style="font-size:9px;color:var(--color-text-success)">✓ Stored ${parsed.length} holding${parsed.length>1?'s':''} for ${esc(fund)}.${noW?` (${noW} had no weight — they won't contribute to exposure math.)`:''}${unparsed.length?` <span style="color:#fbbf24">${unparsed.length} line(s) skipped: ${unparsed.map(u=>esc(u)).join(' · ')}</span>`:''}</div>`;
+}
+function addIndexTicker(fund) {
+  const t = getIndexLookthrough(); if (!t[fund]) return;
+  const tkEl = document.getElementById('qr-idx-add-tk-' + fund);
+  const wEl = document.getElementById('qr-idx-add-w-' + fund);
+  const tk = (tkEl && tkEl.value || '').trim().toUpperCase();
+  const w = parseFloat(wEl && wEl.value);
+  if (!tk || isNaN(w)) return;
+  t[fund].weights[tk] = +w.toFixed(2);
+  t[fund].asOf = new Date().toISOString().slice(0,10);
+  saveIndexLookthrough(); renderIndexEditor();
+}
+function setIndexAsOf(fund, val) {
+  const t = getIndexLookthrough(); if (!t[fund] || !val) return;
+  t[fund].asOf = val; saveIndexLookthrough(); renderIndexEditor();
+}
+function addIndexFund() {
+  const el = document.getElementById('qr-idx-new-fund');
+  const fund = (el && el.value || '').trim().toUpperCase();
+  if (!fund) return;
+  const t = getIndexLookthrough();
+  if (t[fund]) return; // already exists
+  t[fund] = { asOf: new Date().toISOString().slice(0,10), weights: {} };
+  saveIndexLookthrough(); renderIndexEditor();
+}
+function deleteIndexFund(fund) {
+  const t = getIndexLookthrough(); if (!t[fund]) return;
+  if (!confirm('Remove the ' + fund + ' look-through table?')) return;
+  delete t[fund]; saveIndexLookthrough(); renderIndexEditor();
+}
+
+// How much current $ value the user holds of a given index fund ticker.
+// VOO lives in the separate "Passive Core" store (spLots/getSpTotals), NOT the managed
+// positions array — so read it from there. Any other index fund is matched against managed
+// positions (in case the user holds one as a normal position).
+function indexFundHeldValue(fundTicker) {
+  const k = qrNormTicker(fundTicker);
+  if (k === 'VOO') {
+    const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+    if (!sp) return 0;
+    return sp.price > 0 ? sp.currentValue : sp.totalInvested; // same basis the dashboard uses
+  }
+  return positions.filter(p => !p.closed && qrNormTicker(p.ticker) === k)
+    .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+}
+
+// Index look-through for a SINGLE ticker: across EVERY index fund the user actually holds,
+// how much of `ticker` do they already own indirectly inside those funds? Returns an array
+// (one entry per fund that holds the ticker AND that the user owns), or [] if none.
+function qrIndexLookthrough(ticker) {
+  if (!ticker) return [];
+  const t = qrNormTicker(ticker);
+  const tables = getIndexLookthrough();
+  const out = [];
+  for (const [fund, tbl] of Object.entries(tables)) {
+    const held = indexFundHeldValue(fund);
+    if (held <= 0) continue; // user doesn't hold this index fund — skip
+    let weightPct = null, matchKey = null;
+    for (const [k, w] of Object.entries(tbl.weights || {})) {
+      if (qrNormTicker(k) === t) { weightPct = w; matchKey = k; break; }
+    }
+    if (weightPct == null) continue; // ticker isn't a tracked top holding of this fund
+    out.push({ fund, ticker: matchKey, weightPct, fundValue: held, indirectValue: held * (weightPct / 100), asOf: tbl.asOf });
+  }
+  return out;
+}
+
+// ETF-vs-index overlap: given an ETF candidate's parsed holdings (ticker+weight) and a planned
+// buy amount, compute how much of that purchase lands in names the user ALREADY owns via their
+// index funds — i.e. the part that compounds existing exposure rather than adding new. Returns
+// a per-name breakdown. `buyAmount` optional; if absent, dollar figures are null and only the
+// %-of-ETF redundancy is meaningful.
+function qrEtfIndexOverlap(parsedHoldings, buyAmount) {
+  const tables = getIndexLookthrough();
+  // Build a set of (normalized) tickers the user holds via any index fund they own, with the
+  // fund(s) and index-weight for context.
+  const heldViaIndex = {}; // normTicker -> [{fund, weightPct}]
+  for (const [fund, tbl] of Object.entries(tables)) {
+    if (indexFundHeldValue(fund) <= 0) continue;
+    for (const [k, w] of Object.entries(tbl.weights || {})) {
+      const nk = qrNormTicker(k);
+      (heldViaIndex[nk] = heldViaIndex[nk] || []).push({ fund, display: k, weightPct: w });
+    }
+  }
+  const rows = [];
+  let overlapWeight = 0; // sum of ETF weights that overlap index holdings
+  (parsedHoldings || []).forEach(h => {
+    if (h.weight == null) return; // can't size redundancy without the ETF weight
+    const nk = qrNormTicker(h.ticker);
+    if (heldViaIndex[nk]) {
+      overlapWeight += h.weight;
+      rows.push({
+        ticker: h.ticker,
+        etfWeight: h.weight,
+        viaFunds: heldViaIndex[nk].map(x => x.fund),
+        buyDollarsIntoName: (buyAmount != null && buyAmount > 0) ? buyAmount * (h.weight / 100) : null,
+      });
+    }
+  });
+  rows.sort((a, b) => b.etfWeight - a.etfWeight);
+  return {
+    rows,
+    overlapPct: +overlapWeight.toFixed(1),                 // % of the ETF that overlaps your index holdings
+    redundantBuyDollars: (buyAmount != null && buyAmount > 0) ? +(buyAmount * overlapWeight / 100).toFixed(0) : null,
+    anyIndexHeld: Object.keys(heldViaIndex).length > 0,
+  };
+}
+
+// TRUE EXPOSURE: per single name, your DIRECT position value + the value you hold INDIRECTLY
+// inside every basket fund you own that has stored holdings (VOO, plus any pasted ETF like SMH).
+// Direct is exact; embedded is approximate (basket weights drift). Returns rows sorted by total.
+function computeTrueExposure() {
+  const tables = getIndexLookthrough();
+  // Which funds do we have stored holdings for AND does the user hold them?
+  const activeFunds = [];
+  for (const [fund, tbl] of Object.entries(tables)) {
+    const val = indexFundHeldValue(fund);
+    if (val > 0 && tbl.weights && Object.keys(tbl.weights).length) activeFunds.push({ fund, value: val, weights: tbl.weights, asOf: tbl.asOf });
+  }
+  // Accumulate per normalized ticker.
+  const byName = {}; // norm -> { display, direct, viaFunds:{fund:$}, embedded }
+  // Direct holdings (managed positions), excluding the basket funds themselves.
+  const basketNorms = new Set(activeFunds.map(f => qrNormTicker(f.fund)));
+  basketNorms.add(qrNormTicker('VOO'));
+  positions.filter(p => !p.closed && p.ticker).forEach(p => {
+    const n = qrNormTicker(p.ticker);
+    if (basketNorms.has(n)) return; // don't list the ETF itself as a "name"
+    const v = (calcPos(p).exitValue || 0);
+    if (!byName[n]) byName[n] = { display: p.ticker, direct: 0, viaFunds: {}, embedded: 0 };
+    byName[n].direct += v;
+  });
+  // Embedded holdings from each active fund.
+  activeFunds.forEach(({ fund, value, weights }) => {
+    for (const [tk, w] of Object.entries(weights)) {
+      if (w == null) continue;
+      const n = qrNormTicker(tk);
+      const dollars = value * (w / 100);
+      if (!byName[n]) byName[n] = { display: tk, direct: 0, viaFunds: {}, embedded: 0 };
+      byName[n].viaFunds[fund] = (byName[n].viaFunds[fund] || 0) + dollars;
+      byName[n].embedded += dollars;
+    }
+  });
+  const rows = Object.values(byName).map(r => ({ ...r, total: r.direct + r.embedded }))
+    .filter(r => r.total > 0)
+    .sort((a, b) => b.total - a.total);
+  return { rows, activeFunds };
+}
+
+function renderTrueExposurePanel() {
+  const out = document.getElementById('true-exposure-panel');
+  if (!out) return;
+  const { rows, activeFunds } = computeTrueExposure();
+  if (!activeFunds.length) {
+    out.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">True-exposure look-through: add your basket funds' holdings in Quality Review → "Index look-through tables" to see combined direct + embedded exposure here.</div>`;
+    return;
+  }
+  // Only show names with meaningful exposure or a direct holding; cap the list.
+  const shown = rows.filter(r => r.total >= 1000 || r.direct > 0).slice(0, 25);
+  const fundsNote = activeFunds.map(f => `${esc(f.fund)} (~${fmtDollarWhole(f.value)}, as of ${esc(f.asOf||'?')})`).join(' · ');
+  const body = shown.map(r => {
+    const viaParts = Object.entries(r.viaFunds).map(([f, d]) => `${esc(f)} ${fmtDollarWhole(d)}`).join(' + ');
+    const directPart = r.direct > 0 ? `direct ${fmtDollarWhole(r.direct)}` : '';
+    const breakdown = [directPart, viaParts].filter(Boolean).join(' + ');
+    return `<tr>
+      <td style="padding:4px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
+      <td style="padding:4px 8px;text-align:right;font-weight:600;color:var(--color-text-primary)">${fmtDollarWhole(r.total)}</td>
+      <td style="padding:4px 8px;text-align:right;color:var(--color-text-secondary)">${r.direct>0?fmtDollarWhole(r.direct):'—'}</td>
+      <td style="padding:4px 8px;text-align:right;color:var(--color-text-secondary)">${r.embedded>0?fmtDollarWhole(r.embedded):'—'}</td>
+      <td style="padding:4px 8px;font-size:8px;color:var(--color-text-tertiary)">${breakdown}</td>
+    </tr>`;
+  }).join('');
+  out.innerHTML = `
+    <div class="section-heading">True Exposure — direct + inside your funds</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin:4px 0 8px">
+      Your real per-name exposure: what you hold directly PLUS what you hold indirectly inside basket funds you own.
+      Embedded figures are <strong>approximate</strong> (fund weights drift). Funds included: ${fundsNote}.
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:10px">
+        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+          <th style="padding:4px 8px;text-align:left;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">Name</th>
+          <th style="padding:4px 8px;text-align:right;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">True Total</th>
+          <th style="padding:4px 8px;text-align:right;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">Direct</th>
+          <th style="padding:4px 8px;text-align:right;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">Via funds</th>
+          <th style="padding:4px 8px;text-align:left;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;font-size:8px;letter-spacing:0.06em">Breakdown</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>`;
+}
+
+
 // Normalize a ticker for matching (BRK.B / BRK-B / brk b → BRKB).
 function qrNormTicker(t) {
   return (t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -5747,8 +6045,13 @@ function renderQrForm() {
     //  provider we tried — AV and FMP both. Manual paste from the fund's Schwab holdings
     //  page is the path; the overlap check runs against whatever you paste.)
     if (qrType === 'etf' && f.key === 'holdingsTop') {
-      return fieldBlock + `
+      // Override the generic textarea with one that live-previews the parse on every input,
+      // so you can verify ticker+weight against the Schwab screen before relying on it.
+      const holdingsTextarea = `<textarea id="qr-f-${f.key}" rows="3" oninput="renderHoldingsPreview()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
+      const holdingsBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${holdingsTextarea}${hint}</div>`;
+      return holdingsBlock + `
         <div style="margin:-4px 0 12px">
+          <div id="qr-holdings-preview" style="margin-bottom:6px"></div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
             <button type="button" class="btn btn-sm btn-primary" onclick="runQrHoldingsOverlap()" style="font-size:10px">Check overlap with my book</button>
           </div>
@@ -5784,6 +6087,8 @@ function renderQrForm() {
         ${editing ? `<button class="btn btn-sm" onclick="resetQrForm()" style="font-size:11px">Cancel Edit</button>` : ''}
       </div>
     </div>`;
+  // If editing an ETF candidate that already has pasted holdings, show the parse preview now.
+  if (qrType === 'etf' && document.getElementById('qr-f-holdingsTop')) renderHoldingsPreview();
 }
 
 function renderQrOverlap(theme) {
@@ -5816,6 +6121,33 @@ function renderQrOverlap(theme) {
     <div style="margin-bottom:4px">${reframe}</div>
     <div style="font-size:9px;color:var(--color-text-tertiary)">Holdings: ${tk}.</div>
   </div>`;
+}
+
+// Live preview of how the holdings paste is being parsed — shown on every input so the
+// user can verify ticker+weight against the Schwab screen BEFORE relying on it. Reuses the
+// same parseHoldings the overlap check uses, so the preview reflects exactly what will run.
+function renderHoldingsPreview() {
+  const out = document.getElementById('qr-holdings-preview');
+  const fieldEl = document.getElementById('qr-f-holdingsTop');
+  if (!out || !fieldEl) return;
+  const text = fieldEl.value || '';
+  if (!text.trim()) { out.innerHTML = ''; return; }
+  const { parsed, unparsed } = parseHoldings(text);
+  let html = '';
+  if (parsed.length > 0) {
+    const chips = parsed.map(p => `<span style="display:inline-block;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:1px 6px;margin:1px 2px;font-size:9px"><strong style="color:var(--color-text-primary)">${esc(p.ticker)}</strong>${p.weight != null ? ` <span style="color:var(--color-text-tertiary)">${p.weight}%</span>` : ` <span style="color:#fbbf24">no %</span>`}</span>`).join('');
+    const noWeight = parsed.filter(p => p.weight == null).length;
+    html += `<div style="font-size:9px;color:var(--color-text-success);background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 9px;line-height:1.7">
+      <strong>✓ Read ${parsed.length} holding${parsed.length>1?'s':''}</strong> — check these match the fund\u2019s page:<div style="margin-top:3px">${chips}</div>${noWeight ? `<div style="color:var(--color-text-tertiary);font-style:italic;margin-top:3px">${noWeight} had no weight % \u2014 fine for the overlap check, but you\u2019ll lose the concentration figure for those.</div>` : ''}
+    </div>`;
+  }
+  if (unparsed.length > 0) {
+    html += `<div style="font-size:9px;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:7px 9px;margin-top:5px;line-height:1.5">
+      <strong>⚠ ${unparsed.length} line${unparsed.length>1?'s':''} not read as a ticker</strong> (won\u2019t be checked): <span style="color:var(--color-text-secondary)">${unparsed.map(u=>esc(u)).join(' · ')}</span>
+      <div style="color:var(--color-text-tertiary);font-style:italic;margin-top:3px">Each needs a ticker symbol (e.g. NVDA), not a company name. A missed line is a holding the check silently ignores.</div>
+    </div>`;
+  }
+  out.innerHTML = html;
 }
 
 // Read the ETF holdings field, parse it, and show DIRECT overlaps with the book.
@@ -6033,6 +6365,24 @@ function buildQualityFlags(candidate, holdingsOverlaps) {
     flags.push({ level: 'caution', text: `No theme tagged — concentration impact can't be assessed.` });
   }
 
+  // Index look-through: candidate (or its holdings) already owned indirectly via index funds.
+  if (!isEtf && candidate.ticker) {
+    qrIndexLookthrough(candidate.ticker).forEach(lt => {
+      flags.push({ level: 'info', text: `Index look-through: your ${lt.fund} holding already contains ~$${Math.round(lt.indirectValue).toLocaleString()} of ${lt.ticker} (≈${lt.weightPct}% of ${lt.fund}, approx as of ${lt.asOf}). Your true ${lt.ticker} exposure exceeds your direct position — factor this in before adding.` });
+    });
+  }
+  if (isEtf) {
+    const r = parseHoldings(f.holdingsTop || '');
+    if (r.parsed.length) {
+      const ov = qrEtfIndexOverlap(r.parsed, null);
+      if (ov.anyIndexHeld && ov.rows.length) {
+        const lvl = ov.overlapPct >= 40 ? 'flag' : ov.overlapPct >= 20 ? 'caution' : 'info';
+        const names = ov.rows.slice(0, 6).map(x => `${x.ticker} ${x.etfWeight}%`).join(', ');
+        flags.push({ level: lvl, text: `Index overlap: ~${ov.overlapPct}% of this ETF is in names you already own via your index fund(s) (${ov.rows.map(x=>x.viaFunds[0]).filter((v,i,a)=>a.indexOf(v)===i).join('/')}). Overlapping: ${names}. Buying it ${ov.overlapPct>=40?'largely compounds':ov.overlapPct>=20?'partly compounds':'modestly adds to'} exposure you already carry — the "new" diversification is smaller than it looks.` });
+      }
+    }
+  }
+
   if (isEtf) {
     if (holdingsOverlaps && holdingsOverlaps.length > 0) {
       flags.push({ level: 'caution', text: `Holds ${holdingsOverlaps.length} name(s) you own directly (${holdingsOverlaps.map(o=>o.ticker).join(', ')}) — partial double-up, not pure diversification.` });
@@ -6182,6 +6532,22 @@ function buildQrAiPrompt(candidate) {
   if (candidate.theme) {
     const ex = qrThemeExposure(candidate.theme);
     if (ex) computed.push(`Current ${candidate.theme} exposure: ${ex.portfolioPct.toFixed(1)}% of active portfolio across ${ex.tickers.length} position(s)${ex.tickers.length?' ('+ex.tickers.map(t=>t.ticker).join(', ')+')':''}.`);
+  }
+  // Index look-through: this candidate (or its holdings) may already be owned indirectly via
+  // index funds the user holds (VOO etc.) — surfacing the hidden/compounded exposure.
+  if (candidate.type !== 'etf' && candidate.ticker) {
+    const lts = qrIndexLookthrough(candidate.ticker);
+    lts.forEach(lt => computed.push(`Index look-through: you hold ${lt.fund}, which is ~${lt.weightPct}% ${lt.ticker} (approx, as of ${lt.asOf}). On your ${lt.fund} position that's ~$${Math.round(lt.indirectValue).toLocaleString()} of INDIRECT ${lt.ticker} exposure — on top of any direct position. True ${lt.ticker} concentration exceeds a direct-holdings count; weigh adding more against what the index already gives you.`));
+  }
+  if (candidate.type === 'etf') {
+    const r = parseHoldings(candidate.fields && candidate.fields.holdingsTop || '');
+    if (r.parsed.length) {
+      const ov = qrEtfIndexOverlap(r.parsed, null);
+      if (ov.anyIndexHeld && ov.rows.length) {
+        const names = ov.rows.slice(0, 8).map(x => `${x.ticker} (${x.etfWeight}% of ETF, also via ${x.viaFunds.join('/')})`).join('; ');
+        computed.push(`Index overlap: ~${ov.overlapPct}% of this ETF sits in names you ALREADY own through your index fund(s) — buying it partly compounds existing exposure rather than adding new. Overlapping names: ${names}. The "new" diversification is smaller than the headline suggests.`);
+      }
+    }
   }
   if (candidate.sleeve && SLEEVE_PURPOSE[candidate.sleeve]) {
     const tgt = SLEEVE_TARGETS[candidate.sleeve];
@@ -6479,6 +6845,7 @@ function saveQrPushback(id) {
 function renderQualityTab() {
   setQrType(qrType);       // ensures toggle state + form render
   renderQrSavedList();
+  renderIndexEditor();
 }
 
 function renderPostSell() {
@@ -9947,6 +10314,43 @@ const SLEEVE_PURPOSE = {
   'Portfolio Balance Plays': 'STRUCTURAL ballast held for portfolio balance, NOT for alpha — by strategy this sleeve is "held without performance discipline" and is never judged on outperformance. Analyzing it as a growth/quality bet is a category error; the relevant question is whether it actually provides the intended balance/diversification.',
 };
 
+// Index-fund look-through tables. When you hold a broad index fund, you ALSO hold its top
+// names inside it — so buying those names (or an ETF heavy in them) compounds exposure you
+// already carry. These weights are APPROXIMATE and slow-drifting (good for a concentration
+// FLAG, not precise accounting). Live holdings would be exact but are premium-gated on every
+// free data tier, so we maintain editable static snapshots instead (see the editor in the
+// Quality Review tab — add/edit/delete tickers per fund; each carries its own "as of" date).
+// This is the SEED/default; the live table is whatever the user has saved in localStorage.
+const INDEX_LOOKTHROUGH_SEED = {
+  VOO: {
+    asOf: '2026-04-30',
+    weights: {
+      NVDA: 7.84, AAPL: 6.44, MSFT: 4.89, AMZN: 4.19, GOOGL: 3.62, GOOG: 2.46,
+      AVGO: 2.56, META: 2.40, TSLA: 1.92, 'BRK.B': 1.57, JPM: 1.40, LLY: 1.20,
+      V: 0.95, XOM: 0.95, MA: 0.90, COST: 0.85, WMT: 0.80, NFLX: 0.75, ORCL: 0.70,
+    },
+  },
+};
+
+// Live, user-editable index tables (persisted). Falls back to the seed on first load.
+let indexLookthrough = null;
+function loadIndexLookthrough() {
+  try {
+    const raw = localStorage.getItem('portfolio-index-lookthrough-v1');
+    if (raw) { indexLookthrough = JSON.parse(raw); return; }
+  } catch (e) {}
+  // deep-copy the seed so edits don't mutate the constant
+  indexLookthrough = JSON.parse(JSON.stringify(INDEX_LOOKTHROUGH_SEED));
+}
+function saveIndexLookthrough() {
+  try { localStorage.setItem('portfolio-index-lookthrough-v1', JSON.stringify(indexLookthrough)); } catch (e) {}
+}
+function getIndexLookthrough() {
+  if (!indexLookthrough) loadIndexLookthrough();
+  return indexLookthrough;
+}
+
+
 // Sleeve colour palette
 const SLEEVE_COLORS = {
   'Thesis Plays':  '#f59e0b',
@@ -11625,6 +12029,7 @@ function renderAll() {
   renderSpBar();
   renderSpSummary();
   renderSleeveBreakdown();
+  renderTrueExposurePanel();
   renderSleeveRef();
   renderIndustryRef();
   renderCashDisplay();
