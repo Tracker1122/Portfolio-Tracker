@@ -5757,12 +5757,31 @@ function renderQrOverlap(theme) {
   if (!theme) return `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">Pick a theme to see your current exposure (overlap context).</div>`;
   const ex = qrThemeExposure(theme);
   if (!ex || ex.total === 0) {
-    return `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No current holdings in <strong>${esc(theme)}</strong> — this would be fresh exposure, not a double-up.</div>`;
+    return `<div style="font-size:9px;color:var(--color-text-success);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No current holdings in <strong>${esc(theme)}</strong> — this would be <strong>fresh exposure</strong>, not a double-up. The question here is genuinely "is this a good position?"</strong></div>`;
   }
+  const pct = ex.portfolioPct;
   const tk = ex.tickers.map(t => `${esc(t.ticker)} ${fmtDollarWhole(t.value)}`).join(' · ');
-  return `<div style="font-size:9px;color:var(--color-text-secondary);padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);line-height:1.5">
-    You already hold <strong style="color:var(--color-text-primary)">${fmtDollarWhole(ex.total)}</strong> in <strong>${esc(theme)}</strong> (${ex.portfolioPct.toFixed(1)}% of active portfolio): ${tk}.
-    <span style="color:var(--color-text-tertiary);font-style:italic"> Adding here increases concentration in this theme — confirm that\u2019s intended.</span>
+  // Prominence scales with concentration — quiet when modest, unmissable when heavy.
+  // Thresholds mirror the deterministic flag (15 / 25) so there is ONE source of truth.
+  // The point is to convert "is this good?" into "is MORE of this the right size?".
+  let accent, bg, label, reframe, weight;
+  if (pct >= 25) {
+    accent = '#ef4444'; bg = 'rgba(239,68,68,0.12)'; weight = '700';
+    label = `⚠ HIGH CONCENTRATION — ${pct.toFixed(1)}% of your active book is already in ${esc(theme)}`;
+    reframe = `This is no longer "is ${esc(theme)} a good bet?" — you've answered that ${ex.tickers.length} time(s). The real decision is <strong>sizing</strong>: does adding here deepen a concentration you've consciously chosen, or one that's drifting past your intended ceiling? A great position can still be the wrong <em>add</em>.`;
+  } else if (pct >= 15) {
+    accent = '#fbbf24'; bg = 'rgba(251,191,36,0.10)'; weight = '700';
+    label = `${pct.toFixed(1)}% of your active book is already in ${esc(theme)}`;
+    reframe = `Reframe before you decide: this isn't just "is this a good position?" — it's "is <strong>more</strong> ${esc(theme)} the right sizing?" You already hold this theme at a meaningful weight, so evaluate the <em>add</em>, not the name in isolation.`;
+  } else {
+    accent = 'var(--color-border-tertiary)'; bg = 'var(--color-background-tertiary)'; weight = '400';
+    label = `You hold ${pct.toFixed(1)}% of your active book in ${esc(theme)} — a modest existing weight.`;
+    reframe = `Adding here is still mostly a standalone judgment, but keep the running total in mind.`;
+  }
+  return `<div style="font-size:10px;color:var(--color-text-secondary);padding:9px 11px;background:${bg};border:1px solid ${accent};border-left:3px solid ${accent};border-radius:var(--border-radius-md);line-height:1.55">
+    <div style="font-weight:${weight};color:var(--color-text-primary);margin-bottom:3px">${label}</div>
+    <div style="margin-bottom:4px">${reframe}</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary)">Holdings: ${tk}.</div>
   </div>`;
 }
 
@@ -6157,6 +6176,7 @@ Rules:
 - USE THE REALIZED TRACK RECORD AS A MIRROR, scaled to its sample. The track-record facts describe the user's OWN closed trades. Sample size is information, not a gate — scale your CLAIM to it: at ANECDOTE level (few closes) you may reference specific outcomes and gaps but must NOT state or imply a win-rate, edge, or "you tend to" pattern; at TENDENCY level, you may note a soft lean, hedged; only at BASE-RATE level may you speak of a demonstrated edge. CRUCIALLY: treat DISTRIBUTION and GAPS as their own signal — e.g. "you've never closed a position in this sleeve" or "no realized trades in this theme" is a real, statable fact even at n=0, because it means this judgment is untested by your history. Never discard a thin record as meaningless; never inflate it into a base rate. Where the record is relevant, surface it in CASE FOR/AGAINST or WHAT'S ABSENT (e.g. "your thesis assumes stock-picking skill in a theme where you have no closed trades to confirm it").
 - CHECK TIME-HORIZON COHERENCE. The sleeve implies a holding horizon (e.g. Quality = held past ~1yr, judged on durability; Thesis Plays = conviction bet; PBP = ~3yr structural). Compare that to the user's OWN thesis and exit-if language: if a long-horizon sleeve holds a candidate whose thesis or exit condition is short-horizon (a near-term catalyst, a price-pop exit), that's an internal contradiction worth flagging — they may have mis-sleeved it, or the thesis doesn't match the bucket. Only raise this if the contradiction is actually present in their inputs.
 - Be specific to THIS candidate using THEIR inputs — no generic boilerplate.
+- WRITE FOR A LEARNER — EXPAND ACRONYMS, DON'T DEFINE THEM. The reader is coming up to speed on fundamentals. EVERY time you use a metric acronym, write its expansion in parentheses: "ROIC (return on invested capital)", "PEG (price/earnings-to-growth ratio)", "P/E (price-to-earnings ratio)", "ROE (return on equity)", "FCF (free cash flow)", "D/E (debt-to-equity)", "TTM (trailing twelve months)", "NAV (net asset value)", "AUM (assets under management)", "SG&A (selling, general & administrative)". Expand on every occurrence, not just the first — the reader shouldn't have to scroll back. CRITICAL: only EXPAND the letters; do NOT explain what the metric means or how to read it. The first time a metric appears, append "(see the ? explainer for this field)" so the reader gets the definition from the trusted static source — never define the concept yourself inline (definitions you generate can drift; the ? explainers are the authoritative source). Also avoid the bare word "Financials" as a section label for the entered numbers — say "the entered metrics" or "the financial figures".
 - Keep each section tight.
 
 CANDIDATE: ${candidate.ticker} (${candidate.type}${candidate.theme?', theme: '+candidate.theme:''}${candidate.sleeve?', sleeve: '+candidate.sleeve:''})
