@@ -925,6 +925,14 @@
   }
   .ts-btn:hover { background: var(--color-border-tertiary) !important; color: var(--color-text-primary) !important; }
   .ts-btn:active { transform: translateY(1px); }
+  .dist-bar-tip {
+    display: none; position: absolute; left: 104px; top: 100%; margin-top: 2px; z-index: 50;
+    background: var(--color-background-secondary); border: 1px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md); padding: 7px 10px; font-size: 11px; line-height: 1.6;
+    color: var(--color-text-secondary); white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    pointer-events: none;
+  }
+  .dist-bar-row:hover .dist-bar-tip { display: block; }
 </style>
 </head>
 <body>
@@ -6270,18 +6278,17 @@ function renderDistributionTab() {
     ${stocksOnly && vooTailValue > 0 ? metric('VOO untracked tail', pctOf(vooTailValue).toFixed(1) + '%', 'inside VOO, not itemized') : metric('Decomposed funds', Object.keys(activeFunds).length, 'with pasted holdings')}
   </div>`;
 
-  // ── Horizontal bars: one readable row per top name (name · bar · %), sorted desc. ──
+  // ── Horizontal bars: one readable row per top name (name · split-bar · %), sorted desc. ──
   // Bars are scaled to the LARGEST shown name (not to total) so small differences are visible;
   // the % label is always vs. total so the numbers stay honest.
-  // EACH BAR IS SPLIT (stocks-only mode): blue segment = the part you hold DIRECTLY, grey segment
-  // = the part embedded inside your funds (VOO/ETFs). Shows composition, not just a category — so
-  // a name like NVDA that's 95% inside-VOO reads very differently from a pure direct pick. A
-  // "· N% dir" readout backs up the visual for cases where the direct slice is too thin to see.
-  // The direct dollars are EXACT; the via-funds dollars are approximate (fund weights drift).
-  // In funds mode the rows include fund blocks themselves (no direct/via split), so we draw one
-  // calm accent bar instead.
+  // EACH BAR IS SPLIT (stocks-only mode): blue segment = the part you hold DIRECTLY (exact),
+  // green segment = the part embedded inside your funds — VOO/ETFs (approximate). Shows composition
+  // at a glance, so a name like NVDA that's mostly inside-VOO reads very differently from a pure
+  // direct pick. The resting readout is JUST the % of portfolio (clean); hover the row for the
+  // direct/funds breakdown in dollars and %. In funds mode rows include fund blocks themselves
+  // (no direct/via split), so we draw one calm accent bar.
   const COL_DIRECT = '#60a5fa';   // blue — held directly (exact)
-  const COL_VIA    = '#94a3b8';   // grey — inside funds (approximate)
+  const COL_VIA    = '#34d399';   // green — inside funds (approximate)
   // Recover the direct vs. via-funds dollar split from the row's source tags.
   const splitSources = (sources) => {
     let direct = 0, via = 0;
@@ -6294,28 +6301,28 @@ function renderDistributionTab() {
   const barRows = top.map((r) => {
     const p = pctOf(r.value);
     const w = maxPct > 0 ? (p / maxPct) * 100 : 0;
-    let segments, readout;
+    let segments, tip = '';
     if (stocksOnly) {
       const { direct, via } = splitSources(r.sources);
       const tot = direct + via;
       const dPct = tot > 0 ? (direct / tot) * 100 : 100;
       const vPct = 100 - dPct;
-      segments = `<div style="width:${dPct.toFixed(1)}%;background:${COL_DIRECT};height:100%" title="held directly: ${fmtDollarWhole(direct)}"></div><div style="width:${vPct.toFixed(1)}%;background:${COL_VIA};height:100%" title="inside funds: ${fmtDollarWhole(via)}"></div>`;
-      // Readout: % of portfolio + direct share, but only show the "dir" tag when there's a mix
-      // worth noting (a pure-direct or pure-fund name doesn't need it cluttering the row).
-      const dShare = tot > 0 ? Math.round(dPct) : 0;
-      const tag = (direct > 0 && via > 0) ? ` <span style="color:var(--color-text-tertiary)">· ${dShare}% dir</span>` : '';
-      readout = `${p.toFixed(1)}%${tag}`;
+      segments = `<div style="width:${dPct.toFixed(1)}%;background:${COL_DIRECT};height:100%"></div><div style="width:${vPct.toFixed(1)}%;background:${COL_VIA};height:100%"></div>`;
+      // Hover tooltip: portfolio %, then the direct/funds breakdown in $ and %.
+      const directLine = `<span style="color:${COL_DIRECT}">■</span> Direct: ${fmtDollarWhole(direct)} (${Math.round(dPct)}%) <span style="color:var(--color-text-tertiary)">· exact</span>`;
+      const viaLine = `<span style="color:${COL_VIA}">■</span> Inside funds: ${fmtDollarWhole(via)} (${Math.round(vPct)}%) <span style="color:var(--color-text-tertiary)">· approx</span>`;
+      tip = `<div class="dist-bar-tip"><div style="font-weight:700;margin-bottom:3px;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio)</div><div>${directLine}</div><div>${viaLine}</div></div>`;
     } else {
       segments = `<div style="width:100%;background:${COL_DIRECT};height:100%"></div>`;
-      readout = `${p.toFixed(1)}%`;
+      tip = `<div class="dist-bar-tip"><div style="font-weight:700;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio)</div></div>`;
     }
-    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+    return `<div class="dist-bar-row" style="display:flex;align-items:center;gap:8px;margin-bottom:5px;position:relative">
       <div style="flex:0 0 96px;font-size:12px;font-weight:600;color:var(--color-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(r.display)}">${esc(r.display)}</div>
       <div style="flex:1;background:var(--color-background-secondary);border-radius:3px;height:16px;position:relative;overflow:hidden">
         <div style="width:${w.toFixed(1)}%;height:100%;display:flex;border-radius:3px;overflow:hidden">${segments}</div>
       </div>
-      <div style="flex:0 0 78px;text-align:right;font-size:12px;color:var(--color-text-secondary)">${readout}</div>
+      <div style="flex:0 0 48px;text-align:right;font-size:12px;color:var(--color-text-secondary)">${p.toFixed(1)}%</div>
+      ${tip}
     </div>`;
   }).join('');
 
@@ -6323,6 +6330,7 @@ function renderDistributionTab() {
   const barLegend = stocksOnly ? `<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;font-size:11px;color:var(--color-text-secondary)">
     <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:${COL_DIRECT}"></span>Held directly (exact)</span>
     <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:${COL_VIA}"></span>Inside funds — VOO / ETFs (approx)</span>
+    <span style="color:var(--color-text-tertiary);font-style:italic">hover a bar for the $ breakdown</span>
   </div>` : '';
 
   const fundsNote = Object.entries(activeFunds).map(([f,info])=>`${esc(f)} (~${fmtDollarWhole(info.value)}, as of ${esc(info.asOf||'?')})`).join(' · ') || 'none yet — paste fund holdings in Quality Review → Index look-through';
