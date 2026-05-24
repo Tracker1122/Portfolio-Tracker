@@ -1069,6 +1069,7 @@
         <div class="analytics-card-title">Passive Core — VOO</div>
         <div id="sp-summary-content"><div style="color:var(--color-text-tertiary);font-size:11px">No lots imported yet</div></div>
       </div>
+      <!-- OVERVIEW ROW: Strategy (sleeves) | Managed Composition (themes) — highest level -->
       <div class="analytics-card" id="sleeve-breakdown-card" onclick="showCardOverlay('strategy')" style="cursor:pointer">
         <div class="analytics-card-title" style="display:flex;justify-content:space-between;align-items:center">
           <span>Strategy Allocation</span>
@@ -1076,6 +1077,25 @@
         </div>
         <div id="sleeve-breakdown-content"></div>
       </div>
+      <div class="analytics-card" id="managed-composition-card">
+        <div class="analytics-card-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>Managed Composition</span>
+          <div style="display:flex;align-items:center;gap:6px;font-weight:400;text-transform:none;letter-spacing:0">
+            <label style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em">VOO Price</label>
+            <input id="sp-price-input" class="modal-input" type="number" step="0.01" placeholder="654.26" style="width:84px;font-size:11px;padding:3px 8px" value="" oninput="setSpPrice(this.value)">
+          </div>
+        </div>
+        <div id="sp-bar-wrap" style="margin-bottom:4px;display:none">
+          <div id="sp-bar-inner" style="height:24px;background:#4a4a5a;border-radius:var(--border-radius-md);display:flex;align-items:center;padding:0 12px;justify-content:space-between">
+            <span style="font-size:10px;font-weight:600;color:#a0a0b8">Passive Core — VOO</span>
+            <span id="sp-bar-stats" style="font-size:10px;color:#a0a0b8"></span>
+          </div>
+        </div>
+        <div id="theme-stacked-bar" style="margin-top:6px"></div>
+      </div>
+      <!-- True Exposure: full-width, sits directly under the overview row -->
+      <div id="true-exposure-panel" style="grid-column:1 / -1;margin:4px 0 0"></div>
+      <!-- ACTION TIER -->
       <div class="analytics-card" id="trim-watch-card" onclick="showCardOverlay('trim')" style="cursor:pointer">
         <div class="analytics-card-title">Top 5 Trim Candidates — by Dollar Alpha</div>
         <div id="trim-watch-content"></div>
@@ -1098,25 +1118,6 @@
       </div>
     </div>
 
-
-    <!-- Theme Concentration Stacked Bar -->
-    <div class="section-heading" style="display:flex;align-items:center;justify-content:space-between">
-      <span>Managed Composition</span>
-      <div style="display:flex;align-items:center;gap:8px;font-weight:400;text-transform:none;letter-spacing:0">
-        <label style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em">VOO Price Today</label>
-        <input id="sp-price-input" class="modal-input" type="number" step="0.01" placeholder="e.g. 654.26" style="width:100px;font-size:11px;padding:3px 8px" value="" oninput="setSpPrice(this.value)">
-      </div>
-    </div>
-
-    <!-- S&P Grey Bar -->
-    <div id="sp-bar-wrap" style="margin-bottom:4px;display:none">
-      <div id="sp-bar-inner" style="height:28px;background:#4a4a5a;border-radius:var(--border-radius-md);display:flex;align-items:center;padding:0 12px;justify-content:space-between">
-        <span style="font-size:10px;font-weight:600;color:#a0a0b8">Passive Core — VOO</span>
-        <span id="sp-bar-stats" style="font-size:10px;color:#a0a0b8"></span>
-      </div>
-    </div>
-
-    <div id="theme-stacked-bar" style="margin-bottom:20px"></div>
 
     <!-- Industry Spotlight -->
     <div class="section-heading">Industry Spotlight <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">— signals worth acting on · click to expand in Rebalance & Tax</span>
@@ -1146,9 +1147,6 @@
       <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span><strong style="color:var(--color-text-primary)">Two pp methods used in this panel.</strong> The pp shown in each industry card header (next to the dollar deficit) is <strong>capital-weighted across positions</strong>. The per-position pp shown in the drill-down (when you click a card) is <strong>position-specific</strong>. <span id="legend-example-industryref"></span>
     </div>
     <div id="industry-ref-panel" style="margin:8px 0 12px"></div>
-
-    <!-- True Exposure (condensed bar chart; full view in Distribution tab) -->
-    <div id="true-exposure-panel" style="margin:0 0 20px"></div>
 
     <!-- Cash Buckets -->
     <div class="section-heading">Undeployed Cash</div>
@@ -7512,7 +7510,9 @@ function editQrCandidate(id) {
   const c = qualityReviews.find(q => q.id === id);
   if (!c) return;
   qrEditingId = id;
-  setQrType(c.type);  // also re-renders form
+  qrType = c.type || 'stock';   // authoritative: lock the form to the candidate's own type FIRST
+  qrStage2Unlocked = true;       // a saved candidate shows its full form
+  setQrType(qrType);             // sync toggle styling + render (now guaranteed to match the data)
   document.getElementById('tab-quality').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -8090,6 +8090,12 @@ function saveQrPushback(id) {
 }
 
 function renderQualityTab() {
+  // If a candidate is being edited, lock the form to ITS type (so re-entering the tab can't
+  // render an ETF candidate under the stock field set or vice-versa). Otherwise keep current mode.
+  if (qrEditingId !== null) {
+    const c = qualityReviews.find(q => q.id === qrEditingId);
+    if (c && c.type) qrType = c.type;
+  }
   setQrType(qrType);       // ensures toggle state + form render
   renderQrSavedList();
 }
@@ -8344,11 +8350,13 @@ function renderStackedBar() {
     <span>Cash <span style="color:var(--color-text-tertiary)">${((totalCash/grandTotal)*100).toFixed(1)}%</span></span>
   </div>` : '');
 
+  // The bar segments already carry theme + % + top holdings on hover, so the standalone legend
+  // row is redundant and just adds height in the condensed overview band. Show a hover hint instead.
   el.innerHTML = `
     <div class="stacked-bar-wrap">
       <div class="stacked-bar" id="stacked-bar-inner">${segments}</div>
     </div>
-    <div class="stacked-bar-legend">${legend}</div>`;
+    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">hover a segment for theme, %, and top holdings</div>`;
 
   // Wire up JS tooltip
   const tooltip = document.getElementById('bar-tooltip');
