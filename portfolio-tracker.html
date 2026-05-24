@@ -1456,11 +1456,19 @@
               </div>
               <div id="sim-ticker-wrap">
                 <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Ticker</div>
-                <input id="sim-ticker" class="modal-input" type="text" placeholder="e.g. NVDA" style="width:90px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+                <input id="sim-ticker" class="modal-input" type="text" placeholder="e.g. NVDA" style="width:90px;text-transform:uppercase" oninput="this.value=this.value.toUpperCase();simPrefillThemeSleeve()">
               </div>
               <div id="sim-buyamount-wrap">
                 <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Amount $</div>
                 <input id="sim-amount" class="modal-input" type="number" min="0" step="100" placeholder="e.g. 10000" style="width:100px">
+              </div>
+              <div id="sim-theme-wrap">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Theme</div>
+                <select id="sim-theme" class="modal-select" style="width:150px"><option value="">— Theme —</option></select>
+              </div>
+              <div id="sim-sleeve-wrap">
+                <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Sleeve</div>
+                <select id="sim-sleeve" class="modal-select" style="width:150px"><option value="">— Sleeve —</option></select>
               </div>
               <!-- SELL fields -->
               <div id="sim-sell-lot-wrap" style="display:none">
@@ -9531,7 +9539,40 @@ function toggleSimulator() {
   const isOpen = panel.style.display === 'none';
   panel.style.display = isOpen ? 'block' : 'none';
   if (arrow) arrow.textContent = isOpen ? '▾' : '▸';
-  if (isOpen) { populateSellLots(); updateSimAddRow(); renderSimResult(); }
+  if (isOpen) {
+    populateSellLots();
+    // Theme dropdown from THEMES config (dropdown:true); sleeve dropdown from SLEEVES.
+    const themeEl = document.getElementById('sim-theme');
+    if (themeEl && themeEl.options.length <= 1) {
+      Object.entries(THEMES).filter(([_, c]) => c.dropdown).forEach(([name]) => {
+        const o = document.createElement('option'); o.value = name; o.textContent = name; themeEl.appendChild(o);
+      });
+    }
+    const sleeveEl = document.getElementById('sim-sleeve');
+    if (sleeveEl && sleeveEl.options.length <= 1) {
+      SLEEVES.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; sleeveEl.appendChild(o); });
+    }
+    updateSimAddRow();
+    renderSimResult();
+  }
+}
+
+// Derive theme/sleeve from existing holdings of the typed ticker, pre-filling the pickers.
+// Stays editable — the user can override. Only fills when the field is empty or matches a prior
+// derive (so a manual override isn't clobbered on the next keystroke).
+let simLastDerivedTheme = '', simLastDerivedSleeve = '';
+function simPrefillThemeSleeve() {
+  const tk = (document.getElementById('sim-ticker').value || '').trim().toUpperCase();
+  const themeEl = document.getElementById('sim-theme');
+  const sleeveEl = document.getElementById('sim-sleeve');
+  if (!themeEl || !sleeveEl) return;
+  const lot = positions.find(p => !p.closed && p.ticker && p.ticker.toUpperCase() === tk);
+  const dTheme = lot ? (lot.theme || '') : '';
+  const dSleeve = lot ? (lot.sleeve || '') : '';
+  // Only auto-fill if user hasn't manually set something different.
+  if (themeEl.value === '' || themeEl.value === simLastDerivedTheme) themeEl.value = dTheme;
+  if (sleeveEl.value === '' || sleeveEl.value === simLastDerivedSleeve) sleeveEl.value = dSleeve;
+  simLastDerivedTheme = dTheme; simLastDerivedSleeve = dSleeve;
 }
 
 // Populate the sell dropdown with one entry PER LOT (not per ticker) so each account's lot is a
@@ -9559,6 +9600,8 @@ function updateSimAddRow() {
   show('sim-buykind-wrap', isBuy);
   show('sim-ticker-wrap', isBuy);
   show('sim-buyamount-wrap', isBuy);
+  show('sim-theme-wrap', isBuy);
+  show('sim-sleeve-wrap', isBuy);
   show('sim-sell-lot-wrap', !isBuy);
   show('sim-sell-shares-wrap', !isBuy);
   if (!isBuy) updateSimSellPreview();
@@ -9600,9 +9643,11 @@ function addSimTrade() {
     const kind = document.getElementById('sim-buykind').value;
     const ticker = document.getElementById('sim-ticker').value.trim().toUpperCase();
     const amount = parseFloat(document.getElementById('sim-amount').value) || 0;
+    const theme = document.getElementById('sim-theme').value || '';
+    const sleeve = document.getElementById('sim-sleeve').value || '';
     if (!ticker) { alert('Enter a ticker to buy.'); return; }
     if (amount <= 0) { alert('Enter an amount to buy.'); return; }
-    trade = { action: 'buy', kind, ticker, amount };
+    trade = { action: 'buy', kind, ticker, amount, theme, sleeve };
   } else {
     const sel = document.getElementById('sim-sell-lot');
     const opt = sel.options[sel.selectedIndex];
@@ -9620,6 +9665,9 @@ function addSimTrade() {
   document.getElementById('sim-amount').value = '';
   document.getElementById('sim-sell-shares').value = '';
   document.getElementById('sim-sell-lot').value = '';
+  const thEl = document.getElementById('sim-theme'); if (thEl) thEl.value = '';
+  const slEl = document.getElementById('sim-sleeve'); if (slEl) slEl.value = '';
+  simLastDerivedTheme = ''; simLastDerivedSleeve = '';
   document.getElementById('sim-step-label').textContent = `Trade ${simTrades.length + 1}`;
   document.getElementById('sim-trade-count').textContent = `(${simTrades.length} queued)`;
   updateSimAddRow();
@@ -9638,6 +9686,9 @@ function clearSimulator() {
   editingTradeIndex = null;
   ['sim-ticker','sim-amount','sim-sell-shares'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   const lotSel = document.getElementById('sim-sell-lot'); if (lotSel) lotSel.value = '';
+  const thEl = document.getElementById('sim-theme'); if (thEl) thEl.value = '';
+  const slEl = document.getElementById('sim-sleeve'); if (slEl) slEl.value = '';
+  simLastDerivedTheme = ''; simLastDerivedSleeve = '';
   const r = document.getElementById('sim-result'); if (r) r.innerHTML = '';
   const l = document.getElementById('sim-trade-list'); if (l) l.innerHTML = '';
   const sl = document.getElementById('sim-step-label'); if (sl) sl.textContent = 'Trade 1';
@@ -9663,19 +9714,50 @@ function simulateQueue(trades) {
   activeFunds.forEach(({ value, weights }) => { for (const [tk, w] of Object.entries(weights)) { if (w == null) continue; ens(tk).embedded += value * (w / 100); } });
   const before = {}; for (const [k, v] of Object.entries(exp)) before[k] = { ...v };
 
+  // Theme/sleeve are computed on the DIRECT book (sleeves/themes organize your direct positions;
+  // VOO-embedded exposure isn't theme-tagged). Baseline from current open positions.
+  const themeBefore = {}, themeAfter = {}, sleeveBefore = {}, sleeveAfter = {};
+  positions.filter(p => !p.closed && p.ticker).forEach(p => {
+    const v = calcPos(p).exitValue || 0;
+    const th = p.theme || '(unassigned)', sl = p.sleeve || '(unassigned)';
+    themeBefore[th] = (themeBefore[th] || 0) + v; themeAfter[th] = (themeAfter[th] || 0) + v;
+    sleeveBefore[sl] = (sleeveBefore[sl] || 0) + v; sleeveAfter[sl] = (sleeveAfter[sl] || 0) + v;
+  });
+
   let taxableGain = 0, estTax = 0, shelteredProceeds = 0, taxableProceeds = 0, anyLoss = false, hasIRA = false;
   const opaqueBlocks = []; // {ticker, amount} — ETF buys with no look-through table
-  let cashIn = 0, cashOut = 0; // net new capital required (buys) vs proceeds (sells)
+  const etfOverlaps = []; // {ticker, amount, overlapPct, overlapDollars} — ETF buys WITH look-through that overlap holdings
+  let cashIn = 0, cashOut = 0; // new capital for buys vs proceeds from sells
 
   trades.forEach(t => {
     if (t.action === 'buy') {
       cashIn += t.amount;
-      if (t.kind === 'stock') { ens(t.ticker).direct += t.amount; }
-      else {
+      const th = t.theme || '(unassigned)', sl = t.sleeve || '(unassigned)';
+      if (t.kind === 'stock') {
+        ens(t.ticker).direct += t.amount;
+        themeAfter[th] = (themeAfter[th] || 0) + t.amount;
+        sleeveAfter[sl] = (sleeveAfter[sl] || 0) + t.amount;
+      } else {
         const tbl = tables[t.ticker.toUpperCase()];
         if (tbl && tbl.weights && Object.keys(tbl.weights).length) {
           for (const [tk, w] of Object.entries(tbl.weights)) { if (w == null) continue; ens(tk).embedded += t.amount * (w / 100); }
-        } else { opaqueBlocks.push({ ticker: t.ticker.toUpperCase(), amount: t.amount }); }
+          // Overlap: how much of this ETF buy lands in names you already hold (direct or embedded).
+          let overlapW = 0;
+          for (const [tk, w] of Object.entries(tbl.weights)) {
+            if (w == null) continue;
+            const nk = qrNormTicker(tk);
+            const heldBefore = (before[nk] ? before[nk].direct + before[nk].embedded : 0);
+            if (heldBefore > 0) overlapW += w;
+          }
+          if (overlapW > 0) etfOverlaps.push({ ticker: t.ticker.toUpperCase(), amount: t.amount, overlapPct: +overlapW.toFixed(1), overlapDollars: Math.round(t.amount * overlapW / 100) });
+          // ETF buys still join a theme/sleeve if tagged (treated as one block in those views).
+          themeAfter[th] = (themeAfter[th] || 0) + t.amount;
+          sleeveAfter[sl] = (sleeveAfter[sl] || 0) + t.amount;
+        } else {
+          opaqueBlocks.push({ ticker: t.ticker.toUpperCase(), amount: t.amount });
+          themeAfter[th] = (themeAfter[th] || 0) + t.amount;
+          sleeveAfter[sl] = (sleeveAfter[sl] || 0) + t.amount;
+        }
       }
     } else {
       const lot = positions.find(p => p.id === t.lotId);
@@ -9686,6 +9768,9 @@ function simulateQueue(trades) {
       const k = qrNormTicker(lot.ticker);
       if (exp[k]) exp[k].direct = Math.max(0, exp[k].direct - proceeds);
       cashOut += proceeds;
+      const th = lot.theme || '(unassigned)', sl = lot.sleeve || '(unassigned)';
+      themeAfter[th] = Math.max(0, (themeAfter[th] || 0) - proceeds);
+      sleeveAfter[sl] = Math.max(0, (sleeveAfter[sl] || 0) - proceeds);
       const isIRA = (lot.account || '').toUpperCase().includes('IRA');
       if (isIRA) { hasIRA = true; shelteredProceeds += proceeds; }
       else {
@@ -9696,6 +9781,9 @@ function simulateQueue(trades) {
     }
   });
 
+  // Opaque ETF blocks show as their own exposure rows (so the table isn't empty / misleading).
+  opaqueBlocks.forEach(b => { const a = ens(b.ticker + ' (opaque)'); a.direct += b.amount; });
+
   const allKeys = new Set([...Object.keys(before), ...Object.keys(exp)]);
   const rows = [...allKeys].map(k => {
     const b = before[k] || { display: (exp[k] || {}).display, direct: 0, embedded: 0 };
@@ -9704,7 +9792,21 @@ function simulateQueue(trades) {
     return { display: a.display || b.display, before: bt, after: at, change: at - bt, dBefore: b.direct, dAfter: a.direct, eBefore: b.embedded, eAfter: a.embedded };
   }).filter(r => r.before > 1 || r.after > 1).sort((x, y) => y.after - x.after);
 
-  return { rows, taxableGain, estTax, shelteredProceeds, taxableProceeds, anyLoss, hasIRA, opaqueBlocks, cashIn, cashOut };
+  // Build theme + sleeve before→after rows (% of direct book), only where something changed.
+  const directBefore = Object.values(themeBefore).reduce((s, v) => s + v, 0);
+  const directAfter = Object.values(themeAfter).reduce((s, v) => s + v, 0);
+  const buildGroup = (bMap, aMap, bTot, aTot) => {
+    const keys = new Set([...Object.keys(bMap), ...Object.keys(aMap)]);
+    return [...keys].map(name => {
+      const bv = bMap[name] || 0, av = aMap[name] || 0;
+      const bp = bTot > 0 ? (bv / bTot) * 100 : 0, ap = aTot > 0 ? (av / aTot) * 100 : 0;
+      return { name, bv, av, bp, ap, dPct: ap - bp };
+    }).filter(r => Math.abs(r.av - r.bv) > 1).sort((x, y) => Math.abs(y.dPct) - Math.abs(x.dPct));
+  };
+  const themeRows = buildGroup(themeBefore, themeAfter, directBefore, directAfter);
+  const sleeveRows = buildGroup(sleeveBefore, sleeveAfter, directBefore, directAfter);
+
+  return { rows, taxableGain, estTax, shelteredProceeds, taxableProceeds, anyLoss, hasIRA, opaqueBlocks, etfOverlaps, themeRows, sleeveRows, cashIn, cashOut };
 }
 
 function renderSimResult() {
@@ -9767,10 +9869,49 @@ function renderSimResult() {
   const netCash = sim.cashOut - sim.cashIn;
   const cashLine = `Sells raise ${fmtDollarWhole(sim.cashOut)} · buys need ${fmtDollarWhole(sim.cashIn)} · net ${netCash >= 0 ? 'freed' : 'required'}: ${fmtDollarWhole(Math.abs(netCash))}`;
 
+  // ETF overlap warnings (look-through ETFs that land in names you already hold).
+  let overlapNote = '';
+  if (sim.etfOverlaps.length) {
+    overlapNote = sim.etfOverlaps.map(o => {
+      const lvl = o.overlapPct >= 40 ? '#ef4444' : o.overlapPct >= 20 ? '#fbbf24' : 'var(--color-text-secondary)';
+      const verb = o.overlapPct >= 40 ? 'largely compounds' : o.overlapPct >= 20 ? 'partly compounds' : 'modestly adds to';
+      return `<div style="font-size:10px;color:var(--color-text-primary);padding:7px 10px;background:rgba(251,191,36,0.10);border-left:3px solid ${lvl};border-radius:var(--border-radius-md);margin-top:6px;line-height:1.5">
+        <strong>~${o.overlapPct}% of ${esc(o.ticker)} overlaps names you already hold</strong> — buying it ${verb} existing exposure (~${fmtDollarWhole(o.overlapDollars)} of the ${fmtDollarWhole(o.amount)} buy lands in names already in your book), not pure diversification.</div>`;
+    }).join('');
+  }
+
+  // Theme / sleeve before→after (% of your DIRECT book), rendered as compact rows.
+  const groupTable = (rows, label) => {
+    if (!rows.length) return '';
+    const body = rows.slice(0, 12).map(r => {
+      const col = Math.abs(r.dPct) < 0.5 ? 'var(--color-text-tertiary)' : r.dPct > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const arrow = r.dPct > 0 ? '↑' : '↓';
+      return `<tr>
+        <td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.name)}</td>
+        <td style="padding:3px 8px;text-align:right;color:var(--color-text-tertiary)">${r.bp.toFixed(1)}%</td>
+        <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${r.ap.toFixed(1)}%</td>
+        <td style="padding:3px 8px;text-align:right;color:${col};font-weight:600">${arrow} ${Math.abs(r.dPct).toFixed(1)}pp</td>
+        <td style="padding:3px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">${fmtDollarWhole(r.bv)} → ${fmtDollarWhole(r.av)}</td>
+      </tr>`;
+    }).join('');
+    return `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 4px">${label} — before → after (% of direct book)</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+          <th style="padding:3px 8px;text-align:left;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">${label}</th>
+          <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
+          <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
+          <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
+          <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">$ Before → After</th>
+        </tr></thead><tbody>${body}</tbody></table></div>`;
+  };
+  const themeTable = groupTable(sim.themeRows, 'Theme');
+  const sleeveTable = groupTable(sim.sleeveRows, 'Sleeve');
+
   resultEl.innerHTML = `
     <div style="font-size:9px;color:var(--color-text-tertiary);margin:8px 0 4px">${simTrades.length} trade${simTrades.length > 1 ? 's' : ''} queued · ${cashLine}</div>
     <div style="font-size:10px;margin:0 0 8px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
     ${opaqueNote}
+    ${overlapNote}
     <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">True exposure — names that move (direct + inside funds)</div>
     ${moved.length ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
@@ -9779,7 +9920,9 @@ function renderSimResult() {
         <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
         <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
       </tr></thead><tbody>${expBody}</tbody></table></div>` : '<div style="font-size:10px;color:var(--color-text-tertiary);padding:6px 0">No name-level exposure change yet — add trades above.</div>'}
-    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">True exposure = what you hold directly + what you hold inside your funds. Selling a direct position only removes the direct part — the slice inside VOO/ETFs stays. Direct dollars are exact; the fund-embedded part is approximate (weights drift). Tax is an estimate from your active profile, not advice.</div>`;
+    ${themeTable}
+    ${sleeveTable}
+    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">True exposure = what you hold directly + what you hold inside your funds. Selling a direct position only removes the direct part — the slice inside VOO/ETFs stays. Theme/sleeve %s are of your DIRECT book only. Direct dollars are exact; the fund-embedded part is approximate (weights drift). Tax is an estimate from your active profile, not advice.</div>`;
 }
 
 function renderSleeveRef() {
