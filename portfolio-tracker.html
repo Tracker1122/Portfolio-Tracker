@@ -6205,9 +6205,49 @@ function parseHoldings(text) {
   // Then neutralize a comma immediately followed by a corporate suffix (so "Amazon.com, Inc."
   // stays one chunk), and split on newlines / semicolons / remaining commas.
   const protectedText = t0.replace(/,\s*(Inc|Incorporated|Corp|Corporation|Co|Company|Ltd|Limited|PLC|LLC|LP|NV|SA|AG|Class\s+[A-C])\b/gi, ' $1');
-  const chunks = protectedText.split(/[\n;,]+/).map(s => s.trim()).filter(Boolean);
   const parsed = [], unparsed = [];
   const seen = {};
+
+  // Validate a candidate symbol as a clean, mappable US ticker. Rejects exchange-prefixed
+  // foreign listings (KRX: 000660, TYO: 285A), "n/a" swap markers, Treasury codes (B.0 ...),
+  // and anything with a space/colon/digit-only form. Accepts 1-5 all-caps letters with an
+  // optional single dot/dash class suffix (BRK.B, FGXXX, SNDK, MU).
+  const isCleanTicker = (s) => {
+    if (!s) return false;
+    const t = s.trim();
+    if (/[:\s]/.test(t)) return false;               // exchange prefix or multi-word → not a US ticker
+    if (/^n\/?a$/i.test(t)) return false;             // "n/a"
+    return /^[A-Z]{1,5}([.\-][A-Z]{1,2})?$/.test(t.toUpperCase()) && /[A-Z]/i.test(t);
+  };
+  const firstWeight = (str) => { const m = str.match(/[+\-]?(\d+(?:\.\d+)?)\s*%/); return m ? parseFloat(m[1]) : null; };
+
+  // ── Tab-delimited path (stockanalysis.com raw table: No / Symbol / Name / %Weight / Shares) ──
+  // If lines contain tabs, the columns are reliable: use the Symbol field directly rather than
+  // hunting for a ticker-shaped token (which misfires on "SK hynix" → SK or "KRX: 000660" → KRX).
+  // A row whose symbol column isn't a clean US ticker (foreign listing, swap, Treasury) is sent
+  // to `unparsed` so it's shown as skipped, not silently dropped or mis-captured.
+  if (/\t/.test(protectedText)) {
+    protectedText.split(/\n+/).map(s => s.trim()).filter(Boolean).forEach(line => {
+      const fields = line.split(/\t+/).map(f => f.trim());
+      const weight = firstWeight(line);
+      // Find the symbol: the first field that's a clean ticker. (Usually field index 1, after
+      // the row number, but scan in case the leading number is absent.)
+      let sym = null;
+      for (const f of fields) { if (isCleanTicker(f)) { sym = f.toUpperCase(); break; } }
+      if (sym) {
+        if (!seen[sym]) { seen[sym] = true; parsed.push({ ticker: sym, weight }); }
+      } else {
+        // Report the row by its name/symbol so the user sees WHAT was skipped. Prefer the
+        // longest non-numeric field (the company name) for a readable label.
+        const label = fields.filter(f => f && !/^\d+$/.test(f) && !/^\d[\d,]*$/.test(f) && !/%$/.test(f))
+          .sort((a,b)=>b.length-a.length)[0] || line;
+        unparsed.push(label.slice(0, 60));
+      }
+    });
+    return { parsed, unparsed };
+  }
+
+  const chunks = protectedText.split(/[\n;,]+/).map(s => s.trim()).filter(Boolean);
   chunks.forEach(chunk => {
     // Schwab rows look like: "NVDA  NVIDIA Corp  +17.52%  49.2M  $10.9B  +20.38% ..."
     // (Symbol, Description, % of Net Assets, Shares, Market Value, return columns).
