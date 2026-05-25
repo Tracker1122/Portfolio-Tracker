@@ -4168,16 +4168,25 @@ function renderThemeIntel() {
   const grandTotal = totalValue + spValue;
 
   const themes = {};
+  const _now = Date.now();
   open.forEach(p => {
     const c = calcPos(p);
     const v = c.exitValue || 0;
     const spxRet = c.spxReturn !== null ? c.spxReturn / 100 : null;
     const alpha = (spxRet !== null && c.invested > 0)
       ? (c.exitValue - c.invested) - (c.invested * spxRet) : null;
-    if (!themes[p.theme]) themes[p.theme] = { value: 0, alphaSum: 0, alphaCount: 0, positions: 0 };
+    if (!themes[p.theme]) themes[p.theme] = { value: 0, alphaSum: 0, alphaCount: 0, positions: 0, matureAlphaSum: 0, matureAlphaCount: 0, maturePositions: 0 };
     themes[p.theme].value += v;
     themes[p.theme].positions++;
     if (alpha !== null) { themes[p.theme].alphaSum += alpha; themes[p.theme].alphaCount++; }
+    // Mature subset (held >= MATURITY_DAYS) — used so the verdict honors the Matured toggle and can
+    // hedge when the seasoned evidence is thin. Missing/invalid buy date = not mature.
+    let isMature = false;
+    if (p.dateBought) { const b = new Date(p.dateBought); if (!isNaN(b)) isMature = Math.floor((_now - b.getTime()) / 86400000) >= MATURITY_DAYS; }
+    if (isMature) {
+      themes[p.theme].maturePositions++;
+      if (alpha !== null) { themes[p.theme].matureAlphaSum += alpha; themes[p.theme].matureAlphaCount++; }
+    }
   });
 
   const denominator = concMode === 'total' && grandTotal > 0 ? grandTotal : totalValue;
@@ -4215,6 +4224,8 @@ function renderThemeIntel() {
       theme,
       pct: denominator > 0 ? (d.value / denominator) * 100 : 0,
       totalAlpha: d.alphaCount > 0 ? d.alphaSum : null,
+      matureAlpha: d.matureAlphaCount > 0 ? d.matureAlphaSum : null,
+      matureCount: d.maturePositions,
       positions: d.positions
     }))
     .sort((a, b) => b.pct - a.pct);
@@ -4229,15 +4240,45 @@ function renderThemeIntel() {
     const themeKey = t.theme.replace(/[^a-z0-9]/gi, '_');
 
     let signal = '';
-    if (isOver && t.totalAlpha !== null && t.totalAlpha < 0) signal = '⚠ Overweight & trailing — review';
-    else if (isOver && t.totalAlpha !== null && t.totalAlpha > 0) signal = 'Overweight but beating — hold conviction';
-    else if (isUnder && t.totalAlpha !== null && t.totalAlpha > 0) signal = '↑ Underweight & beating — consider adding';
+    // When the Matured toggle is on, the verdict must read the SAME mature subset the vs-benchmark
+    // line shows — otherwise the card contradicts itself (e.g. "0/1 beating" stat under a "beating —
+    // hold conviction" verdict). When off, use the all-open alpha as before.
+    const verdictAlpha = industryAlphaMatureOnly ? t.matureAlpha : t.totalAlpha;
+    const verdictN = industryAlphaMatureOnly ? t.matureCount : t.positions;
+    // Thin-evidence hedge: a verdict resting on 0-2 seasoned positions is fragile (n=1 at -62pp is
+    // not a "trailing" conclusion, it's one data point). Withhold the confident beat/trail verdict
+    // and say so, rather than swapping one overconfident call for the opposite.
+    const thinEvidence = industryAlphaMatureOnly && verdictN > 0 && verdictN <= 2;
+    if (industryAlphaMatureOnly && verdictN === 0) {
+      signal = isOver ? '⚠ Overweight · no seasoned positions to judge' : 'No seasoned positions ≥' + MATURITY_DAYS + 'd';
+    } else if (thinEvidence) {
+      const dir = verdictAlpha === null ? '' : verdictAlpha >= 0 ? ' (currently ahead)' : ' (currently behind)';
+      signal = (isOver ? '⚠ Overweight · ' : '') + 'thin evidence — only ' + verdictN + ' seasoned position' + (verdictN === 1 ? '' : 's') + dir;
+    } else if (isOver && verdictAlpha !== null && verdictAlpha < 0) signal = '⚠ Overweight & trailing — review';
+    else if (isOver && verdictAlpha !== null && verdictAlpha > 0) signal = 'Overweight but beating — hold conviction';
+    else if (isUnder && verdictAlpha !== null && verdictAlpha > 0) signal = '↑ Underweight & beating — consider adding';
     else if (isUnder) signal = 'Underweight — gap to fill if convicted';
-    else if (t.totalAlpha !== null && t.totalAlpha < 0) signal = 'Trailing — worth reviewing';
+    else if (verdictAlpha !== null && verdictAlpha < 0) signal = 'Trailing — worth reviewing';
     else signal = 'Balanced';
 
     const themeValue = open.filter(p => p.theme === t.theme).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
     const themeInvested = open.filter(p => p.theme === t.theme).reduce((s, p) => s + (calcPos(p).invested || 0), 0);
+
+    // Theme-α (vs sector ETF) total — respects the matured toggle, same set as the verdict.
+    // This is a DIFFERENT lens than Dollar Alpha (vs SPX): a position can beat the broad market
+    // while trailing its hotter sector, so these two can disagree in sign. We flag that below.
+    const themeAlphaSet = open.filter(p => {
+      if (p.theme !== t.theme) return false;
+      if (!industryAlphaMatureOnly) return true;
+      if (!p.dateBought) return false;
+      const b = new Date(p.dateBought); if (isNaN(b)) return false;
+      return Math.floor((_now - b.getTime()) / 86400000) >= MATURITY_DAYS;
+    }).map(p => calcThemeAlpha(p)).filter(ta => ta !== null);
+    const themeAlphaTotal = themeAlphaSet.length > 0 ? themeAlphaSet.reduce((s, ta) => s + ta.themeAlphaDollar, 0) : null;
+    // Sign divergence between the two lenses (only meaningful when both are computable & non-trivial)
+    const lensDiverge = verdictAlpha !== null && themeAlphaTotal !== null
+      && Math.sign(verdictAlpha) !== Math.sign(themeAlphaTotal)
+      && Math.abs(verdictAlpha) > 100 && Math.abs(themeAlphaTotal) > 100;
 
     const themePositions = open
       .filter(p => p.theme === t.theme)
@@ -4310,24 +4351,12 @@ function renderThemeIntel() {
             <div class="industry-intel-stat-value" style="color:var(--color-text-primary)">${fmtDollarWhole(themeValue)}</div>
           </div>
           <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">Dollar Alpha</div>
-            <div class="industry-intel-stat-value" style="color:${alphaColor}">${t.totalAlpha !== null ? fmtDollarWhole(t.totalAlpha) : '—'}</div>
+            <div class="industry-intel-stat-label">Dollar Alpha${industryAlphaMatureOnly ? ' <span style="opacity:0.6;font-weight:400">(≥' + MATURITY_DAYS + 'd)</span>' : ''} <span style="opacity:0.5;font-weight:400" title="SPX-relative dollar alpha: your return minus what the S&P 500 would have returned on the same capital. Measures performance vs the broad market.">vs SPX ⓘ</span></div>
+            <div class="industry-intel-stat-value" style="color:${verdictAlpha === null ? 'var(--color-text-tertiary)' : verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${verdictAlpha !== null ? fmtDollarWhole(verdictAlpha) : '—'}</div>
           </div>
           <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">Theme α${getThemeBenchmark(t.theme) ? ' (vs ' + getThemeBenchmark(t.theme) + ')' : ''}</div>
-            <div class="industry-intel-stat-value" style="color:${(() => {
-              const themeAlphas = open.filter(p => p.theme === t.theme).map(p => calcThemeAlpha(p));
-              const valid = themeAlphas.filter(ta => ta !== null);
-              if (valid.length === 0) return 'var(--color-text-tertiary)';
-              const total = valid.reduce((s, ta) => s + ta.themeAlphaDollar, 0);
-              return total >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-            })()}">${(() => {
-              const themeAlphas = open.filter(p => p.theme === t.theme).map(p => calcThemeAlpha(p));
-              const valid = themeAlphas.filter(ta => ta !== null);
-              if (valid.length === 0) return '—';
-              const total = valid.reduce((s, ta) => s + ta.themeAlphaDollar, 0);
-              return (total >= 0 ? '+' : '') + fmtDollarWhole(total);
-            })()}</div>
+            <div class="industry-intel-stat-label">Theme α${getThemeBenchmark(t.theme) ? ' <span style="opacity:0.6;font-weight:400">vs ' + getThemeBenchmark(t.theme) + '</span>' : ''}${industryAlphaMatureOnly ? ' <span style="opacity:0.6;font-weight:400">(≥' + MATURITY_DAYS + 'd)</span>' : ''} <span style="opacity:0.5;font-weight:400" title="Theme-relative alpha: your return minus the sector ETF over each position's holding window. Measures stock-picking vs just buying the sector. Different lens than Dollar Alpha (vs SPX) — they can disagree.">ⓘ</span></div>
+            <div class="industry-intel-stat-value" style="color:${themeAlphaTotal === null ? 'var(--color-text-tertiary)' : themeAlphaTotal >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${themeAlphaTotal === null ? '—' : (themeAlphaTotal >= 0 ? '+' : '') + fmtDollarWhole(themeAlphaTotal)}</div>
           </div>
           <div class="industry-intel-stat">
             <div class="industry-intel-stat-label">G/L</div>
@@ -4339,6 +4368,7 @@ function renderThemeIntel() {
           </div>
         </div>
         <div class="industry-intel-signal">${signal}</div>
+        ${lensDiverge ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px;line-height:1.4">Two lenses disagree: ${verdictAlpha >= 0 ? 'ahead of the S&P' : 'behind the S&P'} but ${themeAlphaTotal >= 0 ? 'ahead of' : 'behind'} ${getThemeBenchmark(t.theme) || 'the sector'}. ${verdictAlpha >= 0 && themeAlphaTotal < 0 ? 'The broad market lifted it; your pick still trails its hotter sector.' : 'Your pick beat its sector but the broad market did better.'}</div>` : ''}
       </div>
       <div class="theme-drill" id="drill-${themeKey}">
         <table style="width:100%;border-collapse:collapse;font-size:11px">
