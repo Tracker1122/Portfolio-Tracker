@@ -7304,7 +7304,7 @@ let qrRotationState = { parsed: [], etfTicker: '', candidates: [] };
 // naive double-up. Normalized tickers. Reset when a new candidate/ETF is loaded.
 let qrRotateChecked = new Set();
 
-function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
+function qrSimulateRotation(parsed, etfTicker, sellNormsSet, targetSleeveOverride) {
   // Proceeds from selling the checked direct positions, plus the estimated tax on doing so.
   // Tax = gain × the position's rate (ST/LT by holding period; IRA sheltered = 0). Losses don't
   // generate tax here (matches the app's applyTaxToGain convention — no loss-harvest credit modeled).
@@ -7406,7 +7406,7 @@ function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
     sleeveAfter[sl] = (sleeveAfter[sl]||0) - (calcPos(p).exitValue || 0);
   });
   // Add net proceeds to the candidate ETF's target sleeve.
-  const targetSleeve = ((typeof document !== 'undefined' && document.getElementById('qr-sleeve')) ? document.getElementById('qr-sleeve').value : '') || '(unassigned)';
+  const targetSleeve = targetSleeveOverride || ((typeof document !== 'undefined' && document.getElementById('qr-sleeve')) ? document.getElementById('qr-sleeve').value : '') || '(unassigned)';
   sleeveAfter[targetSleeve] = (sleeveAfter[targetSleeve]||0) + (proceeds - estTax);
   const sleeveRows = Object.keys(sleeveBefore).map(sl => ({
     sleeve: sl, before: sleeveBefore[sl]||0, after: sleeveAfter[sl]||0, change: (sleeveAfter[sl]||0) - (sleeveBefore[sl]||0)
@@ -7687,12 +7687,18 @@ function saveQrCandidate(keepForm) {
     parsed: qrLastFetch.parsed, fetchedAt: qrLastFetch.fetchedAt, source: 'alphavantage'
   } : null;
 
+  // Persist the user's rotation intent (which overlapping direct names they've checked to rotate
+  // OUT into this ETF) so it survives save/reload — previously this lived only in the transient
+  // qrRotateChecked Set and reverted on every re-render.
+  const rotateOut = [...qrRotateChecked];
+
   let savedId = qrEditingId;
   if (qrEditingId !== null) {
     const c = qualityReviews.find(q => q.id === qrEditingId);
     if (c) {
       c.ticker = ticker; c.theme = theme; c.sleeve = sleeve; c.type = qrType; c.fields = fields;
       if (cachedHoldings) c.cachedHoldings = cachedHoldings;
+      c.rotateOut = rotateOut;
       c.updatedAt = new Date().toISOString();
     }
   } else {
@@ -7701,6 +7707,7 @@ function saveQrCandidate(keepForm) {
       id: savedId,
       type: qrType, ticker, theme, sleeve, fields,
       cachedHoldings: cachedHoldings || undefined,
+      rotateOut,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
     });
   }
@@ -7718,6 +7725,7 @@ function editQrCandidate(id) {
   const c = qualityReviews.find(q => q.id === id);
   if (!c) return;
   qrEditingId = id;
+  qrRotateChecked = new Set(c.rotateOut || []); // restore the saved rotation choice into the live set
   qrType = c.type || 'stock';   // authoritative: lock the form to the candidate's own type FIRST
   qrStage2Unlocked = true;       // a saved candidate shows its full form
   setQrType(qrType);             // sync toggle styling + render (now guaranteed to match the data)
@@ -7767,6 +7775,8 @@ function renderQrSavedList() {
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
         ${rows || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No fields filled.</div>'}
         <div id="qr-flags-${c.id}" style="margin-top:10px">${renderQualityFlags(c)}</div>
+        ${c.type === 'etf' ? `<button id="qr-analysis-btn-${c.id}" class="btn btn-sm" onclick="toggleQrCardAnalysis('${c.id}')" style="font-size:10px;margin-top:10px">🔍 View analysis (overlap + rotation)</button>
+        <div id="qr-analysis-${c.id}" style="margin-top:10px;display:none"></div>` : ''}
         <div id="qr-ai-${c.id}" style="margin-top:10px"></div>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">Edit</button>
@@ -7778,12 +7788,150 @@ function renderQrSavedList() {
   }).join('');
 }
 
+// ─────────────────────────────────────────────
+// Saved-card analysis (read-only insight): overlap breakdown + interactive rotation tool, rendered
+// per-candidate into qr-analysis-<id> so you can review/use the insight WITHOUT entering Edit.
+// Reuses the same computation helpers as the form (computeHoldingsOverlap, qrEtfOverlapSummary,
+// qrSimulateRotation) so there's no logic drift; the rotation tool reads/writes the candidate's
+// PERSISTED rotateOut field directly (no transient global), and saves immediately.
+// ─────────────────────────────────────────────
+function qrCandidateParsedHoldings(c) {
+  if (c.cachedHoldings && Array.isArray(c.cachedHoldings.parsed)) return c.cachedHoldings.parsed;
+  if (c.fields && c.fields.holdingsTop) { const r = parseHoldings(c.fields.holdingsTop); return r.parsed; }
+  return [];
+}
+
+function toggleQrCardAnalysis(id) {
+  const panel = document.getElementById('qr-analysis-' + id);
+  const btn = document.getElementById('qr-analysis-btn-' + id);
+  if (!panel) return;
+  const open = panel.style.display !== 'none';
+  if (open) { panel.style.display = 'none'; if (btn) btn.textContent = '🔍 View analysis (overlap + rotation)'; }
+  else { panel.style.display = 'block'; if (btn) btn.textContent = '× Hide analysis'; renderQrCardAnalysis(id); }
+}
+
+// Toggle one rotated-out name for a saved candidate, persist, and re-render its analysis + flags.
+function qrCardToggleRotate(id, norm) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  const set = new Set(c.rotateOut || []);
+  if (set.has(norm)) set.delete(norm); else set.add(norm);
+  c.rotateOut = [...set];
+  c.updatedAt = new Date().toISOString();
+  // If this candidate is also the one open in the form, keep the live set in sync.
+  if (qrEditingId === id) qrRotateChecked = new Set(c.rotateOut);
+  scheduleSave();
+  renderQrCardAnalysis(id);
+  const fc = document.getElementById('qr-flags-' + id);
+  if (fc) fc.innerHTML = renderQualityFlags(c);
+}
+
+function renderQrCardAnalysis(id) {
+  const host = document.getElementById('qr-analysis-' + id);
+  if (!host) return;
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) { host.innerHTML = ''; return; }
+  if (c.type !== 'etf') {
+    host.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">Overlap & rotation analysis applies to ETF candidates.</div>`;
+    return;
+  }
+  const parsed = qrCandidateParsedHoldings(c);
+  if (!parsed.length) {
+    host.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No fund holdings saved for ${esc(c.ticker)} — add them in Edit to see the overlap breakdown.</div>`;
+    return;
+  }
+  const etfTicker = (c.ticker || 'this ETF').toUpperCase();
+  let html = '';
+
+  // ── Overlap roll-up (reuses qrEtfOverlapSummary) ──
+  const sum = qrEtfOverlapSummary(parsed);
+  if (sum.names.length > 0) {
+    const verb = sum.overlapPct >= 40 ? 'largely compounds' : sum.overlapPct >= 20 ? 'partly compounds' : 'modestly adds to';
+    const viaOnlyNames = sum.names.filter(n => n.direct === 0 && n.viaFunds > 0);
+    const biggest = sum.names.slice(0, 3).map(n => {
+      const where = n.direct > 0 && n.viaFunds > 0 ? 'direct + funds' : n.direct > 0 ? 'direct' : 'via funds';
+      return `${esc(n.ticker)} (${n.etfWeight}% of ETF; you already hold ~${fmtDollarWhole(n.total)} ${where})`;
+    }).join(', ');
+    html += `<div style="font-size:10px;color:var(--color-text-primary);padding:9px 11px;background:rgba(186,117,23,0.10);border:1px solid #BA7517;border-left:3px solid #BA7517;border-radius:var(--border-radius-md);line-height:1.55;margin-bottom:8px">
+      <div style="font-weight:700;margin-bottom:3px">~${sum.overlapPct}% of ${esc(etfTicker)} overlaps names you already hold — buying it ${verb} existing exposure, not pure diversification.</div>
+      <div style="font-size:9px;color:var(--color-text-secondary)">Of the ${sum.parsedWeight}% of the fund described, ~${sum.overlapPct}% sits in names already in your book (directly or inside your index funds). Biggest overlaps: ${biggest}.</div>
+      ${viaOnlyNames.length ? `<div style="font-size:9px;color:#BA7517;margin-top:4px">Note: ${viaOnlyNames.map(n=>esc(n.ticker)).join(', ')} you hold little/none of directly but already own via your funds (mostly VOO) — this ETF would deepen exposure you may not realize you have.</div>` : ''}
+      <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:4px">Approximate — fund weights drift; covers the holdings described (~${sum.parsedWeight}% of the fund).</div>
+    </div>`;
+  }
+
+  // ── Rotation tool (reuses qrSimulateRotation), reading/writing c.rotateOut ──
+  const overlaps = computeHoldingsOverlap(parsed);
+  const rotCandidates = overlaps.filter(o => o.yourDirectValue > 0)
+    .map(o => ({ norm: qrNormTicker(o.ticker), display: o.ticker, directValue: o.yourDirectValue }));
+  if (rotCandidates.length > 0) {
+    const checked = new Set(c.rotateOut || []);
+    const checklist = rotCandidates.map(rc =>
+      `<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;font-size:10px;cursor:pointer;color:var(--color-text-secondary)">
+        <input type="checkbox" ${checked.has(rc.norm)?'checked':''} onchange="qrCardToggleRotate('${id}','${rc.norm}')" style="cursor:pointer">
+        ${esc(rc.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(rc.directValue)}</span>${acctTag(rc.norm)}
+      </label>`).join('');
+
+    let tableHtml = '';
+    if (checked.size > 0) {
+      const sim = qrSimulateRotation(parsed, etfTicker, checked, c.sleeve || '(unassigned)');
+      const netProceeds = sim.proceeds - sim.estTax;
+      let taxNote;
+      if (sim.estTax > 0) {
+        taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains → ~${fmtDollarWhole(netProceeds)} net to reinvest`;
+        if (sim.shelteredProceeds > 0) taxNote += `. ${fmtDollarWhole(sim.shelteredProceeds)} of the sale is in your IRA — sold tax-free`;
+      } else if (sim.hasIRA && sim.taxableProceeds === 0) { taxNote = `no tax — the entire sale is in your IRA (sheltered)`; }
+      else if (sim.hasIRA) { taxNote = `no taxable gain on the ${fmtDollarWhole(sim.taxableProceeds)} taxable portion; ${fmtDollarWhole(sim.shelteredProceeds)} is IRA (tax-free)`; }
+      else if (sim.anyLoss) { taxNote = `no tax (sales at a loss)`; }
+      else { taxNote = `no taxable gain`; }
+      const body = sim.rows.slice(0, 15).map(r => {
+        const chg = Math.round(r.change);
+        const chgColor = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+        const tiny = Math.abs(chg) < 1000 && r.before > 5000 ? ' <span style="color:#BA7517">← barely moves</span>' : '';
+        return `<tr>
+          <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
+          <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
+          <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
+          <td style="padding:3px 8px;text-align:right;color:${chgColor}">${(chg>=0?'+':'')+fmtDollarWhole(chg)}${tiny}</td>
+        </tr>`;
+      }).join('');
+      tableHtml = `
+        <div style="font-size:9px;color:var(--color-text-secondary);margin:8px 0 4px">Selling ${fmtDollarWhole(sim.proceeds)} across ${sim.soldCount} position(s) → buying ${esc(etfTicker)}. Positions: ${sim.posBefore} → ${sim.posAfter}.</div>
+        <div style="font-size:9px;margin:0 0 6px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
+        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
+          <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+            <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name (true exposure)</th>
+            <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
+            <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
+            <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
+          </tr></thead><tbody>${body}</tbody></table></div>
+        <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">For names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal. ` : ''}Approximate; tax is an estimate (not advice).</div>`;
+    } else {
+      tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above to model rotating them into ${esc(etfTicker)} — your choice saves automatically and updates the observations.</div>`;
+    }
+    html += `<div style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:8px">
+      <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">Hypothetical: rotate direct holdings → ${esc(etfTicker)}</div>
+      <div style="margin-bottom:2px">${checklist}</div>
+      ${tableHtml}</div>`;
+  }
+
+  host.innerHTML = html || `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No direct overlap to analyze for ${esc(etfTicker)}.</div>`;
+}
+
+// Resolve which overlapping names are "rotate out" for a candidate: live checkbox state if this is
+// the candidate currently being edited (so toggles update before save), else the persisted choice.
+function qrRotationSetFor(candidate) {
+  if (candidate && qrEditingId === candidate.id) return qrRotateChecked;
+  return new Set((candidate && candidate.rotateOut) || []);
+}
+
 // ── Option 1: deterministic quality flags (checkable observations, no recommendation) ──
 function buildQualityFlags(candidate, holdingsOverlaps) {
   const f = candidate.fields || {};
   const flags = [];
   const isEtf = candidate.type === 'etf';
   const num = v => parseFloat(v) || 0;
+  const rotSet = qrRotationSetFor(candidate);
 
   if (candidate.theme) {
     const ex = qrThemeExposure(candidate.theme);
@@ -7836,8 +7984,8 @@ function buildQualityFlags(candidate, holdingsOverlaps) {
     if (holdingsOverlaps && holdingsOverlaps.length > 0) {
       // Respect the user's rotation intent: names they've checked to rotate OUT (trim into this ETF)
       // are no longer a "double-up" — they're being replaced by the ETF. Split the overlap list.
-      const rotating = holdingsOverlaps.filter(o => qrRotateChecked.has(qrNormTicker(o.ticker)));
-      const keeping = holdingsOverlaps.filter(o => !qrRotateChecked.has(qrNormTicker(o.ticker)));
+      const rotating = holdingsOverlaps.filter(o => rotSet.has(qrNormTicker(o.ticker)));
+      const keeping = holdingsOverlaps.filter(o => !rotSet.has(qrNormTicker(o.ticker)));
       if (keeping.length > 0) {
         flags.push({ level: 'caution', text: `Holds ${keeping.length} name(s) you own directly and plan to KEEP (${keeping.map(o=>o.ticker).join(', ')}) — partial double-up, not pure diversification.` });
       }
@@ -8027,8 +8175,9 @@ function buildQrAiPrompt(candidate) {
   else if (f.holdingsTop) { const r = parseHoldings(f.holdingsTop); overlaps = computeHoldingsOverlap(r.parsed); }
   if (candidate.type === 'etf') {
     if (overlaps.length) {
-      const rotating = overlaps.filter(o => qrRotateChecked.has(qrNormTicker(o.ticker)));
-      const keeping = overlaps.filter(o => !qrRotateChecked.has(qrNormTicker(o.ticker)));
+      const rotSet = qrRotationSetFor(candidate);
+      const rotating = overlaps.filter(o => rotSet.has(qrNormTicker(o.ticker)));
+      const keeping = overlaps.filter(o => !rotSet.has(qrNormTicker(o.ticker)));
       let line = `Direct-holding overlap: this ETF holds ${overlaps.map(o=>o.ticker).join(', ')}, which the user owns individually.`;
       if (rotating.length) {
         line += ` IMPORTANT INTENT: the user has marked ${rotating.map(o=>o.ticker).join(', ')} to ROTATE OUT — i.e. they intend to TRIM/SELL these direct positions and replace that exposure with this ETF. Treat the purchase as a rotation for those names, NOT a double-up. Reason about whether rotating direct→ETF is worth the tax and loss of per-name control, given the rotation often barely changes true exposure (the ETF and VOO still hold these names).`;
