@@ -4294,12 +4294,13 @@ function renderThemeIntel() {
     return sortDir === 'asc' ? av - bv : bv - av;
   });
 
-  // Concentration tag (Heavy / Balanced / Light) — pct vs the average of its OWN lens, so the
-  // active and true tags are each internally consistent (active-vs-active-avg, true-vs-true-avg).
+  // Concentration level (Below average / Average / Above average) — pct vs the average of its OWN
+  // lens, so the active and true tags are each internally consistent (active-vs-active-avg,
+  // true-vs-true-avg). Returns the level word + colors; the caller appends the number + unit.
   function concTag(pct, avg) {
-    if (avg > 0 && pct > avg * 1.5) return { label: 'Heavy', fg: '#A32D2D', bg: '#FCEBEB' };
-    if (avg > 0 && pct < avg * 0.5) return { label: 'Light', fg: '#185FA5', bg: '#E6F1FB' };
-    return { label: 'Balanced', fg: '#5F5E5A', bg: '#F1EFE8' };
+    if (avg > 0 && pct > avg * 1.5) return { label: 'Above average', fg: '#A32D2D', bg: '#FCEBEB' };
+    if (avg > 0 && pct < avg * 0.5) return { label: 'Below average', fg: '#185FA5', bg: '#E6F1FB' };
+    return { label: 'Average', fg: '#5F5E5A', bg: '#F1EFE8' };
   }
   // Picks tag (Beating / Trailing / Too few / No data) from the matured-aware verdict alpha + count.
   function picksTag(verdictAlpha, verdictN) {
@@ -4333,7 +4334,7 @@ function renderThemeIntel() {
     const incidPrefix = r.incidentalFloor ? '≥' : '';
     const alphaStr = r.verdictAlpha === null ? '—' : (r.verdictAlpha >= 0 ? '+' : '') + fmtDollarCompact(r.verdictAlpha);
     const alphaColor = r.verdictAlpha === null ? 'var(--color-text-tertiary)' : r.verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-    return `<div class="intel-row" data-key="${themeKey}" onclick="toggleIntelRow('${themeKey}')" style="display:grid;grid-template-columns:2fr 0.8fr 0.8fr 0.8fr 0.8fr 1.8fr 0.9fr;gap:0;align-items:center;padding:8px 10px;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer">
+    return `<div class="intel-row" data-key="${themeKey}" onclick="toggleIntelRow('${themeKey}')" style="display:grid;grid-template-columns:1.8fr 0.7fr 0.7fr 0.7fr 0.7fr 2.7fr 0.8fr;gap:0;align-items:center;padding:8px 10px;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer">
       <div>
         <div style="display:flex;align-items:center;gap:7px"><span style="width:9px;height:9px;border-radius:2px;background:${color};flex-shrink:0"></span><span style="font-weight:500">${esc(r.theme)}</span><span class="intel-caret" id="caret-${themeKey}" style="color:var(--color-text-tertiary);font-size:13px">›</span></div>
         <div style="font-size:10px;color:var(--color-text-tertiary);margin:3px 0 0 16px;letter-spacing:0.02em">${esc(tickersLine)}</div>
@@ -4343,8 +4344,8 @@ function renderThemeIntel() {
       <div style="text-align:right;color:${r.incidentalPct > 0 ? '#BA7517' : 'var(--color-text-tertiary)'}">${incidPrefix}${r.incidentalPct.toFixed(1)}%</div>
       <div style="text-align:right;color:${alphaColor}">${alphaStr}</div>
       <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-end">
-        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">your picks</span><span style="font-size:9px;color:${wtActive.fg};background:${wtActive.bg};padding:1px 6px;border-radius:4px;font-weight:500;min-width:52px;text-align:center">${wtActive.label}</span></div>
-        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};background:${wtTrue.bg};padding:1px 6px;border-radius:4px;font-weight:500;min-width:52px;text-align:center">${wtTrue.label}</span></div>
+        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">your picks</span><span style="font-size:9px;color:${wtActive.fg};background:${wtActive.bg};padding:1px 7px;border-radius:4px;font-weight:500;white-space:nowrap">${wtActive.label} · ${r.allocPct.toFixed(1)}% of sleeve</span></div>
+        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};background:${wtTrue.bg};padding:1px 7px;border-radius:4px;font-weight:500;white-space:nowrap">${wtTrue.label} · ${truePrefix}${r.truePct.toFixed(1)}% of portfolio</span></div>
       </div>
       <div style="text-align:center"><span style="font-size:9px;color:${pk.fg};background:${pk.bg};padding:2px 7px;border-radius:4px;font-weight:500">${pk.label}</span></div>
     </div>
@@ -4364,7 +4365,7 @@ function renderThemeIntel() {
       <div style="font-size:11px;color:var(--color-text-tertiary)">Click a row to expand · sorted by ${sortKey === 'truePct' ? 'true exposure' : sortKey}</div>
       ${matToggle}
     </div>
-    <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:2fr 0.8fr 0.8fr 0.8fr 0.8fr 1.8fr 0.9fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
+    <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:1.8fr 0.7fr 0.7fr 0.7fr 0.7fr 2.7fr 0.8fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
       ${hdr('theme', 'Theme &amp; positions', '', 'left')}
       ${hdr('alloc', 'Alloc', '% sleeve', 'right')}
       ${hdr('truePct', 'True exp', '% port', 'right')}
