@@ -13174,7 +13174,11 @@ function computeThemeClusters() {
     const fw = nameThemeFundW[k];
     if (fw && Object.keys(fw).length) {
       const bestFund = Object.entries(fw).sort((a, b) => b[1] - a[1])[0][0];
-      return { label: clusterLabelForBench(bestFund), why: 'sits in ' + bestFund + ' (' + fw[bestFund].toFixed(1) + '%)', isBase: false, key: k };
+      // IMPORTANT wording: bestFund is the theme's BENCHMARK (the yardstick used to classify), NOT
+      // necessarily a fund the user holds. Saying "sits in QQQ" falsely implies they own QQQ. The
+      // honest statement: it's classified into this theme because it's a top benchmark constituent;
+      // whether they actually hold it comes from their OWN funds (VOO etc.), shown in true-exposure.
+      return { label: clusterLabelForBench(bestFund), why: 'classified here — top ' + bestFund + ' constituent (' + fw[bestFund].toFixed(1) + '% of that benchmark)', isBase: false, key: k };
     }
     return { label: '__BASE__', why: 'only a broad-index constituent — no theme signal', isBase: true, key: k };
   };
@@ -13343,8 +13347,8 @@ function clusterConfidenceFlag(nameRow, ctx) {
   const sorted = Object.entries(fw).sort((a, b) => b[1] - a[1]);
   const bestW = sorted[0][1];
   const fundsStr = sorted.map(([f, w]) => `${f} ${w.toFixed(1)}%`).join(', ');
-  if (clusterSet.size > 1) return `spans clusters — in ${fundsStr}; assigned by highest weight. Reassign if this belongs elsewhere.`;
-  if (bestW < 2.0) return `thin signal — only ${bestW.toFixed(1)}% of ${sorted[0][0]}. Assignment is a weak inference.`;
+  if (clusterSet.size > 1) return `spans themes — it's a constituent of multiple theme benchmarks (${fundsStr}); classified by the heaviest. These are benchmark weights used to classify, not funds you hold. Reassign if it belongs elsewhere.`;
+  if (bestW < 2.0) return `thin signal — only ${bestW.toFixed(1)}% of the ${sorted[0][0]} benchmark, so the theme classification is a weak inference (not a statement about what you hold).`;
   return null;
 }
 
