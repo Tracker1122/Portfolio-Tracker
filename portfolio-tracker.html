@@ -13451,7 +13451,6 @@ function renderThemeClusters() {
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
         Names grouped by theme — using your true exposure (direct + everything inside funds you hold, so a name like a mega-cap you only own via VOO still counts toward its theme). The <em>why</em> next to each name is the link (your tag, or which fund carries it). ${flagCount ? `<span style="color:#fbbf24">⚠ marks ${flagCount} low-confidence call${flagCount > 1 ? 's' : ''}</span> — names that span clusters or rest on a thin weight. Hit "Reassign names" to fix any.` : ''} This is structural co-movement (same theme/funds), <strong>not</strong> measured return correlation — a name can buck its block.
-        <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary)"><strong style="color:var(--color-text-secondary)">Reading each row:</strong> the <strong style="color:var(--color-text-secondary)">%</strong> is that theme's share of your total invested book (all themes + the diversified base sum to 100%) — i.e. how concentrated you are in it. The <strong style="color:var(--color-text-secondary)">$</strong> is the dollars of true exposure behind it (direct holdings + your share of it inside funds). So "Big Tech 36.9% · $216,172" means 36.9% of your book — $216k — moves with big tech.</div>
       </div>
 
       ${(() => {
@@ -13652,6 +13651,72 @@ function renderSectorPanel() {
 // gap), then by conviction (their weight in the fund, i.e. how much the fund's managers bet on it).
 // Performance shown is the THEME/benchmark's window return — NOT the stock's own return (which we
 // don't have and won't fake). Non-stock tickers (mutual funds, cash sweeps) are filtered out.
+// EXCEPTION: per-card "Fetch performance" button pulls each ticker's OWN 1Y return on demand (opt-in),
+// using the same direct Yahoo endpoint the rest of the app uses (no key, no worker). Still framed as
+// investigate-not-buy — a price change is not analysis.
+// ─────────────────────────────────────────────
+
+// Cache of fetched per-ticker 1Y returns, keyed by uppercased ticker, so results survive the
+// re-render that each fetch triggers. Value: number (percent) | 'err' | 'loading'.
+const discoveryPerf = {};
+
+// Fetch one ticker's trailing-1Y total return from the Yahoo chart endpoint already used app-wide.
+// Returns a percent number, or throws. We take the first and last valid daily close over range=1y.
+async function fetchTicker1yReturn(ticker) {
+  const url = `${PROXY_BASES[0]}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1y`;
+  const data = await yahooFetch(url);
+  const res = data && data.chart && data.chart.result && data.chart.result[0];
+  const closes = res && res.indicators && res.indicators.quote && res.indicators.quote[0] && res.indicators.quote[0].close;
+  if (!closes || !closes.length) throw new Error('no close data');
+  const valid = closes.filter(c => c !== null && c !== undefined);
+  if (valid.length < 2) throw new Error('insufficient data');
+  const first = valid[0], last = valid[valid.length - 1];
+  if (!first) throw new Error('bad first close');
+  return ((last - first) / first) * 100;
+}
+
+// Fetch performance for every ticker in ONE card (one button = one card's tickers, by design — keeps
+// request volume small and predictable). Sequential with a small delay to be polite to the endpoint;
+// each result updates its chip's slot live as it arrives, so you see progress rather than a frozen wait.
+async function fetchCardPerformance(tickersJson, btnId) {
+  let tickers;
+  try { tickers = JSON.parse(decodeURIComponent(tickersJson)); } catch (e) { return; }
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+  let ok = 0, fail = 0;
+  for (const t of tickers) {
+    const key = t.toUpperCase();
+    discoveryPerf[key] = 'loading';
+    updatePerfSlot(key);
+    try {
+      discoveryPerf[key] = await fetchTicker1yReturn(t);
+      ok++;
+    } catch (e) {
+      discoveryPerf[key] = 'err';
+      fail++;
+    }
+    updatePerfSlot(key);
+    await new Promise(r => setTimeout(r, 180)); // polite spacing between calls
+  }
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = fail ? `↻ Retry (${fail} failed)` : '✓ Fetched — refresh';
+  }
+}
+
+// Update a single chip's perf slot in place (no full re-render needed mid-fetch).
+function updatePerfSlot(key) {
+  document.querySelectorAll(`[data-perf-slot="${key}"]`).forEach(el => {
+    const v = discoveryPerf[key];
+    if (v === 'loading') { el.innerHTML = '<span style="color:var(--color-text-tertiary)">…</span>'; return; }
+    if (v === 'err') { el.innerHTML = '<span style="color:var(--color-text-tertiary)" title="Could not fetch — ticker may be unavailable on the data source">n/a</span>'; return; }
+    if (typeof v === 'number') {
+      const col = v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      el.innerHTML = `<span style="color:${col};font-weight:600" title="Trailing 1-year price return (fetched). Not a buy signal.">${v >= 0 ? '+' : ''}${v.toFixed(1)}% 1Y</span>`;
+    }
+  });
+}
+
 // ─────────────────────────────────────────────
 function renderThemeDiscovery() {
   const host = document.getElementById('theme-discovery');
@@ -13759,9 +13824,16 @@ function renderThemeDiscovery() {
     const sorted = Object.entries(c.inFunds).sort((a, b) => b[1] - a[1]);
     const [topFund, topW] = sorted[0];
     const moreNote = sorted.length > 1 ? `<span style="font-size:8px;color:var(--color-text-tertiary)" title="${esc(sorted.slice(1).map(([f, w]) => f + ' ' + w.toFixed(1) + '%').join(', '))}"> +${sorted.length - 1}</span>` : '';
+    const key = (c.display || '').toUpperCase();
+    const cached = discoveryPerf[key];
+    let perfInit = '';
+    if (cached === 'loading') perfInit = '<span style="color:var(--color-text-tertiary)">…</span>';
+    else if (cached === 'err') perfInit = '<span style="color:var(--color-text-tertiary)">n/a</span>';
+    else if (typeof cached === 'number') { const col = cached >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'; perfInit = `<span style="color:${col};font-weight:600">${cached >= 0 ? '+' : ''}${cached.toFixed(1)}% 1Y</span>`; }
     return `<div style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">
       <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${esc(c.display)}</span>
       <span style="font-size:8px;color:var(--color-text-tertiary)">${convictionPhrase(topFund, topW)}${moreNote}</span>
+      <span data-perf-slot="${esc(key)}" style="font-size:8px">${perfInit}</span>
     </div>`;
   };
 
@@ -13771,6 +13843,8 @@ function renderThemeDiscovery() {
     const gap = themePct[theme] ?? 0;
     const perf = themePerf(theme);
     const src = bucketSource(names);
+    const perfBtnId = 'perfbtn-' + theme.replace(/[^a-zA-Z0-9]/g, '');
+    const tickersEnc = encodeURIComponent(JSON.stringify(names.map(n => n.display)));
     const srcBadge = src.isNiche
       ? `<span style="font-size:8px;color:#34d399;background:rgba(52,211,153,0.12);padding:1px 6px;border-radius:var(--border-radius-sm);white-space:nowrap">niche find · ${esc(src.fund)}</span>`
       : `<span style="font-size:8px;color:var(--color-text-tertiary);background:var(--color-background-tertiary);padding:1px 6px;border-radius:var(--border-radius-sm);white-space:nowrap">broad fund · likely familiar</span>`;
@@ -13781,6 +13855,10 @@ function renderThemeDiscovery() {
           <span style="white-space:nowrap;font-size:9px;color:var(--color-text-tertiary)">theme 1Y ${fmtRet(perf)}</span>
         </summary>
         <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(tickerLine).join('')}</div>
+        <div style="margin-top:7px;display:flex;align-items:center;gap:8px">
+          <button id="${perfBtnId}" class="btn btn-sm" onclick="event.preventDefault();fetchCardPerformance('${tickersEnc}','${perfBtnId}')" style="font-size:9px">↡ Fetch 1Y performance (${names.length})</button>
+          <span style="font-size:8px;color:var(--color-text-tertiary);font-style:italic">fetched price return, not a buy signal</span>
+        </div>
       </details>`;
   };
 
