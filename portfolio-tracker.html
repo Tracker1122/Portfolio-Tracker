@@ -7299,6 +7299,10 @@ function qrRenderStockSwap() {
 // the fund being rotated into; `parsed` = that ETF's pasted holdings (ticker+weight).
 // Holds transient state so checkbox toggles can re-render without re-parsing.
 let qrRotationState = { parsed: [], etfTicker: '', candidates: [] };
+// Which overlapping direct names the user has checked to "rotate out" (trim into the ETF). The
+// Checkable Observations and AI payload read this so they reflect post-rotation intent, not a
+// naive double-up. Normalized tickers. Reset when a new candidate/ETF is loaded.
+let qrRotateChecked = new Set();
 
 function qrSimulateRotation(parsed, etfTicker, sellNormsSet) {
   // Proceeds from selling the checked direct positions, plus the estimated tax on doing so.
@@ -7450,6 +7454,16 @@ function qrRenderRotation() {
     const el = document.getElementById('qr-rot-' + c.norm);
     if (el && el.checked) checked.add(c.norm);
   });
+  qrRotateChecked = checked; // expose to observations + AI payload
+  // Re-render the Checkable Observations so they reflect the new rotation intent. The flags live in
+  // qr-flags-<id>; the rotation control belongs to the candidate currently in qrRotationState's view.
+  (function(){
+    const cand = (qrEditingId !== null && typeof qualityReviews !== 'undefined') ? qualityReviews.find(q => q.id === qrEditingId) : null;
+    if (cand && typeof renderQualityFlags === 'function') {
+      const fc = document.getElementById('qr-flags-' + cand.id);
+      if (fc) fc.innerHTML = renderQualityFlags(cand);
+    }
+  })();
   const checklist = candidates.map(c =>
     `<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;font-size:10px;cursor:pointer;color:var(--color-text-secondary)">
       <input type="checkbox" id="qr-rot-${c.norm}" ${checked.has(c.norm)?'checked':''} onchange="qrToggleRotation()" style="cursor:pointer">
@@ -7566,6 +7580,10 @@ function runQrHoldingsOverlap() {
     .filter(o => o.yourDirectValue > 0)
     .map(o => ({ norm: qrNormTicker(o.ticker), display: o.ticker, directValue: o.yourDirectValue }));
   qrRotationState = { parsed, etfTicker, candidates: rotCandidates };
+  // Drop any rotation intent for names no longer in this candidate's overlap set (prevents stale
+  // checks bleeding across candidates); keep checks that still apply.
+  const validNorms = new Set(rotCandidates.map(c => c.norm));
+  qrRotateChecked = new Set([...qrRotateChecked].filter(n => validNorms.has(n)));
   if (rotCandidates.length > 0) {
     html += `<div id="qr-rotation" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:8px"></div>`;
   }
@@ -7816,7 +7834,16 @@ function buildQualityFlags(candidate, holdingsOverlaps) {
 
   if (isEtf) {
     if (holdingsOverlaps && holdingsOverlaps.length > 0) {
-      flags.push({ level: 'caution', text: `Holds ${holdingsOverlaps.length} name(s) you own directly (${holdingsOverlaps.map(o=>o.ticker).join(', ')}) — partial double-up, not pure diversification.` });
+      // Respect the user's rotation intent: names they've checked to rotate OUT (trim into this ETF)
+      // are no longer a "double-up" — they're being replaced by the ETF. Split the overlap list.
+      const rotating = holdingsOverlaps.filter(o => qrRotateChecked.has(qrNormTicker(o.ticker)));
+      const keeping = holdingsOverlaps.filter(o => !qrRotateChecked.has(qrNormTicker(o.ticker)));
+      if (keeping.length > 0) {
+        flags.push({ level: 'caution', text: `Holds ${keeping.length} name(s) you own directly and plan to KEEP (${keeping.map(o=>o.ticker).join(', ')}) — partial double-up, not pure diversification.` });
+      }
+      if (rotating.length > 0) {
+        flags.push({ level: 'info', text: `You've marked ${rotating.length} overlapping name(s) to rotate OUT into this ETF (${rotating.map(o=>o.ticker).join(', ')}) — this is a rotation, not a double-up, for those names. (See the rotation hypothetical for the tax + true-exposure impact: selling direct and rebuying via the ETF often barely moves real exposure.)` });
+      }
     }
     if (f.expense) {
       const exp = num(f.expense);
@@ -7999,7 +8026,20 @@ function buildQrAiPrompt(candidate) {
   if (candidate.cachedHoldings && Array.isArray(candidate.cachedHoldings.parsed)) overlaps = computeHoldingsOverlap(candidate.cachedHoldings.parsed);
   else if (f.holdingsTop) { const r = parseHoldings(f.holdingsTop); overlaps = computeHoldingsOverlap(r.parsed); }
   if (candidate.type === 'etf') {
-    computed.push(overlaps.length ? `Direct-holding overlap: this ETF holds ${overlaps.map(o=>o.ticker).join(', ')}, which the user owns individually.` : `No direct-holding overlap detected with the user's individual positions.`);
+    if (overlaps.length) {
+      const rotating = overlaps.filter(o => qrRotateChecked.has(qrNormTicker(o.ticker)));
+      const keeping = overlaps.filter(o => !qrRotateChecked.has(qrNormTicker(o.ticker)));
+      let line = `Direct-holding overlap: this ETF holds ${overlaps.map(o=>o.ticker).join(', ')}, which the user owns individually.`;
+      if (rotating.length) {
+        line += ` IMPORTANT INTENT: the user has marked ${rotating.map(o=>o.ticker).join(', ')} to ROTATE OUT — i.e. they intend to TRIM/SELL these direct positions and replace that exposure with this ETF. Treat the purchase as a rotation for those names, NOT a double-up. Reason about whether rotating direct→ETF is worth the tax and loss of per-name control, given the rotation often barely changes true exposure (the ETF and VOO still hold these names).`;
+      }
+      if (keeping.length) {
+        line += ` The user plans to KEEP ${keeping.map(o=>o.ticker).join(', ')} — for these, the ETF does compound existing direct exposure.`;
+      }
+      computed.push(line);
+    } else {
+      computed.push(`No direct-holding overlap detected with the user's individual positions.`);
+    }
     computed.push(`(Holdings/weights are from Alpha Vantage — approximate, possibly stale by days, no as-of date.)`);
     if (f.navReturn1y && f.priceReturn1y) {
       const g = Math.abs((parseFloat(f.navReturn1y)||0) - (parseFloat(f.priceReturn1y)||0));
