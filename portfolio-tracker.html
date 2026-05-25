@@ -13082,9 +13082,135 @@ function renderThemeUniverse() {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    <div id="theme-diversification-analysis" style="margin-top:18px"></div>
     <div id="theme-bench-holdings-panel" style="margin-top:18px"></div>
   `;
+  renderThemeDiversification();
   renderThemeBenchmarkPanel();
+}
+
+// ─────────────────────────────────────────────
+// Phase 2: diversification analysis — concentration (benchmark-deduped) + overlap proxy.
+// Two honest halves shown side by side, NOT multiplied into a composite:
+//   • Concentration: exact. Theme exposure with shared-benchmark themes collapsed (SMH backs both
+//     Semiconductors and AI Infrastructure, so they're ONE bet, not two).
+//   • Overlap: a structural proxy bounded by paste coverage — a floor, not a complete figure.
+// ─────────────────────────────────────────────
+function renderThemeDiversification() {
+  const host = document.getElementById('theme-diversification-analysis');
+  if (!host) return;
+
+  // ---- Concentration, benchmark-deduped ----
+  // Group owned exposure by BENCHMARK (not theme name), so themes sharing a benchmark merge.
+  const open = positions.filter(p => !p.closed && p.ticker);
+  const totalActive = open.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const { owned } = themeBenchmarksForCorrelation(); // already benchmark-grouped, owned, exposure desc
+  const concRows = owned.filter(b => b.exposure > 0).map(b => ({
+    ticker: b.ticker,
+    themes: b.themes,
+    dollars: b.exposure,
+    pct: totalActive > 0 ? (b.exposure / totalActive) * 100 : 0,
+    merged: b.themes.length > 1
+  }));
+  const topBench = concRows[0];
+
+  // ---- Overlap pairs among owned theme benchmarks ----
+  const benches = owned.map(b => b.ticker);
+  const pairs = [];
+  let anyMissing = false, gldBlank = false;
+  for (let i = 0; i < benches.length; i++) {
+    for (let j = i + 1; j < benches.length; j++) {
+      const r = themeBenchmarkOverlap(benches[i], benches[j]);
+      // Coverage confidence = lower of the two funds' pasted coverage (overlap can't exceed it).
+      const hA = benchmarkHoldings(benches[i]);
+      const hB = benchmarkHoldings(benches[j]);
+      const covA = hA ? Object.values(hA.weights).reduce((s, w) => s + (w || 0), 0) : 0;
+      const covB = hB ? Object.values(hB.weights).reduce((s, w) => s + (w || 0), 0) : 0;
+      pairs.push({ a: benches[i], b: benches[j], ...r, minCov: Math.min(covA, covB) });
+      if (!r.computable) { anyMissing = true; if (!r.haveA || !r.haveB) { /* one side blank */ } }
+    }
+  }
+  const overlapping = pairs.filter(p => p.computable && p.overlapPct > 0).sort((a, b) => b.overlapPct - a.overlapPct);
+  const cleanZeros = pairs.filter(p => p.computable && p.overlapPct === 0);
+  const notComputable = pairs.filter(p => !p.computable);
+
+  const sgnPct = n => n.toFixed(1) + '%';
+  const covLabel = c => c >= 75 ? '' : c >= 40
+    ? ` <span style="color:var(--color-text-tertiary)" title="Both funds' pasted holdings cover ~${c.toFixed(0)}% — overlap is a floor; unpasted tail may add more">·partial coverage</span>`
+    : ` <span style="color:#fbbf24" title="One fund has thin pasted coverage (~${c.toFixed(0)}%) — this overlap is nearly blind, treat as unreliable">·low coverage ⚠</span>`;
+
+  // Build the ranked overlapping-pairs list with per-name detail (expandable).
+  const pairRows = overlapping.map((p, idx) => {
+    const namesDetail = p.sharedNames.map(n =>
+      `<div style="display:flex;justify-content:space-between;gap:10px;font-size:9px;color:var(--color-text-secondary);padding:1px 0">
+        <span><strong style="color:var(--color-text-primary)">${esc(n.ticker)}</strong></span>
+        <span>${n.wA.toFixed(1)}% ${esc(p.a)} / ${n.wB.toFixed(1)}% ${esc(p.b)} <span style="color:var(--color-text-tertiary)">→ counts ${n.min.toFixed(1)}%</span></span>
+      </div>`).join('');
+    return `
+      <details style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px"${idx === 0 ? ' open' : ''}>
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center;list-style:none">
+          <span style="font-size:11px;color:var(--color-text-primary)"><strong>${esc(p.a)} ↔ ${esc(p.b)}</strong> <span style="color:var(--color-text-tertiary);font-size:9px">${p.sharedNames.length} shared name${p.sharedNames.length > 1 ? 's' : ''}</span>${covLabel(p.minCov)}</span>
+          <strong style="font-size:12px;color:${p.overlapPct >= 15 ? '#fbbf24' : 'var(--color-text-secondary)'}">${sgnPct(p.overlapPct)}</strong>
+        </summary>
+        <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary)">${namesDetail}
+          <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Overlap credits the smaller weight per name (you can only doubly-own up to the lesser slice). The two raw weights show which fund leans harder on it.</div>
+        </div>
+      </details>`;
+  }).join('');
+
+  const zerosLine = cleanZeros.length
+    ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">${cleanZeros.length} pair${cleanZeros.length > 1 ? 's' : ''} share no names in your pasted holdings (clean separation): ${cleanZeros.map(p => esc(p.a) + '↔' + esc(p.b)).join(', ')}.</div>`
+    : '';
+  const missingLine = notComputable.length
+    ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">${notComputable.length} pair${notComputable.length > 1 ? 's' : ''} can't be computed — a fund has no pasted holdings (e.g. GLD is gold, nothing to decompose): ${notComputable.map(p => esc(p.a) + '↔' + esc(p.b)).join(', ')}.</div>`
+    : '';
+
+  // Full grid (collapsible) — every pair, including zeros and not-computable, for completeness.
+  const gridPair = (p) => {
+    if (!p.computable) return `<span style="color:var(--color-text-tertiary)" title="no holdings for one side">—</span>`;
+    if (p.overlapPct === 0) return `<span style="color:var(--color-text-tertiary)">0%</span>`;
+    return `<span style="color:${p.overlapPct >= 15 ? '#fbbf24' : 'var(--color-text-secondary)'}">${sgnPct(p.overlapPct)}</span>`;
+  };
+  const gridLookup = {};
+  pairs.forEach(p => { gridLookup[p.a + '|' + p.b] = p; gridLookup[p.b + '|' + p.a] = p; });
+  const gridHead = `<tr><th style="padding:2px 5px"></th>${benches.map(t => `<th style="padding:2px 5px;font-size:8px;color:var(--color-text-tertiary)">${esc(t)}</th>`).join('')}</tr>`;
+  const gridBody = benches.map(rt => `<tr><td style="padding:2px 5px;font-size:8px;color:var(--color-text-tertiary);font-weight:700">${esc(rt)}</td>${benches.map(ct => {
+    if (rt === ct) return `<td style="padding:2px 5px;text-align:center;color:var(--color-border-tertiary)">·</td>`;
+    return `<td style="padding:2px 5px;text-align:center;font-size:9px">${gridPair(gridLookup[rt + '|' + ct])}</td>`;
+  }).join('')}</tr>`).join('');
+
+  host.innerHTML = `
+    <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:8px">Diversification read — concentration &amp; overlap</div>
+
+      <div style="display:grid;grid-template-columns:1fr;gap:12px">
+        <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 12px">
+          <div style="font-size:9px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:6px">Concentration (benchmark-deduped · exact)</div>
+          ${concRows.map(r => `
+            <div style="display:flex;justify-content:space-between;gap:10px;font-size:10px;padding:2px 0;color:var(--color-text-primary)">
+              <span>${esc(r.ticker)} <span style="color:var(--color-text-tertiary);font-size:9px">${esc(r.themes.join(' + '))}${r.merged ? ' ⚠ merged' : ''}</span></span>
+              <span><strong style="color:${r.pct >= 25 ? '#fbbf24' : 'var(--color-text-secondary)'}">${r.pct.toFixed(1)}%</strong> <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(r.dollars)}</span></span>
+            </div>`).join('')}
+          ${topBench && topBench.merged ? `<div style="font-size:9px;color:#fbbf24;margin-top:6px;line-height:1.5">⚠ <strong>${esc(topBench.ticker)}</strong> backs ${esc(topBench.themes.join(' and '))} — counted as two themes they look like ${topBench.themes.map(t => { const ex = computeThemeExposure(t); return totalActive > 0 ? (ex.dollars / totalActive * 100).toFixed(1) + '%' : '0%'; }).join(' + ')}, but they're <strong>one benchmark</strong>, so it's really ${topBench.pct.toFixed(1)}% in a single bet — your largest exposure.</div>` : ''}
+        </div>
+
+        <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 12px">
+          <div style="font-size:9px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:3px">Theme overlap (structural proxy · a floor, not measured correlation)</div>
+          <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:7px">How much your benchmarks hold the <em>same names</em>, weighted by size — a stand-in for "these move together." Bounded by your pasted holdings, so it's a floor: real overlap could be higher in names below your paste cutoff.</div>
+          ${overlapping.length ? pairRows : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No overlapping pairs in your pasted holdings yet.</div>'}
+          ${zerosLine}
+          ${missingLine}
+          ${pairs.some(p => p.computable) ? `
+          <details style="margin-top:8px">
+            <summary style="font-size:9px;color:var(--color-text-tertiary);cursor:pointer">Show full grid (all pairs)</summary>
+            <div style="overflow-x:auto;margin-top:6px"><table style="border-collapse:collapse;font-size:9px">${gridHead}${gridBody}</table></div>
+            <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px">— = a fund has no pasted holdings. · = same fund.</div>
+          </details>` : ''}
+        </div>
+      </div>
+
+      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Concentration is exact (from your positions). Overlap is a structural estimate from pasted holdings — not measured return correlation, and not added to the concentration % (that would double-count). They're two lenses on the same question: is your book secretly one bet?</div>
+    </div>`;
 }
 
 // Dedicated paste panel for benchmark holdings — the data feed for the structural-overlap proxy.
