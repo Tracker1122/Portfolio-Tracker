@@ -13502,6 +13502,17 @@ function renderSectorPanel() {
   const data = computeSectorClusters();
   const fmtD = (n) => fmtDollarWhole(n);
 
+  // Build a name -> theme-cluster lookup from the moves-together engine, so the sector tagger can show
+  // BOTH lenses side by side. Theme and sector are ALLOWED to differ (how-it-moves vs what-it-is), so
+  // we don't flag divergence as an error — we just surface both so you can eyeball pairings that look
+  // wrong to YOU (e.g. a name you'd expect to match but doesn't). Show, don't assert.
+  const nameTheme = {};
+  try {
+    const cl = computeThemeClusters();
+    cl.clusters.forEach(c => c.names.forEach(n => { nameTheme[n.key] = c.label; }));
+    (cl.base && cl.base.names || []).forEach(n => { nameTheme[n.key] = '(diversified base)'; });
+  } catch (e) {}
+
   // The sector <select> for a name, with each option's definition as a title (hover) tooltip.
   const sectorSelect = (key, currentSector) => `
     <select onchange="setSectorTag('${esc(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer">
@@ -13567,9 +13578,9 @@ function renderSectorPanel() {
     return '';
   };
 
-  const tagLine = (r) => { const e = entryFor(r.key); const showReason = e && e.src === 'ai-lo'; return `<div style="padding:3px 0;border-bottom:1px solid var(--color-border-tertiary)">
+  const tagLine = (r) => { const e = entryFor(r.key); const showReason = e && e.src === 'ai-lo'; const thm = nameTheme[r.key]; return `<div style="padding:3px 0;border-bottom:1px solid var(--color-border-tertiary)">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:10px">
-      <span style="color:var(--color-text-primary)">${redDot(r)}${esc(r.display)} <span style="font-size:8px;color:var(--color-text-tertiary)">${fmtD(r.total)}</span> ${srcBadge(e, r.key)}</span>
+      <span style="color:var(--color-text-primary)">${redDot(r)}${esc(r.display)} <span style="font-size:8px;color:var(--color-text-tertiary)">${fmtD(r.total)}</span> ${srcBadge(e, r.key)}${thm ? ` <span style="font-size:8px;color:var(--color-text-tertiary)" title="This name's moves-together theme. Theme (how it trades) and sector (what it is) can legitimately differ — shown so you can spot pairings that look wrong to you.">· theme: ${esc(thm)}</span>` : ''}</span>
       ${sectorSelect(r.key, e ? e.sector : null)}
     </div>
     ${showReason ? `<div style="font-size:8px;color:#fbbf24;padding:1px 0 0 2px;line-height:1.4">↳ ${esc(aiVerifyReason(r.key))}</div>` : ''}
