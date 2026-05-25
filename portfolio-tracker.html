@@ -2214,7 +2214,6 @@ let spxLiveDate = null;
 let polygonKey = '';
 let avWorkerUrl = ''; // Cloudflare worker base URL that proxies Alpha Vantage ETF_PROFILE (key stays server-side)
 let aiWorkerUrl = ''; // Cloudflare worker base URL that proxies the Anthropic Messages API (key stays server-side; CORS fix)
-let priceWorkerUrl = ''; // Cloudflare worker base URL that proxies Yahoo Finance (adds CORS header GitHub Pages needs). Calls <priceWorkerUrl>/yahoo?url=<encoded yahoo url>. Empty = direct call (works locally, blocked on Pages).
 let saveTimeout = null;
 let cashBuckets = { Taxable: 0, IRA: 0 };
 let cashLedger = [];
@@ -2477,23 +2476,8 @@ const PROXY_BASES = [
   'https://query2.finance.yahoo.com'
 ];
 
-async function yahooFetch(url, _attempt) {
-  // Yahoo doesn't send CORS headers, so direct browser calls are blocked from GitHub Pages. If a
-  // price-proxy worker is configured, route through it (it fetches server-side and adds the header).
-  // No worker set → direct call (works when running locally; fails on Pages — that's the CORS wall).
-  if (!priceWorkerUrl) loadPriceWorkerUrl();
-  const fetchUrl = priceWorkerUrl ? `${priceWorkerUrl}/yahoo?url=${encodeURIComponent(url)}` : url;
-  const resp = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } });
-  // 429 = rate limited. Back off and retry (up to 3 attempts, increasing delay) rather than failing —
-  // free Yahoo/worker tiers throttle bursts, so a brief wait usually clears it.
-  if (resp.status === 429) {
-    const attempt = _attempt || 0;
-    if (attempt < 3) {
-      await new Promise(r => setTimeout(r, 700 * (attempt + 1))); // 0.7s, 1.4s, 2.1s
-      return yahooFetch(url, attempt + 1);
-    }
-    throw new Error('rate limited (429) — wait a moment and retry');
-  }
+async function yahooFetch(url) {
+  const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
@@ -6796,13 +6780,6 @@ function loadAiWorkerUrl() {
 function saveAiWorkerUrl(u) {
   aiWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
   try { localStorage.setItem('ai_worker_url', aiWorkerUrl); } catch(e) {}
-}
-function loadPriceWorkerUrl() {
-  try { const u = localStorage.getItem('price_worker_url'); if (u) priceWorkerUrl = u; } catch(e) {}
-}
-function savePriceWorkerUrl(u) {
-  priceWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
-  try { localStorage.setItem('price_worker_url', priceWorkerUrl); } catch(e) {}
 }
 
 // Normalize an Alpha Vantage ETF_PROFILE response into the common shape.
@@ -13672,71 +13649,104 @@ function renderSectorPanel() {
 // aid ("investigate these"), explicitly NOT a buy recommendation and NOT stock analysis.
 // Ranking = diversification value: names in themes you're LIGHTEST in rank first (filling a real
 // gap), then by conviction (their weight in the fund, i.e. how much the fund's managers bet on it).
-// Performance shown is the THEME/benchmark's window return — NOT the stock's own return (which we
-// don't have and won't fake). Non-stock tickers (mutual funds, cash sweeps) are filtered out.
-// EXCEPTION: per-card "Fetch performance" button pulls each ticker's OWN 1Y return on demand (opt-in),
-// using the same direct Yahoo endpoint the rest of the app uses (no key, no worker). Still framed as
-// investigate-not-buy — a price change is not analysis.
+// PER-CHIP 1Y RETURN: click a name to fetch its OWN trailing-1Y price return via Polygon (your key,
+// same infra as Get Benchmarks — Polygon sends CORS headers, no worker needed). Per-click (not bulk)
+// because Polygon's free tier is ~5 calls/min and a real return costs 2 calls — so we spend the
+// budget only on names you're actually curious about. Still investigate-not-buy: a price move is not analysis.
 // ─────────────────────────────────────────────
 
-// Cache of fetched per-ticker 1Y returns, keyed by uppercased ticker, so results survive the
-// re-render that each fetch triggers. Value: number (percent) | 'err' | 'loading'.
+// Cache of fetched per-ticker performance, keyed by uppercased ticker, surviving re-renders.
+// Value: {m1:number|null, y1:number|null, err?:'rate'|'nokey'|'err'} | 'loading'.
 const discoveryPerf = {};
+const discoverySelected = new Set(); // tickers the user has picked (max 5) to fetch richer data for
+let _lastPolyFetch = 0; // timestamp guard so rapid calls self-space a little
+const DISCOVERY_MAX_SELECT = 5;
 
-// Fetch one ticker's trailing-1Y total return from the Yahoo chart endpoint already used app-wide.
-// Returns a percent number, or throws. We take the first and last valid daily close over range=1y.
-async function fetchTicker1yReturn(ticker) {
-  const url = `${PROXY_BASES[0]}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1y`;
-  const data = await yahooFetch(url);
-  const res = data && data.chart && data.chart.result && data.chart.result[0];
-  const closes = res && res.indicators && res.indicators.quote && res.indicators.quote[0] && res.indicators.quote[0].close;
-  if (!closes || !closes.length) throw new Error('no close data');
-  const valid = closes.filter(c => c !== null && c !== undefined);
-  if (valid.length < 2) throw new Error('insufficient data');
-  const first = valid[0], last = valid[valid.length - 1];
-  if (!first) throw new Error('bad first close');
-  return ((last - first) / first) * 100;
+// Toggle a ticker into/out of the selection (cap at 5). Re-renders to update highlight + counter.
+function toggleDiscoverySelect(ticker) {
+  const key = ticker.toUpperCase();
+  if (discoverySelected.has(key)) discoverySelected.delete(key);
+  else {
+    if (discoverySelected.size >= DISCOVERY_MAX_SELECT) return; // at cap — ignore
+    discoverySelected.add(key);
+  }
+  renderThemeDiscovery();
 }
 
-// Fetch performance for every ticker in ONE card (one button = one card's tickers, by design — keeps
-// request volume small and predictable). Sequential with a small delay to be polite to the endpoint;
-// each result updates its chip's slot live as it arrives, so you see progress rather than a frozen wait.
-async function fetchCardPerformance(tickersJson, btnId) {
-  let tickers;
-  try { tickers = JSON.parse(decodeURIComponent(tickersJson)); } catch (e) { return; }
-  const btn = document.getElementById(btnId);
+// Polygon helper: one ticker's close on a specific date (walks back a few days for weekends/holidays).
+async function polyCloseOnOrBefore(ticker, daysBack) {
+  const t = ticker.toUpperCase();
+  for (let back = daysBack; back <= daysBack + 7; back++) {
+    const d = new Date(); d.setDate(d.getDate() - back);
+    const ds = d.toISOString().slice(0, 10);
+    const res = await fetch(`https://api.polygon.io/v1/open-close/${t}/${ds}?adjusted=true&apiKey=${polygonKey}`);
+    if (res.status === 429) throw new Error('rate');
+    if (!res.ok) continue;
+    const data = await res.json();
+    if (data.status === 'OK' && typeof data.close === 'number') return data.close;
+  }
+  return null;
+}
+
+// Fetch 1-month AND 1-year return for one ticker, sharing a SINGLE latest-close call across both
+// windows (3 calls total: latest + month-ago + year-ago, not 4). This is the efficiency that lets
+// 5 names fit a tight budget.
+async function fetchTickerWindows(ticker) {
+  if (!polygonKey) loadPolygonKey();
+  if (!polygonKey) throw new Error('nokey');
+  const t = ticker.toUpperCase();
+  const prevRes = await fetch(`https://api.polygon.io/v2/aggs/ticker/${t}/prev?adjusted=true&apiKey=${polygonKey}`);
+  if (prevRes.status === 429) throw new Error('rate');
+  if (!prevRes.ok) throw new Error('err');
+  const prevData = await prevRes.json();
+  const latest = prevData.results && prevData.results[0] && prevData.results[0].c;
+  if (!latest) throw new Error('err');
+  const monthAgo = await polyCloseOnOrBefore(t, 30);
+  const yearAgo = await polyCloseOnOrBefore(t, 365);
+  return {
+    m1: monthAgo ? ((latest - monthAgo) / monthAgo) * 100 : null,
+    y1: yearAgo ? ((latest - yearAgo) / yearAgo) * 100 : null,
+  };
+}
+
+// Fetch all selected tickers sequentially, updating each chip live. Self-spaces to respect ~5/min.
+async function fetchSelectedDiscovery() {
+  const tickers = [...discoverySelected];
+  if (!tickers.length) return;
+  const btn = document.getElementById('disc-fetch-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
-  let ok = 0, fail = 0;
-  for (const t of tickers) {
-    const key = t.toUpperCase();
-    discoveryPerf[key] = 'loading';
-    updatePerfSlot(key);
+  for (const key of tickers) {
+    if (typeof discoveryPerf[key] === 'object' && discoveryPerf[key] && !discoveryPerf[key].err) { continue; } // cached, skip
+    discoveryPerf[key] = 'loading'; updatePerfSlot(key);
+    const since = Date.now() - _lastPolyFetch;
+    if (since < 400) await new Promise(r => setTimeout(r, 400 - since));
+    _lastPolyFetch = Date.now();
     try {
-      discoveryPerf[key] = await fetchTicker1yReturn(t);
-      ok++;
+      discoveryPerf[key] = await fetchTickerWindows(key);
     } catch (e) {
-      discoveryPerf[key] = 'err';
-      fail++;
+      discoveryPerf[key] = { err: e.message === 'rate' ? 'rate' : e.message === 'nokey' ? 'nokey' : 'err' };
     }
     updatePerfSlot(key);
-    await new Promise(r => setTimeout(r, 450)); // polite spacing between calls (wider to avoid 429 bursts)
   }
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = fail ? `↻ Retry (${fail} failed)` : '✓ Fetched — refresh';
-  }
+  if (btn) { btn.disabled = false; btn.textContent = `↻ Fetch ${tickers.length} selected (1M + 1Y)`; }
 }
 
-// Update a single chip's perf slot in place (no full re-render needed mid-fetch).
+// Render one window's value as colored text, or a dash.
+function fmtWin(v, label) {
+  if (v === null || v === undefined) return `<span style="color:var(--color-text-tertiary)">${label} —</span>`;
+  const col = v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  return `<span style="color:${col};font-weight:600">${label} ${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
+}
+
+// Update a single chip's perf slot in place.
 function updatePerfSlot(key) {
   document.querySelectorAll(`[data-perf-slot="${key}"]`).forEach(el => {
     const v = discoveryPerf[key];
     if (v === 'loading') { el.innerHTML = '<span style="color:var(--color-text-tertiary)">…</span>'; return; }
-    if (v === 'err') { el.innerHTML = '<span style="color:var(--color-text-tertiary)" title="Could not fetch — ticker may be unavailable on the data source">n/a</span>'; return; }
-    if (typeof v === 'number') {
-      const col = v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-      el.innerHTML = `<span style="color:${col};font-weight:600" title="Trailing 1-year price return (fetched). Not a buy signal.">${v >= 0 ? '+' : ''}${v.toFixed(1)}% 1Y</span>`;
-    }
+    if (v && v.err === 'rate') { el.innerHTML = '<span style="color:#fbbf24" title="Polygon rate limit (free tier ~5/min) — wait a moment and fetch again">rate · retry</span>'; return; }
+    if (v && v.err === 'nokey') { el.innerHTML = '<span style="color:#fbbf24" title="Set your Polygon key via Get Benchmarks first">need key</span>'; return; }
+    if (v && v.err) { el.innerHTML = '<span style="color:var(--color-text-tertiary)" title="Could not fetch — ticker may be unavailable on Polygon">n/a</span>'; return; }
+    if (v && typeof v === 'object') { el.innerHTML = `${fmtWin(v.m1, '1M')} · ${fmtWin(v.y1, '1Y')}`; }
   });
 }
 
@@ -13749,6 +13759,8 @@ function renderThemeDiscovery() {
   const totalBook = trueRows.reduce((s, r) => s + r.total, 0);
   const ownedTrue = {};
   trueRows.forEach(r => { ownedTrue[qrCanonical(r.display).key] = r.total; });
+
+
 
   // Theme exposure % per theme, for gap-weighting.
   const benchTheme = {}; // FUND -> theme
@@ -13849,12 +13861,16 @@ function renderThemeDiscovery() {
     const moreNote = sorted.length > 1 ? `<span style="font-size:8px;color:var(--color-text-tertiary)" title="${esc(sorted.slice(1).map(([f, w]) => f + ' ' + w.toFixed(1) + '%').join(', '))}"> +${sorted.length - 1}</span>` : '';
     const key = (c.display || '').toUpperCase();
     const cached = discoveryPerf[key];
-    let perfInit = '';
+    const selected = discoverySelected.has(key);
+    let perfInit = '<span style="color:var(--color-text-tertiary);font-size:8px">select →</span>';
     if (cached === 'loading') perfInit = '<span style="color:var(--color-text-tertiary)">…</span>';
-    else if (cached === 'err') perfInit = '<span style="color:var(--color-text-tertiary)">n/a</span>';
-    else if (typeof cached === 'number') { const col = cached >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'; perfInit = `<span style="color:${col};font-weight:600">${cached >= 0 ? '+' : ''}${cached.toFixed(1)}% 1Y</span>`; }
-    return `<div style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">
-      <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${esc(c.display)}</span>
+    else if (cached && cached.err === 'rate') perfInit = '<span style="color:#fbbf24">rate · retry</span>';
+    else if (cached && cached.err === 'nokey') perfInit = '<span style="color:#fbbf24">need key</span>';
+    else if (cached && cached.err) perfInit = '<span style="color:var(--color-text-tertiary)">n/a</span>';
+    else if (cached && typeof cached === 'object') perfInit = `${fmtWin(cached.m1, '1M')} · ${fmtWin(cached.y1, '1Y')}`;
+    const atCap = discoverySelected.size >= DISCOVERY_MAX_SELECT && !selected;
+    return `<div onclick="toggleDiscoverySelect('${esc(key)}')" title="${atCap ? '5 selected — deselect one to add another' : 'Click to ' + (selected ? 'deselect' : 'select for fetch')}" style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:${selected ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)'};border:1px solid ${selected ? 'var(--color-accent)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);cursor:${atCap ? 'not-allowed' : 'pointer'};${atCap ? 'opacity:0.5' : ''}">
+      <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${selected ? '✓ ' : ''}${esc(c.display)}</span>
       <span style="font-size:8px;color:var(--color-text-tertiary)">${convictionPhrase(topFund, topW)}${moreNote}</span>
       <span data-perf-slot="${esc(key)}" style="font-size:8px">${perfInit}</span>
     </div>`;
@@ -13866,8 +13882,6 @@ function renderThemeDiscovery() {
     const gap = themePct[theme] ?? 0;
     const perf = themePerf(theme);
     const src = bucketSource(names);
-    const perfBtnId = 'perfbtn-' + theme.replace(/[^a-zA-Z0-9]/g, '');
-    const tickersEnc = encodeURIComponent(JSON.stringify(names.map(n => n.display)));
     const srcBadge = src.isNiche
       ? `<span style="font-size:8px;color:#34d399;background:rgba(52,211,153,0.12);padding:1px 6px;border-radius:var(--border-radius-sm);white-space:nowrap">niche find · ${esc(src.fund)}</span>`
       : `<span style="font-size:8px;color:var(--color-text-tertiary);background:var(--color-background-tertiary);padding:1px 6px;border-radius:var(--border-radius-sm);white-space:nowrap">broad fund · likely familiar</span>`;
@@ -13878,10 +13892,6 @@ function renderThemeDiscovery() {
           <span style="white-space:nowrap;font-size:9px;color:var(--color-text-tertiary)">theme 1Y ${fmtRet(perf)}</span>
         </summary>
         <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(tickerLine).join('')}</div>
-        <div style="margin-top:7px;display:flex;align-items:center;gap:8px">
-          <button id="${perfBtnId}" class="btn btn-sm" onclick="event.preventDefault();fetchCardPerformance('${tickersEnc}','${perfBtnId}')" style="font-size:9px">↡ Fetch 1Y performance (${names.length})</button>
-          <span style="font-size:8px;color:var(--color-text-tertiary);font-style:italic">fetched price return, not a buy signal</span>
-        </div>
       </details>`;
   };
 
@@ -13898,18 +13908,14 @@ function renderThemeDiscovery() {
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
       <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Discovery — ideas hiding in your funds <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(investigate, not buy)</span></div>
       <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
-        Names inside the funds you've pasted that you <strong>don't own</strong>, in themes you're lightest in. <span style="color:#34d399">Niche-fund finds</span> (from small-cap/thematic ETFs) lead — those are the names you likely haven't seen. <span style="color:var(--color-text-tertiary)">Broad-fund buckets</span> (sector ETFs full of household names) are dimmed below. Each name shows how heavily its fund bets on it — a <em>top holding</em> in a specialist fund is a stronger signal than a tail position. <strong style="color:var(--color-text-secondary)">Candidates to investigate — not a buy signal, not stock analysis.</strong>
+        Names inside the funds you've pasted that you <strong>don't own</strong>, in themes you're lightest in. <span style="color:#34d399">Niche-fund finds</span> (from small-cap/thematic ETFs) lead — those are the names you likely haven't seen. <span style="color:var(--color-text-tertiary)">Broad-fund buckets</span> (sector ETFs full of household names) are dimmed below. Each name shows how heavily its fund bets on it — a <em>top holding</em> in a specialist fund is a stronger signal than a tail position. <strong style="color:var(--color-text-secondary)">Candidates to investigate — not a buy signal, not stock analysis.</strong> <span style="color:var(--color-text-tertiary)">Select up to 5 names (click), then fetch their 1-month + 1-year returns (Polygon free tier is ~5 calls/min, so we cap the batch).</span>
       </div>
-      <details style="margin-bottom:10px"${priceWorkerUrl ? '' : ' open'}>
-        <summary style="font-size:8px;color:var(--color-text-tertiary);cursor:pointer">Price source: ${priceWorkerUrl ? '<span style="color:#34d399">✓ worker set</span>' : '<span style="color:#fbbf24">⚠ not set — Yahoo blocks direct calls from GitHub Pages, so "Fetch performance" needs a proxy worker URL</span>'}</summary>
-        <div style="margin-top:6px;font-size:9px;color:var(--color-text-tertiary);line-height:1.5">
-          Paste a Cloudflare worker URL that proxies Yahoo (route <code>/yahoo?url=&lt;encoded&gt;</code>). This also fixes Refresh Prices &amp; Get Benchmarks app-wide.
-          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-            <input id="price-worker-url" type="text" value="${esc(priceWorkerUrl)}" placeholder="https://your-worker.workers.dev" style="flex:1;min-width:180px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px">
-            <button class="btn btn-sm" onclick="savePriceWorkerUrl(document.getElementById('price-worker-url').value); renderThemeDiscovery()" style="font-size:9px">Save</button>
-          </div>
-        </div>
-      </details>
+      ${discoverySelected.size > 0 ? `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;padding:7px 10px;background:rgba(96,165,250,0.08);border:1px solid var(--color-accent);border-radius:var(--border-radius-md)">
+        <span style="font-size:10px;color:var(--color-text-primary);font-weight:600">${discoverySelected.size} of ${DISCOVERY_MAX_SELECT} selected:</span>
+        <span style="font-size:9px;color:var(--color-text-tertiary)">${[...discoverySelected].map(esc).join(', ')}</span>
+        <button id="disc-fetch-btn" class="btn btn-sm btn-primary" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:auto">↡ Fetch ${discoverySelected.size} selected (1M + 1Y)</button>
+        <button class="btn btn-sm" onclick="discoverySelected.clear();renderThemeDiscovery()" style="font-size:9px">Clear</button>
+      </div>` : ''}
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
@@ -17389,7 +17395,6 @@ async function init() {
   }
   loadPolygonKey();
   loadAvWorkerUrl();
-  loadPriceWorkerUrl();
   taxLoadProfile(); // load + apply saved tax profile before first render
   restoreSpxInput();
   renderCashDisplay();
