@@ -768,6 +768,12 @@
     gap: 16px;
     margin-bottom: 20px;
   }
+  .analytics-grid-4 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
   @media (max-width: 700px) { .analytics-grid { grid-template-columns: 1fr; } }
 
   .analytics-card {
@@ -1029,14 +1035,14 @@
 
   <!-- Tab Bar -->
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="switchTab('dashboard')">Dashboard</button>
-    <button class="tab-btn" onclick="switchTab('analysis')">Analysis and Performance</button>
-    <button class="tab-btn" onclick="switchTab('rebalance')">Rebalance &amp; Tax</button>
-    <button class="tab-btn" onclick="switchTab('themes')">Themes</button>
-    <button class="tab-btn" onclick="switchTab('quality')">Quality Review</button>
-    <button class="tab-btn" onclick="switchTab('distribution')">Distribution</button>
+    <button class="tab-btn active" onclick="switchTab('dashboard')">Home</button>
+    <button class="tab-btn" onclick="switchTab('distribution')">True Exposure</button>
+    <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
+    <button class="tab-btn" onclick="switchTab('themes')">Industry Overview</button>
+    <button class="tab-btn" onclick="switchTab('quality')">New Position Evaluation</button>
+    <button class="tab-btn" onclick="switchTab('rebalance')">Tax and Balance Impact</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
-    <button class="tab-btn" onclick="switchTab('trends')">Trends</button>
+    <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
   </div>
 
   <!-- Dashboard Tab -->
@@ -1060,15 +1066,27 @@
     </div>
 
     <!-- Analytics Row -->
-    <div class="analytics-grid">
+    <!-- TOP ROW: four summary cards (Passive Core · Unrealised Gain · Private Investments · Capital Deployed) -->
+    <div class="analytics-grid-4">
+      <div class="analytics-card" id="sp-summary-card" onclick="showCardOverlay('voo')" style="cursor:pointer">
+        <div class="analytics-card-title">Passive Core — VOO</div>
+        <div id="sp-summary-content"><div style="color:var(--color-text-tertiary);font-size:11px">No lots imported yet</div></div>
+      </div>
       <div class="analytics-card" id="account-card" onclick="showCardOverlay('account')" style="cursor:pointer">
         <div class="analytics-card-title">Unrealised Gain by Account</div>
         <div id="account-content"></div>
       </div>
-      <div class="analytics-card" id="sp-summary-card" style="min-width:200px" onclick="showCardOverlay('voo')" style="cursor:pointer">
-        <div class="analytics-card-title">Passive Core — VOO</div>
-        <div id="sp-summary-content"><div style="color:var(--color-text-tertiary);font-size:11px">No lots imported yet</div></div>
+      <div class="analytics-card" id="pe-deals-card" onclick="showCardOverlay('private-investments')" style="cursor:pointer">
+        <div class="analytics-card-title">Private Investments — Direct PE Deals</div>
+        <div id="pe-deals-content"></div>
       </div>
+      <div class="analytics-card" id="capital-deployed-card" onclick="showCardOverlay('capital-deployed')" style="cursor:pointer">
+        <div class="analytics-card-title">Capital Deployed — Money In Over Time</div>
+        <div id="capital-deployed-content"></div>
+      </div>
+    </div>
+
+    <div class="analytics-grid">
       <!-- OVERVIEW ROW: Strategy (sleeves) | Managed Composition (themes) — highest level -->
       <div class="analytics-card" id="sleeve-breakdown-card" onclick="showCardOverlay('strategy')" style="cursor:pointer">
         <div class="analytics-card-title" style="display:flex;justify-content:space-between;align-items:center">
@@ -1104,23 +1122,15 @@
         <div class="analytics-card-title">Top 3 Add Candidates — Beating Both Lenses, Past Soak</div>
         <div id="add-watch-content"></div>
       </div>
-      <div class="analytics-card" id="theme-universe-dash-card" onclick="switchTab('themes')" style="cursor:pointer">
+      <div class="analytics-card" id="theme-universe-dash-card" onclick="switchTab('themes')" style="cursor:pointer;grid-column:1 / -1">
         <div class="analytics-card-title">Theme Universe — Zero-Exposure Themes by 1Y</div>
         <div id="theme-universe-dash-content"></div>
-      </div>
-      <div class="analytics-card" id="capital-deployed-card" onclick="showCardOverlay('capital-deployed')" style="cursor:pointer">
-        <div class="analytics-card-title">Capital Deployed — Money In Over Time</div>
-        <div id="capital-deployed-content"></div>
-      </div>
-      <div class="analytics-card" id="pe-deals-card" onclick="showCardOverlay('private-investments')" style="cursor:pointer">
-        <div class="analytics-card-title">Private Investments — Direct PE Deals</div>
-        <div id="pe-deals-content"></div>
       </div>
     </div>
 
 
     <!-- Industry Spotlight -->
-    <div class="section-heading">Industry Spotlight <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">— signals worth acting on · click to expand in Rebalance & Tax</span>
+    <div class="section-heading">Industry Spotlight <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">— signals worth acting on · click to expand in Tax and Balance Impact</span>
       <span style="margin-left:16px;font-weight:400;text-transform:none;letter-spacing:0" title="Filter theme alpha aggregates to positions held ≥180 days. Affects both Industry Intelligence and Industry Spotlight.">
         <span id="indalpha-toggle-all-dash" onclick="toggleIndustryAlphaMature(false)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">All Open</span>
         <span id="indalpha-toggle-mature-dash" onclick="toggleIndustryAlphaMature(true)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">Matured (≥180d)</span>
@@ -1332,7 +1342,7 @@
 
   <!-- Distribution Tab -->
   <div class="tab-panel" id="tab-distribution">
-    <div class="section-heading">True Portfolio Distribution</div>
+    <div class="section-heading">True Exposure — Full Breakdown</div>
     <div id="distribution-content"></div>
 
     <details id="lookthrough-details" style="margin-top:28px;border-top:1px solid var(--color-border-tertiary);padding-top:12px">
@@ -1340,7 +1350,7 @@
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin:8px 0">
         Paste your funds’ holdings here to decompose them into stocks above. When you hold a broad index fund (VOO, VTI, QQQ…)
         or an ETF, you already own its names inside it. Pasting the holdings dissolves that fund into single tickers in the
-        distribution and feeds the hidden-exposure flags on the Quality Review tab. Weights are approximate — refresh them
+        distribution and feeds the hidden-exposure flags on the New Position Evaluation tab. Weights are approximate — refresh them
         when they drift (e.g. from the fund’s Schwab holdings page). Look-through only fires for funds you actually hold.
       </div>
       <div id="qr-index-editor"></div>
@@ -1528,7 +1538,7 @@
   <div class="tab-panel" id="tab-trends">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
       <button class="btn btn-sm btn-primary" onclick="openTakeSnapshotModal()" style="font-size:11px;padding:6px 14px">📸 Take Snapshot</button>
-      <span style="font-size:10px;color:var(--color-text-tertiary)">Refresh Prices &amp; Get Benchmarks live on the Dashboard tab.</span>
+      <span style="font-size:10px;color:var(--color-text-tertiary)">Refresh Prices &amp; Get Benchmarks live on the Home tab.</span>
     </div>
     <div id="trends-summary" style="margin-bottom:14px"></div>
     <div class="section-heading">Snapshot History</div>
@@ -4009,7 +4019,7 @@ function renderAddWatch() {
 
   if (top3.length === 0) {
     const tier2Note = tier2.length > 0
-      ? `<div style="color:var(--color-text-tertiary);font-size:10px;font-style:italic;margin-top:4px">${tier2.length} position${tier2.length !== 1 ? 's' : ''} showing early strength but still in soak — see Add Candidates table in Rebalance & Tax tab.</div>`
+      ? `<div style="color:var(--color-text-tertiary);font-size:10px;font-style:italic;margin-top:4px">${tier2.length} position${tier2.length !== 1 ? 's' : ''} showing early strength but still in soak — see Add Candidates table in Tax and Balance Impact tab.</div>`
       : '';
     el.innerHTML = '<div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0">No add candidates that have matured yet.</div>' + tier2Note;
     return;
@@ -6079,7 +6089,7 @@ function renderTrueExposurePanel() {
   const { rows, total, activeFunds } = dist;
   if (!total || total <= 0 || !Object.keys(activeFunds).length) {
     out.innerHTML = `<div class="section-heading">True Exposure — direct + inside your funds</div>
-      <div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Add your basket funds' holdings in Quality Review → "Index look-through tables" to see combined direct + embedded exposure here.</div>`;
+      <div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Add your basket funds' holdings in New Position Evaluation → "Index look-through tables" to see combined direct + embedded exposure here.</div>`;
     return;
   }
   const pctOf = (v) => (v / total) * 100;
@@ -6099,7 +6109,7 @@ function renderTrueExposurePanel() {
     ${toggle}
     ${legendHtml}
     <div style="margin:8px 0 8px">${barsHtml || '<div style="font-size:11px;color:var(--color-text-tertiary)">No holdings to chart.</div>'}</div>
-    <a href="#" onclick="switchTab('distribution');return false" style="font-size:10px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">Full breakdown in Distribution →</a>`;
+    <a href="#" onclick="switchTab('distribution');return false" style="font-size:10px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">Full breakdown in True Exposure →</a>`;
 }
 
 // PORTFOLIO DISTRIBUTION: a RE-SLICING of your whole portfolio (positions + Passive Core + cash)
@@ -6337,7 +6347,7 @@ function renderDistributionTab() {
   // Rendered via the shared helper so the dashboard's condensed version stays identical.
   const { barsHtml: barRows, legendHtml: barLegend } = renderDistributionBars(top, stocksOnly, pctOf, { topN: top.length, labelWidth: 96, barHeight: 16, fontSize: 12 });
 
-  const fundsNote = Object.entries(activeFunds).map(([f,info])=>`${esc(f)} (~${fmtDollarWhole(info.value)}, as of ${esc(info.asOf||'?')})`).join(' · ') || 'none yet — paste fund holdings in Quality Review → Index look-through';
+  const fundsNote = Object.entries(activeFunds).map(([f,info])=>`${esc(f)} (~${fmtDollarWhole(info.value)}, as of ${esc(info.asOf||'?')})`).join(' · ') || 'none yet — paste fund holdings in New Position Evaluation → Index look-through';
 
   const perfBody = perfRows.sort((a,b)=>b.value-a.value).map(p=>`<tr>
     <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(p.fund)}</td>
@@ -8411,12 +8421,21 @@ function renderStackedBar() {
 
 function positionTooltip(e) {
   const tip = document.getElementById('bar-tooltip');
-  const x = e.clientX + 12;
-  const y = e.clientY + 12;
+  if (!tip) return;
   const w = tip.offsetWidth || 220;
   const h = tip.offsetHeight || 120;
-  tip.style.left = (x + w > window.innerWidth ? x - w - 20 : x) + 'px';
-  tip.style.top = (y + h > window.innerHeight ? y - h - 20 : y) + 'px';
+  const margin = 12;
+  // Horizontal: sit to the right of the cursor, but flip left if it would overflow.
+  let x = e.clientX + margin;
+  if (x + w > window.innerWidth - 8) x = e.clientX - w - margin;
+  if (x < 8) x = 8; // clamp to left edge
+  // Vertical: PREFER above the cursor (so a wide bar's tooltip doesn't fall into the section
+  // below and become hard to read). Drop below only if there isn't room above.
+  let y = e.clientY - h - margin;
+  if (y < 8) y = e.clientY + margin;                          // not enough room above → go below
+  if (y + h > window.innerHeight - 8) y = window.innerHeight - h - 8; // clamp to bottom edge
+  tip.style.left = x + 'px';
+  tip.style.top = y + 'px';
 }
 
 
@@ -9985,7 +10004,7 @@ function renderSimResult() {
   let opaqueNote = '';
   if (sim.opaqueBlocks.length) {
     opaqueNote = sim.opaqueBlocks.map(b => `<div style="font-size:10px;color:var(--color-text-primary);padding:8px 10px;background:rgba(251,191,36,0.08);border-left:3px solid #fbbf24;border-radius:var(--border-radius-md);margin-top:6px;line-height:1.5">
-      <div style="color:#fbbf24">⚠ ${esc(b.ticker)} (${fmtDollarWhole(b.amount)}) is an opaque block — paste its top holdings below to see its true per-name impact + overlap for this scenario. <span style="color:var(--color-text-tertiary)">(Temporary — not saved; saving a fund's holdings happens in Distribution once you actually own it.)</span></div>
+      <div style="color:#fbbf24">⚠ ${esc(b.ticker)} (${fmtDollarWhole(b.amount)}) is an opaque block — paste its top holdings below to see its true per-name impact + overlap for this scenario. <span style="color:var(--color-text-tertiary)">(Temporary — not saved; saving a fund's holdings happens in True Exposure once you actually own it.)</span></div>
       <div style="font-size:9px;color:var(--color-text-tertiary);margin:5px 0 3px">Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${esc(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a> — copy the ticker + % column and paste here.</div>
       <textarea id="sim-temp-paste-${esc(b.ticker)}" rows="2" oninput="renderSimHoldingsPreview('${esc(b.ticker)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, MSFT 10% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
       <div id="sim-temp-preview-${esc(b.ticker)}" style="margin-top:5px"></div>
@@ -12153,7 +12172,7 @@ function renderThemeUniverseDashTile() {
   // Check if we have any returns data; if not, prompt to backfill
   const hasAnyData = top.some(t => t.returns['1y'] !== null);
   if (!hasAnyData) {
-    el.innerHTML = `<div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0;line-height:1.5">No benchmark data yet. Click <strong>Backfill Theme Universe</strong> in the Themes tab to populate.</div>`;
+    el.innerHTML = `<div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0;line-height:1.5">No benchmark data yet. Click <strong>Backfill Theme Universe</strong> in the Industry Overview tab to populate.</div>`;
     return;
   }
 
