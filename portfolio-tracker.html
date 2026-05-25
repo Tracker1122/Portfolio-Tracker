@@ -4078,6 +4078,31 @@ function renderAddCandidatesTable() {
       const reason = isTier2
         ? `<span style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">In soak — ${r.daysRemaining}d remaining of ${r.soakThreshold}d ${r.sleeve} threshold. Premature for action.</span>`
         : '';
+      // True-exposure pass-through: what you ALREADY hold of this name via funds you own (VOO/ETFs).
+      // Shown only when there's real embedded exposure — so adding direct is framed against your
+      // true position size, not the direct slice alone. Identification logic is unchanged.
+      let passRow = '';
+      const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(r.ticker) : [];
+      const embedded = lts.reduce((s, l) => s + (l.indirectValue || 0), 0);
+      if (embedded > 100) {
+        const direct = r.totalExit || 0;
+        const trueTotal = direct + embedded;
+        const grandTotal = (function(){
+          const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+          const spVal = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
+          let cash = 0; try { if (typeof cashBuckets !== 'undefined' && cashBuckets) cash = Object.values(cashBuckets).reduce((s,v)=>s+(parseFloat(v)||0),0); } catch(e){}
+          return totalPortfolioValue + spVal + cash;
+        })();
+        const truePct = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
+        const via = lts.map(l => `${esc(l.fund)} ${fmtDollarWhole(l.indirectValue)}`).join(' + ');
+        passRow = `<tr style="${opacityWrap}">
+          <td colspan="8" style="padding:2px 8px 8px;border-top:none">
+            <div style="font-size:9px;color:#fbbf24;line-height:1.5;padding-left:4px;border-left:2px solid rgba(251,191,36,0.4)">
+              <strong>Total ${esc(r.ticker)} you already hold: ~${fmtDollarWhole(trueTotal)}</strong> — direct ${fmtDollarWhole(direct)} + ${fmtDollarWhole(embedded)} via funds (${via}) = <strong>${truePct.toFixed(1)}% of your portfolio</strong>. Adding direct deepens a position that's already this large on a true-exposure basis. <span style="color:var(--color-text-tertiary)">(Embedded approximate — fund weights drift.)</span>
+            </div>
+          </td>
+        </tr>`;
+      }
       return `<tr style="${opacityWrap}">
         <td><strong>${esc(r.ticker)}</strong>${r.isETF ? ' <span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px;font-weight:700">ETF</span>' : ''}</td>
         <td><span style="font-size:9px;color:${sleeveColor};background:${sleeveColor}22;padding:1px 5px;border-radius:3px;font-weight:700">${esc(r.sleeve || '—')}</span></td>
@@ -4087,7 +4112,7 @@ function renderAddCandidatesTable() {
         <td class="r"><span style="color:var(--color-text-success)">+${fmtDollarWhole(r.totalSpxAlpha)}</span></td>
         <td class="r"><span style="color:var(--color-text-success)">+${fmtDollarWhole(r.totalThemeDollar)}</span> <span style="font-size:9px;color:var(--color-text-success);opacity:0.7">(${ppStr})</span></td>
         <td>${reason}</td>
-      </tr>`;
+      </tr>${passRow}`;
     }).join('');
 
     return `<div class="rebal-table-wrap">
@@ -4159,6 +4184,33 @@ function renderThemeIntel() {
 
   const denominator = concMode === 'total' && grandTotal > 0 ? grandTotal : totalValue;
   const avgConc = 100 / Object.keys(themes).length;
+
+  // ── True-exposure-by-theme (look-through) ──
+  // Embedded exposure inside funds you own, mapped to a theme ONLY when the embedded name is one
+  // you hold directly with a theme tag (so we can classify it). VOO's untracked tail and any
+  // embedded name you don't hold directly CANNOT be theme-classified — so this is a FLOOR, not a
+  // ceiling. We surface that caveat in the UI. Built from getIndexLookthrough via qrIndexLookthrough.
+  const themeEmbedded = {}; // theme -> embedded $ classifiable to it
+  let embeddedClassified = 0, embeddedTotal = 0;
+  (function(){
+    if (typeof getIndexLookthrough !== 'function' || typeof indexFundHeldValue !== 'function') return;
+    // Map normalized ticker -> theme, from your directly-held tagged positions.
+    const tickerTheme = {};
+    open.forEach(p => { const k = qrNormTicker(p.ticker); if (p.theme && !tickerTheme[k]) tickerTheme[k] = p.theme; });
+    const tables = getIndexLookthrough();
+    for (const [fund, tbl] of Object.entries(tables)) {
+      const held = indexFundHeldValue(fund);
+      if (held <= 0 || !tbl.weights) continue;
+      for (const [tk, w] of Object.entries(tbl.weights)) {
+        if (w == null) continue;
+        const val = held * (w / 100);
+        embeddedTotal += val;
+        const th = tickerTheme[qrNormTicker(tk)];
+        if (th) { themeEmbedded[th] = (themeEmbedded[th] || 0) + val; embeddedClassified += val; }
+      }
+    }
+  })();
+  const embeddedUnclassified = Math.max(0, embeddedTotal - embeddedClassified);
 
   const sorted = Object.entries(themes)
     .map(([theme, d]) => ({
@@ -4242,6 +4294,15 @@ function renderThemeIntel() {
             <div class="industry-intel-stat-label">Concentration</div>
             <div class="industry-intel-stat-value" style="color:${pctColor}">${t.pct.toFixed(1)}%</div>
           </div>
+          <div class="industry-intel-stat" title="Direct holdings PLUS what you hold in this theme inside funds you own (VOO/ETFs), as % of total portfolio. Floor only — VOO's untracked tail and any embedded name you don't also hold directly can't be theme-classified.">
+            <div class="industry-intel-stat-label">True exp. ⓘ</div>
+            <div class="industry-intel-stat-value" style="color:#fbbf24">${(() => {
+              const emb = themeEmbedded[t.theme] || 0;
+              const trueVal = themeValue + emb;
+              const truePct = grandTotal > 0 ? (trueVal / grandTotal) * 100 : 0;
+              return emb > 0 ? '≥' + truePct.toFixed(1) + '%' : truePct.toFixed(1) + '%';
+            })()}</div>
+          </div>
           <div class="industry-intel-stat">
             <div class="industry-intel-stat-label">Invested</div>
             <div class="industry-intel-stat-value" style="color:var(--color-text-secondary)">${fmtDollarWhole(themeInvested)}</div>
@@ -4303,10 +4364,13 @@ function renderThemeIntel() {
         </table>
       </div>`;
   }).join('')}</div>`;
+  // Honesty footnote: explain why "True exp." is a floor — embedded exposure we can't theme-classify.
+  if (embeddedTotal > 0) {
+    const classPct = embeddedTotal > 0 ? (embeddedClassified / embeddedTotal) * 100 : 0;
+    el.innerHTML += `<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-top:10px;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">
+      <strong style="color:#fbbf24">True exp. is a floor, not a ceiling.</strong> It adds the exposure inside funds you own (VOO/ETFs) to each theme — but only for embedded names you <em>also</em> hold directly (so we know their theme). Of ${fmtDollarWhole(embeddedTotal)} embedded in your funds, ~${classPct.toFixed(0)}% (${fmtDollarWhole(embeddedClassified)}) could be theme-classified; the rest — VOO's untracked tail and names you don't hold directly — isn't shown in any theme. So your real theme concentration is <em>at least</em> the True exp. figure, likely higher.</div>`;
+  }
 }
-
-// ─────────────────────────────────────────────
-// Account Breakdown
 // ─────────────────────────────────────────────
 function renderAccountBreakdown() {
   const el = document.getElementById('account-content');
@@ -11077,7 +11141,7 @@ function showSpotlightOverlay(signal) {
   if (!ov || !content) return;
 
   const open = positions.filter(p => !p.closed && p.ticker && p.theme);
-  const { name, color, alpha, pct, realGl, label, sublabel, borderColor, d } = signal;
+  const { name, color, alpha, pct, truePct, realGl, label, sublabel, borderColor, d } = signal;
   const alphaColor = alpha === null ? 'var(--color-text-tertiary)' : alpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
   const glColor = realGl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
 
@@ -11218,7 +11282,7 @@ function showSpotlightOverlay(signal) {
     '<div style="font-size:20px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px;border-left:3px solid ' + (THEME_COLORS[name]||'#94a3b8') + ';padding-left:10px">' + esc(name) + '</div>' +
     '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:18px;padding-left:13px">' + sublabel + '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:8px;padding:12px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">' +
-      '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">Concentration</div><div style="font-size:18px;font-weight:700;color:var(--color-text-secondary)">' + pct.toFixed(1) + '%</div></div>' +
+      '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">Concentration</div><div style="font-size:18px;font-weight:700;color:var(--color-text-secondary)">' + pct.toFixed(1) + '%</div>' + ((truePct != null && truePct > pct + 0.1) ? '<div style="font-size:10px;font-weight:600;color:#fbbf24;margin-top:1px" title="Direct holdings plus what you hold in this theme inside funds you own (VOO/ETFs). Floor — VOO\'s untracked tail isn\'t theme-classified, so true exposure is at least this.">≥' + truePct.toFixed(1) + '% true</div>' : '') + '</div>' +
       '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">vs S&P</div><div style="font-size:18px;font-weight:700;color:' + alphaColor + '">' + (alpha!==null?fmtDollarWhole(alpha):'—') + '</div></div>' +
       '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">' + themeAlphaLabel + '</div><div style="font-size:18px;font-weight:700;color:' + themeAlphaColor + '">' + (themeAlphaTotal!==null?(themeAlphaTotal>=0?'+':'')+fmtDollarWhole(themeAlphaTotal):'—') + '</div>' + (themePpStr ? '<div style="font-size:10px;font-weight:600;color:' + themeAlphaColor + ';opacity:0.85;margin-top:1px" title="' + ppTooltip + '">' + themePpStr + '</div>' : '') + '</div>' +
       '<div><div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">G/L</div><div style="font-size:18px;font-weight:700;color:' + glColor + '">' + fmtDollarWhole(realGl) + '</div></div>' +
@@ -11244,6 +11308,46 @@ function renderDashboardThemeSpotlight() {
   const industryCount = industryNames.length;
   const avgIndustryValue = totalValue / industryCount;
   const avgPct = 100 / industryCount;
+
+  // ── TRUE-EXPOSURE concentration (look-through) ──
+  // Overweight/concentration signals fire on TRUE exposure (direct + what you hold in the theme
+  // inside funds you own), because "overweight" means actually overweight, not just in the slice
+  // held directly. Alpha/performance signals are unchanged (they measure your direct picks).
+  // Embedded is classifiable to a theme only when the embedded name is one you hold directly with
+  // a theme tag — so true-exposure-by-theme is a FLOOR (VOO's untracked tail isn't classified).
+  // grandTotal includes VOO so true %s are on the same denominator as the embedded dollars.
+  const themeEmbeddedSpot = {};
+  let spotEmbeddedTotal = 0, spotEmbeddedClassified = 0;
+  let grandTotalSpot = totalValue;
+  (function(){
+    if (typeof getIndexLookthrough !== 'function' || typeof indexFundHeldValue !== 'function') return;
+    const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+    grandTotalSpot = totalValue + (sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0);
+    const tickerTheme = {};
+    open.forEach(p => { const k = qrNormTicker(p.ticker); if (p.theme && !tickerTheme[k]) tickerTheme[k] = p.theme; });
+    const tables = getIndexLookthrough();
+    for (const [fund, tbl] of Object.entries(tables)) {
+      const held = indexFundHeldValue(fund);
+      if (held <= 0 || !tbl.weights) continue;
+      for (const [tk, w] of Object.entries(tbl.weights)) {
+        if (w == null) continue;
+        const val = held * (w / 100);
+        spotEmbeddedTotal += val;
+        const th = tickerTheme[qrNormTicker(tk)];
+        if (th) { themeEmbeddedSpot[th] = (themeEmbeddedSpot[th] || 0) + val; spotEmbeddedClassified += val; }
+      }
+    }
+  })();
+  // true % per theme = (direct theme value + embedded classifiable to it) / grand total (incl VOO).
+  const trueThemePct = {};
+  industryNames.forEach(nm => {
+    const directVal = open.filter(p => p.theme === nm).reduce((s,p)=>s+(calcPos(p).exitValue||0),0);
+    const emb = themeEmbeddedSpot[nm] || 0;
+    trueThemePct[nm] = grandTotalSpot > 0 ? ((directVal + emb) / grandTotalSpot) * 100 : 0;
+  });
+  // Average true concentration across themes — recomputed on the SAME basis so the relative
+  // "1.5× the average theme" gates stay internally consistent (not mixing direct avg vs true pct).
+  const avgTruePct = industryCount > 0 ? Object.values(trueThemePct).reduce((s,v)=>s+v,0) / industryCount : 0;
 
   // Build per-industry data
   const industries = {};
@@ -11278,6 +11382,7 @@ function renderDashboardThemeSpotlight() {
     const alpha = d.alphaCount > 0 ? d.alphaSum : null;
     const alphaPerDollar = d.invested > 0 && alpha !== null ? alpha / d.invested : null;
     const pct = totalValue > 0 ? (d.value / totalValue) * 100 : 0;
+    const truePct = trueThemePct[name] != null ? trueThemePct[name] : pct; // true-exposure concentration (floor)
     const color = THEME_COLORS[name] || '#94a3b8';
     const sortedTickers = [...d.tickers].sort((a,b) => b.value - a.value);
     const topTicker = sortedTickers[0]?.ticker || '';
@@ -11349,20 +11454,20 @@ function renderDashboardThemeSpotlight() {
         sublabel: 'Trailing both SPX and theme — real drag, not just sector noise', score });
     }
 
-    // 2. Overconcentrated & Trailing — 6 month gate or big swing override
-    if (timeQualifies && pct > avgPct * 1.4 && alpha !== null && alpha < -200) {
-      const score = (pct / avgPct) * Math.abs(alpha) / 100;
-      signals.push({ name, color, d, alpha, pct, realGl,
+    // 2. Overconcentrated & Trailing — fires on TRUE exposure (direct + inside funds)
+    if (timeQualifies && truePct > avgTruePct * 1.4 && alpha !== null && alpha < -200) {
+      const score = (truePct / avgTruePct) * Math.abs(alpha) / 100;
+      signals.push({ name, color, d, alpha, pct, truePct, realGl,
         label: 'Overweight & Trailing', borderColor: 'var(--color-text-danger)',
-        sublabel: 'Above-average concentration with negative alpha', score });
+        sublabel: 'Above-average TRUE exposure (incl. funds) with negative alpha', score });
     }
 
-    // 3. Growing Without Earning — 6 month gate
-    if (matureEnough && pct > avgPct * 1.2 && alphaPerDollar !== null && alphaPerDollar >= 0 && alphaPerDollar < 0.01 && d.value > avgIndustryValue * 0.5) {
-      const score = (pct / avgPct) * (0.01 - alphaPerDollar) * 50;
-      if (score > 0.3) signals.push({ name, color, d, alpha, pct, realGl,
+    // 3. Growing Without Earning — TRUE-exposure concentration gate
+    if (matureEnough && truePct > avgTruePct * 1.2 && alphaPerDollar !== null && alphaPerDollar >= 0 && alphaPerDollar < 0.01 && d.value > avgIndustryValue * 0.5) {
+      const score = (truePct / avgTruePct) * (0.01 - alphaPerDollar) * 50;
+      if (score > 0.3) signals.push({ name, color, d, alpha, pct, truePct, realGl,
         label: 'Growing Without Earning', borderColor: '#fbbf24',
-        sublabel: 'High concentration, low alpha productivity', score });
+        sublabel: 'High TRUE exposure (incl. funds), low alpha productivity', score });
     }
 
     // 4. Thesis Fragmentation — 6 month gate or big swing override
@@ -11385,11 +11490,11 @@ function renderDashboardThemeSpotlight() {
       }
     }
 
-    // 5. Concentration Drift — 6 month gate
+    // 5. Concentration Drift — TRUE-exposure gate
     const recentBuys = d.tickers.filter(p => p.daysHeld < 90);
-    if (matureEnough && pct > avgPct * 1.5 && recentBuys.length === 0 && d.value > avgIndustryValue) {
-      const score = (pct / avgPct) * (d.value / totalValue) * 5;
-      signals.push({ name, color, d, alpha, pct, realGl,
+    if (matureEnough && truePct > avgTruePct * 1.5 && recentBuys.length === 0 && d.value > avgIndustryValue) {
+      const score = (truePct / avgTruePct) * (d.value / totalValue) * 5;
+      signals.push({ name, color, d, alpha, pct, truePct, realGl,
         label: 'Concentration Drift',
         sublabel: 'Exposure grew through price appreciation — no recent buy decision',
         borderColor: '#fbbf24', score });
