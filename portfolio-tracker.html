@@ -13673,39 +13673,33 @@ function toggleDiscoverySelect(ticker) {
   renderThemeDiscovery();
 }
 
-// Polygon helper: one ticker's close on a specific date (walks back a few days for weekends/holidays).
-async function polyCloseOnOrBefore(ticker, daysBack) {
-  const t = ticker.toUpperCase();
-  for (let back = daysBack; back <= daysBack + 7; back++) {
-    const d = new Date(); d.setDate(d.getDate() - back);
-    const ds = d.toISOString().slice(0, 10);
-    const res = await fetch(`https://api.polygon.io/v1/open-close/${t}/${ds}?adjusted=true&apiKey=${polygonKey}`);
-    if (res.status === 429) throw new Error('rate');
-    if (!res.ok) continue;
-    const data = await res.json();
-    if (data.status === 'OK' && typeof data.close === 'number') return data.close;
-  }
-  return null;
-}
-
-// Fetch 1-month AND 1-year return for one ticker, sharing a SINGLE latest-close call across both
-// windows (3 calls total: latest + month-ago + year-ago, not 4). This is the efficiency that lets
-// 5 names fit a tight budget.
+// Fetch 1-month AND 1-year return for one ticker in a SINGLE Polygon call. The range-aggregates
+// endpoint returns every daily bar over the window at once, so we read: last bar (latest close),
+// first bar (~1Y ago), and the bar nearest ~30d ago — no per-date hunting, no 404-walk burning the
+// rate budget. This is ~1 call/ticker vs the old 3-12, which is what was tripping the 429s.
 async function fetchTickerWindows(ticker) {
   if (!polygonKey) loadPolygonKey();
   if (!polygonKey) throw new Error('nokey');
   const t = ticker.toUpperCase();
-  const prevRes = await fetch(`https://api.polygon.io/v2/aggs/ticker/${t}/prev?adjusted=true&apiKey=${polygonKey}`);
-  if (prevRes.status === 429) throw new Error('rate');
-  if (!prevRes.ok) throw new Error('err');
-  const prevData = await prevRes.json();
-  const latest = prevData.results && prevData.results[0] && prevData.results[0].c;
-  if (!latest) throw new Error('err');
-  const monthAgo = await polyCloseOnOrBefore(t, 30);
-  const yearAgo = await polyCloseOnOrBefore(t, 365);
+  const to = new Date();
+  const from = new Date(); from.setDate(from.getDate() - 372); // a bit over 1Y for headroom
+  const ds = (d) => d.toISOString().slice(0, 10);
+  const url = `https://api.polygon.io/v2/aggs/ticker/${t}/range/1/day/${ds(from)}/${ds(to)}?adjusted=true&sort=asc&limit=400&apiKey=${polygonKey}`;
+  const res = await fetch(url);
+  if (res.status === 429) throw new Error('rate');
+  if (!res.ok) throw new Error('err');
+  const data = await res.json();
+  const bars = data.results;
+  if (!bars || bars.length < 2) throw new Error('err');
+  const latest = bars[bars.length - 1].c;       // most recent close
+  const yearBar = bars[0].c;                      // oldest in window (~1Y ago)
+  // bar nearest 30 days ago: target timestamp, find closest by time
+  const target = Date.now() - 30 * 86400 * 1000;
+  let monthBar = null, best = Infinity;
+  for (const b of bars) { const diff = Math.abs(b.t - target); if (diff < best) { best = diff; monthBar = b.c; } }
   return {
-    m1: monthAgo ? ((latest - monthAgo) / monthAgo) * 100 : null,
-    y1: yearAgo ? ((latest - yearAgo) / yearAgo) * 100 : null,
+    m1: monthBar ? ((latest - monthBar) / monthBar) * 100 : null,
+    y1: yearBar ? ((latest - yearBar) / yearBar) * 100 : null,
   };
 }
 
