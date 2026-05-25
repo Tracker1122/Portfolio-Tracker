@@ -1091,7 +1091,7 @@
       <div class="analytics-card" id="sleeve-breakdown-card" onclick="showCardOverlay('strategy')" style="cursor:pointer">
         <div class="analytics-card-title" style="display:flex;justify-content:space-between;align-items:center">
           <span>Strategy Allocation</span>
-          <div onclick="event.stopPropagation();toggleSleeveView()" style="font-size:8px;color:var(--color-text-tertiary);cursor:pointer;border:1px solid var(--color-border-tertiary);border-radius:10px;padding:1px 7px;font-weight:400;text-transform:none;letter-spacing:0" id="sleeve-view-toggle">% of Total</div>
+          <div onclick="event.stopPropagation();toggleSleeveView()" style="font-size:8px;color:var(--color-text-tertiary);cursor:pointer;border:1px solid var(--color-border-tertiary);border-radius:10px;padding:1px 7px;font-weight:400;text-transform:none;letter-spacing:0" id="sleeve-view-toggle">% of portfolio</div>
         </div>
         <div id="sleeve-breakdown-content"></div>
       </div>
@@ -1365,8 +1365,8 @@
     <div id="sleeve-valueadd-wrap" style="margin-bottom:24px"></div>
     <div class="section-heading">Industry Intelligence
       <span style="margin-left:12px;font-weight:400;text-transform:none;letter-spacing:0">
-        <span id="conc-toggle-sleeve" onclick="setConcMode('sleeve')" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;background:var(--color-text-info);color:#000;font-weight:600">% of Strategy</span>
-        <span id="conc-toggle-total" onclick="setConcMode('total')" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">% of Total</span>
+        <span id="conc-toggle-sleeve" onclick="setConcMode('sleeve')" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;background:var(--color-text-info);color:#000;font-weight:600">% of active managed sleeve</span>
+        <span id="conc-toggle-total" onclick="setConcMode('total')" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">% of portfolio</span>
       </span>
       <span style="margin-left:16px;font-weight:400;text-transform:none;letter-spacing:0" title="Filter theme alpha aggregates to positions held ≥180 days. Affects both Industry Intelligence and Industry Spotlight.">
         <span id="indalpha-toggle-all-rebal" onclick="toggleIndustryAlphaMature(false)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">All Open</span>
@@ -4151,8 +4151,37 @@ function toggleThemeDrill(themeKey) {
 }
 
 // ─────────────────────────────────────────────
-// Industry Intelligence
+// Industry Intelligence — triage table + inline accordion
 // ─────────────────────────────────────────────
+let intelSortKey = 'truePct';  // default sort: true exposure descending (biggest real risk on top)
+let intelSortDir = 'desc';
+let intelOpenKey = null;        // which theme row is currently expanded (one at a time)
+
+function fmtDollarCompact(v) {
+  const a = Math.abs(v);
+  if (a >= 1000) return '$' + (v / 1000).toFixed(1) + 'k';
+  return '$' + Math.round(v);
+}
+function setIntelSort(key) {
+  if (intelSortKey === key) { intelSortDir = intelSortDir === 'desc' ? 'asc' : 'desc'; }
+  else { intelSortKey = key; intelSortDir = (key === 'theme') ? 'asc' : 'desc'; }
+  renderThemeIntel();
+  if (intelOpenKey) { const d = document.getElementById('intel-drill-' + intelOpenKey); const c = document.getElementById('caret-' + intelOpenKey); if (d) d.style.display = 'block'; if (c) c.textContent = '⌄'; }
+}
+function setIntelMature(wantMature) {
+  toggleIndustryAlphaMature(wantMature); // existing fn: sets flag, saves, renderAll()
+}
+function toggleIntelRow(themeKey) {
+  const drill = document.getElementById('intel-drill-' + themeKey);
+  const caret = document.getElementById('caret-' + themeKey);
+  if (!drill) return;
+  const isOpen = drill.style.display === 'block';
+  document.querySelectorAll('.intel-drill').forEach(d => d.style.display = 'none');
+  document.querySelectorAll('.intel-caret').forEach(c => c.textContent = '›');
+  if (!isOpen) { drill.style.display = 'block'; if (caret) caret.textContent = '⌄'; intelOpenKey = themeKey; }
+  else { intelOpenKey = null; }
+}
+
 function renderThemeIntel() {
   const el = document.getElementById('theme-intel-wrap');
   if (!el) return;
@@ -4163,241 +4192,255 @@ function renderThemeIntel() {
     return;
   }
 
-  const totalValue = open.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
-  const spValue = (() => { const sp = getSpTotals(); return sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0; })();
-  const grandTotal = totalValue + spValue;
-
-  const themes = {};
   const _now = Date.now();
+  const totalValue = open.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0); // active managed book (no VOO)
+  const spValue = (() => { const sp = getSpTotals(); return sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0; })();
+  const grandTotal = totalValue + spValue; // whole portfolio incl VOO core
+
+  // Per-theme aggregates (direct positions only). Alpha tracked all-open AND mature-only so the
+  // verdict can honor the Matured toggle and hedge on thin seasoned evidence.
+  const themes = {};
   open.forEach(p => {
     const c = calcPos(p);
-    const v = c.exitValue || 0;
     const spxRet = c.spxReturn !== null ? c.spxReturn / 100 : null;
-    const alpha = (spxRet !== null && c.invested > 0)
-      ? (c.exitValue - c.invested) - (c.invested * spxRet) : null;
-    if (!themes[p.theme]) themes[p.theme] = { value: 0, alphaSum: 0, alphaCount: 0, positions: 0, matureAlphaSum: 0, matureAlphaCount: 0, maturePositions: 0 };
-    themes[p.theme].value += v;
-    themes[p.theme].positions++;
-    if (alpha !== null) { themes[p.theme].alphaSum += alpha; themes[p.theme].alphaCount++; }
-    // Mature subset (held >= MATURITY_DAYS) — used so the verdict honors the Matured toggle and can
-    // hedge when the seasoned evidence is thin. Missing/invalid buy date = not mature.
+    const alpha = (spxRet !== null && c.invested > 0) ? (c.exitValue - c.invested) - (c.invested * spxRet) : null;
+    if (!themes[p.theme]) themes[p.theme] = { value: 0, invested: 0, gl: 0, alphaSum: 0, alphaCount: 0, positions: 0, matureAlphaSum: 0, matureAlphaCount: 0, maturePositions: 0, tickers: [] };
+    const d = themes[p.theme];
+    d.value += c.exitValue || 0; d.invested += c.invested || 0; d.gl += c.gainLoss || 0; d.positions++;
+    if (!d.tickers.includes(p.ticker)) d.tickers.push(p.ticker);
+    if (alpha !== null) { d.alphaSum += alpha; d.alphaCount++; }
     let isMature = false;
     if (p.dateBought) { const b = new Date(p.dateBought); if (!isNaN(b)) isMature = Math.floor((_now - b.getTime()) / 86400000) >= MATURITY_DAYS; }
-    if (isMature) {
-      themes[p.theme].maturePositions++;
-      if (alpha !== null) { themes[p.theme].matureAlphaSum += alpha; themes[p.theme].matureAlphaCount++; }
-    }
+    if (isMature) { d.maturePositions++; if (alpha !== null) { d.matureAlphaSum += alpha; d.matureAlphaCount++; } }
   });
 
-  const denominator = concMode === 'total' && grandTotal > 0 ? grandTotal : totalValue;
-  const avgConc = 100 / Object.keys(themes).length;
-
-  // ── True-exposure-by-theme (look-through) ──
-  // Embedded exposure inside funds you own, mapped to a theme ONLY when the embedded name is one
-  // you hold directly with a theme tag (so we can classify it). VOO's untracked tail and any
-  // embedded name you don't hold directly CANNOT be theme-classified — so this is a FLOOR, not a
-  // ceiling. We surface that caveat in the UI. Built from getIndexLookthrough via qrIndexLookthrough.
-  const themeEmbedded = {}; // theme -> embedded $ classifiable to it
-  let embeddedClassified = 0, embeddedTotal = 0;
+  // ── Look-through, split into THREE buckets per theme ──
+  // For each theme: direct (the position value), intended-via-sector-ETF (embedded from a fund whose
+  // OWN theme == this theme, e.g. SMH for Semiconductors), and incidental (embedded from VOO + any
+  // fund tagged a DIFFERENT theme — chip names you carry without choosing them). Incidental + the
+  // total are FLOORS: VOO's untracked tail can't be theme-classified. Built from getIndexLookthrough.
+  const themeSectorEtf = {};   // theme -> $ embedded via its own sector ETF (intended)
+  const themeIncidental = {};  // theme -> $ embedded via broad/other funds (incidental)
+  let embeddedTotal = 0, embeddedClassified = 0;
   (function(){
     if (typeof getIndexLookthrough !== 'function' || typeof indexFundHeldValue !== 'function') return;
-    // Map normalized ticker -> theme, from your directly-held tagged positions.
     const tickerTheme = {};
     open.forEach(p => { const k = qrNormTicker(p.ticker); if (p.theme && !tickerTheme[k]) tickerTheme[k] = p.theme; });
+    // Map each fund ticker -> its own theme tag (thematic ETFs carry one; VOO does not).
+    const fundTheme = {};
+    open.forEach(p => { if (p.isETF && p.theme) fundTheme[qrNormTicker(p.ticker)] = p.theme; });
     const tables = getIndexLookthrough();
     for (const [fund, tbl] of Object.entries(tables)) {
       const held = indexFundHeldValue(fund);
       if (held <= 0 || !tbl.weights) continue;
+      const fundOwnTheme = fundTheme[qrNormTicker(fund)] || null; // null = broad fund (VOO)
       for (const [tk, w] of Object.entries(tbl.weights)) {
         if (w == null) continue;
         const val = held * (w / 100);
         embeddedTotal += val;
-        const th = tickerTheme[qrNormTicker(tk)];
-        if (th) { themeEmbedded[th] = (themeEmbedded[th] || 0) + val; embeddedClassified += val; }
+        const embTheme = tickerTheme[qrNormTicker(tk)];
+        if (!embTheme) continue; // can't classify -> untracked tail
+        embeddedClassified += val;
+        if (fundOwnTheme === embTheme) {
+          themeSectorEtf[embTheme] = (themeSectorEtf[embTheme] || 0) + val; // intended sector exposure
+        } else {
+          themeIncidental[embTheme] = (themeIncidental[embTheme] || 0) + val; // incidental (broad or cross-theme)
+        }
       }
     }
   })();
-  const embeddedUnclassified = Math.max(0, embeddedTotal - embeddedClassified);
 
-  const sorted = Object.entries(themes)
-    .map(([theme, d]) => ({
-      theme,
-      pct: denominator > 0 ? (d.value / denominator) * 100 : 0,
-      totalAlpha: d.alphaCount > 0 ? d.alphaSum : null,
-      matureAlpha: d.matureAlphaCount > 0 ? d.matureAlphaSum : null,
-      matureCount: d.maturePositions,
-      positions: d.positions
-    }))
-    .sort((a, b) => b.pct - a.pct);
+  // Build per-theme rows.
+  const SLEEVE_FALLBACK = 'var(--color-text-tertiary)';
+  const rows = Object.entries(themes).map(([theme, d]) => {
+    const directVal = d.value;
+    const sectorEtf = themeSectorEtf[theme] || 0;
+    const incidental = themeIncidental[theme] || 0;
+    const trueVal = directVal + sectorEtf + incidental;
+    const allocPct = totalValue > 0 ? (directVal / totalValue) * 100 : 0;        // % of active managed sleeve
+    const directPct = grandTotal > 0 ? (directVal / grandTotal) * 100 : 0;       // % of whole portfolio (direct)
+    const sectorEtfPct = grandTotal > 0 ? (sectorEtf / grandTotal) * 100 : 0;
+    const incidentalPct = grandTotal > 0 ? (incidental / grandTotal) * 100 : 0;
+    const truePct = grandTotal > 0 ? (trueVal / grandTotal) * 100 : 0;
+    const hasEmbedded = (sectorEtf + incidental) > 0;
+    const verdictAlpha = industryAlphaMatureOnly ? (d.matureAlphaCount > 0 ? d.matureAlphaSum : null) : (d.alphaCount > 0 ? d.alphaSum : null);
+    const verdictN = industryAlphaMatureOnly ? d.maturePositions : d.positions;
+    return { theme, d, directVal, sectorEtf, incidental, trueVal, allocPct, directPct, sectorEtfPct, incidentalPct, truePct, hasEmbedded, verdictAlpha, verdictN, incidentalFloor: incidental > 0 };
+  });
 
-  el.innerHTML = `<div class="industry-intel-grid">${sorted.map(t => {
-    const isOver = t.pct > avgConc * 1.5;
-    const isUnder = t.pct < avgConc * 0.5;
-    const cardClass = isOver ? 'overweight' : isUnder ? 'underweight' : 'neutral';
-    const pctColor = isOver ? 'var(--color-text-danger)' : isUnder ? 'var(--color-text-info)' : 'var(--color-text-secondary)';
-    const alphaColor = t.totalAlpha === null ? 'var(--color-text-tertiary)' : t.totalAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-    const color = THEME_COLORS[t.theme] || '#94a3b8';
-    const themeKey = t.theme.replace(/[^a-z0-9]/gi, '_');
+  // Average TRUE concentration across themes — basis for the Heavy/Balanced/Light tag, recomputed
+  // on the same true-exposure basis so "above/below average" is internally consistent.
+  const avgTruePct = rows.length > 0 ? rows.reduce((s, r) => s + r.truePct, 0) / rows.length : 0;
 
-    let signal = '';
-    // When the Matured toggle is on, the verdict must read the SAME mature subset the vs-benchmark
-    // line shows — otherwise the card contradicts itself (e.g. "0/1 beating" stat under a "beating —
-    // hold conviction" verdict). When off, use the all-open alpha as before.
-    const verdictAlpha = industryAlphaMatureOnly ? t.matureAlpha : t.totalAlpha;
-    const verdictN = industryAlphaMatureOnly ? t.matureCount : t.positions;
-    // Thin-evidence hedge: a verdict resting on 0-2 seasoned positions is fragile (n=1 at -62pp is
-    // not a "trailing" conclusion, it's one data point). Withhold the confident beat/trail verdict
-    // and say so, rather than swapping one overconfident call for the opposite.
-    const thinEvidence = industryAlphaMatureOnly && verdictN > 0 && verdictN <= 2;
-    if (industryAlphaMatureOnly && verdictN === 0) {
-      signal = isOver ? '⚠ Overweight · no seasoned positions to judge' : 'No seasoned positions ≥' + MATURITY_DAYS + 'd';
-    } else if (thinEvidence) {
-      const dir = verdictAlpha === null ? '' : verdictAlpha >= 0 ? ' (currently ahead)' : ' (currently behind)';
-      signal = (isOver ? '⚠ Overweight · ' : '') + 'thin evidence — only ' + verdictN + ' seasoned position' + (verdictN === 1 ? '' : 's') + dir;
-    } else if (isOver && verdictAlpha !== null && verdictAlpha < 0) signal = '⚠ Overweight & trailing — review';
-    else if (isOver && verdictAlpha !== null && verdictAlpha > 0) signal = 'Overweight but beating — hold conviction';
-    else if (isUnder && verdictAlpha !== null && verdictAlpha > 0) signal = '↑ Underweight & beating — consider adding';
-    else if (isUnder) signal = 'Underweight — gap to fill if convicted';
-    else if (verdictAlpha !== null && verdictAlpha < 0) signal = 'Trailing — worth reviewing';
-    else signal = 'Balanced';
+  // Sort by TRUE exposure descending (biggest real risk on top) unless a sort override is set.
+  const sortKey = (typeof intelSortKey !== 'undefined' && intelSortKey) ? intelSortKey : 'truePct';
+  const sortDir = (typeof intelSortDir !== 'undefined' && intelSortDir) ? intelSortDir : 'desc';
+  rows.sort((a, b) => {
+    let av, bv;
+    if (sortKey === 'theme') { av = a.theme; bv = b.theme; return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av); }
+    if (sortKey === 'alloc') { av = a.allocPct; bv = b.allocPct; }
+    else if (sortKey === 'incidental') { av = a.incidentalPct; bv = b.incidentalPct; }
+    else if (sortKey === 'alpha') { av = a.verdictAlpha == null ? -Infinity : a.verdictAlpha; bv = b.verdictAlpha == null ? -Infinity : b.verdictAlpha; }
+    else { av = a.truePct; bv = b.truePct; }
+    return sortDir === 'asc' ? av - bv : bv - av;
+  });
 
-    const themeValue = open.filter(p => p.theme === t.theme).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
-    const themeInvested = open.filter(p => p.theme === t.theme).reduce((s, p) => s + (calcPos(p).invested || 0), 0);
-
-    // Theme-α (vs sector ETF) total — respects the matured toggle, same set as the verdict.
-    // This is a DIFFERENT lens than Dollar Alpha (vs SPX): a position can beat the broad market
-    // while trailing its hotter sector, so these two can disagree in sign. We flag that below.
-    const themeAlphaSet = open.filter(p => {
-      if (p.theme !== t.theme) return false;
-      if (!industryAlphaMatureOnly) return true;
-      if (!p.dateBought) return false;
-      const b = new Date(p.dateBought); if (isNaN(b)) return false;
-      return Math.floor((_now - b.getTime()) / 86400000) >= MATURITY_DAYS;
-    }).map(p => calcThemeAlpha(p)).filter(ta => ta !== null);
-    const themeAlphaTotal = themeAlphaSet.length > 0 ? themeAlphaSet.reduce((s, ta) => s + ta.themeAlphaDollar, 0) : null;
-    // Sign divergence between the two lenses (only meaningful when both are computable & non-trivial)
-    const lensDiverge = verdictAlpha !== null && themeAlphaTotal !== null
-      && Math.sign(verdictAlpha) !== Math.sign(themeAlphaTotal)
-      && Math.abs(verdictAlpha) > 100 && Math.abs(themeAlphaTotal) > 100;
-
-    const themePositions = open
-      .filter(p => p.theme === t.theme)
-      .map(p => {
-        const c = calcPos(p);
-        const spxRet = c.spxReturn !== null ? c.spxReturn / 100 : null;
-        const alpha = (spxRet !== null && c.invested > 0)
-          ? (c.exitValue - c.invested) - (c.invested * spxRet) : null;
-        const buyDate = p.dateBought ? new Date(p.dateBought) : null;
-        const daysHeld = buyDate ? Math.floor((new Date() - buyDate) / 86400000) : null;
-        const isLT = daysHeld !== null && daysHeld > 365;
-        const gl = c.gainLoss;
-        const isIRA = (p.account||'').toUpperCase().includes('IRA');
-        let sig, sigClass;
-        if (isIRA) { sig = 'IRA'; sigClass = 'signal-monitor'; }
-        else if (c.result === 'Beat') { sig = 'Hold'; sigClass = 'signal-hold'; }
-        else if (gl < 0) { sig = 'Harvest'; sigClass = 'signal-harvest'; }
-        else if (isLT) { sig = 'Review—LT'; sigClass = 'signal-trail-lt'; }
-        else { sig = 'Wait LT'; sigClass = 'signal-trail-st'; }
-        const aColor = alpha === null ? 'var(--color-text-tertiary)' : alpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-        const gColor = gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-        const pctOfTheme = themeValue > 0 ? ((c.exitValue / themeValue) * 100).toFixed(1) + '%' : '—';
-        const pctOfPort = totalValue > 0 ? ((c.exitValue / totalValue) * 100).toFixed(1) + '%' : '—';
-
-        // Theme-relative alpha for this position
-        const ta = calcThemeAlpha(p);
-        const taColor = ta === null ? 'var(--color-text-tertiary)' : ta.themeAlphaDollar >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-        const taCell = ta === null
-          ? '<span style="color:var(--color-text-tertiary)">—</span>'
-          : (ta.themeAlphaDollar >= 0 ? '+' : '') + fmtDollar(ta.themeAlphaDollar);
-
-        return `<tr style="border-bottom:1px solid var(--color-border-tertiary)">
-          <td style="padding:6px 8px 6px 0;font-weight:700;white-space:nowrap">${esc(p.ticker)}</td>
-          <td style="padding:6px 8px;color:var(--color-text-tertiary);font-size:10px;white-space:nowrap">${esc(p.account||'')}</td>
-          <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:600;color:${daysHeld === null ? 'var(--color-text-tertiary)' : daysHeld < 90 ? 'var(--color-text-danger)' : daysHeld < 365 ? '#fbbf24' : 'var(--color-text-success)'}">${daysHeld === null ? '—' : daysHeld < 30 ? '< 1M' : daysHeld < 90 ? '1–3M' : daysHeld < 180 ? '3–6M' : daysHeld < 365 ? '6–12M' : daysHeld < 730 ? '1–2Y' : '2Y+'}</td>
-          <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--color-text-secondary)">${pctOfTheme}</td>
-          <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--color-text-tertiary)">${pctOfPort}</td>
-          <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--color-text-primary)">${fmtDollarWhole(c.exitValue)}</td>
-          <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:${aColor}">${alpha !== null ? fmtDollar(alpha) : '<span style="color:var(--color-text-tertiary)">—</span>'}</td>
-          <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:${taColor};font-weight:${ta === null ? '400' : '600'}">${taCell}</td>
-          <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:${gColor}">${fmtDollar(gl)}</td>
-          <td style="padding:6px 0 6px 8px;text-align:right;white-space:nowrap"><span class="signal-badge ${sigClass}">${sig}</span></td>
-        </tr>`;
-      }).join('');
-
-    return `<div>
-      <div class="industry-intel-card ${cardClass}" id="card-${themeKey}" style="border-left-color:${color}" onclick="toggleThemeDrill('${themeKey}')">
-        <div class="industry-intel-name">${esc(t.theme)} <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400">↕</span></div>
-        <div style="margin-bottom:6px">${fmtBenchmarkLine(t.theme)}</div>
-        <div class="industry-intel-stats">
-          <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">Concentration</div>
-            <div class="industry-intel-stat-value" style="color:${pctColor}">${t.pct.toFixed(1)}%</div>
-          </div>
-          <div class="industry-intel-stat" title="Direct holdings PLUS what you hold in this theme inside funds you own (VOO/ETFs), as % of total portfolio. Floor only — VOO's untracked tail and any embedded name you don't also hold directly can't be theme-classified.">
-            <div class="industry-intel-stat-label">True exp. ⓘ</div>
-            <div class="industry-intel-stat-value" style="color:#fbbf24">${(() => {
-              const emb = themeEmbedded[t.theme] || 0;
-              const trueVal = themeValue + emb;
-              const truePct = grandTotal > 0 ? (trueVal / grandTotal) * 100 : 0;
-              return emb > 0 ? '≥' + truePct.toFixed(1) + '%' : truePct.toFixed(1) + '%';
-            })()}</div>
-          </div>
-          <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">Invested</div>
-            <div class="industry-intel-stat-value" style="color:var(--color-text-secondary)">${fmtDollarWhole(themeInvested)}</div>
-          </div>
-          <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">Value</div>
-            <div class="industry-intel-stat-value" style="color:var(--color-text-primary)">${fmtDollarWhole(themeValue)}</div>
-          </div>
-          <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">Dollar Alpha${industryAlphaMatureOnly ? ' <span style="opacity:0.6;font-weight:400">(≥' + MATURITY_DAYS + 'd)</span>' : ''} <span style="opacity:0.5;font-weight:400" title="SPX-relative dollar alpha: your return minus what the S&P 500 would have returned on the same capital. Measures performance vs the broad market.">vs SPX ⓘ</span></div>
-            <div class="industry-intel-stat-value" style="color:${verdictAlpha === null ? 'var(--color-text-tertiary)' : verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${verdictAlpha !== null ? fmtDollarWhole(verdictAlpha) : '—'}</div>
-          </div>
-          <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">Theme α${getThemeBenchmark(t.theme) ? ' <span style="opacity:0.6;font-weight:400">vs ' + getThemeBenchmark(t.theme) + '</span>' : ''}${industryAlphaMatureOnly ? ' <span style="opacity:0.6;font-weight:400">(≥' + MATURITY_DAYS + 'd)</span>' : ''} <span style="opacity:0.5;font-weight:400" title="Theme-relative alpha: your return minus the sector ETF over each position's holding window. Measures stock-picking vs just buying the sector. Different lens than Dollar Alpha (vs SPX) — they can disagree.">ⓘ</span></div>
-            <div class="industry-intel-stat-value" style="color:${themeAlphaTotal === null ? 'var(--color-text-tertiary)' : themeAlphaTotal >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${themeAlphaTotal === null ? '—' : (themeAlphaTotal >= 0 ? '+' : '') + fmtDollarWhole(themeAlphaTotal)}</div>
-          </div>
-          <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">G/L</div>
-            <div class="industry-intel-stat-value" style="color:${t.totalAlpha !== null && open.filter(p=>p.theme===t.theme).reduce((s,p)=>s+(calcPos(p).gainLoss||0),0) >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${fmtDollarWhole(open.filter(p=>p.theme===t.theme).reduce((s,p)=>s+(calcPos(p).gainLoss||0),0))}</div>
-          </div>
-          <div class="industry-intel-stat">
-            <div class="industry-intel-stat-label">Positions</div>
-            <div class="industry-intel-stat-value" style="color:var(--color-text-secondary)">${t.positions}</div>
-          </div>
-        </div>
-        <div class="industry-intel-signal">${signal}</div>
-        ${lensDiverge ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px;line-height:1.4">Two lenses disagree: ${verdictAlpha >= 0 ? 'ahead of the S&P' : 'behind the S&P'} but ${themeAlphaTotal >= 0 ? 'ahead of' : 'behind'} ${getThemeBenchmark(t.theme) || 'the sector'}. ${verdictAlpha >= 0 && themeAlphaTotal < 0 ? 'The broad market lifted it; your pick still trails its hotter sector.' : 'Your pick beat its sector but the broad market did better.'}</div>` : ''}
-      </div>
-      <div class="theme-drill" id="drill-${themeKey}">
-        <table style="width:100%;border-collapse:collapse;font-size:11px">
-          <thead>
-            <tr style="border-bottom:1px solid var(--color-border-tertiary)">
-              <th style="text-align:left;padding:4px 8px 4px 0;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">Ticker</th>
-              <th style="text-align:left;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">Account</th>
-              <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">Held</th>
-              <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">% of Industry</th>
-              <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">% of Managed</th>
-              <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">Value $</th>
-              <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">$ Alpha</th>
-              <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap" title="Theme-relative alpha — your dollar gain vs theme benchmark over the same holding period.">${getThemeBenchmark(t.theme) ? 'vs ' + getThemeBenchmark(t.theme) : 'Theme α'}</th>
-              <th style="text-align:right;padding:4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">G/L</th>
-              <th style="text-align:right;padding:4px 0 4px 8px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">Signal</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${themePositions}
-          </tbody>
-        </table>
-      </div>`;
-  }).join('')}</div>`;
-  // Honesty footnote: explain why "True exp." is a floor — embedded exposure we can't theme-classify.
-  if (embeddedTotal > 0) {
-    const classPct = embeddedTotal > 0 ? (embeddedClassified / embeddedTotal) * 100 : 0;
-    el.innerHTML += `<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-top:10px;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">
-      <strong style="color:#fbbf24">True exp. is a floor, not a ceiling.</strong> It adds the exposure inside funds you own (VOO/ETFs) to each theme — but only for embedded names you <em>also</em> hold directly (so we know their theme). Of ${fmtDollarWhole(embeddedTotal)} embedded in your funds, ~${classPct.toFixed(0)}% (${fmtDollarWhole(embeddedClassified)}) could be theme-classified; the rest — VOO's untracked tail and names you don't hold directly — isn't shown in any theme. So your real theme concentration is <em>at least</em> the True exp. figure, likely higher.</div>`;
+  // Weight tag (Heavy / Balanced / Light) from TRUE exposure vs average true concentration.
+  function weightTag(truePct) {
+    if (truePct > avgTruePct * 1.5) return { label: 'Heavy', fg: '#A32D2D', bg: '#FCEBEB' };
+    if (truePct < avgTruePct * 0.5) return { label: 'Light', fg: '#185FA5', bg: '#E6F1FB' };
+    return { label: 'Balanced', fg: '#5F5E5A', bg: '#F1EFE8' };
   }
+  // Picks tag (Beating / Trailing / Thin) from the matured-aware verdict alpha + evidence count.
+  function picksTag(verdictAlpha, verdictN) {
+    if (industryAlphaMatureOnly && verdictN === 0) return { label: 'No data', fg: '#5F5E5A', bg: '#F1EFE8' };
+    if (industryAlphaMatureOnly && verdictN > 0 && verdictN <= 2) return { label: 'Thin', fg: '#5F5E5A', bg: '#F1EFE8' };
+    if (verdictAlpha === null) return { label: '—', fg: '#5F5E5A', bg: '#F1EFE8' };
+    if (verdictAlpha > 0) return { label: 'Beating', fg: '#3B6D11', bg: '#EAF3DE' };
+    if (verdictAlpha < 0) return { label: 'Trailing', fg: '#A32D2D', bg: '#FCEBEB' };
+    return { label: 'Even', fg: '#5F5E5A', bg: '#F1EFE8' };
+  }
+
+  const hdr = (key, label, sub, align) => {
+    const active = sortKey === key;
+    const arrow = active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+    return `<div style="text-align:${align};cursor:pointer;${active ? 'color:var(--color-text-secondary)' : ''}" onclick="setIntelSort('${key}')">${label}${arrow}${sub ? `<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">${sub}</div>` : ''}</div>`;
+  };
+
+  const matToggle = `<div style="display:flex;gap:6px;align-items:center">
+    <span onclick="setIntelMature(false)" style="font-size:10px;cursor:pointer;padding:2px 8px;border-radius:10px;${!industryAlphaMatureOnly ? 'color:#000;background:var(--color-text-info);font-weight:600' : 'color:var(--color-text-tertiary)'}">All open</span>
+    <span onclick="setIntelMature(true)" style="font-size:10px;cursor:pointer;padding:2px 8px;border-radius:10px;${industryAlphaMatureOnly ? 'color:#000;background:var(--color-text-info);font-weight:600' : 'color:var(--color-text-tertiary)'}">Matured ≥${MATURITY_DAYS}d</span>
+  </div>`;
+
+  const tableRows = rows.map(r => {
+    const themeKey = r.theme.replace(/[^a-z0-9]/gi, '_');
+    const color = THEME_COLORS[r.theme] || '#94a3b8';
+    const wt = weightTag(r.truePct);
+    const pk = picksTag(r.verdictAlpha, r.verdictN);
+    const tickersLine = r.d.tickers.slice(0, 6).join(' · ') + (r.d.tickers.length > 6 ? ' +' + (r.d.tickers.length - 6) : '');
+    const truePrefix = r.hasEmbedded ? '≥' : '';
+    const incidPrefix = r.incidentalFloor ? '≥' : '';
+    const alphaStr = r.verdictAlpha === null ? '—' : (r.verdictAlpha >= 0 ? '+' : '') + fmtDollarCompact(r.verdictAlpha);
+    const alphaColor = r.verdictAlpha === null ? 'var(--color-text-tertiary)' : r.verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    return `<div class="intel-row" data-key="${themeKey}" onclick="toggleIntelRow('${themeKey}')" style="display:grid;grid-template-columns:2.2fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 1fr;gap:0;align-items:center;padding:8px 10px;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer">
+      <div>
+        <div style="display:flex;align-items:center;gap:7px"><span style="width:9px;height:9px;border-radius:2px;background:${color};flex-shrink:0"></span><span style="font-weight:500">${esc(r.theme)}</span><span class="intel-caret" id="caret-${themeKey}" style="color:var(--color-text-tertiary);font-size:13px">›</span></div>
+        <div style="font-size:10px;color:var(--color-text-tertiary);margin:3px 0 0 16px;letter-spacing:0.02em">${esc(tickersLine)}</div>
+      </div>
+      <div style="text-align:right;color:var(--color-text-secondary)">${r.allocPct.toFixed(1)}%</div>
+      <div style="text-align:right;color:#BA7517;font-weight:500">${truePrefix}${r.truePct.toFixed(1)}%</div>
+      <div style="text-align:right;color:${r.incidentalPct > 0 ? '#BA7517' : 'var(--color-text-tertiary)'}">${incidPrefix}${r.incidentalPct.toFixed(1)}%</div>
+      <div style="text-align:right;color:${alphaColor}">${alphaStr}</div>
+      <div style="text-align:center"><span style="font-size:9px;color:${wt.fg};background:${wt.bg};padding:2px 7px;border-radius:4px;font-weight:500">${wt.label}</span></div>
+      <div style="text-align:center"><span style="font-size:9px;color:${pk.fg};background:${pk.bg};padding:2px 7px;border-radius:4px;font-weight:500">${pk.label}</span></div>
+    </div>
+    <div class="intel-drill" id="intel-drill-${themeKey}" style="display:none">${renderIntelDeepDive(r, totalValue, grandTotal)}</div>`;
+  }).join('');
+
+  // Footnote: true exp / incidental are floors.
+  let footnote = '';
+  if (embeddedTotal > 0) {
+    const classPct = (embeddedClassified / embeddedTotal) * 100;
+    footnote = `<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-top:10px;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">
+      <strong style="color:#BA7517">≥ means floor.</strong> True exposure adds what you hold in each theme inside your funds. Of ${fmtDollarWhole(embeddedTotal)} embedded across your funds, ~${classPct.toFixed(0)}% could be theme-classified; the rest (VOO's untracked tail) isn't shown in any theme — so true exposure and incidental are <em>at least</em> the figures shown, likely higher.</div>`;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:11px;color:var(--color-text-tertiary)">Click a row to expand · sorted by ${sortKey === 'truePct' ? 'true exposure' : sortKey}</div>
+      ${matToggle}
+    </div>
+    <div style="display:grid;grid-template-columns:2.2fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 1fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:0 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
+      ${hdr('theme', 'Theme &amp; positions', '', 'left')}
+      ${hdr('alloc', 'Alloc', '% sleeve', 'right')}
+      ${hdr('truePct', 'True exp', '% port', 'right')}
+      ${hdr('incidental', 'Incid.', '% port', 'right')}
+      ${hdr('alpha', 'Alpha', 'vs SPX', 'right')}
+      <div style="text-align:center">Weight</div>
+      <div style="text-align:center">Picks</div>
+    </div>
+    ${tableRows}
+    ${footnote}`;
+}
+
+// Deep-dive content for an expanded theme row: two lenses + 3-bucket build-up + financial stats +
+// the per-position drill table. r is the row object from renderThemeIntel.
+function renderIntelDeepDive(r, totalValue, grandTotal) {
+  const color = THEME_COLORS[r.theme] || '#94a3b8';
+  const bench = getThemeBenchmark(r.theme);
+  // 3-bucket build-up widths (% of the true total, for the bar)
+  const tv = r.trueVal || 1;
+  const wDirect = (r.directVal / tv) * 100;
+  const wSector = (r.sectorEtf / tv) * 100;
+  const wIncid = (r.incidental / tv) * 100;
+  const truePrefix = r.hasEmbedded ? '≥' : '';
+
+  const buckets = [];
+  buckets.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px"><span style="width:10px;height:10px;background:#378ADD;border-radius:2px;flex-shrink:0"></span><span style="font-weight:500;min-width:96px">Direct ${r.directPct.toFixed(1)}%</span><span style="color:var(--color-text-tertiary)">names you bought individually</span></div>`);
+  if (r.sectorEtf > 0) buckets.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px"><span style="width:10px;height:10px;background:#185FA5;border-radius:2px;flex-shrink:0"></span><span style="font-weight:500;min-width:96px">Sector ETF ${r.sectorEtfPct.toFixed(1)}%</span><span style="color:var(--color-text-tertiary)">${bench ? esc(bench) : 'your theme ETF'} — intentional sector bet</span></div>`);
+  if (r.incidental > 0) buckets.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px"><span style="width:10px;height:10px;background:repeating-linear-gradient(45deg,#BA7517,#BA7517 2px,transparent 2px,transparent 4px);border:0.5px solid #BA7517;border-radius:2px;flex-shrink:0"></span><span style="color:#BA7517;font-weight:500;min-width:96px">≥${r.incidentalPct.toFixed(1)}%</span><span style="color:var(--color-text-secondary)"><strong style="color:#BA7517">incidental</strong> — names inside broad funds (VOO) you never chose</span></div>`);
+
+  const buildup = `
+    <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:11px 13px 13px;margin-bottom:12px">
+      <div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:10px">What makes up that ${truePrefix}${r.truePct.toFixed(1)}% <span style="color:var(--color-text-tertiary)">(% of whole portfolio)</span></div>
+      <div style="position:relative;height:13px;margin:0 0 9px;border-radius:4px;overflow:hidden;background:var(--color-background-secondary)">
+        <div style="position:absolute;left:0;top:0;height:13px;width:${wDirect.toFixed(1)}%;background:#378ADD"></div>
+        <div style="position:absolute;left:${wDirect.toFixed(1)}%;top:0;height:13px;width:${wSector.toFixed(1)}%;background:#185FA5"></div>
+        <div style="position:absolute;left:${(wDirect + wSector).toFixed(1)}%;top:0;height:13px;width:${wIncid.toFixed(1)}%;background:repeating-linear-gradient(45deg,#BA7517,#BA7517 3px,transparent 3px,transparent 6px)"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">${buckets.join('')}</div>
+    </div>`;
+
+  // Theme-α (vs sector ETF), matured-aware — same set as verdict.
+  const _now = Date.now();
+  const themeAlphaSet = positions.filter(p => {
+    if (p.closed || p.theme !== r.theme) return false;
+    if (!industryAlphaMatureOnly) return true;
+    if (!p.dateBought) return false;
+    const b = new Date(p.dateBought); if (isNaN(b)) return false;
+    return Math.floor((_now - b.getTime()) / 86400000) >= MATURITY_DAYS;
+  }).map(p => calcThemeAlpha(p)).filter(ta => ta !== null);
+  const themeAlphaTotal = themeAlphaSet.length > 0 ? themeAlphaSet.reduce((s, ta) => s + ta.themeAlphaDollar, 0) : null;
+  const lensDiverge = r.verdictAlpha !== null && themeAlphaTotal !== null
+    && Math.sign(r.verdictAlpha) !== Math.sign(themeAlphaTotal)
+    && Math.abs(r.verdictAlpha) > 100 && Math.abs(themeAlphaTotal) > 100;
+
+  const lenses = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px">
+        <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Allocation</div>
+        <div style="font-size:22px;font-weight:500;line-height:1.1">${r.allocPct.toFixed(1)}<span style="font-size:14px">%</span></div>
+        <div style="font-size:10px;color:var(--color-text-secondary);margin-top:2px">of your active managed sleeve</div>
+        <div style="font-size:10px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.4">how much of your active picks you steered here</div>
+      </div>
+      <div style="background:var(--color-background-primary);border:0.5px solid #BA7517;border-left:3px solid #BA7517;border-radius:var(--border-radius-md);padding:10px 12px">
+        <div style="font-size:10px;color:#BA7517;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">True exposure · risk</div>
+        <div style="font-size:22px;font-weight:500;line-height:1.1;color:#BA7517">${truePrefix}${r.truePct.toFixed(1)}<span style="font-size:14px">%</span></div>
+        <div style="font-size:10px;color:var(--color-text-secondary);margin-top:2px">of your whole portfolio</div>
+        <div style="font-size:10px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.4">all the ${esc(r.theme.toLowerCase())} risk you carry, however held</div>
+      </div>
+    </div>`;
+
+  const dollarAlphaColor = r.verdictAlpha === null ? 'var(--color-text-tertiary)' : r.verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const themeAlphaColor = themeAlphaTotal === null ? 'var(--color-text-tertiary)' : themeAlphaTotal >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const glColor = r.d.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const matSuffix = industryAlphaMatureOnly ? ' (≥' + MATURITY_DAYS + 'd)' : '';
+  const stats = `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px"><div style="font-size:9px;color:var(--color-text-tertiary)">Dollar Alpha vs SPX${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${dollarAlphaColor}">${r.verdictAlpha !== null ? fmtDollarWhole(r.verdictAlpha) : '—'}</div></div>
+      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px"><div style="font-size:9px;color:var(--color-text-tertiary)">Theme α${bench ? ' vs ' + esc(bench) : ''}${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${themeAlphaColor}">${themeAlphaTotal === null ? '—' : (themeAlphaTotal >= 0 ? '+' : '') + fmtDollarWhole(themeAlphaTotal)}</div></div>
+      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px"><div style="font-size:9px;color:var(--color-text-tertiary)">G/L · ${r.d.positions} pos</div><div style="font-size:13px;font-weight:500;color:${glColor}">${fmtDollarWhole(r.d.gl)}</div></div>
+    </div>`;
+
+  const divergeNote = lensDiverge ? `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-top:10px;line-height:1.45">Two lenses disagree: ${r.verdictAlpha >= 0 ? 'ahead of the S&P' : 'behind the S&P'} but ${themeAlphaTotal >= 0 ? 'ahead of' : 'behind'} ${bench || 'the sector'}. ${r.verdictAlpha >= 0 && themeAlphaTotal < 0 ? 'The broad market lifted it; your pick still trails its hotter sector.' : 'Your pick beat its sector but the broad market did better.'}</div>` : '';
+
+  return `<div style="background:var(--color-background-secondary);border-radius:0 0 var(--border-radius-md) var(--border-radius-md);border-left:3px solid ${color};padding:12px 14px 14px">
+    <div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 12px">${fmtBenchmarkLine(r.theme)}</div>
+    ${lenses}
+    ${buildup}
+    ${stats}
+    ${divergeNote}
+  </div>`;
 }
 // ─────────────────────────────────────────────
 function renderAccountBreakdown() {
@@ -8826,7 +8869,7 @@ let sleeveViewMode = 'total'; // 'total' or 'sleeve'
 function toggleSleeveView() {
   sleeveViewMode = sleeveViewMode === 'total' ? 'sleeve' : 'total';
   const btn = document.getElementById('sleeve-view-toggle');
-  if (btn) btn.textContent = sleeveViewMode === 'total' ? '% of Total' : '% of Active';
+  if (btn) btn.textContent = sleeveViewMode === 'total' ? '% of portfolio' : '% of active managed sleeve';
   renderSleeveBreakdown();
 }
 
@@ -8862,7 +8905,7 @@ function renderSleeveBreakdown() {
     const d = sleeveData[sleeve] || { value: 0, positions: 0 };
     const denominator = sleeveViewMode === 'sleeve' ? activeValue : totalPortfolio;
     const pct = denominator > 0 ? (d.value / denominator) * 100 : 0;
-    const pctLabel = sleeveViewMode === 'sleeve' ? '% of Active' : '% of Total';
+    const pctLabel = sleeveViewMode === 'sleeve' ? '% of active managed sleeve' : '% of portfolio';
     const target = SLEEVE_TARGETS[sleeve];
     const color = SLEEVE_COLORS[sleeve];
     const isOver = pct > target.max;
