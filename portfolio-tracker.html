@@ -1363,16 +1363,7 @@
   <div class="tab-panel" id="tab-analysis">
     <div class="section-heading">Sleeve Performance &amp; Value-Add — Is the Active Work Justified?</div>
     <div id="sleeve-valueadd-wrap" style="margin-bottom:24px"></div>
-    <div class="section-heading">Industry Intelligence
-      <span style="margin-left:12px;font-weight:400;text-transform:none;letter-spacing:0">
-        <span id="conc-toggle-sleeve" onclick="setConcMode('sleeve')" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;background:var(--color-text-info);color:#000;font-weight:600">% of active managed sleeve</span>
-        <span id="conc-toggle-total" onclick="setConcMode('total')" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">% of portfolio</span>
-      </span>
-      <span style="margin-left:16px;font-weight:400;text-transform:none;letter-spacing:0" title="Filter theme alpha aggregates to positions held ≥180 days. Affects both Industry Intelligence and Industry Spotlight.">
-        <span id="indalpha-toggle-all-rebal" onclick="toggleIndustryAlphaMature(false)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">All Open</span>
-        <span id="indalpha-toggle-mature-rebal" onclick="toggleIndustryAlphaMature(true)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">Matured (≥180d)</span>
-      </span>
-    </div>
+    <div class="section-heading">Industry Intelligence</div>
     <div id="theme-intel-wrap" style="margin-bottom:20px"></div>
 
     <div class="section-heading" style="margin-top:24px">Add Candidates</div>
@@ -4291,10 +4282,10 @@ function renderThemeIntel() {
     if (truePct < avgTruePct * 0.5) return { label: 'Light', fg: '#185FA5', bg: '#E6F1FB' };
     return { label: 'Balanced', fg: '#5F5E5A', bg: '#F1EFE8' };
   }
-  // Picks tag (Beating / Trailing / Thin) from the matured-aware verdict alpha + evidence count.
+  // Picks tag (Beating / Trailing / Too few / No data) from the matured-aware verdict alpha + count.
   function picksTag(verdictAlpha, verdictN) {
     if (industryAlphaMatureOnly && verdictN === 0) return { label: 'No data', fg: '#5F5E5A', bg: '#F1EFE8' };
-    if (industryAlphaMatureOnly && verdictN > 0 && verdictN <= 2) return { label: 'Thin', fg: '#5F5E5A', bg: '#F1EFE8' };
+    if (industryAlphaMatureOnly && verdictN > 0 && verdictN <= 2) return { label: 'Too few', fg: '#5F5E5A', bg: '#F1EFE8' };
     if (verdictAlpha === null) return { label: '—', fg: '#5F5E5A', bg: '#F1EFE8' };
     if (verdictAlpha > 0) return { label: 'Beating', fg: '#3B6D11', bg: '#EAF3DE' };
     if (verdictAlpha < 0) return { label: 'Trailing', fg: '#A32D2D', bg: '#FCEBEB' };
@@ -4350,14 +4341,14 @@ function renderThemeIntel() {
       <div style="font-size:11px;color:var(--color-text-tertiary)">Click a row to expand · sorted by ${sortKey === 'truePct' ? 'true exposure' : sortKey}</div>
       ${matToggle}
     </div>
-    <div style="display:grid;grid-template-columns:2.2fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 1fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:0 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
+    <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:2.2fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 1fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
       ${hdr('theme', 'Theme &amp; positions', '', 'left')}
       ${hdr('alloc', 'Alloc', '% sleeve', 'right')}
       ${hdr('truePct', 'True exp', '% port', 'right')}
       ${hdr('incidental', 'Incid.', '% port', 'right')}
       ${hdr('alpha', 'Alpha', 'vs SPX', 'right')}
       <div style="text-align:center">Weight</div>
-      <div style="text-align:center">Picks</div>
+      <div style="text-align:center">Stock-picking<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">vs SPX</div></div>
     </div>
     ${tableRows}
     ${footnote}`;
@@ -6402,16 +6393,38 @@ function renderDistributionTab() {
   const perfRows = [];
   if (sp && sp.totalShares > 0) {
     const ret = sp.totalInvested > 0 && sp.price > 0 ? (sp.gl / sp.totalInvested) * 100 : null;
-    perfRows.push({ fund: 'VOO (Passive Core)', invested: sp.totalInvested, value: sp.price>0?sp.currentValue:sp.totalInvested, gl: sp.gl, ret });
+    // VOO IS the S&P, so its alpha vs S&P is ~0 by construction, and it has no single theme.
+    perfRows.push({ fund: 'VOO (Passive Core)', invested: sp.totalInvested, value: sp.price>0?sp.currentValue:sp.totalInvested, gl: sp.gl, ret, spxAlpha: 0, spxAlphaPp: 0, themeAlpha: null, themeAlphaPp: null, themeBench: null, isVoo: true });
   }
   const etfAgg = {};
   positions.filter(p=>!p.closed && p.ticker && p.isETF===true).forEach(p=>{
     const c=calcPos(p); const inv=(parseFloat(p.shares)||0)*(parseFloat(p.pricePaid)||0); const val=c.exitValue||0;
     const k=p.ticker.toUpperCase();
-    if(!etfAgg[k]) etfAgg[k]={fund:k,invested:0,value:0};
+    if(!etfAgg[k]) etfAgg[k]={fund:k,invested:0,value:0,spxAlphaSum:0,spxAlphaInv:0,themeAlphaSum:0,themeAlphaInv:0,themeBench:(typeof getThemeBenchmark==='function'?getThemeBenchmark(p.theme):null)};
     etfAgg[k].invested+=inv; etfAgg[k].value+=val;
+    // α vs S&P (per lot): fund's return minus what the S&P returned on the same capital, in dollars.
+    const paid=parseFloat(p.pricePaid)||0, exitP=parseFloat(p.exitPrice)||0;
+    if (paid>0 && exitP>0 && p.spxBuy && p.spxExit) {
+      const fundRet=(exitP-paid)/paid;
+      const spxRet=(p.spxExit-p.spxBuy)/p.spxBuy;
+      etfAgg[k].spxAlphaSum += (fundRet - spxRet) * inv;
+      etfAgg[k].spxAlphaInv += inv;
+    }
+    // α vs Theme (per lot): reuse calcThemeAlpha — null when the fund IS its own benchmark gives ~0,
+    // null when benchmark data is missing. Only accumulate lots that produce a value.
+    if (typeof calcThemeAlpha==='function') {
+      const ta=calcThemeAlpha(p);
+      if (ta!==null) { etfAgg[k].themeAlphaSum += ta.themeAlphaDollar; etfAgg[k].themeAlphaInv += inv; }
+    }
   });
-  Object.values(etfAgg).forEach(e=>{ e.gl=e.value-e.invested; e.ret=e.invested>0?(e.gl/e.invested)*100:null; perfRows.push(e); });
+  Object.values(etfAgg).forEach(e=>{
+    e.gl=e.value-e.invested; e.ret=e.invested>0?(e.gl/e.invested)*100:null;
+    e.spxAlpha = e.spxAlphaInv>0 ? e.spxAlphaSum : null;
+    e.spxAlphaPp = e.spxAlphaInv>0 ? (e.spxAlphaSum/e.spxAlphaInv)*100 : null;
+    e.themeAlpha = e.themeAlphaInv>0 ? e.themeAlphaSum : null;
+    e.themeAlphaPp = e.themeAlphaInv>0 ? (e.themeAlphaSum/e.themeAlphaInv)*100 : null;
+    perfRows.push(e);
+  });
 
   // Plain-English source label for stocks-only mode.
   const srcLabel = (sources) => {
@@ -6484,12 +6497,19 @@ function renderDistributionTab() {
 
   const fundsNote = Object.entries(activeFunds).map(([f,info])=>`${esc(f)} (~${fmtDollarWhole(info.value)}, as of ${esc(info.asOf||'?')})`).join(' · ') || 'none yet — paste fund holdings in New Position Evaluation → Index look-through';
 
+  const fundAlphaCell = (dollar, pp, benchLabel) => {
+    if (dollar === null) return `<td style="padding:3px 8px;text-align:right;color:var(--color-text-tertiary)">—</td>`;
+    const col = dollar >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    return `<td style="padding:3px 8px;text-align:right;color:${col}"><div>${dollar>=0?'+':''}${fmtDollarWhole(dollar)}</div><div style="font-size:8px;color:var(--color-text-tertiary)">${pp>=0?'+':''}${pp.toFixed(1)}pp${benchLabel?' vs '+esc(benchLabel):''}</div></td>`;
+  };
   const perfBody = perfRows.sort((a,b)=>b.value-a.value).map(p=>`<tr>
     <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(p.fund)}</td>
     <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(p.invested)}</td>
     <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(p.value)}</td>
     <td style="padding:3px 8px;text-align:right;color:${p.gl>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${p.gl>=0?'+':''}${fmtDollarWhole(p.gl)}</td>
     <td style="padding:3px 8px;text-align:right;color:${(p.ret||0)>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${p.ret!=null?(p.ret>=0?'+':'')+p.ret.toFixed(1)+'%':'—'}</td>
+    ${fundAlphaCell(p.spxAlpha, p.spxAlphaPp, null)}
+    ${p.isVoo ? `<td style="padding:3px 8px;text-align:right;color:var(--color-text-tertiary)" title="VOO is broad — no single theme to measure against">n/a</td>` : fundAlphaCell(p.themeAlpha, p.themeAlphaPp, p.themeBench)}
   </tr>`).join('');
 
   const toggle = `<div style="display:flex;gap:4px;margin-bottom:10px">
@@ -6539,8 +6559,10 @@ function renderDistributionTab() {
           <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Value</th>
           <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">G/L</th>
           <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Return</th>
+          <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)" title="The fund's return minus what the S&P 500 would have returned on the same capital over the same holding window.">α vs S&amp;P</th>
+          <th style="padding:4px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)" title="The fund's return minus its theme's benchmark ETF. ~0 when the fund IS its own theme benchmark (e.g. SMH); meaningful when different (e.g. DRAM vs SMH). '—' when benchmark price data isn't loaded.">α vs Theme</th>
         </tr></thead>
-        <tbody>${perfBody || '<tr><td colspan="5" style="padding:8px;color:var(--color-text-tertiary);font-size:10px">No funds held.</td></tr>'}</tbody>
+        <tbody>${perfBody || '<tr><td colspan="7" style="padding:8px;color:var(--color-text-tertiary);font-size:10px">No funds held.</td></tr>'}</tbody>
       </table>
     </div>`;
   }
