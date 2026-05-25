@@ -2214,6 +2214,7 @@ let spxLiveDate = null;
 let polygonKey = '';
 let avWorkerUrl = ''; // Cloudflare worker base URL that proxies Alpha Vantage ETF_PROFILE (key stays server-side)
 let aiWorkerUrl = ''; // Cloudflare worker base URL that proxies the Anthropic Messages API (key stays server-side; CORS fix)
+let priceWorkerUrl = ''; // Cloudflare worker base URL that proxies Yahoo Finance (adds CORS header GitHub Pages needs). Calls <priceWorkerUrl>/yahoo?url=<encoded yahoo url>. Empty = direct call (works locally, blocked on Pages).
 let saveTimeout = null;
 let cashBuckets = { Taxable: 0, IRA: 0 };
 let cashLedger = [];
@@ -2476,8 +2477,23 @@ const PROXY_BASES = [
   'https://query2.finance.yahoo.com'
 ];
 
-async function yahooFetch(url) {
-  const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+async function yahooFetch(url, _attempt) {
+  // Yahoo doesn't send CORS headers, so direct browser calls are blocked from GitHub Pages. If a
+  // price-proxy worker is configured, route through it (it fetches server-side and adds the header).
+  // No worker set → direct call (works when running locally; fails on Pages — that's the CORS wall).
+  if (!priceWorkerUrl) loadPriceWorkerUrl();
+  const fetchUrl = priceWorkerUrl ? `${priceWorkerUrl}/yahoo?url=${encodeURIComponent(url)}` : url;
+  const resp = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } });
+  // 429 = rate limited. Back off and retry (up to 3 attempts, increasing delay) rather than failing —
+  // free Yahoo/worker tiers throttle bursts, so a brief wait usually clears it.
+  if (resp.status === 429) {
+    const attempt = _attempt || 0;
+    if (attempt < 3) {
+      await new Promise(r => setTimeout(r, 700 * (attempt + 1))); // 0.7s, 1.4s, 2.1s
+      return yahooFetch(url, attempt + 1);
+    }
+    throw new Error('rate limited (429) — wait a moment and retry');
+  }
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
@@ -6780,6 +6796,13 @@ function loadAiWorkerUrl() {
 function saveAiWorkerUrl(u) {
   aiWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
   try { localStorage.setItem('ai_worker_url', aiWorkerUrl); } catch(e) {}
+}
+function loadPriceWorkerUrl() {
+  try { const u = localStorage.getItem('price_worker_url'); if (u) priceWorkerUrl = u; } catch(e) {}
+}
+function savePriceWorkerUrl(u) {
+  priceWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
+  try { localStorage.setItem('price_worker_url', priceWorkerUrl); } catch(e) {}
 }
 
 // Normalize an Alpha Vantage ETF_PROFILE response into the common shape.
@@ -13696,7 +13719,7 @@ async function fetchCardPerformance(tickersJson, btnId) {
       fail++;
     }
     updatePerfSlot(key);
-    await new Promise(r => setTimeout(r, 180)); // polite spacing between calls
+    await new Promise(r => setTimeout(r, 450)); // polite spacing between calls (wider to avoid 429 bursts)
   }
   if (btn) {
     btn.disabled = false;
@@ -13877,6 +13900,16 @@ function renderThemeDiscovery() {
       <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
         Names inside the funds you've pasted that you <strong>don't own</strong>, in themes you're lightest in. <span style="color:#34d399">Niche-fund finds</span> (from small-cap/thematic ETFs) lead — those are the names you likely haven't seen. <span style="color:var(--color-text-tertiary)">Broad-fund buckets</span> (sector ETFs full of household names) are dimmed below. Each name shows how heavily its fund bets on it — a <em>top holding</em> in a specialist fund is a stronger signal than a tail position. <strong style="color:var(--color-text-secondary)">Candidates to investigate — not a buy signal, not stock analysis.</strong>
       </div>
+      <details style="margin-bottom:10px"${priceWorkerUrl ? '' : ' open'}>
+        <summary style="font-size:8px;color:var(--color-text-tertiary);cursor:pointer">Price source: ${priceWorkerUrl ? '<span style="color:#34d399">✓ worker set</span>' : '<span style="color:#fbbf24">⚠ not set — Yahoo blocks direct calls from GitHub Pages, so "Fetch performance" needs a proxy worker URL</span>'}</summary>
+        <div style="margin-top:6px;font-size:9px;color:var(--color-text-tertiary);line-height:1.5">
+          Paste a Cloudflare worker URL that proxies Yahoo (route <code>/yahoo?url=&lt;encoded&gt;</code>). This also fixes Refresh Prices &amp; Get Benchmarks app-wide.
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <input id="price-worker-url" type="text" value="${esc(priceWorkerUrl)}" placeholder="https://your-worker.workers.dev" style="flex:1;min-width:180px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px">
+            <button class="btn btn-sm" onclick="savePriceWorkerUrl(document.getElementById('price-worker-url').value); renderThemeDiscovery()" style="font-size:9px">Save</button>
+          </div>
+        </div>
+      </details>
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
@@ -17356,6 +17389,7 @@ async function init() {
   }
   loadPolygonKey();
   loadAvWorkerUrl();
+  loadPriceWorkerUrl();
   taxLoadProfile(); // load + apply saved tax profile before first render
   restoreSpxInput();
   renderCashDisplay();
