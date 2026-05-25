@@ -6219,7 +6219,7 @@ function computeTrueExposure() {
       byName[c.key].embedded += dollars;
     }
   });
-  const rows = Object.values(byName).map(r => ({ ...r, total: r.direct + r.embedded }))
+  const rows = Object.entries(byName).map(([key, r]) => ({ ...r, key, total: r.direct + r.embedded }))
     .filter(r => r.total > 0)
     .sort((a, b) => b.total - a.total);
   return { rows, activeFunds };
@@ -12916,6 +12916,116 @@ function computeThemeExposure(themeName) {
 }
 
 // ─────────────────────────────────────────────
+// MOVES-TOGETHER CLUSTERS — group your TRUE-exposure names (direct + inside every fund you hold)
+// into blocks that tend to move together, expressed through YOUR HOLDINGS, not benchmark-vs-benchmark.
+// This answers "how much of me is one bet." Honest limits, same as everywhere:
+//   • Clustering is by THEME (how you think about it), with the shared-FUND linkage as the visible
+//     "why" (e.g. these move together because they're all chips AND all sit inside SMH/VOO).
+//   • This is STRUCTURAL co-movement (same theme / same funds), NOT measured return correlation —
+//     no per-stock return history exists. A name can buck its cluster.
+// Assignment priority per name: (1) a direct position's theme tag is authoritative; (2) else the
+// theme-benchmark fund where the name carries its HIGHEST weight (most characteristic); (3) else, if
+// it only shows up as a small constituent with no theme signal, it's "diversified base" (VOO's tail)
+// — NOT a bet. Crucially, a name owned ONLY via funds (e.g. GOOGL via QQQ/VOO) still clusters into
+// its theme — "via-fund only" ≠ "base"; what matters is whether it belongs to a bet.
+// Themes sharing a benchmark (SMH backs Semiconductors + AI Infrastructure) MERGE into one cluster.
+// User overrides (clusterOverrides: {canonKey: themeName}) win over all automatic assignment.
+// ─────────────────────────────────────────────
+function loadClusterOverrides() {
+  try { const r = localStorage.getItem('portfolio-cluster-overrides-v1'); return r ? JSON.parse(r) : {}; } catch (e) { return {}; }
+}
+function saveClusterOverrides(o) {
+  try { localStorage.setItem('portfolio-cluster-overrides-v1', JSON.stringify(o)); } catch (e) {}
+}
+
+function computeThemeClusters() {
+  const { rows } = computeTrueExposure();
+  const totalBook = rows.reduce((s, r) => s + r.total, 0);
+
+  // theme -> benchmark, and benchmark -> [themes] (for the merge label).
+  const themeBench = {};
+  themeUniverseAll().forEach(t => { if (t.ticker) themeBench[t.name] = t.ticker.toUpperCase(); });
+  const benchToThemes = {};
+  Object.entries(themeBench).forEach(([thm, b]) => { (benchToThemes[b] = benchToThemes[b] || []).push(thm); });
+  // Canonical cluster label for a benchmark: merges shared-benchmark themes explicitly.
+  const clusterLabelForBench = (b) => benchToThemes[b] ? benchToThemes[b].join(' + ') + ' (' + b + ')' : null;
+
+  // Direct theme tags (authoritative), keyed canonically.
+  const directTheme = {};
+  positions.filter(p => !p.closed && p.ticker && p.theme).forEach(p => { directTheme[qrCanonical(p.ticker).key] = p.theme; });
+
+  // For each canonical name: across THEME-benchmark funds, the summed weight per fund (dual classes
+  // collapse to one key, so GOOGL+GOOG combine). Used to pick the most-characteristic theme.
+  const nameThemeFundW = {}; // canonKey -> { FUND -> summed weight }
+  const store = getIndexLookthrough();
+  Object.entries(store).forEach(([fund, tbl]) => {
+    const FT = fund.toUpperCase();
+    if (!benchToThemes[FT] || !tbl.weights) return; // only theme-benchmark funds carry a theme signal
+    Object.entries(tbl.weights).forEach(([tk, w]) => {
+      if (w == null) return;
+      const k = qrCanonical(tk).key;
+      nameThemeFundW[k] = nameThemeFundW[k] || {};
+      nameThemeFundW[k][FT] = (nameThemeFundW[k][FT] || 0) + w;
+    });
+  });
+
+  const overrides = loadClusterOverrides();
+
+  // Assign each true-exposure row to a cluster label (or base), tracking WHY.
+  // Use the row's PRECOMPUTED canonical key (r.key) — re-canonicalizing r.display would fail, since
+  // display is a human label like "GOOGL/GOOG (Alphabet)", not a ticker.
+  const assign = (r) => {
+    const k = r.key;
+    if (overrides[k]) { // user override wins; map theme -> merged label if it has a benchmark
+      const b = themeBench[overrides[k]];
+      return { label: b ? clusterLabelForBench(b) : overrides[k], why: 'you assigned this', isBase: false, key: k };
+    }
+    if (directTheme[k]) {
+      const b = themeBench[directTheme[k]];
+      return { label: b ? clusterLabelForBench(b) : directTheme[k], why: 'your direct position is tagged ' + directTheme[k], isBase: false, key: k };
+    }
+    const fw = nameThemeFundW[k];
+    if (fw && Object.keys(fw).length) {
+      const bestFund = Object.entries(fw).sort((a, b) => b[1] - a[1])[0][0];
+      return { label: clusterLabelForBench(bestFund), why: 'sits in ' + bestFund + ' (' + fw[bestFund].toFixed(1) + '%)', isBase: false, key: k };
+    }
+    return { label: '__BASE__', why: 'only a broad-index constituent — no theme signal', isBase: true, key: k };
+  };
+
+  const clusters = {};
+  let base = { total: 0, names: [] };
+  rows.forEach(r => {
+    const a = assign(r);
+    if (a.isBase) { base.total += r.total; base.names.push({ display: r.display, total: r.total, key: a.key }); return; }
+    if (!clusters[a.label]) clusters[a.label] = { label: a.label, total: 0, names: [] };
+    clusters[a.label].total += r.total;
+    clusters[a.label].names.push({ display: r.display, total: r.total, why: a.why, key: a.key, direct: r.direct, viaFunds: r.viaFunds });
+  });
+
+  const ranked = Object.values(clusters).map(c => ({
+    ...c,
+    pct: totalBook > 0 ? (c.total / totalBook) * 100 : 0,
+    names: c.names.sort((a, b) => b.total - a.total)
+  })).sort((a, b) => b.total - a.total);
+
+  // Headline metrics: biggest block %, and effective independent bets (1/HHI over clusters+base,
+  // treating base as one diversified lump). HHI on the share-of-book of each block.
+  const blocks = [...ranked.map(c => c.pct / 100)];
+  if (base.total > 0) blocks.push(base.total / totalBook);
+  const hhi = blocks.reduce((s, x) => s + x * x, 0);
+  const effectiveBets = hhi > 0 ? 1 / hhi : 0;
+
+  return {
+    totalBook,
+    clusters: ranked,
+    base: { total: base.total, pct: totalBook > 0 ? (base.total / totalBook) * 100 : 0, names: base.names.sort((a, b) => b.total - a.total) },
+    biggest: ranked[0] || null,
+    effectiveBets,
+    allThemes: Object.keys(themeBench).sort() // for the override UI in stage 2
+  };
+}
+
+// ─────────────────────────────────────────────
 // Theme-benchmark holdings + overlap (structural correlation proxy)
 // Holdings are stored in the SHARED index look-through store (keyed by fund ticker), so a
 // benchmark's holdings pasted here also feed the look-through math, and vice-versa — one source
@@ -13089,132 +13199,142 @@ function renderThemeUniverse() {
     <div id="theme-discovery" style="margin-top:18px"></div>
     <div id="theme-bench-holdings-panel" style="margin-top:18px"></div>
   `;
-  renderThemeDiversification();
+  renderThemeClusters();
   renderThemeDiscovery();
   renderThemeBenchmarkPanel();
 }
 
 // ─────────────────────────────────────────────
-// Phase 2: diversification analysis — concentration (benchmark-deduped) + overlap proxy.
-// Two honest halves shown side by side, NOT multiplied into a composite:
-//   • Concentration: exact. Theme exposure with shared-benchmark themes collapsed (SMH backs both
-//     Semiconductors and AI Infrastructure, so they're ONE bet, not two).
-//   • Overlap: a structural proxy bounded by paste coverage — a floor, not a complete figure.
+// MOVES-TOGETHER CLUSTERS (render) — replaces the old benchmark-vs-benchmark overlap panel, which
+// expressed co-movement through the funds rather than YOUR holdings. This shows how much of your
+// actual book moves as one block, grouped by theme, with the shared-fund linkage as the "why".
+// Low-confidence auto-assignments (a name spanning distinct clusters, or assigned on a thin fund
+// weight) get a ⚠ so you know where to look; any name can be reassigned (persisted as an override).
+// Structural proxy, not measured return correlation — labeled as such.
 // ─────────────────────────────────────────────
-function renderThemeDiversification() {
+let clusterEditExpanded = false;
+function toggleClusterEdit() { clusterEditExpanded = !clusterEditExpanded; renderThemeClusters(); }
+function reassignCluster(key, theme) {
+  const o = loadClusterOverrides();
+  if (theme === '__auto__') delete o[key]; else o[key] = theme;
+  saveClusterOverrides(o);
+  renderThemeClusters();
+}
+
+// Confidence: returns null (confident) or a reason string for a given name key + its theme-fund
+// weights, mirroring the engine's assignment. Direct-tagged names are never flagged here (the
+// engine's 'why' starts with "your direct position"). Flag when funds span DISTINCT clusters
+// (post-merge) or the deciding weight is thin (<2%).
+function clusterConfidenceFlag(nameRow, ctx) {
+  if (nameRow.why && nameRow.why.indexOf('your direct position') === 0) return null;
+  if (nameRow.why && nameRow.why.indexOf('you assigned') === 0) return null; // user override = confident
+  const fw = ctx.nameThemeFundW[nameRow.key];
+  if (!fw || !Object.keys(fw).length) return null;
+  const clusterSet = new Set(Object.keys(fw).map(f => ctx.clusterLabelForBench(f)));
+  const sorted = Object.entries(fw).sort((a, b) => b[1] - a[1]);
+  const bestW = sorted[0][1];
+  const fundsStr = sorted.map(([f, w]) => `${f} ${w.toFixed(1)}%`).join(', ');
+  if (clusterSet.size > 1) return `spans clusters — in ${fundsStr}; assigned by highest weight. Reassign if this belongs elsewhere.`;
+  if (bestW < 2.0) return `thin signal — only ${bestW.toFixed(1)}% of ${sorted[0][0]}. Assignment is a weak inference.`;
+  return null;
+}
+
+function renderThemeClusters() {
   const host = document.getElementById('theme-diversification-analysis');
   if (!host) return;
-
-  // ---- Concentration, benchmark-deduped ----
-  // Group owned exposure by BENCHMARK (not theme name), so themes sharing a benchmark merge.
-  const open = positions.filter(p => !p.closed && p.ticker);
-  const totalActive = open.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
-  const { owned } = themeBenchmarksForCorrelation(); // already benchmark-grouped, owned, exposure desc
-  const concRows = owned.filter(b => b.exposure > 0).map(b => ({
-    ticker: b.ticker,
-    themes: b.themes,
-    dollars: b.exposure,
-    pct: totalActive > 0 ? (b.exposure / totalActive) * 100 : 0,
-    merged: b.themes.length > 1
-  }));
-  const topBench = concRows[0];
-
-  // ---- Overlap pairs among owned theme benchmarks ----
-  const benches = owned.map(b => b.ticker);
-  const pairs = [];
-  let anyMissing = false, gldBlank = false;
-  for (let i = 0; i < benches.length; i++) {
-    for (let j = i + 1; j < benches.length; j++) {
-      const r = themeBenchmarkOverlap(benches[i], benches[j]);
-      // Coverage confidence = lower of the two funds' pasted coverage (overlap can't exceed it).
-      const hA = benchmarkHoldings(benches[i]);
-      const hB = benchmarkHoldings(benches[j]);
-      const covA = hA ? Object.values(hA.weights).reduce((s, w) => s + (w || 0), 0) : 0;
-      const covB = hB ? Object.values(hB.weights).reduce((s, w) => s + (w || 0), 0) : 0;
-      pairs.push({ a: benches[i], b: benches[j], ...r, minCov: Math.min(covA, covB) });
-      if (!r.computable) { anyMissing = true; if (!r.haveA || !r.haveB) { /* one side blank */ } }
-    }
+  const data = computeThemeClusters();
+  if (!data.clusters.length && data.base.total === 0) {
+    host.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No holdings to cluster yet.</div>`;
+    return;
   }
-  const overlapping = pairs.filter(p => p.computable && p.overlapPct > 0).sort((a, b) => b.overlapPct - a.overlapPct);
-  const cleanZeros = pairs.filter(p => p.computable && p.overlapPct === 0);
-  const notComputable = pairs.filter(p => !p.computable);
 
-  const sgnPct = n => n.toFixed(1) + '%';
-  const covLabel = c => c >= 75 ? '' : c >= 40
-    ? ` <span style="color:var(--color-text-tertiary)" title="Both funds' pasted holdings cover ~${c.toFixed(0)}% — overlap is a floor; unpasted tail may add more">·partial coverage</span>`
-    : ` <span style="color:#fbbf24" title="One fund has thin pasted coverage (~${c.toFixed(0)}%) — this overlap is nearly blind, treat as unreliable">·low coverage ⚠</span>`;
+  // Rebuild the context the confidence flag needs (theme-fund weights + merge labels), matching the engine.
+  const themeBench = {};
+  themeUniverseAll().forEach(t => { if (t.ticker) themeBench[t.name] = t.ticker.toUpperCase(); });
+  const benchToThemes = {};
+  Object.entries(themeBench).forEach(([thm, b]) => { (benchToThemes[b] = benchToThemes[b] || []).push(thm); });
+  const clusterLabelForBench = (b) => benchToThemes[b] ? benchToThemes[b].join(' + ') + ' (' + b + ')' : null;
+  const nameThemeFundW = {};
+  const store = getIndexLookthrough();
+  Object.entries(store).forEach(([fund, tbl]) => {
+    const FT = fund.toUpperCase();
+    if (!benchToThemes[FT] || !tbl.weights) return;
+    Object.entries(tbl.weights).forEach(([tk, w]) => {
+      if (w == null) return;
+      const k = qrCanonical(tk).key;
+      nameThemeFundW[k] = nameThemeFundW[k] || {};
+      nameThemeFundW[k][FT] = (nameThemeFundW[k][FT] || 0) + w;
+    });
+  });
+  const ctx = { nameThemeFundW, clusterLabelForBench };
 
-  // Build the ranked overlapping-pairs list with per-name detail (expandable).
-  const pairRows = overlapping.map((p, idx) => {
-    const namesDetail = p.sharedNames.map(n =>
-      `<div style="display:flex;justify-content:space-between;gap:10px;font-size:9px;color:var(--color-text-secondary);padding:1px 0">
-        <span><strong style="color:var(--color-text-primary)">${esc(n.ticker)}</strong></span>
-        <span>${n.wA.toFixed(1)}% ${esc(p.a)} / ${n.wB.toFixed(1)}% ${esc(p.b)} <span style="color:var(--color-text-tertiary)">→ counts ${n.min.toFixed(1)}%</span></span>
-      </div>`).join('');
-    return `
-      <details style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px"${idx === 0 ? ' open' : ''}>
-        <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center;list-style:none">
-          <span style="font-size:11px;color:var(--color-text-primary)"><strong>${esc(p.a)} ↔ ${esc(p.b)}</strong> <span style="color:var(--color-text-tertiary);font-size:9px">${p.sharedNames.length} shared name${p.sharedNames.length > 1 ? 's' : ''}</span>${covLabel(p.minCov)}</span>
-          <strong style="font-size:12px;color:${p.overlapPct >= 15 ? '#fbbf24' : 'var(--color-text-secondary)'}">${sgnPct(p.overlapPct)}</strong>
-        </summary>
-        <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary)">${namesDetail}
-          <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Overlap credits the smaller weight per name (you can only doubly-own up to the lesser slice). The two raw weights show which fund leans harder on it.</div>
-        </div>
-      </details>`;
-  }).join('');
+  // Count total flags across clusters for the headline nudge.
+  let flagCount = 0;
+  data.clusters.forEach(c => c.names.forEach(n => { if (clusterConfidenceFlag(n, ctx)) flagCount++; }));
 
-  const zerosLine = cleanZeros.length
-    ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">${cleanZeros.length} pair${cleanZeros.length > 1 ? 's' : ''} share no names in your pasted holdings (clean separation): ${cleanZeros.map(p => esc(p.a) + '↔' + esc(p.b)).join(', ')}.</div>`
-    : '';
-  const missingLine = notComputable.length
-    ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">${notComputable.length} pair${notComputable.length > 1 ? 's' : ''} can't be computed — a fund has no pasted holdings (e.g. GLD is gold, nothing to decompose): ${notComputable.map(p => esc(p.a) + '↔' + esc(p.b)).join(', ')}.</div>`
-    : '';
+  const fmtD = (n) => fmtDollarWhole(n);
+  const biggest = data.biggest;
 
-  // Full grid (collapsible) — every pair, including zeros and not-computable, for completeness.
-  const gridPair = (p) => {
-    if (!p.computable) return `<span style="color:var(--color-text-tertiary)" title="no holdings for one side">—</span>`;
-    if (p.overlapPct === 0) return `<span style="color:var(--color-text-tertiary)">0%</span>`;
-    return `<span style="color:${p.overlapPct >= 15 ? '#fbbf24' : 'var(--color-text-secondary)'}">${sgnPct(p.overlapPct)}</span>`;
+  // Theme options for the reassign dropdowns (all themes, plus an "auto" reset and a base option).
+  const themeOptions = data.allThemes;
+
+  // One name line inside a cluster: name, true $, the "why", and ⚠ + reassign control when editing.
+  const nameLine = (n) => {
+    const flag = clusterConfidenceFlag(n, ctx);
+    const tri = flag ? `<span title="${esc(flag)}" style="color:#fbbf24;cursor:help">⚠</span> ` : '';
+    const editControl = clusterEditExpanded ? `
+      <select onchange="reassignCluster('${esc(n.key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;margin-left:6px;cursor:pointer">
+        <option value="__auto__">↺ auto</option>
+        ${themeOptions.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+      </select>` : '';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:2px 0 2px 12px;font-size:10px">
+      <span style="color:var(--color-text-primary)">${tri}${esc(n.display)} <span style="color:var(--color-text-tertiary);font-size:8px">${esc(n.why || '')}</span>${editControl}</span>
+      <span style="color:var(--color-text-tertiary);white-space:nowrap">${fmtD(n.total)}</span>
+    </div>`;
   };
-  const gridLookup = {};
-  pairs.forEach(p => { gridLookup[p.a + '|' + p.b] = p; gridLookup[p.b + '|' + p.a] = p; });
-  const gridHead = `<tr><th style="padding:2px 5px"></th>${benches.map(t => `<th style="padding:2px 5px;font-size:8px;color:var(--color-text-tertiary)">${esc(t)}</th>`).join('')}</tr>`;
-  const gridBody = benches.map(rt => `<tr><td style="padding:2px 5px;font-size:8px;color:var(--color-text-tertiary);font-weight:700">${esc(rt)}</td>${benches.map(ct => {
-    if (rt === ct) return `<td style="padding:2px 5px;text-align:center;color:var(--color-border-tertiary)">·</td>`;
-    return `<td style="padding:2px 5px;text-align:center;font-size:9px">${gridPair(gridLookup[rt + '|' + ct])}</td>`;
-  }).join('')}</tr>`).join('');
+
+  const clusterBlock = (c, idx) => {
+    const flagsHere = c.names.filter(n => clusterConfidenceFlag(n, ctx)).length;
+    const flagBadge = flagsHere ? ` <span style="color:#fbbf24;font-size:8px" title="${flagsHere} low-confidence assignment${flagsHere > 1 ? 's' : ''} in this block">⚠${flagsHere}</span>` : '';
+    return `
+      <details${idx === 0 ? ' open' : ''} style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px">
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none">
+          <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(c.label)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">${c.names.length} name${c.names.length > 1 ? 's' : ''}</span>${flagBadge}</span>
+          <strong style="font-size:12px;color:${c.pct >= 25 ? '#fbbf24' : 'var(--color-text-secondary)'}">${c.pct.toFixed(1)}% · ${fmtD(c.total)}</strong>
+        </summary>
+        <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--color-border-tertiary)">${c.names.map(nameLine).join('')}</div>
+      </details>`;
+  };
 
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:8px">Diversification read — concentration &amp; overlap</div>
-
-      <div style="display:grid;grid-template-columns:1fr;gap:12px">
-        <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 12px">
-          <div style="font-size:9px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:6px">Concentration (benchmark-deduped · exact)</div>
-          ${concRows.map(r => `
-            <div style="display:flex;justify-content:space-between;gap:10px;font-size:10px;padding:2px 0;color:var(--color-text-primary)">
-              <span>${esc(r.ticker)} <span style="color:var(--color-text-tertiary);font-size:9px">${esc(r.themes.join(' + '))}${r.merged ? ' ⚠ merged' : ''}</span></span>
-              <span><strong style="color:${r.pct >= 25 ? '#fbbf24' : 'var(--color-text-secondary)'}">${r.pct.toFixed(1)}%</strong> <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(r.dollars)}</span></span>
-            </div>`).join('')}
-          ${topBench && topBench.merged ? `<div style="font-size:9px;color:#fbbf24;margin-top:6px;line-height:1.5">⚠ <strong>${esc(topBench.ticker)}</strong> backs ${esc(topBench.themes.join(' and '))} — counted as two themes they look like ${topBench.themes.map(t => { const ex = computeThemeExposure(t); return totalActive > 0 ? (ex.dollars / totalActive * 100).toFixed(1) + '%' : '0%'; }).join(' + ')}, but they're <strong>one benchmark</strong>, so it's really ${topBench.pct.toFixed(1)}% in a single bet — your largest exposure.</div>` : ''}
-        </div>
-
-        <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 12px">
-          <div style="font-size:9px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:3px">Theme overlap (structural proxy · a floor, not measured correlation)</div>
-          <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:7px">How much your benchmarks hold the <em>same names</em>, weighted by size — a stand-in for "these move together." Bounded by your pasted holdings, so it's a floor: real overlap could be higher in names below your paste cutoff.</div>
-          ${overlapping.length ? pairRows : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No overlapping pairs in your pasted holdings yet.</div>'}
-          ${zerosLine}
-          ${missingLine}
-          ${pairs.some(p => p.computable) ? `
-          <details style="margin-top:8px">
-            <summary style="font-size:9px;color:var(--color-text-tertiary);cursor:pointer">Show full grid (all pairs)</summary>
-            <div style="overflow-x:auto;margin-top:6px"><table style="border-collapse:collapse;font-size:9px">${gridHead}${gridBody}</table></div>
-            <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px">— = a fund has no pasted holdings. · = same fund.</div>
-          </details>` : ''}
-        </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">How your holdings move together</div>
+        <button class="btn btn-sm" onclick="toggleClusterEdit()" style="font-size:9px">${clusterEditExpanded ? 'Done editing' : '✎ Reassign names'}</button>
       </div>
 
-      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Concentration is exact (from your positions). Overlap is a structural estimate from pasted holdings — not measured return correlation, and not added to the concentration % (that would double-count). They're two lenses on the same question: is your book secretly one bet?</div>
+      <div style="background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:10px;font-size:11px;line-height:1.55;color:var(--color-text-primary)">
+        ${biggest ? `Your biggest moves-together block is <strong style="color:${biggest.pct >= 25 ? '#fbbf24' : 'var(--color-text-primary)'}">${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong> of your book — that's the chunk of you that rises and falls as one bet.` : ''}
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">Across all blocks, your portfolio behaves like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} independent bets</strong> (lower = more concentrated). Plus a ${data.base.pct.toFixed(1)}% diversified base (your broad-index tail — not a bet).</div>
+      </div>
+
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
+        Names grouped by theme — using your true exposure (direct + everything inside funds you hold, so a name like a mega-cap you only own via VOO still counts toward its theme). The <em>why</em> next to each name is the link (your tag, or which fund carries it). ${flagCount ? `<span style="color:#fbbf24">⚠ marks ${flagCount} low-confidence call${flagCount > 1 ? 's' : ''}</span> — names that span clusters or rest on a thin weight. Hit "Reassign names" to fix any.` : ''} This is structural co-movement (same theme/funds), <strong>not</strong> measured return correlation — a name can buck its block.
+      </div>
+
+      ${data.clusters.map(clusterBlock).join('')}
+
+      ${data.base.total > 0 ? `
+      <details style="border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px;opacity:0.85">
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;list-style:none">
+          <span style="font-size:11px;color:var(--color-text-secondary)">Diversified base <span style="font-size:9px;color:var(--color-text-tertiary)">${data.base.names.length} broad-index names · not a bet</span></span>
+          <span style="font-size:11px;color:var(--color-text-tertiary)">${data.base.pct.toFixed(1)}% · ${fmtD(data.base.total)}</span>
+        </summary>
+        <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-tertiary)">
+          These names have no theme signal — they exist only as small constituents of your broad-market funds (VOO's tail). Genuinely diversified; the blocks above are the concentrated bets sitting on top of this base. ${clusterEditExpanded ? 'If one of these is actually part of a bet, reassign it:' : ''}
+          ${clusterEditExpanded ? data.base.names.slice(0, 40).map(nameLine).join('') : ''}
+        </div>
+      </details>` : ''}
     </div>`;
 }
 
@@ -13469,7 +13589,7 @@ function clearThemeBenchHoldings(ticker) {
   saveIndexLookthrough();
   renderThemeBenchmarkPanel();
   renderThemeDiscovery();
-  renderThemeDiversification();
+  renderThemeClusters();
 }
 
 // Mark/un-mark a benchmark as "skipped on purpose" — a broad fund (Emerging Markets, International,
