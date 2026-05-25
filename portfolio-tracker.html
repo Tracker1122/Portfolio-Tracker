@@ -8200,6 +8200,28 @@ function buildQrAiPrompt(candidate) {
         line += ` The user plans to KEEP ${keeping.map(o=>o.ticker).join(', ')} — for these, the ETF does compound existing direct exposure.`;
       }
       computed.push(line);
+      // Pass-through / true-exposure visibility: when the user intends to rotate names out, hand the
+      // AI the actual before/after true-exposure arithmetic the rotation tool computes — so it stops
+      // saying "the user hasn't traced the VOO overlap" and reasons from the real numbers. Fully
+      // defensive: any failure here must NOT break the rest of the payload.
+      if (rotating.length) {
+        try {
+          const parsedH = (candidate.cachedHoldings && Array.isArray(candidate.cachedHoldings.parsed))
+            ? candidate.cachedHoldings.parsed
+            : (f.holdingsTop ? parseHoldings(f.holdingsTop).parsed : []);
+          const sellSet = new Set(rotating.map(o => qrNormTicker(o.ticker)));
+          if (parsedH.length && sellSet.size && typeof qrSimulateRotation === 'function') {
+            const sim = qrSimulateRotation(parsedH, (candidate.ticker || 'this ETF').toUpperCase(), sellSet, candidate.sleeve || '(unassigned)');
+            const moved = (sim.rows || [])
+              .filter(r => sellSet.has(qrNormTicker(r.display)) || Math.abs(r.change) >= 1)
+              .slice(0, 12)
+              .map(r => `${r.display}: $${Math.round(r.before).toLocaleString()} → $${Math.round(r.after).toLocaleString()} (${(r.change>=0?'+':'')}$${Math.round(r.change).toLocaleString()})`);
+            if (moved.length) {
+              computed.push(`PASS-THROUGH / TRUE-EXPOSURE arithmetic for the planned rotation (this is the number the user CAN trace — do not say it's untraced). Selling ${'$'+Math.round(sim.proceeds).toLocaleString()} across ${sim.soldCount} direct position(s) into ${(candidate.ticker||'the ETF').toUpperCase()}, est. tax ${'$'+Math.round(sim.estTax).toLocaleString()}. TRUE exposure per name, BEFORE → AFTER (direct + via-funds, incl. the exposure the ETF and VOO hand back): ${moved.join('; ')}. KEY READ: where a name's true exposure barely moves, rotating direct→ETF reshuffles rather than reduces it — quantify that rather than treating the net change as unknown.`);
+            }
+          }
+        } catch (e) { /* pass-through is additive context only; never block the payload */ }
+      }
     } else {
       computed.push(`No direct-holding overlap detected with the user's individual positions.`);
     }
