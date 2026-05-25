@@ -13083,9 +13083,11 @@ function renderThemeUniverse() {
       </table>
     </div>
     <div id="theme-diversification-analysis" style="margin-top:18px"></div>
+    <div id="theme-candidates-screen" style="margin-top:18px"></div>
     <div id="theme-bench-holdings-panel" style="margin-top:18px"></div>
   `;
   renderThemeDiversification();
+  renderThemeCandidates();
   renderThemeBenchmarkPanel();
 }
 
@@ -13213,6 +13215,121 @@ function renderThemeDiversification() {
     </div>`;
 }
 
+// ─────────────────────────────────────────────
+// "Themes to consider" — forward-looking screen for diversification.
+// Crosses three axes for themes you DON'T own (or barely own), shown SIDE BY SIDE so you weigh
+// the tradeoff yourself — no blended score (low-overlap-but-lagging vs low-overlap-and-hot are
+// different "goods" and shouldn't be collapsed):
+//   • Exposure — how light/absent you are (the gap diversification would fill)
+//   • Overlap — max overlap of this theme's benchmark with ANY benchmark you own (LOW = genuinely
+//     diversifying; high = you'd just be deepening an existing bet). "skipped" = blank-on-purpose
+//     broad fund; "paste to compute" = holdings not entered yet.
+//   • Performance — the benchmark's YTD / 1Y window returns.
+// Default sort: lowest max-overlap first (diversification-first), since that's the stated goal —
+// but performance sits right beside it for you to override the read by eye.
+// ─────────────────────────────────────────────
+function renderThemeCandidates() {
+  const host = document.getElementById('theme-candidates-screen');
+  if (!host) return;
+
+  const open = positions.filter(p => !p.closed && p.ticker);
+  const totalActive = open.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const { owned, unowned } = themeBenchmarksForCorrelation();
+  const ownedTickers = owned.map(b => b.ticker);
+
+  // Candidates = unowned benchmarks + any owned theme under a "light" threshold (≤3% of book),
+  // because an underweight theme is still a diversification target. Dedup by ticker.
+  const lightOwned = owned.filter(b => totalActive > 0 && (b.exposure / totalActive) * 100 <= 3 && b.exposure > 0);
+  const candTickers = [...new Set([...unowned.map(b => b.ticker), ...lightOwned.map(b => b.ticker)])];
+
+  // Map each candidate ticker → its theme name(s) for display.
+  const themesByBench = {};
+  themeUniverseAll().forEach(t => { if (t.ticker) (themesByBench[t.ticker] = themesByBench[t.ticker] || []).push(t.name); });
+
+  const rows = candTickersToRows();
+  function candTickersToRows() {
+    return candTickers.map(tk => {
+      // Exposure (0 for truly unowned)
+      let dollars = 0;
+      (themesByBench[tk] || []).forEach(name => { dollars += computeThemeExposure(name).dollars; });
+      const pct = totalActive > 0 ? (dollars / totalActive) * 100 : 0;
+
+      // Overlap: max overlap vs any OWNED benchmark. Track data state honestly.
+      const h = benchmarkHoldings(tk);
+      const store = getIndexLookthrough();
+      const isBlankOnPurpose = !!(store[tk] && store[tk].blankOnPurpose);
+      let overlapState, maxOv = 0, maxWith = '';
+      if (isBlankOnPurpose) {
+        overlapState = 'skipped';
+      } else if (!h) {
+        overlapState = 'nodata';
+      } else {
+        overlapState = 'computed';
+        ownedTickers.forEach(o => {
+          if (o === tk) return;
+          const r = themeBenchmarkOverlap(tk, o);
+          if (r.computable && r.overlapPct > maxOv) { maxOv = r.overlapPct; maxWith = o; }
+        });
+      }
+
+      // Performance
+      const ret = computeThemeReturns(tk);
+      return { ticker: tk, themes: themesByBench[tk] || [], pct, dollars, overlapState, maxOv, maxWith, ytd: ret.ytd, oneY: ret['1y'] };
+    });
+  }
+
+  // Sort: computed-overlap rows by overlap asc (best diversifiers first); then skipped (broad
+  // diversifiers, structurally low overlap); then nodata (need a paste) last.
+  const order = { computed: 0, skipped: 1, nodata: 2 };
+  rows.sort((a, b) => {
+    if (order[a.overlapState] !== order[b.overlapState]) return order[a.overlapState] - order[b.overlapState];
+    if (a.overlapState === 'computed') return a.maxOv - b.maxOv;
+    return a.ticker.localeCompare(b.ticker);
+  });
+
+  const fmtRet = (n) => n === null ? '<span style="color:var(--color-text-tertiary)">—</span>' :
+    `<span style="color:${n >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${n >= 0 ? '+' : ''}${n.toFixed(1)}%</span>`;
+  const overlapCell = (r) => {
+    if (r.overlapState === 'skipped') return `<span style="color:var(--color-text-tertiary)" title="Marked skipped-on-purpose — broad fund, holdings not decomposed. Overlap with your US book is structurally low regardless.">skipped · low by nature</span>`;
+    if (r.overlapState === 'nodata') return `<span style="color:#fbbf24" title="No holdings pasted for this benchmark yet — paste it below to compute overlap, or mark it skipped-on-purpose">paste to compute</span>`;
+    if (r.maxOv === 0) return `<span style="color:var(--color-text-success)" title="Shares no names with anything you own — a clean diversifier">0% · clean</span>`;
+    const col = r.maxOv >= 15 ? '#fbbf24' : 'var(--color-text-secondary)';
+    return `<span style="color:${col}" title="Highest overlap with any benchmark you own — higher means you'd be deepening an existing bet">${r.maxOv.toFixed(1)}% (vs ${esc(r.maxWith)})</span>`;
+  };
+
+  const tableRows = rows.map(r => {
+    const expLabel = r.dollars > 0
+      ? `<span style="color:var(--color-text-secondary)">${r.pct.toFixed(1)}%</span> <span style="color:var(--color-text-tertiary);font-size:9px">underweight</span>`
+      : `<span style="color:var(--color-text-tertiary);font-style:italic">none</span>`;
+    return `<tr style="border-bottom:1px solid var(--color-border-tertiary)">
+      <td style="padding:4px 8px"><strong style="color:var(--color-text-primary)">${esc(r.themes.join(' / ') || r.ticker)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">${esc(r.ticker)}</span></td>
+      <td style="padding:4px 8px;text-align:right">${expLabel}</td>
+      <td style="padding:4px 8px;text-align:right;font-size:10px">${overlapCell(r)}</td>
+      <td style="padding:4px 8px;text-align:right">${fmtRet(r.ytd)}</td>
+      <td style="padding:4px 8px;text-align:right">${fmtRet(r.oneY)}</td>
+    </tr>`;
+  }).join('');
+
+  host.innerHTML = `
+    <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Themes to consider — diversification screen</div>
+      <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
+        Themes you don't own (or are light in), with three axes side by side — you weigh them, there's no blended score. <strong>Overlap</strong> is the highest shared-name overlap with anything you already own: <span style="color:var(--color-text-success)">low/clean = a genuine diversifier</span>; high means you'd just deepen an existing bet. <strong>Performance</strong> is the benchmark's window return. Low overlap + strong performance is the sweet spot; low overlap + weak performance is still a diversifier, just not a hot one (e.g. bonds). Sorted lowest-overlap first.
+      </div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+          <th style="padding:4px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Theme</th>
+          <th style="padding:4px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Your Exposure</th>
+          <th style="padding:4px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Overlap w/ your book</th>
+          <th style="padding:4px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">YTD</th>
+          <th style="padding:4px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">1Y</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table></div>
+      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px;line-height:1.5">Overlap is a structural proxy bounded by pasted holdings (a floor), not measured correlation. "Paste to compute" = enter that benchmark's holdings below; "skipped" = you marked it as a broad fund not worth decomposing. Performance needs a Backfill run to populate.</div>
+    </div>`;
+}
+
 // Dedicated paste panel for benchmark holdings — the data feed for the structural-overlap proxy.
 // Lists owned-theme benchmarks first (the high-value set for "is my book secretly one bet"), then
 // the unowned universe benchmarks collapsed below. Each fund reuses the proven paste UX: live
@@ -13230,21 +13347,32 @@ function renderThemeBenchmarkPanel() {
     const count = h ? h.count : 0;
     const cov = h ? Object.values(h.weights).reduce((s, w) => s + (w || 0), 0) : 0;
     const asOf = h && h.asOf ? h.asOf : '';
+    const store = getIndexLookthrough();
+    const skipped = !!(store[b.ticker] && store[b.ticker].blankOnPurpose && count === 0);
     let ageDays = null, stale = false;
     if (asOf) { ageDays = Math.floor((Date.now() - new Date(asOf + 'T00:00:00').getTime()) / 86400000); stale = ageDays > 120; }
     const themesLabel = b.themes.join(' + ');
     const status = count > 0
       ? `<span style="font-size:9px;color:var(--color-text-success)">✓ ${count} holding${count > 1 ? 's' : ''} (${cov.toFixed(0)}% of fund)</span>`
-      : `<span style="font-size:9px;color:#fbbf24">no holdings yet</span>`;
+      : skipped
+        ? `<span style="font-size:9px;color:var(--color-text-tertiary)">skipped on purpose — overlap not computed</span>`
+        : `<span style="font-size:9px;color:#fbbf24">no holdings yet</span>`;
     const staleNote = stale ? `<span style="font-size:9px;color:#fbbf24" title="Pasted ${ageDays} days ago — funds rebalance; consider refreshing">⚠ ${ageDays}d old</span>` : '';
+    // Right-aligned action: Clear (has holdings) / Un-skip (skipped) / Skip (empty, not skipped).
+    const action = count > 0
+      ? `<button class="btn btn-sm" onclick="clearThemeBenchHoldings('${esc(b.ticker)}')" style="font-size:9px;margin-left:auto;padding:1px 7px;color:var(--color-text-danger)">Clear</button>`
+      : skipped
+        ? `<a href="#" onclick="toggleThemeBenchSkip(event,'${esc(b.ticker)}')" style="font-size:9px;margin-left:auto;color:var(--color-text-info);text-decoration:underline;cursor:pointer">Un-skip</a>`
+        : `<a href="#" onclick="toggleThemeBenchSkip(event,'${esc(b.ticker)}')" style="font-size:9px;margin-left:auto;color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="Broad fund not worth decomposing (e.g. Emerging Markets, International, Bonds)? Mark it skipped so it stops asking for holdings — the screen will show it as a low-overlap-by-nature diversifier.">Skip on purpose</a>`;
     return `
-      <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:8px">
+      <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:8px${skipped ? ';opacity:0.7' : ''}">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
           <strong style="font-size:12px;color:var(--color-text-primary)">${esc(b.ticker)}</strong>
           <span style="font-size:9px;color:var(--color-text-tertiary)">${esc(themesLabel)}</span>
           ${status} ${staleNote}
-          ${count > 0 ? `<button class="btn btn-sm" onclick="clearThemeBenchHoldings('${esc(b.ticker)}')" style="font-size:9px;margin-left:auto;padding:1px 7px;color:var(--color-text-danger)">Clear</button>` : ''}
+          ${action}
         </div>
+        ${skipped ? '' : `
         <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:5px">
           Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${esc(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a>
           <span>opens it on stockanalysis.com (free); copy the table and paste — row #, name &amp; shares are ignored automatically.</span>
@@ -13255,7 +13383,7 @@ function renderThemeBenchmarkPanel() {
           <button class="btn btn-sm btn-primary" onclick="pasteThemeBenchHoldings('${esc(b.ticker)}')" style="font-size:9px">Parse &amp; store</button>
           <span style="font-size:8px;color:var(--color-text-tertiary)">stored to the shared holdings table — also feeds index look-through</span>
         </div>
-        <div id="tbench-msg-${esc(b.ticker)}" style="margin-top:4px"></div>
+        <div id="tbench-msg-${esc(b.ticker)}" style="margin-top:4px"></div>`}
       </div>`;
   };
 
@@ -13314,6 +13442,7 @@ function pasteThemeBenchHoldings(ticker) {
   saveIndexLookthrough();
   const noW = parsed.filter(p => p.weight == null).length;
   renderThemeBenchmarkPanel(); // refresh statuses
+  renderThemeCandidates(); // a new paste may make a candidate's overlap computable
   const msg2 = document.getElementById('tbench-msg-' + ticker);
   if (msg2) msg2.innerHTML = `<div style="font-size:9px;color:var(--color-text-success)">✓ Stored ${parsed.length} holding${parsed.length > 1 ? 's' : ''} for ${esc(tk)}.${noW ? ` (${noW} had no weight — won't contribute to overlap math.)` : ''}${unparsed.length ? ` <span style="color:#fbbf24">${unparsed.length} line(s) skipped: ${unparsed.map(u => esc(u)).join(' · ')}</span>` : ''}</div>`;
 }
@@ -13328,6 +13457,23 @@ function clearThemeBenchHoldings(ticker) {
   store[tk].weights = {};
   saveIndexLookthrough();
   renderThemeBenchmarkPanel();
+  renderThemeCandidates();
+}
+
+// Mark/un-mark a benchmark as "skipped on purpose" — a broad fund (Emerging Markets, International,
+// Bonds, gold) the user has decided not to decompose. Reuses the SAME blankOnPurpose flag the index
+// look-through editor uses, so the state is consistent everywhere. Skipped funds stop asking for
+// holdings and the candidates screen shows them as low-overlap-by-nature diversifiers rather than a
+// missing-data nag. Pasting holdings later auto-clears the flag (handled in pasteThemeBenchHoldings).
+function toggleThemeBenchSkip(event, ticker) {
+  if (event && event.preventDefault) event.preventDefault();
+  const tk = (ticker || '').toUpperCase();
+  const store = getIndexLookthrough();
+  if (!store[tk]) store[tk] = { asOf: '', weights: {} };
+  store[tk].blankOnPurpose = !store[tk].blankOnPurpose;
+  saveIndexLookthrough();
+  renderThemeBenchmarkPanel();
+  renderThemeCandidates();
 }
 
 // Dashboard tile — zero-exposure themes only, sorted by 1Y performance descending.
