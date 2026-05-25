@@ -13721,11 +13721,23 @@ function renderThemeDiscovery() {
   };
 
   // One candidate: ticker + conviction (its weight in the fund) as a light chip, not a heavy row.
+  // Translate a fund weight into plain conviction language. The number alone ("NASA 10.7%") forces a
+  // decode — what it MEANS is how heavily that fund bets on the name. We can't print true rank (pasted
+  // holdings are often partial — IWM is top-N only), but the weight's MAGNITUDE is reliable: a 10%+
+  // position is a heavy bet regardless of where it ranks. So we tier by weight, honestly.
+  const convictionPhrase = (fund, w) => {
+    const tier = w >= 8 ? 'a top holding in' : w >= 3 ? 'a sizable position in' : w >= 1 ? 'a small position in' : 'a minor holding in';
+    return `${tier} ${esc(fund)} (${w.toFixed(1)}%)`;
+  };
   const tickerLine = (c) => {
-    const fundsLabel = Object.entries(c.inFunds).sort((a, b) => b[1] - a[1]).map(([f, w]) => `${esc(f)} ${w.toFixed(1)}%`).join(', ');
-    return `<div style="display:inline-flex;align-items:baseline;gap:5px;padding:3px 9px;margin:2px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">
+    // Lead with the single highest-conviction fund — secondary funds (e.g. a 0.6% tail in a broad
+    // index) add noise, not signal. The strongest fund carries the discovery case.
+    const sorted = Object.entries(c.inFunds).sort((a, b) => b[1] - a[1]);
+    const [topFund, topW] = sorted[0];
+    const moreNote = sorted.length > 1 ? `<span style="font-size:8px;color:var(--color-text-tertiary)" title="${esc(sorted.slice(1).map(([f, w]) => f + ' ' + w.toFixed(1) + '%').join(', '))}"> +${sorted.length - 1}</span>` : '';
+    return `<div style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">
       <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${esc(c.display)}</span>
-      <span style="font-size:8px;color:var(--color-text-tertiary)">${esc(fundsLabel)}</span>
+      <span style="font-size:8px;color:var(--color-text-tertiary)">${convictionPhrase(topFund, topW)}${moreNote}</span>
     </div>`;
   };
 
@@ -13761,7 +13773,7 @@ function renderThemeDiscovery() {
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
       <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Discovery — ideas hiding in your funds <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(investigate, not buy)</span></div>
       <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
-        Names inside the funds you've pasted that you <strong>don't own</strong>, in themes you're lightest in. <span style="color:#34d399">Niche-fund finds</span> (from small-cap/thematic ETFs) lead — those are the names you likely haven't seen. <span style="color:var(--color-text-tertiary)">Broad-fund buckets</span> (sector ETFs full of household names) are dimmed below. <strong style="color:var(--color-text-secondary)">Candidates to investigate — not a buy signal, not stock analysis.</strong> Performance is the <em>theme's</em> 1Y, not the stock's.
+        Names inside the funds you've pasted that you <strong>don't own</strong>, in themes you're lightest in. <span style="color:#34d399">Niche-fund finds</span> (from small-cap/thematic ETFs) lead — those are the names you likely haven't seen. <span style="color:var(--color-text-tertiary)">Broad-fund buckets</span> (sector ETFs full of household names) are dimmed below. Each name shows how heavily its fund bets on it — a <em>top holding</em> in a specialist fund is a stronger signal than a tail position. <strong style="color:var(--color-text-secondary)">Candidates to investigate — not a buy signal, not stock analysis.</strong>
       </div>
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
