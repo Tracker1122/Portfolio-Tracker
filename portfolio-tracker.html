@@ -12974,11 +12974,47 @@ function loadSectorMap() {
 function saveSectorMap(m) {
   try { localStorage.setItem('portfolio-sector-map-v1', JSON.stringify(m)); } catch (e) {}
 }
+// Map values are { sector, src } where src ∈ 'user' | 'ai' | 'ai-lo'. Accessor that tolerates the
+// old bare-string shape (treats it as a user tag) for backward safety.
+function sectorEntry(m, key) {
+  const v = m[key];
+  if (!v) return null;
+  if (typeof v === 'string') return { sector: v, src: 'user' };
+  return v;
+}
 function setSectorTag(key, sectorId) {
   const m = loadSectorMap();
-  if (!sectorId || sectorId === '__unset__') delete m[key]; else m[key] = sectorId;
+  if (!sectorId || sectorId === '__unset__') delete m[key]; else m[key] = { sector: sectorId, src: 'user' }; // a human pick is always authoritative
   saveSectorMap(m);
   if (typeof renderSectorPanel === 'function') renderSectorPanel();
+}
+
+// One-time AI-suggested seeding. Applies Claude's first-pass labels ONLY to names not already
+// user-tagged (never overwrites your choices), marking each 'ai' (confident) or 'ai-lo' (verify).
+// These are SUGGESTIONS — visibly flagged in the UI and overridable. We hold the honesty line:
+// the low-confidence names (international tickers, recent IPOs, ambiguous ticker reuse) are marked
+// for your verification, not presented as fact.
+const AI_SECTOR_SUGGESTIONS = {"NVDA":["semis","hi"],"MSFT":["bigtech","hi"],"AAPL":["bigtech","hi"],"GOOGL":["bigtech","hi"],"AMZN":["discretionary","lo"],"AVGO":["semis","hi"],"META":["bigtech","hi"],"ORCL":["bigtech","hi"],"NFLX":["comms","hi"],"MU":["semis","hi"],"TSLA":["discretionary","lo"],"TSM":["semis","hi"],"INTC":["semis","hi"],"AMD":["semis","hi"],"TXN":["semis","hi"],"QCOM":["semis","hi"],"LRCX":["semis","hi"],"ASML":["semis","hi"],"KLAC":["semis","hi"],"AMAT":["semis","hi"],"ADI":["semis","hi"],"MRVL":["semis","hi"],"SNPS":["semis","hi"],"STX":["semis","hi"],"WDC":["semis","hi"],"SNDK":["semis","lo"],"V":["financials","hi"],"JPM":["financials","hi"],"AXP":["financials","hi"],"MS":["financials","hi"],"MA":["financials","hi"],"BRKB":["financials","lo"],"SOFI":["financials","hi"],"PANW":["bigtech","lo"],"CRWD":["bigtech","lo"],"CRWV":["bigtech","lo"],"ETN":["grid","hi"],"JCI":["grid","hi"],"PWR":["grid","hi"],"NVT":["grid","hi"],"HUBB":["grid","hi"],"ABBN":["grid","lo"],"PRY":["grid","lo"],"NG":["utilities","lo"],"EOAN":["utilities","lo"],"XOM":["energy","hi"],"CVX":["energy","hi"],"SLB":["energy","hi"],"VLO":["energy","hi"],"WMB":["energy","hi"],"CNQ":["energy","hi"],"NOV":["energy","hi"],"FTI":["energy","hi"],"SU":["energy","lo"],"GLD":["commodities","hi"],"NEM":["materials","hi"],"SCCO":["materials","hi"],"AU":["materials","lo"],"AEM":["materials","hi"],"LIN":["materials","hi"],"SHW":["materials","hi"],"CF":["materials","hi"],"VMC":["materials","hi"],"PKG":["materials","hi"],"CCK":["materials","hi"],"AVY":["materials","hi"],"ATR":["materials","hi"],"CBT":["materials","hi"],"OC":["materials","hi"],"MAS":["materials","lo"],"B":["materials","lo"],"RKLB":["defense","hi"],"ASTS":["defense","lo"],"PL":["defense","lo"],"LUNR":["defense","lo"],"FLY":["defense","lo"],"SATS":["comms","lo"],"LLY":["healthcare","hi"],"WMT":["staples","hi"],"COST":["staples","hi"],"PM":["staples","hi"],"KR":["staples","hi"],"ADM":["staples","hi"],"TGT":["staples","lo"],"CL":["staples","hi"],"PG":["staples","hi"],"PEP":["staples","hi"],"KMB":["staples","hi"],"HSY":["staples","hi"],"STZ":["staples","hi"],"CLX":["staples","hi"],"COKE":["staples","hi"],"CCEP":["staples","hi"],"KO":["staples","hi"],"LW":["staples","hi"],"DAR":["staples","lo"],"MCD":["discretionary","hi"],"RCL":["discretionary","hi"],"CCL":["discretionary","hi"],"DRI":["discretionary","hi"],"RACE":["discretionary","hi"],"RL":["discretionary","hi"],"BBWI":["discretionary","hi"],"SIG":["discretionary","lo"],"AZO":["discretionary","hi"],"ALV":["discretionary","hi"],"MGA":["discretionary","hi"],"CMI":["industrials","hi"],"JBHT":["industrials","hi"],"CSX":["industrials","hi"],"UNP":["industrials","hi"],"CNI":["industrials","hi"],"UPS":["industrials","hi"],"DAL":["industrials","hi"],"UAL":["industrials","hi"],"R":["industrials","hi"],"TFII":["industrials","hi"],"MATX":["industrials","lo"],"KEX":["industrials","lo"],"ITW":["industrials","hi"],"GWW":["industrials","hi"],"PCAR":["industrials","hi"],"OTIS":["industrials","hi"],"ALSN":["industrials","hi"],"DCI":["industrials","hi"],"WM":["industrials","hi"],"RSG":["industrials","hi"],"WMS":["industrials","lo"],"TTC":["industrials","hi"],"TEL":["industrials","lo"],"WTS":["grid","lo"],"LII":["industrials","lo"],"FERG":["industrials","lo"],"WSO":["industrials","lo"],"RUSHA":["industrials","lo"],"MSA":["industrials","hi"],"JHX":["materials","lo"],"LAMR":["comms","lo"],"FGXXX":["cash","hi"]};
+function applyAiSectorSuggestions() {
+  const m = loadSectorMap();
+  let applied = 0, skipped = 0;
+  Object.entries(AI_SECTOR_SUGGESTIONS).forEach(([key, [sector, conf]]) => {
+    const existing = sectorEntry(m, key);
+    if (existing && existing.src === 'user') { skipped++; return; } // never overwrite a human pick
+    m[key] = { sector, src: conf === 'hi' ? 'ai' : 'ai-lo' };
+    applied++;
+  });
+  saveSectorMap(m);
+  if (typeof renderSectorPanel === 'function') renderSectorPanel();
+  return { applied, skipped };
+}
+function clearAiSectorSuggestions() {
+  const m = loadSectorMap();
+  let removed = 0;
+  Object.keys(m).forEach(k => { const e = sectorEntry(m, k); if (e && (e.src === 'ai' || e.src === 'ai-lo')) { delete m[k]; removed++; } });
+  saveSectorMap(m);
+  if (typeof renderSectorPanel === 'function') renderSectorPanel();
+  return removed;
 }
 
 // Whole-book sector clustering. Every true-exposure name gets its sector from the user's sector map
@@ -12992,12 +13028,13 @@ function computeSectorClusters() {
   let untagged = { total: 0, names: [] };
   let excluded = { total: 0, names: [] };
   rows.forEach(r => {
-    const sid = map[r.key];
-    if (!sid) { untagged.total += r.total; untagged.names.push({ display: r.display, total: r.total, key: r.key }); return; }
-    if (sid === 'cash') { excluded.total += r.total; excluded.names.push({ display: r.display, total: r.total, key: r.key }); return; }
+    const e = sectorEntry(map, r.key);
+    if (!e) { untagged.total += r.total; untagged.names.push({ display: r.display, total: r.total, key: r.key }); return; }
+    if (e.sector === 'cash') { excluded.total += r.total; excluded.names.push({ display: r.display, total: r.total, key: r.key }); return; }
+    const sid = e.sector;
     if (!sectors[sid]) sectors[sid] = { id: sid, label: (SECTOR_BY_ID[sid] || {}).label || sid, total: 0, names: [] };
     sectors[sid].total += r.total;
-    sectors[sid].names.push({ display: r.display, total: r.total, key: r.key, direct: r.direct, viaFunds: r.viaFunds });
+    sectors[sid].names.push({ display: r.display, total: r.total, key: r.key, direct: r.direct, viaFunds: r.viaFunds, src: e.src });
   });
   const ranked = Object.values(sectors).map(s => ({
     ...s, pct: totalBook > 0 ? (s.total / totalBook) * 100 : 0, names: s.names.sort((a, b) => b.total - a.total)
@@ -13429,10 +13466,10 @@ function renderSectorPanel() {
   const fmtD = (n) => fmtDollarWhole(n);
 
   // The sector <select> for a name, with each option's definition as a title (hover) tooltip.
-  const sectorSelect = (key, current) => `
+  const sectorSelect = (key, currentSector) => `
     <select onchange="setSectorTag('${esc(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer">
-      <option value="__unset__"${!current ? ' selected' : ''}>— untagged —</option>
-      ${SECTOR_VOCAB.map(s => `<option value="${s.id}"${current === s.id ? ' selected' : ''} title="${esc(s.blurb)}">${esc(s.label)}</option>`).join('')}
+      <option value="__unset__"${!currentSector ? ' selected' : ''}>— untagged —</option>
+      ${SECTOR_VOCAB.map(s => `<option value="${s.id}"${currentSector === s.id ? ' selected' : ''} title="${esc(s.blurb)}">${esc(s.label)}</option>`).join('')}
     </select>`;
 
   // ---- The by-sector view (what your tags reveal) ----
@@ -13474,19 +13511,33 @@ function renderSectorPanel() {
   // ---- The tagging UI (collapsed) — names ranked by exposure, untagged first within that ----
   const { rows } = computeTrueExposure();
   const map = loadSectorMap();
+  const entryFor = (key) => sectorEntry(map, key);
   const tagRows = rows.slice().sort((a, b) => {
-    const au = map[a.key] ? 1 : 0, bu = map[b.key] ? 1 : 0; // untagged first
-    if (au !== bu) return au - bu;
+    // Order: needs-verify (ai-lo) first, then untagged, then ai-confident, then user-confirmed.
+    const rank = (k) => { const e = entryFor(k); if (!e) return 1; if (e.src === 'ai-lo') return 0; if (e.src === 'ai') return 2; return 3; };
+    const ra = rank(a.key), rb = rank(b.key);
+    if (ra !== rb) return ra - rb;
     return b.total - a.total;
   });
-  const TAG_CAP = 40;
+  const TAG_CAP = 50;
   const tagShown = tagRows.slice(0, TAG_CAP);
-  const untaggedCount = rows.filter(r => !map[r.key]).length;
+  const untaggedCount = rows.filter(r => !entryFor(r.key)).length;
+  const aiCount = rows.filter(r => { const e = entryFor(r.key); return e && (e.src === 'ai' || e.src === 'ai-lo'); }).length;
+  const verifyCount = rows.filter(r => { const e = entryFor(r.key); return e && e.src === 'ai-lo'; }).length;
 
-  const tagLine = (r) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--color-border-tertiary);font-size:10px">
-    <span style="color:var(--color-text-primary)">${esc(r.display)} <span style="font-size:8px;color:var(--color-text-tertiary)">${fmtD(r.total)}</span></span>
-    ${sectorSelect(r.key, map[r.key])}
-  </div>`;
+  // provenance badge per name
+  const srcBadge = (e) => {
+    if (!e) return '';
+    if (e.src === 'user') return `<span title="You confirmed this" style="font-size:7px;color:#34d399">✓ you</span>`;
+    if (e.src === 'ai') return `<span title="Claude suggested this (high confidence) — overridable" style="font-size:7px;color:var(--color-text-tertiary)">ai</span>`;
+    if (e.src === 'ai-lo') return `<span title="Claude is UNSURE — please verify (international ticker, recent IPO, or ambiguous symbol)" style="font-size:7px;color:#fbbf24">⚠ verify</span>`;
+    return '';
+  };
+
+  const tagLine = (r) => { const e = entryFor(r.key); return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--color-border-tertiary);font-size:10px">
+    <span style="color:var(--color-text-primary)">${esc(r.display)} <span style="font-size:8px;color:var(--color-text-tertiary)">${fmtD(r.total)}</span> ${srcBadge(e)}</span>
+    ${sectorSelect(r.key, e ? e.sector : null)}
+  </div>`; };
 
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
@@ -13496,20 +13547,25 @@ function renderSectorPanel() {
       </div>
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        Your book grouped by the sectors <strong>you tagged</strong> — a second lens that cuts across your themes to catch clusters scattered through your funds. Sectors aren't guessed; untagged names are shown separately. ${data.taggedPct < 100 ? `<span style="color:#fbbf24">Only ${data.taggedPct.toFixed(0)}% tagged so far — figures are a floor.</span>` : ''} Coverage is also bounded by pasted holdings, like everything else here.
+        Your book grouped by sector — a second lens that cuts across your themes to catch clusters scattered through your funds. ${aiCount > 0 ? `<span style="color:var(--color-text-secondary)">Claude pre-labeled ${aiCount} names as a first pass${verifyCount ? `, and flagged <span style="color:#fbbf24">${verifyCount} as "⚠ verify"</span> where it's unsure (international tickers, recent IPOs, ambiguous symbols)</span>` : ''}. Those are suggestions you can override; your own picks win.</span>` : `Sectors aren't guessed; untagged names show separately.`} ${data.taggedPct < 100 ? `<span style="color:#fbbf24">${data.taggedPct.toFixed(0)}% tagged — figures are a floor.</span>` : ''}
       </div>
 
       ${data.sectors.length ? hiddenNote : ''}
-      ${data.sectors.length ? (biggest ? `<div style="font-size:11px;color:var(--color-text-primary);margin-bottom:8px">Biggest sector: <strong>${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong>${data.excluded.total > 0 ? ` <span style="font-size:9px;color:var(--color-text-tertiary)">· ${fmtD(data.excluded.total)} cash/excluded</span>` : ''}</div>` : '') : `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">Nothing tagged yet — hit "Tag sectors" and start with the largest names; the grid/utility cluster you suspected will show up here once those names are tagged.</div>`}
+      ${data.sectors.length ? (biggest ? `<div style="font-size:11px;color:var(--color-text-primary);margin-bottom:8px">Biggest sector: <strong>${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong>${data.excluded.total > 0 ? ` <span style="font-size:9px;color:var(--color-text-tertiary)">· ${fmtD(data.excluded.total)} cash/excluded</span>` : ''}</div>` : '') : `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">Nothing tagged yet.${aiCount === 0 ? ' Use the "Apply first pass" button below, or tag by hand.' : ''}</div>`}
       ${data.sectors.map(sectorBlock).join('')}
-      ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px;padding:6px 0;border-top:1px dashed var(--color-border-tertiary)">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names). Tag the big ones to sharpen this — the small tail barely moves it.</div>` : ''}
+      ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px;padding:6px 0;border-top:1px dashed var(--color-border-tertiary)">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names). Tag the big ones to sharpen this.</div>` : ''}
 
       ${sectorTagExpanded ? `
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
-        <div style="font-size:10px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Tag sectors — biggest / untagged first</div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">Tag each name once; it applies everywhere that name appears. Hover any sector option to see its definition (the locked rules — e.g. GOOGL/META = Big Tech, mining company = Materials but the metal itself = Commodities). You only need the top ~15-20 to cover most of your book; the rest is tiny.</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <div style="font-size:10px;font-weight:700;color:var(--color-text-primary)">Tag sectors — verify-flagged &amp; untagged first</div>
+          <div style="display:flex;gap:6px">
+            ${aiCount === 0 ? `<button class="btn btn-sm btn-primary" onclick="applyAiSectorSuggestions()" style="font-size:9px">Apply Claude's first pass</button>` : `<button class="btn btn-sm" onclick="if(confirm('Remove all Claude-suggested tags? Your own picks are kept.')){clearAiSectorSuggestions();}" style="font-size:9px;color:var(--color-text-danger)">Clear AI suggestions</button>`}
+          </div>
+        </div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">Hover any option for its definition (the locked rules). <span style="color:#fbbf24">⚠ verify</span> = Claude's unsure, check it. <span style="color:var(--color-text-tertiary)">ai</span> = Claude's confident guess. <span style="color:#34d399">✓ you</span> = you set it. Changing any to your pick marks it ✓ you. Top ${TAG_CAP} by exposure shown.</div>
         ${tagShown.map(tagLine).join('')}
-        ${rows.length > TAG_CAP ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Showing top ${TAG_CAP} by exposure. The remaining ${rows.length - TAG_CAP} are small slivers — tag only if you want completeness.</div>` : ''}
+        ${rows.length > TAG_CAP ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Showing top ${TAG_CAP}. The remaining ${rows.length - TAG_CAP} are small slivers.</div>` : ''}
       </div>` : ''}
     </div>`;
 }
