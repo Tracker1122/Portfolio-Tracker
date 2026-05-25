@@ -13703,39 +13703,65 @@ function renderThemeDiscovery() {
     return computeThemeReturns(tk)['1y'];
   };
 
-  // One ticker line inside an expanded bucket: name + which funds hold it and at what weight.
+  // Broad ETFs are full of household names (low discovery value); niche/thematic/small-cap funds
+  // surface the genuine finds. This is the one honest "discovery-value" signal in the data — the FUND
+  // a name comes from. NOTE: IWM (Russell 2000 small-cap) is NOT here — its names are unfamiliar
+  // small-caps, exactly the finds we want to surface, so it counts as niche.
+  const BROAD_FUNDS = new Set(['VOO','QQQ','XLV','XLF','XLE','XLU','XLY','XLP','XLK','XLI','XLB','XLRE','XLC','VNQ','DIA','SPY']);
+  const bucketSource = (names) => {
+    // Tally fund appearances across this bucket's names; pick the most common.
+    const tally = {};
+    names.forEach(c => Object.keys(c.inFunds).forEach(f => { tally[f] = (tally[f] || 0) + 1; }));
+    const top = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+    const fund = top ? top[0] : '';
+    const isNiche = fund && !BROAD_FUNDS.has(fund.toUpperCase());
+    return { fund, isNiche };
+  };
+
+  // One candidate: ticker + conviction (its weight in the fund) as a light chip, not a heavy row.
   const tickerLine = (c) => {
     const fundsLabel = Object.entries(c.inFunds).sort((a, b) => b[1] - a[1]).map(([f, w]) => `${esc(f)} ${w.toFixed(1)}%`).join(', ');
-    return `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0 3px 12px;border-bottom:1px solid var(--color-border-tertiary)">
+    return `<div style="display:inline-flex;align-items:baseline;gap:5px;padding:3px 9px;margin:2px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">
       <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${esc(c.display)}</span>
-      <span style="font-size:9px;color:var(--color-text-tertiary);text-align:right">in ${fundsLabel}</span>
+      <span style="font-size:8px;color:var(--color-text-tertiary)">${esc(fundsLabel)}</span>
     </div>`;
   };
 
-  // One theme bucket: collapsible header (gap + count + perf), tickers inside sorted by conviction.
-  // Top 2 gap-themes open by default; rest collapsed (see what matters first, structure a click away).
-  const bucketHtml = (theme, idx) => {
+  // One theme bucket as an idea-board card: niche buckets flagged as the real finds, broad ones muted.
+  const bucketHtml = (theme, idx, open) => {
     const names = buckets[theme].slice().sort((a, b) => b.maxW - a.maxW);
     const gap = themePct[theme] ?? 0;
     const perf = themePerf(theme);
-    const open = idx < 2 ? ' open' : '';
+    const src = bucketSource(names);
+    const srcBadge = src.isNiche
+      ? `<span style="font-size:8px;color:#34d399;background:rgba(52,211,153,0.12);padding:1px 6px;border-radius:var(--border-radius-sm);white-space:nowrap">niche find · ${esc(src.fund)}</span>`
+      : `<span style="font-size:8px;color:var(--color-text-tertiary);background:var(--color-background-tertiary);padding:1px 6px;border-radius:var(--border-radius-sm);white-space:nowrap">broad fund · likely familiar</span>`;
     return `
-      <details${open} style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px">
-        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none">
-          <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(theme)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">you hold ${gap < 0.05 ? '<span style="color:#34d399">none</span>' : gap.toFixed(1) + '%'} · ${names.length} name${names.length > 1 ? 's' : ''}</span></span>
+      <details${open ? ' open' : ''} style="border:1px solid ${src.isNiche ? 'rgba(52,211,153,0.3)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);padding:8px 11px;margin-bottom:6px;${src.isNiche ? '' : 'opacity:0.78'}">
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(theme)}</strong> ${srcBadge} <span style="font-size:9px;color:var(--color-text-tertiary)">you hold ${gap < 0.05 ? '<span style="color:#34d399">none</span>' : gap.toFixed(1) + '%'} · ${names.length} name${names.length > 1 ? 's' : ''}</span></span>
           <span style="white-space:nowrap;font-size:9px;color:var(--color-text-tertiary)">theme 1Y ${fmtRet(perf)}</span>
         </summary>
-        <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--color-border-tertiary)">${names.map(tickerLine).join('')}</div>
+        <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(tickerLine).join('')}</div>
       </details>`;
   };
 
+  // Lead with NICHE-fund buckets (the genuine finds), then broad-fund buckets; within each group keep
+  // gap-ascending (lightest theme first). Open the niche buckets by default — that's the real signal.
+  const orderedThemes = themeOrder.slice().sort((a, b) => {
+    const na = bucketSource(buckets[a]).isNiche ? 0 : 1;
+    const nb = bucketSource(buckets[b]).isNiche ? 0 : 1;
+    if (na !== nb) return na - nb; // niche first
+    return (themePct[a] ?? 0) - (themePct[b] ?? 0); // then by gap
+  });
+
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Discovery — names that fill your gaps <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(investigate, not buy)</span></div>
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Discovery — ideas hiding in your funds <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(investigate, not buy)</span></div>
       <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
-        Names mined from the fund holdings you've pasted, that you <strong>don't own</strong>, grouped by theme and ordered by gap — themes you're <strong>lightest</strong> in come first. Click a theme to see its candidate names (sorted by their weight in the fund — how much that fund's managers concentrate on them). <strong style="color:var(--color-text-secondary)">This surfaces candidates to investigate — not a buy signal, not analysis of the stock.</strong> It only sees names inside funds you've pasted. Performance is the <em>theme's</em> 1-year return, not the stock's.
+        Names inside the funds you've pasted that you <strong>don't own</strong>, in themes you're lightest in. <span style="color:#34d399">Niche-fund finds</span> (from small-cap/thematic ETFs) lead — those are the names you likely haven't seen. <span style="color:var(--color-text-tertiary)">Broad-fund buckets</span> (sector ETFs full of household names) are dimmed below. <strong style="color:var(--color-text-secondary)">Candidates to investigate — not a buy signal, not stock analysis.</strong> Performance is the <em>theme's</em> 1Y, not the stock's.
       </div>
-      ${themeOrder.length ? themeOrder.map(bucketHtml).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
+      ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
 }
