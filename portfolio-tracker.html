@@ -7533,10 +7533,21 @@ function qrRenderRotation() {
         const freshNet = sumChg(fresh);
         const hiddenFresh = Math.max(0, fresh.length - sim.rows.slice(0, 15).filter(r => r.before === 0).length);
         const sgn = n => (n >= 0 ? '+' : '\u2212') + fmtDollarWhole(Math.abs(n));
-        return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.55;color:var(--color-text-primary)">
-          <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:4px">What really moved</div>
-          Names you <strong>already had</strong> exposure to (${held.length}): net <strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong> true exposure${heldNet<0?' — almost all of it the positions you\u2019re selling; the ETF tops the rest back up':''}.<br>
-          Names you had <strong>no</strong> exposure to (${fresh.length}): net <strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong> of brand-new exposure${hiddenFresh>0?` (${hiddenFresh} of these are below the 15-row table above)`:''}.
+        // One-line read of the two labels, computed (not asserted). Describes the trade the numbers
+        // show: cut from names you held, added as new exposure — and flags when the "cut" is really
+        // just the sells reshuffling back via the ETF.
+        const cut = sumChg(held.filter(r => r.change < 0));
+        const sells = sim.soldCount || 0;
+        let verdict;
+        if (heldNet < 0 && freshNet > 0) verdict = `Net: trims ${fmtDollarWhole(Math.abs(heldNet))} from names you held (mostly the ${sells} you\u2019re selling) and adds ${fmtDollarWhole(Math.abs(freshNet))} in new ones.`;
+        else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up the ones you held by ${fmtDollarWhole(Math.abs(heldNet))}.`;
+        else if (freshNet === 0) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already held — no new exposure.`;
+        else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
+        return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
+          <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:5px">What really moved</div>
+          <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
+          <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh>0?`, ${hiddenFresh} below table`:''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
+          <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
         </div>`;
       })()}
       ${sim.sleeveRows.length ? `
@@ -7992,10 +8003,17 @@ function renderQrCardAnalysis(id) {
           const freshNet = sumChg(fresh);
           const hiddenFresh = Math.max(0, fresh.length - sim.rows.slice(0, 15).filter(r => r.before === 0).length);
           const sgn = n => (n >= 0 ? '+' : '\u2212') + fmtDollarWhole(Math.abs(n));
-          return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.55;color:var(--color-text-primary)">
-            <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:4px">What really moved</div>
-            Names you <strong>already had</strong> exposure to (${held.length}): net <strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong> true exposure${heldNet<0?' — almost all of it the positions you\u2019re selling; the ETF tops the rest back up':''}.<br>
-            Names you had <strong>no</strong> exposure to (${fresh.length}): net <strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong> of brand-new exposure${hiddenFresh>0?` (${hiddenFresh} of these are below the 15-row table above)`:''}.
+          const sells = sim.soldCount || 0;
+          let verdict;
+          if (heldNet < 0 && freshNet > 0) verdict = `Net: trims ${fmtDollarWhole(Math.abs(heldNet))} from names you held (mostly the ${sells} you\u2019re selling) and adds ${fmtDollarWhole(Math.abs(freshNet))} in new ones.`;
+          else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up the ones you held by ${fmtDollarWhole(Math.abs(heldNet))}.`;
+          else if (freshNet === 0) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already held — no new exposure.`;
+          else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
+          return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
+            <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:5px">What really moved</div>
+            <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
+            <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh>0?`, ${hiddenFresh} below table`:''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
+            <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
           </div>`;
         })()}
         <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">For names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal. ` : ''}Approximate; tax is an estimate (not advice).</div>`;
@@ -14890,6 +14908,11 @@ function exportData() {
     peDeals,
     qualityReviews,
     themeUniverseHistory,
+    // Index look-through / benchmark holdings store (the pasted ETF holdings that feed both the
+    // look-through math and the theme-overlap proxy). Was previously omitted from export, which
+    // silently dropped this data on any export→import round-trip. Read live from the store so we
+    // capture whatever's currently pasted, not a stale in-memory copy.
+    indexLookthrough: getIndexLookthrough(),
     trackRecordMatureOnly, industryAlphaMatureOnly,
     taxProfile,
     version: "2.2",
@@ -14926,6 +14949,12 @@ function importData(input) {
       if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
       if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
       if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
+      // Restore index look-through / benchmark holdings store (lives in its own localStorage key,
+      // so savePositions() below won't persist it — call saveIndexLookthrough() explicitly).
+      if (data.indexLookthrough && typeof data.indexLookthrough === 'object') {
+        indexLookthrough = data.indexLookthrough;
+        saveIndexLookthrough();
+      }
       if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
       if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
       if (data.taxProfile && typeof data.taxProfile === 'object') { taxProfile = { ...taxProfile, ...data.taxProfile }; applyTaxProfile(); }
