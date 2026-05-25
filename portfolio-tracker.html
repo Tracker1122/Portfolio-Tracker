@@ -13083,11 +13083,13 @@ function renderThemeUniverse() {
       </table>
     </div>
     <div id="theme-diversification-analysis" style="margin-top:18px"></div>
+    <div id="theme-discovery" style="margin-top:18px"></div>
     <div id="theme-candidates-screen" style="margin-top:18px"></div>
     <div id="theme-trueexp-names" style="margin-top:18px"></div>
     <div id="theme-bench-holdings-panel" style="margin-top:18px"></div>
   `;
   renderThemeDiversification();
+  renderThemeDiscovery();
   renderThemeCandidates();
   renderTrueExposureNames();
   renderThemeBenchmarkPanel();
@@ -13214,6 +13216,138 @@ function renderThemeDiversification() {
       </div>
 
       <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Concentration is exact (from your positions). Overlap is a structural estimate from pasted holdings — not measured return correlation, and not added to the concentration % (that would double-count). They're two lenses on the same question: is your book secretly one bet?</div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+// DISCOVERY — surface specific NAMES (not just themes) worth investigating, mined from the fund
+// holdings you've pasted. The honest scope: this can ONLY surface names that sit inside funds you
+// researched — it will NEVER invent a stock or pull one from outside your data. It is a discovery
+// aid ("investigate these"), explicitly NOT a buy recommendation and NOT stock analysis.
+// Ranking = diversification value: names in themes you're LIGHTEST in rank first (filling a real
+// gap), then by conviction (their weight in the fund, i.e. how much the fund's managers bet on it).
+// Performance shown is the THEME/benchmark's window return — NOT the stock's own return (which we
+// don't have and won't fake). Non-stock tickers (mutual funds, cash sweeps) are filtered out.
+// ─────────────────────────────────────────────
+let discoveryThemeFilter = '__all__';
+function setDiscoveryThemeFilter(v) { discoveryThemeFilter = v; renderThemeDiscovery(); }
+let discoveryShowAll = false;
+function toggleDiscoveryShowAll() { discoveryShowAll = !discoveryShowAll; renderThemeDiscovery(); }
+
+function renderThemeDiscovery() {
+  const host = document.getElementById('theme-discovery');
+  if (!host) return;
+
+  const { rows: trueRows } = computeTrueExposure();
+  const totalBook = trueRows.reduce((s, r) => s + r.total, 0);
+  const ownedTrue = {};
+  trueRows.forEach(r => { ownedTrue[qrCanonical(r.display).key] = r.total; });
+
+  // Theme exposure % per theme, for gap-weighting.
+  const benchTheme = {}; // FUND -> theme
+  const themePct = {};
+  themeUniverseAll().forEach(t => {
+    if (t.ticker) benchTheme[t.ticker.toUpperCase()] = t.name;
+    const ex = computeThemeExposure(t.name);
+    themePct[t.name] = totalBook > 0 ? (ex.dollars / totalBook) * 100 : 0;
+  });
+
+  // Mine every pasted fund's holdings for names. Only theme-benchmark funds map to a theme (so we
+  // can show theme gap + theme performance); names that appear only in non-theme funds (e.g. a
+  // candidate ETF you evaluated) are skipped — no theme to anchor diversification value.
+  // Stock-ticker heuristic. Real US stocks are 1–5 uppercase letters (optionally a .A/.B class).
+  // Mutual-fund tickers are 5 letters ending in X (VFINX, VRTPX) — a near-universal convention — so
+  // we exclude those specifically. Not foolproof (can't fully tell funds from strings), but it
+  // catches the common case without nuking legitimate 1–4 letter stocks.
+  const looksLikeStock = tk => /^[A-Z]{1,5}(\.[A-Z])?$/.test(tk) && !/^[A-Z]{4}X$/.test(tk);
+  const store = getIndexLookthrough();
+  const cand = {};
+  Object.entries(store).forEach(([fund, tbl]) => {
+    if (!tbl.weights) return;
+    const theme = benchTheme[fund.toUpperCase()] || null;
+    Object.entries(tbl.weights).forEach(([tk, w]) => {
+      if (w == null) return;
+      const k = qrCanonical(tk).key;
+      if (!cand[k]) cand[k] = { display: tk, inFunds: {}, themes: new Set(), maxW: 0 };
+      cand[k].inFunds[fund] = w;
+      if (theme) cand[k].themes.add(theme);
+      if (w > cand[k].maxW) cand[k].maxW = w;
+    });
+  });
+
+  const TINY = 0.005 * totalBook; // "own only tinily" threshold = 0.5% of book
+  let junkCount = 0;
+  let disc = Object.entries(cand).map(([k, c]) => ({
+    display: c.display, inFunds: c.inFunds, themes: [...c.themes], maxW: c.maxW, owned: ownedTrue[k] || 0
+  })).filter(c => {
+    if (c.owned >= TINY) return false;       // already own a real position
+    if (c.themes.length === 0) return false; // no theme to anchor diversification value
+    if (!looksLikeStock(c.display)) { junkCount++; return false; } // mutual-fund/sweep/parse junk
+    return true;
+  });
+
+  // Diversification value = lowest theme exposure among its themes (the biggest gap it fills).
+  disc.forEach(c => { c.minThemePct = Math.min(...c.themes.map(t => themePct[t] ?? 100)); });
+  disc.sort((a, b) => {
+    if (Math.abs(a.minThemePct - b.minThemePct) > 0.1) return a.minThemePct - b.minThemePct; // gap first
+    return b.maxW - a.maxW; // then conviction
+  });
+
+  // Theme filter options (themes that actually appear among candidates).
+  const themesPresent = new Set();
+  disc.forEach(c => c.themes.forEach(t => themesPresent.add(t)));
+  const themeOpts = ['__all__', ...[...themesPresent].sort((a, b) => (themePct[a] ?? 0) - (themePct[b] ?? 0))];
+  const filterSel = `<select onchange="setDiscoveryThemeFilter(this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 7px;cursor:pointer">
+    ${themeOpts.map(t => `<option value="${esc(t)}"${t === discoveryThemeFilter ? ' selected' : ''}>${t === '__all__' ? 'All gaps' : esc(t) + ' (' + (themePct[t] ?? 0).toFixed(1) + '%)'}</option>`).join('')}
+  </select>`;
+
+  let filtered = disc;
+  if (discoveryThemeFilter !== '__all__') filtered = disc.filter(c => c.themes.includes(discoveryThemeFilter));
+
+  const CAP = 20;
+  const shown = discoveryShowAll ? filtered : filtered.slice(0, CAP);
+  const hidden = filtered.length - shown.length;
+
+  // Theme performance helper — clearly the THEME's, not the stock's.
+  const themePerf = (themeName) => {
+    const tk = (themeUniverseAll().find(t => t.name === themeName) || {}).ticker;
+    if (!tk) return null;
+    const r = computeThemeReturns(tk);
+    return r['1y'];
+  };
+  const fmtRet = (n) => n === null ? '<span style="color:var(--color-text-tertiary)">—</span>' :
+    `<span style="color:${n >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${n >= 0 ? '+' : ''}${n.toFixed(1)}%</span>`;
+
+  const rowHtml = (c) => {
+    const primaryTheme = c.themes.slice().sort((a, b) => (themePct[a] ?? 0) - (themePct[b] ?? 0))[0];
+    const gapPct = themePct[primaryTheme] ?? 0;
+    const fundsLabel = Object.entries(c.inFunds).map(([f, w]) => `${esc(f)} ${w.toFixed(1)}%`).join(', ');
+    const perf = themePerf(primaryTheme);
+    return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid var(--color-border-tertiary)">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:12px;font-weight:600;color:var(--color-text-primary)">${esc(c.display)} <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">${esc(primaryTheme)} · you hold ${gapPct < 0.05 ? '<span style="color:#34d399">none</span>' : gapPct.toFixed(1) + '%'}</span></div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">top holding in: ${fundsLabel}</div>
+      </div>
+      <div style="text-align:right;white-space:nowrap">
+        <div style="font-size:9px;color:var(--color-text-tertiary)">theme 1Y</div>
+        <div style="font-size:11px">${fmtRet(perf)}</div>
+      </div>
+    </div>`;
+  };
+
+  host.innerHTML = `
+    <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:3px">
+        <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">Discovery — names that fill your gaps <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(investigate, not buy)</span></div>
+        ${filterSel}
+      </div>
+      <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
+        Specific names mined from the fund holdings you've pasted, that you <strong>don't own</strong>, ranked by how much they'd fill a gap — names in the themes you're <strong>lightest</strong> in come first, then by their weight in the fund (how much that fund's managers concentrate on them). <strong style="color:var(--color-text-secondary)">This surfaces candidates to investigate — it is not a buy signal and not analysis of the stock.</strong> It can only see names inside funds you've pasted; it can't know about anything outside your data. Performance shown is the <em>theme's</em> 1-year return, not the stock's.
+      </div>
+      ${shown.length ? shown.map(rowHtml).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates for this filter — either you already own the names in this theme, or no holdings are pasted for its funds.</div>'}
+      ${hidden > 0 ? `<button class="btn btn-sm" onclick="toggleDiscoveryShowAll()" style="font-size:9px;margin-top:8px">Show ${hidden} more candidate${hidden > 1 ? 's' : ''}</button>` : ''}
+      ${discoveryShowAll && filtered.length > CAP ? `<button class="btn btn-sm" onclick="toggleDiscoveryShowAll()" style="font-size:9px;margin-top:8px">Collapse to top ${CAP}</button>` : ''}
+      ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
 }
 
