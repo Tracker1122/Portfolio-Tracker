@@ -12995,7 +12995,78 @@ function setSectorTag(key, sectorId) {
 // the low-confidence names (international tickers, recent IPOs, ambiguous ticker reuse) are marked
 // for your verification, not presented as fact.
 const AI_SECTOR_SUGGESTIONS = {"NVDA":["semis","hi"],"MSFT":["bigtech","hi"],"AAPL":["bigtech","hi"],"GOOGL":["bigtech","hi"],"AMZN":["discretionary","lo"],"AVGO":["semis","hi"],"META":["bigtech","hi"],"ORCL":["bigtech","hi"],"NFLX":["comms","hi"],"MU":["semis","hi"],"TSLA":["discretionary","lo"],"TSM":["semis","hi"],"INTC":["semis","hi"],"AMD":["semis","hi"],"TXN":["semis","hi"],"QCOM":["semis","hi"],"LRCX":["semis","hi"],"ASML":["semis","hi"],"KLAC":["semis","hi"],"AMAT":["semis","hi"],"ADI":["semis","hi"],"MRVL":["semis","hi"],"SNPS":["semis","hi"],"STX":["semis","hi"],"WDC":["semis","hi"],"SNDK":["semis","lo"],"V":["financials","hi"],"JPM":["financials","hi"],"AXP":["financials","hi"],"MS":["financials","hi"],"MA":["financials","hi"],"BRKB":["financials","lo"],"SOFI":["financials","hi"],"PANW":["bigtech","lo"],"CRWD":["bigtech","lo"],"CRWV":["bigtech","lo"],"ETN":["grid","hi"],"JCI":["grid","hi"],"PWR":["grid","hi"],"NVT":["grid","hi"],"HUBB":["grid","hi"],"ABBN":["grid","lo"],"PRY":["grid","lo"],"NG":["utilities","lo"],"EOAN":["utilities","lo"],"XOM":["energy","hi"],"CVX":["energy","hi"],"SLB":["energy","hi"],"VLO":["energy","hi"],"WMB":["energy","hi"],"CNQ":["energy","hi"],"NOV":["energy","hi"],"FTI":["energy","hi"],"SU":["energy","lo"],"GLD":["commodities","hi"],"NEM":["materials","hi"],"SCCO":["materials","hi"],"AU":["materials","lo"],"AEM":["materials","hi"],"LIN":["materials","hi"],"SHW":["materials","hi"],"CF":["materials","hi"],"VMC":["materials","hi"],"PKG":["materials","hi"],"CCK":["materials","hi"],"AVY":["materials","hi"],"ATR":["materials","hi"],"CBT":["materials","hi"],"OC":["materials","hi"],"MAS":["materials","lo"],"B":["materials","lo"],"RKLB":["defense","hi"],"ASTS":["defense","lo"],"PL":["defense","lo"],"LUNR":["defense","lo"],"FLY":["defense","lo"],"SATS":["comms","lo"],"LLY":["healthcare","hi"],"WMT":["staples","hi"],"COST":["staples","hi"],"PM":["staples","hi"],"KR":["staples","hi"],"ADM":["staples","hi"],"TGT":["staples","lo"],"CL":["staples","hi"],"PG":["staples","hi"],"PEP":["staples","hi"],"KMB":["staples","hi"],"HSY":["staples","hi"],"STZ":["staples","hi"],"CLX":["staples","hi"],"COKE":["staples","hi"],"CCEP":["staples","hi"],"KO":["staples","hi"],"LW":["staples","hi"],"DAR":["staples","lo"],"MCD":["discretionary","hi"],"RCL":["discretionary","hi"],"CCL":["discretionary","hi"],"DRI":["discretionary","hi"],"RACE":["discretionary","hi"],"RL":["discretionary","hi"],"BBWI":["discretionary","hi"],"SIG":["discretionary","lo"],"AZO":["discretionary","hi"],"ALV":["discretionary","hi"],"MGA":["discretionary","hi"],"CMI":["industrials","hi"],"JBHT":["industrials","hi"],"CSX":["industrials","hi"],"UNP":["industrials","hi"],"CNI":["industrials","hi"],"UPS":["industrials","hi"],"DAL":["industrials","hi"],"UAL":["industrials","hi"],"R":["industrials","hi"],"TFII":["industrials","hi"],"MATX":["industrials","lo"],"KEX":["industrials","lo"],"ITW":["industrials","hi"],"GWW":["industrials","hi"],"PCAR":["industrials","hi"],"OTIS":["industrials","hi"],"ALSN":["industrials","hi"],"DCI":["industrials","hi"],"WM":["industrials","hi"],"RSG":["industrials","hi"],"WMS":["industrials","lo"],"TTC":["industrials","hi"],"TEL":["industrials","lo"],"WTS":["grid","lo"],"LII":["industrials","lo"],"FERG":["industrials","lo"],"WSO":["industrials","lo"],"RUSHA":["industrials","lo"],"MSA":["industrials","hi"],"JHX":["materials","lo"],"LAMR":["comms","lo"],"FGXXX":["cash","hi"]};
+// Specific reasons for the ai-lo (verify) sector flags — so the triangle is actionable, telling you
+// WHY Claude is unsure on this exact name, not just that it is. Names not listed fall back to a
+// generic reason. These guide your correction; the sector itself is still Claude's guess to confirm.
+const AI_VERIFY_REASONS = {
+  AMZN: 'GICS says Consumer Discretionary (retail), but it spans cloud/Big Tech — your call which bucket fits your mental model.',
+  TSLA: 'GICS Consumer Discretionary (autos), but many treat it as tech — pick the one matching how you think of it.',
+  SNDK: 'SanDisk — recently spun back out of Western Digital; recent corporate churn, confirm the entity and that semis is right.',
+  BRKB: 'Berkshire is a conglomerate; GICS files it under Financials, but it owns operating businesses across sectors.',
+  PANW: 'Cybersecurity — no separate cyber bucket in your vocab, so placed in Big Tech/Software; move if you prefer.',
+  CRWD: 'Cybersecurity — placed in Big Tech/Software (no cyber bucket); confirm that fits.',
+  CRWV: 'CoreWeave — recent IPO (AI cloud); little history, verify the classification.',
+  ABBN: 'ABB — Swiss listing; confident it\u2019s electrical/grid, but verify the ticker maps to ABB.',
+  PRY: 'Prysmian — Italian cable maker; international ticker, confirm identity.',
+  NG: 'Ambiguous ticker — National Grid (utility) vs NovaGold (materials). GRID-fund context suggests National Grid; verify.',
+  EOAN: 'E.ON — German utility; international ticker, confirm identity.',
+  SU: 'Ambiguous — Suncor (energy) vs Stericycle; fund context is mixed, verify which.',
+  AU: 'AngloGold (gold miner) — confirm it\u2019s the miner (Materials), not a bullion vehicle.',
+  MAS: 'Ambiguous ticker (Masco building products?) — verify identity before trusting Materials.',
+  B: 'Single-letter ticker (Barnes Group?) — ambiguous, confirm what this is.',
+  ASTS: 'AST SpaceMobile — recent IPO, space/defense-adjacent; verify the bucket.',
+  PL: 'Planet Labs (or ambiguous) — recent IPO; confirm identity and that Defense fits.',
+  LUNR: 'Intuitive Machines — recent IPO (lunar/space); verify Defense/Aerospace fits.',
+  FLY: 'Ambiguous ticker — confirm what this is before trusting Defense.',
+  SATS: 'EchoStar/Hughes (or ambiguous) — placed in Communications; verify.',
+  TGT: 'Target — staple grocer or discretionary retail? GICS splits this finely; confirm.',
+  DAR: 'Darling Ingredients — rendering/food byproducts; could read as Materials or Staples, verify.',
+  SIG: 'Signet Jewelers — discretionary, but confirm the ticker.',
+  MATX: 'Matson — shipping; Industrials, but verify.',
+  KEX: 'Kirby — barge transport; Industrials, verify.',
+  WMS: 'Advanced Drainage — building products; placed Industrials, could be Materials.',
+  TEL: 'TE Connectivity — electrical components; placed Industrials, arguably Grid/Electrical — your call.',
+  WTS: 'Watts Water — flow control; placed Grid/Electrical, could be Industrials, verify.',
+  LII: 'Lennox — HVAC; Industrials, verify.',
+  FERG: 'Ferguson — plumbing/HVAC distribution; Industrials, verify.',
+  WSO: 'Watsco — HVAC distribution; Industrials, verify.',
+  RUSHA: 'Rush Enterprises — truck dealer; Industrials, verify.',
+  JHX: 'James Hardie — building materials (Australian); Materials, verify identity.',
+  LAMR: 'Lamar Advertising — billboards; a REIT by structure but placed Communications, verify.'
+};
+function aiVerifyReason(key) {
+  return AI_VERIFY_REASONS[key] || 'International ticker, recent IPO, or ambiguous symbol — verify this one.';
+}
+
+// AI-suggestion mode: when 'on', confident (hi) suggestions auto-apply to any UNTAGGED name on
+// every render — so a NEW obvious large-cap that enters the book (new position or freshly-pasted
+// ETF) self-tags, while names not on the confident list, or marked 'lo', stay ⚠ verify / untagged.
+// 'off' after the user hits Clear, so auto-apply respects that and won't undo it. User picks always win.
+function aiSuggestModeOn() {
+  try { return localStorage.getItem('portfolio-sector-ai-mode') !== 'off'; } catch (e) { return true; }
+}
+function setAiSuggestMode(on) {
+  try { localStorage.setItem('portfolio-sector-ai-mode', on ? 'on' : 'off'); } catch (e) {}
+}
+// Auto-apply ONLY confident (hi) suggestions to currently-untagged names. Never overwrites a user
+// pick. Returns count applied. This is the "obvious large-cap auto-tags, rest flagged" behavior:
+// 'hi' names are the pre-vetted obvious ones; 'lo' names are deliberately left for ⚠ verify.
+function autoApplyConfidentSuggestions() {
+  if (!aiSuggestModeOn()) return 0;
+  const m = loadSectorMap();
+  let applied = 0;
+  Object.entries(AI_SECTOR_SUGGESTIONS).forEach(([key, [sector, conf]]) => {
+    if (conf !== 'hi') return;            // only obvious large-caps auto-apply
+    if (sectorEntry(m, key)) return;       // already tagged (user/ai/ai-lo) — leave it
+    m[key] = { sector, src: 'ai' };
+    applied++;
+  });
+  if (applied) saveSectorMap(m);
+  return applied;
+}
+
 function applyAiSectorSuggestions() {
+  setAiSuggestMode(true); // turning the pass on (re)enables auto-apply for future new names
   const m = loadSectorMap();
   let applied = 0, skipped = 0;
   Object.entries(AI_SECTOR_SUGGESTIONS).forEach(([key, [sector, conf]]) => {
@@ -13009,6 +13080,7 @@ function applyAiSectorSuggestions() {
   return { applied, skipped };
 }
 function clearAiSectorSuggestions() {
+  setAiSuggestMode(false); // turn OFF so auto-apply won't immediately re-add at next render
   const m = loadSectorMap();
   let removed = 0;
   Object.keys(m).forEach(k => { const e = sectorEntry(m, k); if (e && (e.src === 'ai' || e.src === 'ai-lo')) { delete m[k]; removed++; } });
@@ -13023,6 +13095,7 @@ function clearAiSectorSuggestions() {
 function computeSectorClusters() {
   const { rows } = computeTrueExposure();
   const totalBook = rows.reduce((s, r) => s + r.total, 0);
+  autoApplyConfidentSuggestions(); // new obvious large-caps self-tag (if AI mode on); unknowns stay untagged
   const map = loadSectorMap();
   const sectors = {};
   let untagged = { total: 0, names: [] };
@@ -13134,84 +13207,6 @@ function computeThemeClusters() {
   };
 }
 
-// ─────────────────────────────────────────────
-// Theme-benchmark holdings + overlap (structural correlation proxy)
-// Holdings are stored in the SHARED index look-through store (keyed by fund ticker), so a
-// benchmark's holdings pasted here also feed the look-through math, and vice-versa — one source
-// of truth, one staleness clock per fund. We do NOT measure return correlation (no return series
-// is stored); we approximate "these themes move together" by how much their benchmark ETFs hold
-// the same names, weighted by position size. This is a STRUCTURAL proxy, labeled as such in the UI.
-// ─────────────────────────────────────────────
-
-// The distinct benchmark tickers backing the themes the user OWNS (deduped — SMH backs both
-// Semiconductors and AI Infrastructure, so it appears once). Ordered: owned first (by exposure
-// desc), then the unowned universe benchmarks (lower value for this analysis, listed after).
-function themeBenchmarksForCorrelation() {
-  const owned = [], unowned = [];
-  // Build per-benchmark: which themes map to it, and total owned exposure across those themes.
-  const byBench = {};
-  themeUniverseAll().forEach(t => {
-    if (!t.ticker) return;
-    if (!byBench[t.ticker]) byBench[t.ticker] = { ticker: t.ticker, themes: [], exposure: 0, anyOwned: false };
-    const ex = computeThemeExposure(t.name);
-    byBench[t.ticker].themes.push(t.name);
-    byBench[t.ticker].exposure += ex.dollars;
-    if (ex.hasPositions) byBench[t.ticker].anyOwned = true;
-  });
-  Object.values(byBench).forEach(b => { (b.anyOwned ? owned : unowned).push(b); });
-  owned.sort((a, b) => b.exposure - a.exposure);
-  unowned.sort((a, b) => a.ticker.localeCompare(b.ticker));
-  return { owned, unowned };
-}
-
-// Read a benchmark's stored holdings (weights map) from the shared look-through store.
-// Returns { weights: {TICKER: pct}, asOf, count } or null if none stored.
-function benchmarkHoldings(ticker) {
-  if (!ticker) return null;
-  const store = getIndexLookthrough();
-  const entry = store[ticker.toUpperCase()];
-  if (!entry || !entry.weights) return null;
-  const weights = entry.weights;
-  const count = Object.keys(weights).length;
-  if (count === 0) return null;
-  return { weights, asOf: entry.asOf || null, count };
-}
-
-// Weighted holdings overlap between two benchmarks — the structural proxy for co-movement.
-// For each name held by BOTH funds, the contribution is min(weightA, weightB): the exposure that
-// genuinely co-occurs in both. Summing min() across shared names gives an overlap % bounded by the
-// smaller fund's coverage; it doesn't over-credit a name that's huge in one fund but tiny in the
-// other. Returns:
-//   { computable, haveA, haveB, overlapPct, sharedNames:[{ticker,wA,wB,min}], sameBenchmark }
-// computable=false when either side lacks holdings (so the UI shows "paste both", never a fake 0).
-function themeBenchmarkOverlap(tickerA, tickerB) {
-  const a = (tickerA || '').toUpperCase();
-  const b = (tickerB || '').toUpperCase();
-  // Same benchmark backing two themes (e.g. SMH ↔ SMH): identical by definition, not a discovery.
-  if (a && a === b) {
-    const h = benchmarkHoldings(a);
-    const cov = h ? Object.values(h.weights).reduce((s, w) => s + (w || 0), 0) : 0;
-    return { computable: !!h, haveA: !!h, haveB: !!h, overlapPct: h ? cov : 0, sharedNames: [], sameBenchmark: true };
-  }
-  const hA = benchmarkHoldings(a);
-  const hB = benchmarkHoldings(b);
-  if (!hA || !hB) {
-    return { computable: false, haveA: !!hA, haveB: !!hB, overlapPct: 0, sharedNames: [], sameBenchmark: false };
-  }
-  const shared = [];
-  let overlap = 0;
-  Object.entries(hA.weights).forEach(([tk, wA]) => {
-    const wB = hB.weights[tk];
-    if (wB != null && wA != null) {
-      const mn = Math.min(wA, wB);
-      overlap += mn;
-      shared.push({ ticker: tk, wA, wB, min: mn });
-    }
-  });
-  shared.sort((x, y) => y.min - x.min);
-  return { computable: true, haveA: true, haveB: true, overlapPct: overlap, sharedNames: shared, sameBenchmark: false };
-}
-
 // Render the full Theme Universe tab.
 function renderThemeUniverse() {
   const el = document.getElementById('theme-universe-tab-content');
@@ -13307,12 +13302,10 @@ function renderThemeUniverse() {
     <div id="theme-diversification-analysis" style="margin-top:18px"></div>
     <div id="theme-sector-panel" style="margin-top:18px"></div>
     <div id="theme-discovery" style="margin-top:18px"></div>
-    <div id="theme-bench-holdings-panel" style="margin-top:18px"></div>
   `;
   renderThemeClusters();
   renderSectorPanel();
   renderThemeDiscovery();
-  renderThemeBenchmarkPanel();
 }
 
 // ─────────────────────────────────────────────
@@ -13393,14 +13386,23 @@ function renderThemeClusters() {
   const nameLine = (n) => {
     const flag = clusterConfidenceFlag(n, ctx);
     const tri = flag ? `<span title="${esc(flag)}" style="color:#fbbf24;cursor:help">⚠</span> ` : '';
+    const isOverridden = n.why && n.why.indexOf('you assigned') === 0;
+    // Default option is blank when the tool placed it (no "auto" noise on every confident row); the
+    // reset choice only matters once you've overridden, so it's labeled clearly only then.
     const editControl = clusterEditExpanded ? `
       <select onchange="reassignCluster('${esc(n.key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;margin-left:6px;cursor:pointer">
-        <option value="__auto__">↺ auto</option>
-        ${themeOptions.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+        <option value="__auto__"${isOverridden ? '' : ' selected'}>${isOverridden ? '↺ reset to auto' : '—'}</option>
+        ${themeOptions.map(t => `<option value="${esc(t)}"${isOverridden && n.label === clusterLabelForBench(themeBench[t]) ? ' selected' : ''}>${esc(t)}</option>`).join('')}
       </select>` : '';
-    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:2px 0 2px 12px;font-size:10px">
-      <span style="color:var(--color-text-primary)">${tri}${esc(n.display)} <span style="color:var(--color-text-tertiary);font-size:8px">${esc(n.why || '')}</span>${editControl}</span>
-      <span style="color:var(--color-text-tertiary);white-space:nowrap">${fmtD(n.total)}</span>
+    // When editing AND this name is flagged, show the reason inline (not just hover) so you can
+    // reason about the fix without hunting. The reason already explains the conflict (which clusters
+    // it's torn between, or the thin weight) — that's the actionable part.
+    const reasonInline = (clusterEditExpanded && flag) ? `<div style="font-size:8px;color:#fbbf24;padding:1px 0 2px 24px;line-height:1.4">↳ ${esc(flag)}</div>` : '';
+    return `<div style="padding:2px 0 2px 12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:10px">
+        <span style="color:var(--color-text-primary)">${tri}${esc(n.display)} <span style="color:var(--color-text-tertiary);font-size:8px">${esc(n.why || '')}</span>${editControl}</span>
+        <span style="color:var(--color-text-tertiary);white-space:nowrap">${fmtD(n.total)}</span>
+      </div>${reasonInline}
     </div>`;
   };
 
@@ -13524,30 +13526,49 @@ function renderSectorPanel() {
   const untaggedCount = rows.filter(r => !entryFor(r.key)).length;
   const aiCount = rows.filter(r => { const e = entryFor(r.key); return e && (e.src === 'ai' || e.src === 'ai-lo'); }).length;
   const verifyCount = rows.filter(r => { const e = entryFor(r.key); return e && e.src === 'ai-lo'; }).length;
+  // RED = untagged AND material (carries real exposure). The VOO tail (sub-floor slivers) stays
+  // unmarked so red means "you should act on this," not noise. Floor = 0.5% of book.
+  const MATERIAL_FLOOR = 0.005 * (data.totalBook || 1);
+  const isMaterialUntagged = (r) => !entryFor(r.key) && r.total >= MATERIAL_FLOOR;
+  const redCount = rows.filter(isMaterialUntagged).length;
+  const redDot = (r) => isMaterialUntagged(r) ? `<span title="Untagged — this position carries real exposure (${fmtD(r.total)}) but has no sector. Tag it so it's not missing from the analysis." style="color:var(--color-text-danger);font-weight:700">●</span> ` : '';
+
+  // Held ETFs with NO pasted holdings (and not deliberately skipped) — their underlying names are
+  // entirely absent from true-exposure/clusters/sectors. This is the bigger "hidden exposure" hole
+  // than an untagged stock, so it gets the same red treatment, surfaced where you'd act on it.
+  const store = getIndexLookthrough();
+  const emptyHeldETFs = [...new Set(positions.filter(p => !p.closed && p.isETF && p.ticker).map(p => p.ticker.toUpperCase()))]
+    .filter(tk => { const e = store[tk]; const hasHoldings = e && e.weights && Object.keys(e.weights).length > 0; const skipped = e && e.blankOnPurpose; return !hasHoldings && !skipped; });
 
   // provenance badge per name
-  const srcBadge = (e) => {
+  const srcBadge = (e, curKey) => {
     if (!e) return '';
     if (e.src === 'user') return `<span title="You confirmed this" style="font-size:7px;color:#34d399">✓ you</span>`;
     if (e.src === 'ai') return `<span title="Claude suggested this (high confidence) — overridable" style="font-size:7px;color:var(--color-text-tertiary)">ai</span>`;
-    if (e.src === 'ai-lo') return `<span title="Claude is UNSURE — please verify (international ticker, recent IPO, or ambiguous symbol)" style="font-size:7px;color:#fbbf24">⚠ verify</span>`;
+    if (e.src === 'ai-lo') return `<span title="${esc(aiVerifyReason(curKey))}" style="font-size:7px;color:#fbbf24">⚠ verify</span>`;
     return '';
   };
 
-  const tagLine = (r) => { const e = entryFor(r.key); return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--color-border-tertiary);font-size:10px">
-    <span style="color:var(--color-text-primary)">${esc(r.display)} <span style="font-size:8px;color:var(--color-text-tertiary)">${fmtD(r.total)}</span> ${srcBadge(e)}</span>
-    ${sectorSelect(r.key, e ? e.sector : null)}
+  const tagLine = (r) => { const e = entryFor(r.key); const showReason = e && e.src === 'ai-lo'; return `<div style="padding:3px 0;border-bottom:1px solid var(--color-border-tertiary)">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:10px">
+      <span style="color:var(--color-text-primary)">${redDot(r)}${esc(r.display)} <span style="font-size:8px;color:var(--color-text-tertiary)">${fmtD(r.total)}</span> ${srcBadge(e, r.key)}</span>
+      ${sectorSelect(r.key, e ? e.sector : null)}
+    </div>
+    ${showReason ? `<div style="font-size:8px;color:#fbbf24;padding:1px 0 0 2px;line-height:1.4">↳ ${esc(aiVerifyReason(r.key))}</div>` : ''}
   </div>`; };
 
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
         <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">By sector — what's hiding in your funds</div>
-        <button class="btn btn-sm" onclick="toggleSectorTag()" style="font-size:9px">${sectorTagExpanded ? 'Done tagging' : '🏷 Tag sectors' + (untaggedCount ? ' (' + untaggedCount + ' untagged)' : '')}</button>
+        <button class="btn btn-sm" onclick="toggleSectorTag()" style="font-size:9px">${sectorTagExpanded ? 'Done tagging' : '🏷 Tag sectors' + (redCount ? ' (' + redCount + ' untagged)' : '')}</button>
       </div>
 
+      ${emptyHeldETFs.length ? `<div style="font-size:10px;color:var(--color-text-danger);background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.35);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:8px;line-height:1.5"><span style="font-weight:700">● ${emptyHeldETFs.join(', ')} — held ETF${emptyHeldETFs.length > 1 ? 's' : ''} with no holdings pasted.</span> Until you paste ${emptyHeldETFs.length > 1 ? 'their' : 'its'} holdings in the <strong>index look-through table (True Exposure tab)</strong>, the fund's underlying names are missing from true-exposure, clusters, and sectors entirely — a bigger gap than an untagged stock. ${emptyHeldETFs.length > 1 ? 'These' : 'This'} won't decompose until pasted.</div>` : ''}
+      ${redCount ? `<div style="font-size:10px;color:var(--color-text-danger);background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.35);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:8px;line-height:1.5"><span style="font-weight:700">● ${redCount} untagged position${redCount > 1 ? 's' : ''} with real exposure</span> — these carry meaningful dollars but have no sector, so they're missing from the analysis. Hit "Tag sectors" to fix; they sort to the top.</div>` : ''}
+
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        Your book grouped by sector — a second lens that cuts across your themes to catch clusters scattered through your funds. ${aiCount > 0 ? `<span style="color:var(--color-text-secondary)">Claude pre-labeled ${aiCount} names as a first pass${verifyCount ? `, and flagged <span style="color:#fbbf24">${verifyCount} as "⚠ verify"</span> where it's unsure (international tickers, recent IPOs, ambiguous symbols)</span>` : ''}. Those are suggestions you can override; your own picks win.</span>` : `Sectors aren't guessed; untagged names show separately.`} ${data.taggedPct < 100 ? `<span style="color:#fbbf24">${data.taggedPct.toFixed(0)}% tagged — figures are a floor.</span>` : ''}
+        Your book grouped by sector — a second lens that cuts across your themes to catch clusters scattered through your funds. ${aiCount > 0 ? `<span style="color:var(--color-text-secondary)">Claude pre-labeled ${aiCount} names as a first pass${verifyCount ? `, and flagged <span style="color:#fbbf24">${verifyCount} as "⚠ verify"</span> where it's unsure (international tickers, recent IPOs, ambiguous symbols)</span>` : ''}. Those are suggestions you can override; your own picks win.</span>` : `Sectors aren't guessed; untagged names show separately.`} <span style="color:var(--color-text-danger)">● red = untagged with real exposure</span> · <span style="color:#fbbf24">⚠ = tagged but unsure</span>. ${data.taggedPct < 100 ? `${data.taggedPct.toFixed(0)}% tagged — figures are a floor.` : ''}
       </div>
 
       ${data.sectors.length ? hiddenNote : ''}
@@ -13688,155 +13709,9 @@ function renderThemeDiscovery() {
       <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
         Names mined from the fund holdings you've pasted, that you <strong>don't own</strong>, grouped by theme and ordered by gap — themes you're <strong>lightest</strong> in come first. Click a theme to see its candidate names (sorted by their weight in the fund — how much that fund's managers concentrate on them). <strong style="color:var(--color-text-secondary)">This surfaces candidates to investigate — not a buy signal, not analysis of the stock.</strong> It only sees names inside funds you've pasted. Performance is the <em>theme's</em> 1-year return, not the stock's.
       </div>
-      ${themeOrder.length ? themeOrder.map(bucketHtml).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) below to populate this.</div>'}
+      ${themeOrder.length ? themeOrder.map(bucketHtml).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
-}
-
-// Dedicated paste panel for benchmark holdings — the data feed for the structural-overlap proxy.
-// Lists owned-theme benchmarks first (the high-value set for "is my book secretly one bet"), then
-// the unowned universe benchmarks collapsed below. Each fund reuses the proven paste UX: live
-// preview chips, unparsed-line flagging, the stockanalysis link, and an as-of staleness stamp.
-// Writes to the SHARED look-through store via pasteThemeBenchHoldings(), so one paste serves both
-// this analysis and the index look-through math.
-function renderThemeBenchmarkPanel() {
-  const host = document.getElementById('theme-bench-holdings-panel');
-  if (!host) return;
-  const { owned, unowned } = themeBenchmarksForCorrelation();
-  const today = new Date().toISOString().slice(0, 10);
-
-  const fundCard = (b) => {
-    const h = benchmarkHoldings(b.ticker);
-    const count = h ? h.count : 0;
-    const cov = h ? Object.values(h.weights).reduce((s, w) => s + (w || 0), 0) : 0;
-    const asOf = h && h.asOf ? h.asOf : '';
-    const store = getIndexLookthrough();
-    const skipped = !!(store[b.ticker] && store[b.ticker].blankOnPurpose && count === 0);
-    let ageDays = null, stale = false;
-    if (asOf) { ageDays = Math.floor((Date.now() - new Date(asOf + 'T00:00:00').getTime()) / 86400000); stale = ageDays > 120; }
-    const themesLabel = b.themes.join(' + ');
-    const status = count > 0
-      ? `<span style="font-size:9px;color:var(--color-text-success)">✓ ${count} holding${count > 1 ? 's' : ''} (${cov.toFixed(0)}% of fund)</span>`
-      : skipped
-        ? `<span style="font-size:9px;color:var(--color-text-tertiary)">skipped on purpose — overlap not computed</span>`
-        : `<span style="font-size:9px;color:#fbbf24">no holdings yet</span>`;
-    const staleNote = stale ? `<span style="font-size:9px;color:#fbbf24" title="Pasted ${ageDays} days ago — funds rebalance; consider refreshing">⚠ ${ageDays}d old</span>` : '';
-    // Right-aligned action: Clear (has holdings) / Un-skip (skipped) / Skip (empty, not skipped).
-    const action = count > 0
-      ? `<button class="btn btn-sm" onclick="clearThemeBenchHoldings('${esc(b.ticker)}')" style="font-size:9px;margin-left:auto;padding:1px 7px;color:var(--color-text-danger)">Clear</button>`
-      : skipped
-        ? `<a href="#" onclick="toggleThemeBenchSkip(event,'${esc(b.ticker)}')" style="font-size:9px;margin-left:auto;color:var(--color-text-info);text-decoration:underline;cursor:pointer">Un-skip</a>`
-        : `<a href="#" onclick="toggleThemeBenchSkip(event,'${esc(b.ticker)}')" style="font-size:9px;margin-left:auto;color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="Broad fund not worth decomposing (e.g. Emerging Markets, International, Bonds)? Mark it skipped so it stops asking for holdings — the screen will show it as a low-overlap-by-nature diversifier.">Skip on purpose</a>`;
-    return `
-      <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:8px${skipped ? ';opacity:0.7' : ''}">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-          <strong style="font-size:12px;color:var(--color-text-primary)">${esc(b.ticker)}</strong>
-          <span style="font-size:9px;color:var(--color-text-tertiary)">${esc(themesLabel)}</span>
-          ${status} ${staleNote}
-          ${action}
-        </div>
-        ${skipped ? '' : `
-        <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:5px">
-          Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${esc(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a>
-          <span>opens it on stockanalysis.com (free); copy the table and paste — row #, name &amp; shares are ignored automatically.</span>
-        </div>
-        <textarea id="tbench-paste-${esc(b.ticker)}" rows="2" oninput="renderThemeBenchPreview('${esc(b.ticker)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, AVGO 8% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
-        <div id="tbench-preview-${esc(b.ticker)}" style="margin-top:5px"></div>
-        <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
-          <button class="btn btn-sm btn-primary" onclick="pasteThemeBenchHoldings('${esc(b.ticker)}')" style="font-size:9px">Parse &amp; store</button>
-          <span style="font-size:8px;color:var(--color-text-tertiary)">stored to the shared holdings table — also feeds index look-through</span>
-        </div>
-        <div id="tbench-msg-${esc(b.ticker)}" style="margin-top:4px"></div>`}
-      </div>`;
-  };
-
-  const ownedFilled = owned.filter(b => benchmarkHoldings(b.ticker)).length;
-  host.innerHTML = `
-    <details style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--color-text-primary);list-style:none">▸ Benchmark holdings — paste/manage the data behind the overlap proxy <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(${ownedFilled}/${owned.length} owned benchmarks have holdings · click to expand)</span></summary>
-      <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin:8px 0 10px">
-        Paste each benchmark's top holdings to let the tracker estimate how much your themes <em>move together</em> — a structural proxy (shared names, weighted by size), <strong>not</strong> measured return correlation. You don't need all of them: any <em>pair</em> where both funds have holdings becomes computable. The two below that share a benchmark (SMH) are the same fund by definition. Owned-theme benchmarks first — these are the high-value ones.
-      </div>
-      ${owned.map(fundCard).join('')}
-      ${unowned.length ? `
-      <details style="margin-top:6px">
-        <summary style="font-size:10px;color:var(--color-text-tertiary);cursor:pointer">Unowned-theme benchmarks (${unowned.length}) — lower value for this analysis, paste only if you want their overlap too</summary>
-        <div style="margin-top:8px">${unowned.map(fundCard).join('')}</div>
-      </details>` : ''}
-    </details>`;
-}
-
-// Live preview of what a paste parses to — mirrors the index look-through preview exactly.
-function renderThemeBenchPreview(ticker) {
-  const ta = document.getElementById('tbench-paste-' + ticker);
-  const out = document.getElementById('tbench-preview-' + ticker);
-  if (!ta || !out) return;
-  const text = (ta.value || '').trim();
-  if (!text) { out.innerHTML = ''; return; }
-  const { parsed, unparsed } = parseHoldings(text);
-  if (!parsed.length && !unparsed.length) { out.innerHTML = ''; return; }
-  const coverage = parsed.reduce((s, p) => s + (p.weight || 0), 0);
-  const chips = parsed.map(p => `<span style="display:inline-block;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:1px 7px;margin:0 4px 3px 0;font-size:9px"><strong style="color:var(--color-text-primary)">${esc(p.ticker)}</strong> <span style="color:var(--color-text-tertiary)">${p.weight != null ? p.weight + '%' : '—'}</span></span>`).join('');
-  out.innerHTML = `
-    <div style="font-size:8px;color:var(--color-text-success);margin-bottom:3px">Will read ${parsed.length} holding${parsed.length > 1 ? 's' : ''} (${coverage.toFixed(1)}% of fund) — verify, then “Parse &amp; store”:</div>
-    <div>${chips}</div>
-    ${unparsed.length ? `<div style="font-size:8px;color:#fbbf24;margin-top:2px">${unparsed.length} line(s) won\u2019t be read: ${unparsed.map(u => esc(u)).join(' · ')}</div>` : ''}`;
-}
-
-// Parse a benchmark's pasted holdings and store them in the SHARED look-through store (so they
-// feed both this overlap proxy and the index look-through math). Paste = authoritative refresh.
-function pasteThemeBenchHoldings(ticker) {
-  const tk = (ticker || '').toUpperCase();
-  const ta = document.getElementById('tbench-paste-' + ticker);
-  const msg = document.getElementById('tbench-msg-' + ticker);
-  if (!ta) return;
-  const { parsed, unparsed } = parseHoldings(ta.value || '');
-  if (!parsed.length) {
-    if (msg) msg.innerHTML = `<div style="font-size:9px;color:#fbbf24">Nothing parsed — paste ticker + weight rows (e.g. "NVDA 22%").</div>`;
-    return;
-  }
-  const store = getIndexLookthrough();
-  if (!store[tk]) store[tk] = { asOf: '', weights: {} };
-  const weights = {};
-  parsed.forEach(p => { weights[p.ticker] = (p.weight != null) ? p.weight : null; });
-  store[tk].weights = weights;
-  store[tk].asOf = new Date().toISOString().slice(0, 10);
-  if (store[tk].blankOnPurpose) delete store[tk].blankOnPurpose;
-  saveIndexLookthrough();
-  const noW = parsed.filter(p => p.weight == null).length;
-  renderThemeBenchmarkPanel(); // refresh statuses
-  renderThemeDiscovery(); // a new paste may surface new gap-filling candidate names
-  const msg2 = document.getElementById('tbench-msg-' + ticker);
-  if (msg2) msg2.innerHTML = `<div style="font-size:9px;color:var(--color-text-success)">✓ Stored ${parsed.length} holding${parsed.length > 1 ? 's' : ''} for ${esc(tk)}.${noW ? ` (${noW} had no weight — won't contribute to overlap math.)` : ''}${unparsed.length ? ` <span style="color:#fbbf24">${unparsed.length} line(s) skipped: ${unparsed.map(u => esc(u)).join(' · ')}</span>` : ''}</div>`;
-}
-
-function clearThemeBenchHoldings(ticker) {
-  const tk = (ticker || '').toUpperCase();
-  const store = getIndexLookthrough();
-  if (!store[tk] || !store[tk].weights) return;
-  const n = Object.keys(store[tk].weights).length;
-  if (n === 0) return;
-  if (!confirm(`Clear all ${n} stored holding${n > 1 ? 's' : ''} for ${tk}? This clears the shared holdings table entry — it also affects index look-through if ${tk} is used there.`)) return;
-  store[tk].weights = {};
-  saveIndexLookthrough();
-  renderThemeBenchmarkPanel();
-  renderThemeDiscovery();
-  renderThemeClusters();
-}
-
-// Mark/un-mark a benchmark as "skipped on purpose" — a broad fund (Emerging Markets, International,
-// Bonds, gold) the user has decided not to decompose. Reuses the SAME blankOnPurpose flag the index
-// look-through editor uses, so the state is consistent everywhere. Skipped funds stop asking for
-// holdings. Pasting holdings later auto-clears the flag (handled in pasteThemeBenchHoldings).
-function toggleThemeBenchSkip(event, ticker) {
-  if (event && event.preventDefault) event.preventDefault();
-  const tk = (ticker || '').toUpperCase();
-  const store = getIndexLookthrough();
-  if (!store[tk]) store[tk] = { asOf: '', weights: {} };
-  store[tk].blankOnPurpose = !store[tk].blankOnPurpose;
-  saveIndexLookthrough();
-  renderThemeBenchmarkPanel();
-  renderThemeDiscovery();
 }
 
 // Dashboard tile — zero-exposure themes only, sorted by 1Y performance descending.
@@ -15543,8 +15418,8 @@ function exportData() {
     peDeals,
     qualityReviews,
     themeUniverseHistory,
-    // Index look-through / benchmark holdings store (the pasted ETF holdings that feed both the
-    // look-through math and the theme-overlap proxy). Was previously omitted from export, which
+    // Index look-through store (the pasted ETF holdings that feed look-through true-exposure, the
+    // moves-together clusters, and the sector view). Was previously omitted from export, which
     // silently dropped this data on any export→import round-trip. Read live from the store so we
     // capture whatever's currently pasted, not a stale in-memory copy.
     indexLookthrough: getIndexLookthrough(),
@@ -15584,7 +15459,7 @@ function importData(input) {
       if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
       if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
       if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
-      // Restore index look-through / benchmark holdings store (lives in its own localStorage key,
+      // Restore index look-through store (lives in its own localStorage key,
       // so savePositions() below won't persist it — call saveIndexLookthrough() explicitly).
       if (data.indexLookthrough && typeof data.indexLookthrough === 'object') {
         indexLookthrough = data.indexLookthrough;
