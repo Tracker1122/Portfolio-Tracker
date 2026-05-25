@@ -1361,10 +1361,8 @@
 
   <!-- Analysis and Performance Tab -->
   <div class="tab-panel" id="tab-analysis">
-    <div class="section-heading">Sleeve Value-Add — Is the Active Work Justified?</div>
+    <div class="section-heading">Sleeve Performance &amp; Value-Add — Is the Active Work Justified?</div>
     <div id="sleeve-valueadd-wrap" style="margin-bottom:24px"></div>
-    <div class="section-heading">Strategy Performance</div>
-    <div id="sleeve-performance-wrap" style="margin-bottom:20px"></div>
     <div class="section-heading">Industry Intelligence
       <span style="margin-left:12px;font-weight:400;text-transform:none;letter-spacing:0">
         <span id="conc-toggle-sleeve" onclick="setConcMode('sleeve')" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;background:var(--color-text-info);color:#000;font-weight:600">% of Strategy</span>
@@ -4425,7 +4423,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
-  if (name === 'analysis') { renderSleeveValueAdd(); renderSleevePerformance(); renderThemeIntel(); renderAddCandidatesTable(); }
+  if (name === 'analysis') { renderSleeveValueAdd(); renderThemeIntel(); renderAddCandidatesTable(); }
   if (name === 'rebalance') { renderRebalance(); if (typeof renderTaxSection === 'function') renderTaxSection(); }
   if (name === 'postsell') renderPostSell();
   if (name === 'quality') renderQualityTab();
@@ -8586,8 +8584,31 @@ function renderSleeveValueAdd() {
   if (!el) return;
   const data = buildSleeveValueAdd();
 
+  // Fold in Strategy-Performance metrics (concentration vs target, Value, G/L, beat/trail) so the
+  // two card sets become one. Concentration is % of total portfolio (incl. VOO), matching the
+  // original Strategy Performance card. Alpha math is untouched — value-add stays direct-only.
+  const open = positions.filter(p => !p.closed && p.ticker);
+  const sp = getSpTotals();
+  const spValue = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
+  const totalPortfolio = open.reduce((s,p) => s+(calcPos(p).exitValue||0), 0) + spValue;
+  const perf = {};
+  SLEEVES.forEach(s => perf[s] = { value: 0, glSum: 0, beats: 0, trails: 0, tickers: [] });
+  open.forEach(p => {
+    if (!p.sleeve || !perf[p.sleeve]) return;
+    const c = calcPos(p);
+    const spxRet = c.spxReturn !== null ? c.spxReturn / 100 : null;
+    const alpha = (spxRet !== null && c.invested > 0) ? (c.exitValue - c.invested) - (c.invested * spxRet) : null;
+    const d = perf[p.sleeve];
+    d.value += c.exitValue || 0;
+    d.glSum += c.gainLoss || 0;
+    d.tickers.push({ ticker: p.ticker, value: c.exitValue || 0, gl: c.gainLoss || 0, alpha });
+    if (c.result === 'Beat') d.beats++;
+    else if (c.result === 'Trail') d.trails++;
+  });
+
   const cards = SLEEVES.map(sleeve => {
     const o = data[sleeve];
+    const pf = perf[sleeve];
     const color = SLEEVE_COLORS[sleeve];
     const v = sleeveVerdict(sleeve, o);
     const themePp = o.themeInvested > 0 ? (o.themeDollar / o.themeInvested) * 100 : null;
@@ -8595,10 +8616,37 @@ function renderSleeveValueAdd() {
     const themeColor = o.themeDollar >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
     const spxColor = o.spxAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
 
-    return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${color};border-radius:var(--border-radius-lg);padding:12px">
+    // Concentration vs target (folded in from Strategy Performance)
+    const target = SLEEVE_TARGETS[sleeve];
+    const concPct = totalPortfolio > 0 ? (pf.value / totalPortfolio) * 100 : 0;
+    const isOver = pf.value > 0 && concPct > target.max;
+    const isUnder = pf.value > 0 && concPct < target.min;
+    const concColor = isOver ? 'var(--color-text-danger)' : isUnder ? 'var(--color-text-info)' : 'var(--color-text-secondary)';
+    const concStatus = isOver ? '↑ Over' : isUnder ? '↓ Under' : '✓ On target';
+    const glColor = pf.glSum >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const sleeveKey = sleeve.replace(/[^a-z0-9]/gi,'_');
+    const top5 = [...pf.tickers].sort((a,b) => b.value - a.value).slice(0,5);
+    const tooltipRows = top5.map(t => {
+      const aColor = t.alpha === null ? 'var(--color-text-tertiary)' : t.alpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const gColor = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      return `<div class="tip-row"><span class="tip-ticker">${esc(t.ticker)}</span><span class="tip-val" style="color:var(--color-text-primary)">${fmtDollarWhole(t.value)}</span><span class="tip-val" style="color:${gColor}">G/L ${fmtDollarWhole(t.gl)}</span><span class="tip-val" style="color:${aColor}">α ${t.alpha !== null ? fmtDollarWhole(t.alpha) : '—'}</span></div>`;
+    }).join('');
+
+    return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${color};border-radius:var(--border-radius-lg);padding:12px;cursor:default"
+      data-sleeve="${sleeveKey}"
+      onmouseenter="showSleeveTooltip(event,'${sleeveKey}')"
+      onmousemove="positionTooltip(event)"
+      onmouseleave="document.getElementById('bar-tooltip').classList.remove('visible')">
       <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">${sleeve}</div>
       <div style="font-size:12px;font-weight:700;color:${v.color};margin-bottom:6px">${v.text}</div>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.45;margin-bottom:10px">${v.detail}</div>
+
+      <div style="border-top:1px solid var(--color-border-tertiary);padding-top:8px;margin-bottom:8px">
+        <div style="font-size:9px;color:var(--color-text-tertiary)">Concentration</div>
+        <div style="font-size:14px;font-weight:700;color:${concColor}">${concPct.toFixed(1)}%</div>
+        <div style="font-size:9px;color:${concColor}">${concStatus} · ${target.min}–${target.max}%</div>
+      </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--color-border-tertiary);padding-top:8px">
         <div>
           <div style="font-size:9px;color:var(--color-text-tertiary)">vs Theme ETF <span style="opacity:0.6">(primary)</span></div>
@@ -8611,13 +8659,26 @@ function renderSleeveValueAdd() {
           <div style="font-size:9px;color:var(--color-text-tertiary)">${o.positions} pos · ${fmtDollarWhole(o.totalCapital)}</div>
         </div>
       </div>
-      ${soakPct > 0 && sleeve !== 'Portfolio Balance Plays' ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:6px;font-style:italic">${soakPct.toFixed(0)}% of capital still in ${SLEEVE_SOAK[sleeve]}-day soak</div>` : ''}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--color-border-tertiary);padding-top:8px;margin-top:8px">
+        <div>
+          <div style="font-size:9px;color:var(--color-text-tertiary)">Value</div>
+          <div style="font-size:12px;font-weight:600;color:var(--color-text-primary)">${fmtDollarWhole(pf.value)}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--color-text-tertiary)">G/L <span style="opacity:0.6">· ${pf.beats}B/${pf.trails}T</span></div>
+          <div style="font-size:12px;font-weight:600;color:${glColor}">${fmtDollarWhole(pf.glSum)}</div>
+        </div>
+      </div>
+
+      ${soakPct > 0 && sleeve !== 'Portfolio Balance Plays' ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;font-style:italic">${soakPct.toFixed(0)}% of capital still in ${SLEEVE_SOAK[sleeve]}-day soak</div>` : ''}
+      <div id="sleeve-tip-${sleeveKey}" style="display:none" data-title="${sleeve}" data-color="${color}" data-rows="${esc(tooltipRows)}"></div>
     </div>`;
   }).join('');
 
   el.innerHTML = `
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 10px;padding:0 2px;line-height:1.5">
-      Does each sleeve justify the active work over the simple alternatives? <strong>vs Theme ETF</strong> answers \u201cwould I have done better just buying the sector?\u201d \u2014 the honest test for stock-picking. <strong>vs S&P</strong> is shown for context (beating the S&P while trailing your theme means the theme won, not your pick). Verdicts are withheld while most of a sleeve\u2019s capital is still in its soak window. Point-in-time, not time-weighted; benchmark prices may lag the S&P figure by a day.
+      Does each sleeve justify the active work over the simple alternatives? <strong>vs Theme ETF</strong> answers \u201cwould I have done better just buying the sector?\u201d \u2014 the honest test for stock-picking. <strong>vs S&P</strong> is shown for context (beating the S&P while trailing your theme means the theme won, not your pick). Concentration is % of total portfolio (incl. VOO) vs the sleeve target. Verdicts are withheld while most of a sleeve\u2019s capital is still in its soak window. Point-in-time, not time-weighted; benchmark prices may lag the S&P figure by a day.
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">${cards}</div>`;
 }
