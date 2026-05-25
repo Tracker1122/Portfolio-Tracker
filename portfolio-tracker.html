@@ -4160,7 +4160,14 @@ function setIntelSort(key) {
   if (intelOpenKey) { const d = document.getElementById('intel-drill-' + intelOpenKey); const c = document.getElementById('caret-' + intelOpenKey); if (d) d.style.display = 'block'; if (c) c.textContent = '⌄'; }
 }
 function setIntelMature(wantMature) {
-  toggleIndustryAlphaMature(wantMature); // existing fn: sets flag, saves, renderAll()
+  if (industryAlphaMatureOnly === wantMature) return;
+  industryAlphaMatureOnly = wantMature;
+  if (typeof scheduleSave === 'function') scheduleSave();
+  renderThemeIntel(); // renderAll() does NOT re-render this table, so do it explicitly
+  // keep the dashboard/other maturity toggles' visual state in sync if that helper exists
+  if (typeof updateIndustryAlphaToggleVisual === 'function') updateIndustryAlphaToggleVisual();
+  // re-open the expanded row if one was open (re-render rebuilt the rows collapsed)
+  if (intelOpenKey) { const d = document.getElementById('intel-drill-' + intelOpenKey); const c = document.getElementById('caret-' + intelOpenKey); if (d) d.style.display = 'block'; if (c) c.textContent = '⌄'; }
 }
 function toggleIntelRow(themeKey) {
   const drill = document.getElementById('intel-drill-' + themeKey);
@@ -4212,6 +4219,8 @@ function renderThemeIntel() {
   // total are FLOORS: VOO's untracked tail can't be theme-classified. Built from getIndexLookthrough.
   const themeSectorEtf = {};   // theme -> $ embedded via its own sector ETF (intended)
   const themeIncidental = {};  // theme -> $ embedded via broad/other funds (incidental)
+  const sectorEtfFunds = {};   // theme -> Set of fund tickers contributing the sector-ETF bucket
+  const incidentalFunds = {};  // theme -> Set of fund tickers contributing the incidental bucket
   let embeddedTotal = 0, embeddedClassified = 0;
   (function(){
     if (typeof getIndexLookthrough !== 'function' || typeof indexFundHeldValue !== 'function') return;
@@ -4234,8 +4243,10 @@ function renderThemeIntel() {
         embeddedClassified += val;
         if (fundOwnTheme === embTheme) {
           themeSectorEtf[embTheme] = (themeSectorEtf[embTheme] || 0) + val; // intended sector exposure
+          (sectorEtfFunds[embTheme] = sectorEtfFunds[embTheme] || new Set()).add(fund.toUpperCase());
         } else {
           themeIncidental[embTheme] = (themeIncidental[embTheme] || 0) + val; // incidental (broad or cross-theme)
+          (incidentalFunds[embTheme] = incidentalFunds[embTheme] || new Set()).add(fund.toUpperCase());
         }
       }
     }
@@ -4254,9 +4265,11 @@ function renderThemeIntel() {
     const incidentalPct = grandTotal > 0 ? (incidental / grandTotal) * 100 : 0;
     const truePct = grandTotal > 0 ? (trueVal / grandTotal) * 100 : 0;
     const hasEmbedded = (sectorEtf + incidental) > 0;
+    const sectorFundsLabel = sectorEtfFunds[theme] ? [...sectorEtfFunds[theme]].join(', ') : '';
+    const incidentalFundsLabel = incidentalFunds[theme] ? [...incidentalFunds[theme]].join(', ') : '';
     const verdictAlpha = industryAlphaMatureOnly ? (d.matureAlphaCount > 0 ? d.matureAlphaSum : null) : (d.alphaCount > 0 ? d.alphaSum : null);
     const verdictN = industryAlphaMatureOnly ? d.maturePositions : d.positions;
-    return { theme, d, directVal, sectorEtf, incidental, trueVal, allocPct, directPct, sectorEtfPct, incidentalPct, truePct, hasEmbedded, verdictAlpha, verdictN, incidentalFloor: incidental > 0 };
+    return { theme, d, directVal, sectorEtf, incidental, trueVal, allocPct, directPct, sectorEtfPct, incidentalPct, truePct, hasEmbedded, verdictAlpha, verdictN, incidentalFloor: incidental > 0, sectorFundsLabel, incidentalFundsLabel };
   });
 
   // Average TRUE concentration across themes — basis for the Heavy/Balanced/Light tag, recomputed
@@ -4368,8 +4381,8 @@ function renderIntelDeepDive(r, totalValue, grandTotal) {
 
   const buckets = [];
   buckets.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px"><span style="width:10px;height:10px;background:#378ADD;border-radius:2px;flex-shrink:0"></span><span style="font-weight:500;min-width:96px">Direct ${r.directPct.toFixed(1)}%</span><span style="color:var(--color-text-tertiary)">names you bought individually</span></div>`);
-  if (r.sectorEtf > 0) buckets.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px"><span style="width:10px;height:10px;background:#185FA5;border-radius:2px;flex-shrink:0"></span><span style="font-weight:500;min-width:96px">Sector ETF ${r.sectorEtfPct.toFixed(1)}%</span><span style="color:var(--color-text-tertiary)">${bench ? esc(bench) : 'your theme ETF'} — intentional sector bet</span></div>`);
-  if (r.incidental > 0) buckets.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px"><span style="width:10px;height:10px;background:repeating-linear-gradient(45deg,#BA7517,#BA7517 2px,transparent 2px,transparent 4px);border:0.5px solid #BA7517;border-radius:2px;flex-shrink:0"></span><span style="color:#BA7517;font-weight:500;min-width:96px">≥${r.incidentalPct.toFixed(1)}%</span><span style="color:var(--color-text-secondary)"><strong style="color:#BA7517">incidental</strong> — names inside broad funds (VOO) you never chose</span></div>`);
+  if (r.sectorEtf > 0) buckets.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px"><span style="width:10px;height:10px;background:#185FA5;border-radius:2px;flex-shrink:0"></span><span style="font-weight:500;min-width:96px">Sector ETF ${r.sectorEtfPct.toFixed(1)}%</span><span style="color:var(--color-text-tertiary)">${r.sectorFundsLabel ? esc(r.sectorFundsLabel) : 'your theme ETF'} — intentional sector bet</span></div>`);
+  if (r.incidental > 0) buckets.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px"><span style="width:10px;height:10px;background:repeating-linear-gradient(45deg,#BA7517,#BA7517 2px,transparent 2px,transparent 4px);border:0.5px solid #BA7517;border-radius:2px;flex-shrink:0"></span><span style="color:#BA7517;font-weight:500;min-width:96px">≥${r.incidentalPct.toFixed(1)}%</span><span style="color:var(--color-text-secondary)"><strong style="color:#BA7517">incidental</strong> — names inside ${r.incidentalFundsLabel ? esc(r.incidentalFundsLabel) : 'broad funds'} you never chose</span></div>`);
 
   const buildup = `
     <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:11px 13px 13px;margin-bottom:12px">
@@ -4418,8 +4431,8 @@ function renderIntelDeepDive(r, totalValue, grandTotal) {
   const matSuffix = industryAlphaMatureOnly ? ' (≥' + MATURITY_DAYS + 'd)' : '';
   const stats = `
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px"><div style="font-size:9px;color:var(--color-text-tertiary)">Dollar Alpha vs SPX${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${dollarAlphaColor}">${r.verdictAlpha !== null ? fmtDollarWhole(r.verdictAlpha) : '—'}</div></div>
-      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px"><div style="font-size:9px;color:var(--color-text-tertiary)">Theme α${bench ? ' vs ' + esc(bench) : ''}${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${themeAlphaColor}">${themeAlphaTotal === null ? '—' : (themeAlphaTotal >= 0 ? '+' : '') + fmtDollarWhole(themeAlphaTotal)}</div></div>
+      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px" title="Your ${esc(r.theme)} picks' return minus what the S&P 500 would have returned on the same capital. Measures these picks vs the broad market."><div style="font-size:9px;color:var(--color-text-tertiary)">Your ${esc(r.theme)} picks vs S&amp;P${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${dollarAlphaColor}">${r.verdictAlpha !== null ? fmtDollarWhole(r.verdictAlpha) : '—'}</div></div>
+      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px" title="Your ${esc(r.theme)} picks' return minus the ${bench ? esc(bench) + ' sector benchmark' : 'sector benchmark'} over the same window. Measures whether picking individual ${esc(r.theme.toLowerCase())} names beat just buying the sector ETF."><div style="font-size:9px;color:var(--color-text-tertiary)">Your ${esc(r.theme)} picks vs ${bench ? esc(bench) : 'sector'}${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${themeAlphaColor}">${themeAlphaTotal === null ? '—' : (themeAlphaTotal >= 0 ? '+' : '') + fmtDollarWhole(themeAlphaTotal)}</div></div>
       <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px"><div style="font-size:9px;color:var(--color-text-tertiary)">G/L · ${r.d.positions} pos</div><div style="font-size:13px;font-weight:500;color:${glColor}">${fmtDollarWhole(r.d.gl)}</div></div>
     </div>`;
 
