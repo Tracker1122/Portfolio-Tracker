@@ -13230,11 +13230,6 @@ function renderThemeDiversification() {
 // Performance shown is the THEME/benchmark's window return — NOT the stock's own return (which we
 // don't have and won't fake). Non-stock tickers (mutual funds, cash sweeps) are filtered out.
 // ─────────────────────────────────────────────
-let discoveryThemeFilter = '__all__';
-function setDiscoveryThemeFilter(v) { discoveryThemeFilter = v; renderThemeDiscovery(); }
-let discoveryShowAll = false;
-function toggleDiscoveryShowAll() { discoveryShowAll = !discoveryShowAll; renderThemeDiscovery(); }
-
 function renderThemeDiscovery() {
   const host = document.getElementById('theme-discovery');
   if (!host) return;
@@ -13294,60 +13289,56 @@ function renderThemeDiscovery() {
     return b.maxW - a.maxW; // then conviction
   });
 
-  // Theme filter options (themes that actually appear among candidates).
-  const themesPresent = new Set();
-  disc.forEach(c => c.themes.forEach(t => themesPresent.add(t)));
-  const themeOpts = ['__all__', ...[...themesPresent].sort((a, b) => (themePct[a] ?? 0) - (themePct[b] ?? 0))];
-  const filterSel = `<select onchange="setDiscoveryThemeFilter(this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 7px;cursor:pointer">
-    ${themeOpts.map(t => `<option value="${esc(t)}"${t === discoveryThemeFilter ? ' selected' : ''}>${t === '__all__' ? 'All gaps' : esc(t) + ' (' + (themePct[t] ?? 0).toFixed(1) + '%)'}</option>`).join('')}
-  </select>`;
+  // Group candidates into theme BUCKETS (by their primary/lightest theme), so discovery is browsable
+  // by gap. Bucket order = your exposure ascending (biggest gaps first); names within = conviction desc.
+  const buckets = {};
+  disc.forEach(c => {
+    const primary = c.themes.slice().sort((a, b) => (themePct[a] ?? 0) - (themePct[b] ?? 0))[0];
+    (buckets[primary] = buckets[primary] || []).push(c);
+  });
+  const themeOrder = Object.keys(buckets).sort((a, b) => (themePct[a] ?? 0) - (themePct[b] ?? 0));
 
-  let filtered = disc;
-  if (discoveryThemeFilter !== '__all__') filtered = disc.filter(c => c.themes.includes(discoveryThemeFilter));
-
-  const CAP = 20;
-  const shown = discoveryShowAll ? filtered : filtered.slice(0, CAP);
-  const hidden = filtered.length - shown.length;
-
-  // Theme performance helper — clearly the THEME's, not the stock's.
+  const fmtRet = (n) => n === null ? '<span style="color:var(--color-text-tertiary)">—</span>' :
+    `<span style="color:${n >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${n >= 0 ? '+' : ''}${n.toFixed(1)}%</span>`;
   const themePerf = (themeName) => {
     const tk = (themeUniverseAll().find(t => t.name === themeName) || {}).ticker;
     if (!tk) return null;
-    const r = computeThemeReturns(tk);
-    return r['1y'];
+    return computeThemeReturns(tk)['1y'];
   };
-  const fmtRet = (n) => n === null ? '<span style="color:var(--color-text-tertiary)">—</span>' :
-    `<span style="color:${n >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${n >= 0 ? '+' : ''}${n.toFixed(1)}%</span>`;
 
-  const rowHtml = (c) => {
-    const primaryTheme = c.themes.slice().sort((a, b) => (themePct[a] ?? 0) - (themePct[b] ?? 0))[0];
-    const gapPct = themePct[primaryTheme] ?? 0;
-    const fundsLabel = Object.entries(c.inFunds).map(([f, w]) => `${esc(f)} ${w.toFixed(1)}%`).join(', ');
-    const perf = themePerf(primaryTheme);
-    return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid var(--color-border-tertiary)">
-      <div style="min-width:0;flex:1">
-        <div style="font-size:12px;font-weight:600;color:var(--color-text-primary)">${esc(c.display)} <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">${esc(primaryTheme)} · you hold ${gapPct < 0.05 ? '<span style="color:#34d399">none</span>' : gapPct.toFixed(1) + '%'}</span></div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">top holding in: ${fundsLabel}</div>
-      </div>
-      <div style="text-align:right;white-space:nowrap">
-        <div style="font-size:9px;color:var(--color-text-tertiary)">theme 1Y</div>
-        <div style="font-size:11px">${fmtRet(perf)}</div>
-      </div>
+  // One ticker line inside an expanded bucket: name + which funds hold it and at what weight.
+  const tickerLine = (c) => {
+    const fundsLabel = Object.entries(c.inFunds).sort((a, b) => b[1] - a[1]).map(([f, w]) => `${esc(f)} ${w.toFixed(1)}%`).join(', ');
+    return `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0 3px 12px;border-bottom:1px solid var(--color-border-tertiary)">
+      <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${esc(c.display)}</span>
+      <span style="font-size:9px;color:var(--color-text-tertiary);text-align:right">in ${fundsLabel}</span>
     </div>`;
+  };
+
+  // One theme bucket: collapsible header (gap + count + perf), tickers inside sorted by conviction.
+  // Top 2 gap-themes open by default; rest collapsed (see what matters first, structure a click away).
+  const bucketHtml = (theme, idx) => {
+    const names = buckets[theme].slice().sort((a, b) => b.maxW - a.maxW);
+    const gap = themePct[theme] ?? 0;
+    const perf = themePerf(theme);
+    const open = idx < 2 ? ' open' : '';
+    return `
+      <details${open} style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px">
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none">
+          <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(theme)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">you hold ${gap < 0.05 ? '<span style="color:#34d399">none</span>' : gap.toFixed(1) + '%'} · ${names.length} name${names.length > 1 ? 's' : ''}</span></span>
+          <span style="white-space:nowrap;font-size:9px;color:var(--color-text-tertiary)">theme 1Y ${fmtRet(perf)}</span>
+        </summary>
+        <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--color-border-tertiary)">${names.map(tickerLine).join('')}</div>
+      </details>`;
   };
 
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:3px">
-        <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">Discovery — names that fill your gaps <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(investigate, not buy)</span></div>
-        ${filterSel}
-      </div>
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Discovery — names that fill your gaps <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(investigate, not buy)</span></div>
       <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
-        Specific names mined from the fund holdings you've pasted, that you <strong>don't own</strong>, ranked by how much they'd fill a gap — names in the themes you're <strong>lightest</strong> in come first, then by their weight in the fund (how much that fund's managers concentrate on them). <strong style="color:var(--color-text-secondary)">This surfaces candidates to investigate — it is not a buy signal and not analysis of the stock.</strong> It can only see names inside funds you've pasted; it can't know about anything outside your data. Performance shown is the <em>theme's</em> 1-year return, not the stock's.
+        Names mined from the fund holdings you've pasted, that you <strong>don't own</strong>, grouped by theme and ordered by gap — themes you're <strong>lightest</strong> in come first. Click a theme to see its candidate names (sorted by their weight in the fund — how much that fund's managers concentrate on them). <strong style="color:var(--color-text-secondary)">This surfaces candidates to investigate — not a buy signal, not analysis of the stock.</strong> It only sees names inside funds you've pasted. Performance is the <em>theme's</em> 1-year return, not the stock's.
       </div>
-      ${shown.length ? shown.map(rowHtml).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates for this filter — either you already own the names in this theme, or no holdings are pasted for its funds.</div>'}
-      ${hidden > 0 ? `<button class="btn btn-sm" onclick="toggleDiscoveryShowAll()" style="font-size:9px;margin-top:8px">Show ${hidden} more candidate${hidden > 1 ? 's' : ''}</button>` : ''}
-      ${discoveryShowAll && filtered.length > CAP ? `<button class="btn btn-sm" onclick="toggleDiscoveryShowAll()" style="font-size:9px;margin-top:8px">Collapse to top ${CAP}</button>` : ''}
+      ${themeOrder.length ? themeOrder.map(bucketHtml).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) below to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
 }
