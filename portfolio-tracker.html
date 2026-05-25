@@ -13760,6 +13760,24 @@ function renderThemeDiscovery() {
   const ownedTrue = {};
   trueRows.forEach(r => { ownedTrue[qrCanonical(r.display).key] = r.total; });
 
+  // How (if at all) you already hold a discovery name — computed free from true exposure, no API call.
+  // Discovery names are "don't own" by the direct filter, but a name can still sit INSIDE a fund you
+  // hold (e.g. SATS via NASA). Surfacing that tells you a "gap" may already be partly filled.
+  const trueRowByKey = {};
+  trueRows.forEach(r => { trueRowByKey[qrCanonical(r.display).key] = r; });
+  const holdingNote = (ticker) => {
+    const r = trueRowByKey[qrCanonical(ticker).key];
+    if (!r || r.total < 1) return null; // true gap — show nothing (this is the default for discovery)
+    const direct = r.direct || 0;
+    const viaFunds = r.viaFunds || {};
+    const fundNames = Object.keys(viaFunds);
+    const embedded = r.embedded || 0;
+    const fmtm = (n) => '$' + Math.round(n).toLocaleString();
+    if (direct >= 1 && fundNames.length) return `you hold ${fmtm(direct)} direct + ${fmtm(embedded)} via ${fundNames.join('/')}`;
+    if (direct >= 1) return `you hold ${fmtm(direct)} directly`;
+    return `you already hold ${fmtm(embedded)} via ${fundNames.join('/')}`; // hidden-exposure case
+  };
+
 
 
   // Theme exposure % per theme, for gap-weighting.
@@ -13869,9 +13887,11 @@ function renderThemeDiscovery() {
     else if (cached && cached.err) perfInit = '<span style="color:var(--color-text-tertiary)">n/a</span>';
     else if (cached && typeof cached === 'object') perfInit = `${fmtWin(cached.m1, '1M')} · ${fmtWin(cached.y1, '1Y')}`;
     const atCap = discoverySelected.size >= DISCOVERY_MAX_SELECT && !selected;
+    const hn = holdingNote(c.display);
     return `<div onclick="toggleDiscoverySelect('${esc(key)}')" title="${atCap ? '5 selected — deselect one to add another' : 'Click to ' + (selected ? 'deselect' : 'select for fetch')}" style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:${selected ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)'};border:1px solid ${selected ? 'var(--color-accent)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);cursor:${atCap ? 'not-allowed' : 'pointer'};${atCap ? 'opacity:0.5' : ''}">
       <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${selected ? '✓ ' : ''}${esc(c.display)}</span>
       <span style="font-size:8px;color:var(--color-text-tertiary)">${convictionPhrase(topFund, topW)}${moreNote}</span>
+      ${hn ? `<span style="font-size:8px;color:#fbbf24" title="You already hold some of this (computed from your funds, no fetch) — so this 'gap' is partly filled already.">· ${esc(hn)}</span>` : ''}
       <span data-perf-slot="${esc(key)}" style="font-size:8px">${perfInit}</span>
     </div>`;
   };
