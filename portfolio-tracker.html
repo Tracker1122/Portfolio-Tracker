@@ -13327,6 +13327,8 @@ function renderThemeUniverse() {
 // ─────────────────────────────────────────────
 let clusterEditExpanded = false;
 function toggleClusterEdit() { clusterEditExpanded = !clusterEditExpanded; renderThemeClusters(); }
+let clusterExpandedIdx = 0; // which cluster's names are expanded under the bar (one at a time); 0 = biggest open by default
+function toggleClusterExpand(i) { clusterExpandedIdx = (clusterExpandedIdx === i) ? -1 : i; renderThemeClusters(); }
 function reassignCluster(key, theme) {
   const o = loadClusterOverrides();
   if (theme === '__auto__') delete o[key]; else o[key] = theme;
@@ -13418,18 +13420,8 @@ function renderThemeClusters() {
     </div>`;
   };
 
-  const clusterBlock = (c, idx) => {
-    const flagsHere = c.names.filter(n => clusterConfidenceFlag(n, ctx)).length;
-    const flagBadge = flagsHere ? ` <span style="color:#fbbf24;font-size:8px" title="${flagsHere} low-confidence assignment${flagsHere > 1 ? 's' : ''} in this block">⚠${flagsHere}</span>` : '';
-    return `
-      <details${idx === 0 ? ' open' : ''} style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px">
-        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none">
-          <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(c.label)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">${c.names.length} name${c.names.length > 1 ? 's' : ''}</span>${flagBadge}</span>
-          <strong style="font-size:12px;color:${c.pct >= 25 ? '#fbbf24' : 'var(--color-text-secondary)'}">${c.pct.toFixed(1)}% · ${fmtD(c.total)}</strong>
-        </summary>
-        <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--color-border-tertiary)">${c.names.map(nameLine).join('')}</div>
-      </details>`;
-  };
+  const clusterBlockUnused = null; // (former list-row renderer removed — clusters now render as the proportion bar + legend below)
+
 
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
@@ -13447,7 +13439,36 @@ function renderThemeClusters() {
         Names grouped by theme — using your true exposure (direct + everything inside funds you hold, so a name like a mega-cap you only own via VOO still counts toward its theme). The <em>why</em> next to each name is the link (your tag, or which fund carries it). ${flagCount ? `<span style="color:#fbbf24">⚠ marks ${flagCount} low-confidence call${flagCount > 1 ? 's' : ''}</span> — names that span clusters or rest on a thin weight. Hit "Reassign names" to fix any.` : ''} This is structural co-movement (same theme/funds), <strong>not</strong> measured return correlation — a name can buck its block.
       </div>
 
-      ${data.clusters.map(clusterBlock).join('')}
+      ${(() => {
+        // Concentration is a PROPORTION — so the primary visual is ONE stacked horizontal bar, not a
+        // list (which is what made this blur into the sector + discovery lists). Each cluster is a
+        // proportional segment; the diversified base is a muted trailing segment. Below the bar, a
+        // clickable legend expands each cluster's names inline (preserving edit/flag/detail).
+        const palette = ['#60a5fa','#a78bfa','#f472b6','#34d399','#fbbf24','#fb923c','#22d3ee','#c084fc','#4ade80','#facc15','#f87171'];
+        const segs = data.clusters.map((c, i) => ({ label: c.label, pct: c.pct, color: palette[i % palette.length], idx: i }));
+        const basePct = data.base.pct;
+        const bar = `<div style="display:flex;width:100%;height:34px;border-radius:var(--border-radius-md);overflow:hidden;margin-bottom:8px;border:1px solid var(--color-border-tertiary)">
+          ${segs.map(s => `<div title="${esc(s.label)} — ${s.pct.toFixed(1)}%" onclick="toggleClusterExpand(${s.idx})" style="width:${s.pct}%;background:${s.color};cursor:pointer;display:flex;align-items:center;justify-content:center;min-width:2px" >${s.pct >= 7 ? `<span style="font-size:9px;color:#0b0b0f;font-weight:700;white-space:nowrap;overflow:hidden;padding:0 2px">${s.pct.toFixed(0)}%</span>` : ''}</div>`).join('')}
+          ${basePct > 0 ? `<div title="Diversified base — ${basePct.toFixed(1)}%" style="width:${basePct}%;background:var(--color-background-tertiary);border-left:1px solid var(--color-border-tertiary);min-width:2px"></div>` : ''}
+        </div>`;
+        // Legend rows: each cluster as a compact clickable line (color chip + name + %·$ + flag),
+        // expanding to its names. This is NOT the old list shape — it's a key to the bar above.
+        const legend = data.clusters.map((c, i) => {
+          const flagsHere = c.names.filter(n => clusterConfidenceFlag(n, ctx)).length;
+          const flagBadge = flagsHere ? ` <span style="color:#fbbf24;font-size:8px" title="${flagsHere} low-confidence assignment${flagsHere > 1 ? 's' : ''}">⚠${flagsHere}</span>` : '';
+          const isOpen = clusterExpandedIdx === i;
+          return `<div style="margin-bottom:2px">
+            <div onclick="toggleClusterExpand(${i})" style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--border-radius-sm);cursor:pointer;font-size:11px" onmouseover="this.style.background='var(--color-background-secondary)'" onmouseout="this.style.background='transparent'">
+              <span style="width:10px;height:10px;border-radius:2px;background:${palette[i % palette.length]};flex-shrink:0"></span>
+              <span style="color:var(--color-text-primary);flex:1"><strong>${esc(c.label)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">${c.names.length} name${c.names.length > 1 ? 's' : ''}</span>${flagBadge}</span>
+              <span style="font-weight:700;font-size:11px;color:${c.pct >= 25 ? '#fbbf24' : 'var(--color-text-secondary)'};white-space:nowrap">${c.pct.toFixed(1)}% · ${fmtD(c.total)}</span>
+              <span style="color:var(--color-text-tertiary);font-size:9px;width:10px">${isOpen ? '▾' : '▸'}</span>
+            </div>
+            ${isOpen ? `<div style="padding:4px 6px 8px 24px;border-left:2px solid ${palette[i % palette.length]};margin:0 0 4px 10px">${c.names.map(nameLine).join('')}</div>` : ''}
+          </div>`;
+        }).join('');
+        return bar + legend;
+      })()}
 
       ${data.base.total > 0 ? `
       <details style="border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px;opacity:0.85">
