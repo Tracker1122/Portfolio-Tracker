@@ -13043,6 +13043,8 @@ function renderThemeUniverse() {
   }).join('');
 
   el.innerHTML = `
+    <details>
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:8px;list-style:none">▸ Theme universe — benchmark performance &amp; your exposure <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(click to expand)</span></summary>
     <div style="margin-bottom:14px;padding:10px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
       <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span>
       <strong style="color:var(--color-text-primary)">Awareness surface, not recommendation.</strong>
@@ -13082,16 +13084,15 @@ function renderThemeUniverse() {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    </details>
     <div id="theme-diversification-analysis" style="margin-top:18px"></div>
     <div id="theme-discovery" style="margin-top:18px"></div>
     <div id="theme-candidates-screen" style="margin-top:18px"></div>
-    <div id="theme-trueexp-names" style="margin-top:18px"></div>
     <div id="theme-bench-holdings-panel" style="margin-top:18px"></div>
   `;
   renderThemeDiversification();
   renderThemeDiscovery();
   renderThemeCandidates();
-  renderTrueExposureNames();
   renderThemeBenchmarkPanel();
 }
 
@@ -13466,110 +13467,6 @@ function renderThemeCandidates() {
     </div>`;
 }
 
-// ─────────────────────────────────────────────
-// True-exposure names list — every name you hold, tagged DIRECT / VIA-FUND / BOTH, with the
-// direct $, via-fund $, and true total. Reuses computeTrueExposure() (the SAME decomposition the
-// dashboard True Exposure panel uses — no logic drift). Top 25 by true value shown; the long tail
-// of tiny via-fund slivers (VOO's smaller constituents) collapses behind an expander so nothing is
-// hidden, just folded. A theme filter narrows to the names behind one theme/benchmark.
-// Honest bound: via-fund $ is only as complete as the holdings you've pasted for funds you HOLD
-// (VOO + your ETF positions); names below a fund's pasted top-N won't show their indirect slice.
-// ─────────────────────────────────────────────
-let trueExpThemeFilter = '__all__';
-function setTrueExpThemeFilter(v) { trueExpThemeFilter = v; renderTrueExposureNames(); }
-let trueExpShowAll = false;
-function toggleTrueExpShowAll() { trueExpShowAll = !trueExpShowAll; renderTrueExposureNames(); }
-
-function renderTrueExposureNames() {
-  const host = document.getElementById('theme-trueexp-names');
-  if (!host) return;
-  const { rows } = computeTrueExposure();
-  if (!rows.length) {
-    host.innerHTML = `<div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Your positions — direct vs inside funds</div>
-      <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No holdings to decompose yet. Paste your funds' holdings (VOO + any ETFs you hold) so this can show what you own directly vs indirectly.</div>
-    </div>`;
-    return;
-  }
-
-  // Theme tagging for the filter: a name belongs to a theme if (a) a direct position carries that
-  // theme, or (b) it comes via that theme's benchmark fund. Build name→themes once.
-  const benchToTheme = {}; // FUND -> theme name(s)
-  themeUniverseAll().forEach(t => { if (t.ticker) (benchToTheme[t.ticker.toUpperCase()] = benchToTheme[t.ticker.toUpperCase()] || []).push(t.name); });
-  const directThemeByNorm = {};
-  positions.filter(p => !p.closed && p.ticker && p.theme).forEach(p => {
-    const k = qrCanonical(p.ticker).key;
-    (directThemeByNorm[k] = directThemeByNorm[k] || new Set()).add(p.theme);
-  });
-  const themesForRow = (r) => {
-    const set = new Set();
-    const k = qrCanonical(r.display).key;
-    if (directThemeByNorm[k]) directThemeByNorm[k].forEach(t => set.add(t));
-    Object.keys(r.viaFunds).forEach(f => (benchToTheme[f.toUpperCase()] || []).forEach(t => set.add(t)));
-    return set;
-  };
-
-  // Build filter options: all owned themes that appear.
-  const allThemes = new Set();
-  rows.forEach(r => themesForRow(r).forEach(t => allThemes.add(t)));
-  const themeOpts = ['__all__', ...[...allThemes].sort()];
-  const filterSel = `<select onchange="setTrueExpThemeFilter(this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 7px;cursor:pointer">
-    ${themeOpts.map(t => `<option value="${esc(t)}"${t === trueExpThemeFilter ? ' selected' : ''}>${t === '__all__' ? 'All themes' : esc(t)}</option>`).join('')}
-  </select>`;
-
-  // Apply filter.
-  let filtered = rows;
-  if (trueExpThemeFilter !== '__all__') filtered = rows.filter(r => themesForRow(r).has(trueExpThemeFilter));
-
-  const tagOf = (r) => (r.direct > 0 && r.embedded > 0) ? 'both' : (r.direct > 0) ? 'direct' : 'via';
-  const tagBadge = (t) => {
-    const map = {
-      direct: { label: 'DIRECT', bg: 'rgba(96,165,250,0.15)', col: '#60a5fa' },
-      via: { label: 'VIA-FUND', bg: 'rgba(52,211,153,0.15)', col: '#34d399' },
-      both: { label: 'BOTH', bg: 'rgba(251,191,36,0.15)', col: '#fbbf24' }
-    };
-    const m = map[t];
-    return `<span style="font-size:8px;font-weight:700;letter-spacing:0.04em;background:${m.bg};color:${m.col};border-radius:8px;padding:1px 7px">${m.label}</span>`;
-  };
-
-  const CAP = 25;
-  const shown = trueExpShowAll ? filtered : filtered.slice(0, CAP);
-  const hidden = filtered.length - shown.length;
-
-  const rowHtml = (r) => {
-    const tag = tagOf(r);
-    const funds = Object.keys(r.viaFunds);
-    const fundsLabel = funds.length ? funds.join(', ') : '';
-    const directPart = r.direct > 0 ? `<span style="color:#60a5fa">${fmtDollarWhole(r.direct)} direct</span>` : '';
-    const viaPart = r.embedded > 0 ? `<span style="color:#34d399">${fmtDollarWhole(r.embedded)} via ${esc(fundsLabel)}</span>` : '';
-    const sep = (directPart && viaPart) ? ' <span style="color:var(--color-text-tertiary)">+</span> ' : '';
-    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--color-border-tertiary)">
-      <div style="display:flex;align-items:center;gap:8px;min-width:0">
-        <span style="font-size:11px;font-weight:600;color:var(--color-text-primary);white-space:nowrap">${esc(r.display)}</span>
-        ${tagBadge(tag)}
-      </div>
-      <div style="text-align:right;font-size:9px;line-height:1.4">
-        <div style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${fmtDollarWhole(r.total)}</div>
-        <div>${directPart}${sep}${viaPart}</div>
-      </div>
-    </div>`;
-  };
-
-  host.innerHTML = `
-    <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:3px">
-        <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">Your positions — direct vs inside funds</div>
-        ${filterSel}
-      </div>
-      <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
-        Every name you hold, by <strong>true exposure</strong> (what you own directly + what's inside funds you hold like VOO and your ETFs). <span style="color:#60a5fa">DIRECT</span> = you bought the shares · <span style="color:#34d399">VIA-FUND</span> = you only own it inside a fund · <span style="color:#fbbf24">BOTH</span> = some of each. Sorted by true total. Via-fund figures are a floor — only as complete as the holdings you've pasted.
-      </div>
-      ${shown.map(rowHtml).join('') || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No names match this theme filter.</div>'}
-      ${hidden > 0 ? `<button class="btn btn-sm" onclick="toggleTrueExpShowAll()" style="font-size:9px;margin-top:8px">Show ${hidden} more smaller holding${hidden > 1 ? 's' : ''} (mostly tiny via-fund slivers)</button>` : ''}
-      ${trueExpShowAll && filtered.length > CAP ? `<button class="btn btn-sm" onclick="toggleTrueExpShowAll()" style="font-size:9px;margin-top:8px">Collapse to top ${CAP}</button>` : ''}
-    </div>`;
-}
-
 // Dedicated paste panel for benchmark holdings — the data feed for the structural-overlap proxy.
 // Lists owned-theme benchmarks first (the high-value set for "is my book secretly one bet"), then
 // the unowned universe benchmarks collapsed below. Each fund reuses the proven paste UX: live
@@ -13629,10 +13526,10 @@ function renderThemeBenchmarkPanel() {
 
   const ownedFilled = owned.filter(b => benchmarkHoldings(b.ticker)).length;
   host.innerHTML = `
-    <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Benchmark holdings — for the overlap / correlation proxy</div>
-      <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
-        Paste each benchmark's top holdings to let the tracker estimate how much your themes <em>move together</em> — a structural proxy (shared names, weighted by size), <strong>not</strong> measured return correlation. You don't need all of them: any <em>pair</em> where both funds have holdings becomes computable. The two below that share a benchmark (SMH) are the same fund by definition. Owned-theme benchmarks first (${ownedFilled}/${owned.length} have holdings) — these are the high-value ones.
+    <details style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
+      <summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--color-text-primary);list-style:none">▸ Benchmark holdings — paste/manage the data behind the overlap proxy <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(${ownedFilled}/${owned.length} owned benchmarks have holdings · click to expand)</span></summary>
+      <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin:8px 0 10px">
+        Paste each benchmark's top holdings to let the tracker estimate how much your themes <em>move together</em> — a structural proxy (shared names, weighted by size), <strong>not</strong> measured return correlation. You don't need all of them: any <em>pair</em> where both funds have holdings becomes computable. The two below that share a benchmark (SMH) are the same fund by definition. Owned-theme benchmarks first — these are the high-value ones.
       </div>
       ${owned.map(fundCard).join('')}
       ${unowned.length ? `
@@ -13640,7 +13537,7 @@ function renderThemeBenchmarkPanel() {
         <summary style="font-size:10px;color:var(--color-text-tertiary);cursor:pointer">Unowned-theme benchmarks (${unowned.length}) — lower value for this analysis, paste only if you want their overlap too</summary>
         <div style="margin-top:8px">${unowned.map(fundCard).join('')}</div>
       </details>` : ''}
-    </div>`;
+    </details>`;
 }
 
 // Live preview of what a paste parses to — mirrors the index look-through preview exactly.
