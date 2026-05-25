@@ -13658,6 +13658,15 @@ function renderSectorPanel() {
 // Cache of fetched per-ticker performance, keyed by uppercased ticker, surviving re-renders.
 // Value: {m1:number|null, y1:number|null, err?:'rate'|'nokey'|'err'} | 'loading'.
 const discoveryPerf = {};
+// Benchmark (source-fund) performance cache, keyed by uppercased FUND ticker. Same value shape as
+// discoveryPerf. A fund is just another ticker to Polygon, so we reuse fetchTickerWindows for it.
+// Cached across batches: once NASA is fetched, every NASA name reuses it free — this is the lever
+// that keeps the benchmark comparison inside the free-tier rate budget.
+const discoveryBenchPerf = {};
+// Map of discovery name -> its source fund (the highest-weight fund it sits in). Populated when chips
+// render (renderThemeDiscovery), read at fetch time so fetchSelectedDiscovery knows which fund to
+// fetch as each name's benchmark. The honest comparand is the fund the name was discovered in.
+const discoverySourceFund = {};
 const discoverySelected = new Set(); // tickers the user has picked (max 5) to fetch richer data for
 let _lastPolyFetch = 0; // timestamp guard so rapid calls self-space a little
 const DISCOVERY_MAX_SELECT = 5;
@@ -13703,26 +13712,88 @@ async function fetchTickerWindows(ticker) {
   };
 }
 
-// Fetch all selected tickers sequentially, updating each chip live. Self-spaces to respect ~5/min.
+// One self-spaced Polygon fetch into the given cache at the given key. Returns 'ok' on success,
+// or the error kind ('rate'|'nokey'|'err') on failure. Skips (returns 'cached') if already a good
+// value. Errors are NOT treated as cached, so a re-run re-attempts only the misses — this is what
+// makes "retry to grab what it missed" cost only the failed calls.
+async function _polyFetchInto(cache, key, slotUpdater) {
+  if (typeof cache[key] === 'object' && cache[key] && !cache[key].err) return 'cached';
+  cache[key] = 'loading'; if (slotUpdater) slotUpdater(key);
+  const since = Date.now() - _lastPolyFetch;
+  if (since < 400) await new Promise(r => setTimeout(r, 400 - since));
+  _lastPolyFetch = Date.now();
+  try {
+    cache[key] = await fetchTickerWindows(key);
+    if (slotUpdater) slotUpdater(key);
+    return 'ok';
+  } catch (e) {
+    const kind = e.message === 'rate' ? 'rate' : e.message === 'nokey' ? 'nokey' : 'err';
+    cache[key] = { err: kind };
+    if (slotUpdater) slotUpdater(key);
+    return kind;
+  }
+}
+
+// Fetch selected discovery names AND their source-fund benchmarks, sequentially, self-spaced ~5/min.
+// Order (option B): NAMES first (the primary signal), THEN the distinct uncached source funds (the
+// enrichment). If the rate budget runs out mid-batch, the names have already landed and only the
+// benchmarks miss — recoverable on a retry. Failures are counted and reported explicitly (no silent
+// rate failures), with a button that re-fetches only what missed.
 async function fetchSelectedDiscovery() {
-  const tickers = [...discoverySelected];
-  if (!tickers.length) return;
+  const names = [...discoverySelected];
+  if (!names.length) return;
   const btn = document.getElementById('disc-fetch-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
-  for (const key of tickers) {
-    if (typeof discoveryPerf[key] === 'object' && discoveryPerf[key] && !discoveryPerf[key].err) { continue; } // cached, skip
-    discoveryPerf[key] = 'loading'; updatePerfSlot(key);
-    const since = Date.now() - _lastPolyFetch;
-    if (since < 400) await new Promise(r => setTimeout(r, 400 - since));
-    _lastPolyFetch = Date.now();
-    try {
-      discoveryPerf[key] = await fetchTickerWindows(key);
-    } catch (e) {
-      discoveryPerf[key] = { err: e.message === 'rate' ? 'rate' : e.message === 'nokey' ? 'nokey' : 'err' };
-    }
+
+  // Distinct source funds for the selected names (skip names with no known fund), so each fund is
+  // fetched at most once. A fund already cached from a prior batch isn't re-fetched.
+  const funds = [...new Set(names.map(n => discoverySourceFund[n]).filter(Boolean).map(f => f.toUpperCase()))];
+
+  let nameMiss = 0, benchMiss = 0, rateMiss = 0, noKey = false;
+
+  // Phase 1: names.
+  for (const key of names) {
+    const r = await _polyFetchInto(discoveryPerf, key, updatePerfSlot);
+    if (r === 'cached' || r === 'ok') continue;
+    nameMiss++; if (r === 'rate') rateMiss++; if (r === 'nokey') noKey = true;
+    // a name's chip also shows the comparison line; refresh it so "vs FUND" tracks the fund cache
     updatePerfSlot(key);
   }
-  if (btn) { btn.disabled = false; btn.textContent = `↻ Fetch ${tickers.length} selected (1M + 1Y)`; }
+  // Phase 2: benchmarks (only the distinct funds, only uncached/failed ones).
+  for (const fund of funds) {
+    const r = await _polyFetchInto(discoveryBenchPerf, fund, () => {
+      // a fund's result feeds every selected name that uses it — refresh all their slots
+      names.forEach(n => { if ((discoverySourceFund[n] || '').toUpperCase() === fund) updatePerfSlot(n); });
+    });
+    if (r === 'cached' || r === 'ok') continue;
+    benchMiss++; if (r === 'rate') rateMiss++; if (r === 'nokey') noKey = true;
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = `↻ Fetch ${names.length} selected (1M + 1Y)`; }
+  renderDiscoveryFetchStatus({ names: names.length, funds: funds.length, nameMiss, benchMiss, rateMiss, noKey });
+}
+
+// Explicit post-batch status. Loud about rate failures (the user asked for no silent rate misses) and
+// offers a one-click retry that re-attempts ONLY the failed names/funds (successes are skipped).
+function renderDiscoveryFetchStatus(s) {
+  const el = document.getElementById('disc-fetch-status');
+  if (!el) return;
+  if (!s.nameMiss && !s.benchMiss) {
+    el.innerHTML = `<span style="color:var(--color-text-success);font-size:9px">✓ Fetched ${s.names} name${s.names > 1 ? 's' : ''} + ${s.funds} benchmark${s.funds === 1 ? '' : 's'}.</span>`;
+    return;
+  }
+  if (s.noKey) {
+    el.innerHTML = `<span style="color:#fbbf24;font-size:9px">No Polygon key set — set it via "Get Benchmarks" first, then retry.</span>`;
+    return;
+  }
+  const parts = [];
+  if (s.nameMiss) parts.push(`${s.nameMiss} name${s.nameMiss > 1 ? 's' : ''}`);
+  if (s.benchMiss) parts.push(`${s.benchMiss} benchmark${s.benchMiss > 1 ? 's' : ''}`);
+  const rateNote = s.rateMiss
+    ? ` — Polygon free tier is ~5 calls/min and this batch hit that ceiling. Wait ~60s, then retry; it will fetch only what's still missing.`
+    : ` — some tickers returned no data (thin/unavailable on Polygon).`;
+  el.innerHTML = `<span style="color:#fbbf24;font-size:9px;line-height:1.5">⚠ Missed ${parts.join(' + ')}${rateNote}</span>
+    <button class="btn btn-sm" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:6px">↻ Retry the misses</button>`;
 }
 
 // Render one window's value as colored text, or a dash.
@@ -13730,6 +13801,25 @@ function fmtWin(v, label) {
   if (v === null || v === undefined) return `<span style="color:var(--color-text-tertiary)">${label} —</span>`;
   const col = v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
   return `<span style="color:${col};font-weight:600">${label} ${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
+}
+
+// Format the "vs FUND +z% → +Δ pts" comparison for a name's chip, given the name's perf and its source
+// fund. Honest degradation: if we don't yet have the fund's value (uncached, loading, or it failed),
+// or the name's own 1Y is null, we don't fabricate a delta — we show "vs FUND —" or nothing.
+// The delta is in PERCENTAGE POINTS (name 1Y minus fund 1Y), not a ratio — it's the simplest honest
+// read of "did the name out- or under-perform the fund it came from over the same window."
+function fmtBenchCompare(name, namePerf) {
+  const fund = (discoverySourceFund[name] || '').toUpperCase();
+  if (!fund) return '';
+  const b = discoveryBenchPerf[fund];
+  // Name's own 1Y must exist to compare; if not, nothing meaningful to say.
+  if (!(namePerf && typeof namePerf === 'object' && typeof namePerf.y1 === 'number')) return '';
+  if (b === 'loading') return ` · <span style="color:var(--color-text-tertiary)">vs ${esc(fund)} …</span>`;
+  if (!b) return ` · <span style="color:var(--color-text-tertiary)" title="Fetch the batch to load this benchmark">vs ${esc(fund)} —</span>`;
+  if (b.err || typeof b.y1 !== 'number') return ` · <span style="color:var(--color-text-tertiary)" title="Benchmark return unavailable">vs ${esc(fund)} —</span>`;
+  const delta = namePerf.y1 - b.y1; // percentage points
+  const dCol = delta >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  return ` · <span style="color:var(--color-text-tertiary)">vs ${esc(fund)} ${b.y1 >= 0 ? '+' : ''}${b.y1.toFixed(1)}%</span> <span style="color:${dCol};font-weight:600" title="1-year return minus the fund's 1-year return, in percentage points. Positive = the name outpaced the fund it was found in over the same window.">→ ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pts</span>`;
 }
 
 // Update a single chip's perf slot in place.
@@ -13740,7 +13830,7 @@ function updatePerfSlot(key) {
     if (v && v.err === 'rate') { el.innerHTML = '<span style="color:#fbbf24" title="Polygon rate limit (free tier ~5/min) — wait a moment and fetch again">rate · retry</span>'; return; }
     if (v && v.err === 'nokey') { el.innerHTML = '<span style="color:#fbbf24" title="Set your Polygon key via Get Benchmarks first">need key</span>'; return; }
     if (v && v.err) { el.innerHTML = '<span style="color:var(--color-text-tertiary)" title="Could not fetch — ticker may be unavailable on Polygon">n/a</span>'; return; }
-    if (v && typeof v === 'object') { el.innerHTML = `${fmtWin(v.m1, '1M')} · ${fmtWin(v.y1, '1Y')}`; }
+    if (v && typeof v === 'object') { el.innerHTML = `${fmtWin(v.m1, '1M')} · ${fmtWin(v.y1, '1Y')}${fmtBenchCompare(key, v)}`; }
   });
 }
 
@@ -13870,8 +13960,9 @@ function renderThemeDiscovery() {
     // index) add noise, not signal. The strongest fund carries the discovery case.
     const sorted = Object.entries(c.inFunds).sort((a, b) => b[1] - a[1]);
     const [topFund, topW] = sorted[0];
-    const moreNote = sorted.length > 1 ? `<span style="font-size:8px;color:var(--color-text-tertiary)" title="${esc(sorted.slice(1).map(([f, w]) => f + ' ' + w.toFixed(1) + '%').join(', '))}"> +${sorted.length - 1}</span>` : '';
     const key = (c.display || '').toUpperCase();
+    discoverySourceFund[key] = topFund; // benchmark = the fund this name shows the most conviction in
+    const moreNote = sorted.length > 1 ? `<span style="font-size:8px;color:var(--color-text-tertiary)" title="${esc(sorted.slice(1).map(([f, w]) => f + ' ' + w.toFixed(1) + '%').join(', '))}"> +${sorted.length - 1}</span>` : '';
     const cached = discoveryPerf[key];
     const selected = discoverySelected.has(key);
     let perfInit = '<span style="color:var(--color-text-tertiary);font-size:8px">select →</span>';
@@ -13929,6 +14020,7 @@ function renderThemeDiscovery() {
         <span style="font-size:9px;color:var(--color-text-tertiary)">${[...discoverySelected].map(esc).join(', ')}</span>
         <button id="disc-fetch-btn" class="btn btn-sm btn-primary" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:auto">↡ Fetch ${discoverySelected.size} selected (1M + 1Y)</button>
         <button class="btn btn-sm" onclick="discoverySelected.clear();renderThemeDiscovery()" style="font-size:9px">Clear</button>
+        <div id="disc-fetch-status" style="flex-basis:100%;margin-top:2px"></div>
       </div>` : ''}
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
