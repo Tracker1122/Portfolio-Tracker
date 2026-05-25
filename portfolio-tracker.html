@@ -7450,11 +7450,23 @@ function qrRenderRotation() {
   const { parsed, etfTicker, candidates } = qrRotationState;
   if (!candidates.length) { host.innerHTML = ''; return; }
   const checked = new Set();
-  candidates.forEach(c => {
-    const el = document.getElementById('qr-rot-' + c.norm);
-    if (el && el.checked) checked.add(c.norm);
-  });
-  qrRotateChecked = checked; // expose to observations + AI payload
+  const _editCand = (qrEditingId !== null && typeof qualityReviews !== 'undefined') ? qualityReviews.find(q => q.id === qrEditingId) : null;
+  const _domHasBoxes = candidates.some(c => document.getElementById('qr-rot-' + c.norm));
+  if (_domHasBoxes) {
+    // Checkboxes exist — read their current state (a real user toggle).
+    candidates.forEach(c => { const el = document.getElementById('qr-rot-' + c.norm); if (el && el.checked) checked.add(c.norm); });
+  } else if (_editCand && _editCand.rotateOut) {
+    // First render (no boxes yet) — seed from the persisted choice so it matches the saved intent.
+    _editCand.rotateOut.forEach(n => checked.add(n));
+  }
+  qrRotateChecked = checked; // live mirror (UI checkbox state)
+  // Persist immediately onto the candidate being edited so rotateOut is always current — the
+  // observations + AI + saved-card analysis all read rotateOut, so this keeps them in lockstep
+  // without depending on an explicit Save.
+  if (qrEditingId !== null && typeof qualityReviews !== 'undefined') {
+    const ec = qualityReviews.find(q => q.id === qrEditingId);
+    if (ec) { ec.rotateOut = [...checked]; ec.updatedAt = new Date().toISOString(); if (typeof scheduleSave === 'function') scheduleSave(); }
+  }
   // Re-render the Checkable Observations so they reflect the new rotation intent. The flags live in
   // qr-flags-<id>; the rotation control belongs to the candidate currently in qrRotationState's view.
   (function(){
@@ -7918,10 +7930,11 @@ function renderQrCardAnalysis(id) {
   host.innerHTML = html || `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No direct overlap to analyze for ${esc(etfTicker)}.</div>`;
 }
 
-// Resolve which overlapping names are "rotate out" for a candidate: live checkbox state if this is
-// the candidate currently being edited (so toggles update before save), else the persisted choice.
+// Which overlapping names are "rotate out" for a candidate. The persisted rotateOut field is the
+// single source of truth — both the form and the saved-card rotation toggles write it immediately,
+// so we never rely on the volatile live checkbox set (which earlier caused the observation and the
+// rotation tool to disagree after a save).
 function qrRotationSetFor(candidate) {
-  if (candidate && qrEditingId === candidate.id) return qrRotateChecked;
   return new Set((candidate && candidate.rotateOut) || []);
 }
 
