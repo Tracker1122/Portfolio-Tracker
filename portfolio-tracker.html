@@ -13506,8 +13506,8 @@ function renderSectorPanel() {
     const viaTotal = s.names.reduce((t, n) => t + ((n.direct || 0) === 0 ? n.total : 0), 0);
     const viaPct = s.total > 0 ? (viaTotal / s.total) * 100 : 0;
     const nameLine = (n) => {
-      const tag = (n.direct > 0 && n.total - n.direct > 0.5) ? 'both' : (n.direct > 0) ? 'direct' : 'via-fund';
-      const tagCol = tag === 'direct' ? '#60a5fa' : tag === 'via-fund' ? '#34d399' : '#fbbf24';
+      const tag = (n.direct > 0 && n.total - n.direct > 0.5) ? 'held directly + in fund' : (n.direct > 0) ? 'held directly' : 'held only in fund';
+      const tagCol = tag === 'held directly' ? '#60a5fa' : tag === 'held only in fund' ? '#34d399' : '#fbbf24';
       return `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0 2px 12px;font-size:10px">
         <span style="color:var(--color-text-primary)">${esc(n.display)} <span style="font-size:8px;color:${tagCol}">${tag}</span></span>
         <span style="color:var(--color-text-tertiary)">${fmtD(n.total)}</span>
