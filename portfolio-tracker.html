@@ -7799,6 +7799,50 @@ function renderQrSavedList() {
       </div>
     </details>`;
   }).join('');
+  // The qr-ai-<id> divs render empty in the card HTML above; now that the cards are in the DOM,
+  // repopulate any candidate that has a live thread OR an old cached analysis so reopening a card
+  // shows its conversation again (and lets the user resume challenging it).
+  qualityReviews.forEach(c => {
+    if (Array.isArray(c.aiThread) && c.aiThread.length) {
+      renderQrAiThread(c.id);
+    } else if (c.aiAnalysis) {
+      renderQrAiCachedAnalysis(c.id);
+    }
+  });
+}
+
+// Render an OLD cached one-shot analysis (pre-thread candidates) on reopen: shows the analysis text
+// plus a Challenge box, WITHOUT seeding c.aiThread. The thread is only created when the user actually
+// sends a challenge (qrAiChallenge seeds turn 0 from this cached analysis at that point) — so merely
+// reopening a card never mutates old data.
+function renderQrAiCachedAnalysis(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  const out = document.getElementById('qr-ai-' + id);
+  if (!out || !c.aiAnalysis) return;
+  const esc2 = s => esc(s).replace(/\n/g, '<br>');
+  const truncBanner = c.aiTruncated ? `
+      <div style="font-size:9px;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:6px 8px;margin-bottom:8px;line-height:1.45">
+        ⚠ <strong>Output was cut off at the length limit</strong> — incomplete (hit the worker's MAX_TOKENS cap). Raise MAX_TOKENS in the worker and redeploy to get the full output.
+      </div>` : '';
+  out.innerHTML = `
+    <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-tertiary)">
+      <div style="font-size:8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;border-bottom:1px solid var(--color-border-tertiary);padding-bottom:6px">
+        ⚠ AI-generated reasoning — sounds confident regardless of accuracy. Argues both sides by design. Not a recommendation.
+      </div>
+      ${truncBanner}
+      <div style="font-size:11px;color:var(--color-text-primary);line-height:1.55">${esc2(c.aiAnalysis)}</div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
+        <div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px">Argue back (this is the point — catch its errors, correct its inputs):</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:6px">
+          • Which claim is the AI <em>least</em> equipped to actually know?<br>
+          • What did it treat as fact that was really just something you typed?<br>
+          • If the holdings/weights it reasoned from are stale, which point breaks first?
+        </div>
+        <textarea id="qr-challenge-${id}" rows="3" placeholder="Push back on a specific point…" style="width:100%;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical"></textarea>
+        <button class="btn btn-sm btn-primary" onclick="qrAiChallenge('${id}')" style="font-size:10px;margin-top:6px">Challenge</button>
+      </div>
+    </div>`;
 }
 
 // ─────────────────────────────────────────────
@@ -8298,6 +8342,32 @@ function startQrAiAnalysis(id) {
   if (!c) return;
   const out = document.getElementById('qr-ai-' + id);
   if (!out) return;
+  // Guard: regenerating from scratch overwrites c.aiThread (turn 0 is replaced and the conversation
+  // is lost). If a real argument exists (at least one user challenge), make that destructive, not silent.
+  const hasConversation = Array.isArray(c.aiThread) && c.aiThread.some(t => t.role === 'user');
+  if (hasConversation) {
+    const rounds = c.aiThread.filter(t => t.role === 'user').length;
+    out.innerHTML = `
+      <div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary)">
+        <div style="font-size:10px;font-weight:700;color:#fbbf24;margin-bottom:6px">You already argued this one — ${rounds} round${rounds===1?'':'s'} deep</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);line-height:1.5;margin-bottom:8px">
+          Generating a fresh analysis throws away the whole conversation and starts over from a new opening read. If you just want to keep arguing, go back to the existing thread instead.
+        </div>
+        <button class="btn btn-sm" onclick="renderQrAiThread('${id}')" style="font-size:10px">Back to my thread</button>
+        <button class="btn btn-sm" onclick="if(confirm('Discard the current ${rounds}-round conversation and regenerate from scratch?')){const c=qualityReviews.find(q=>q.id==='${id}');if(c){c.aiThread=null;c.aiOpeningPrompt=null;scheduleSave();}startQrAiAnalysisFresh('${id}');}" style="font-size:10px;color:var(--color-text-danger)">Discard & regenerate</button>
+      </div>`;
+    return;
+  }
+  startQrAiAnalysisFresh(id);
+}
+
+// The original "thin inputs warning + Generate" entry, factored out so the thread-guard above can
+// reach it after an explicit discard. Behaviour here is unchanged from before.
+function startQrAiAnalysisFresh(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  const out = document.getElementById('qr-ai-' + id);
+  if (!out) return;
   if (!aiWorkerUrl) loadAiWorkerUrl();
   const { filled, blank, total } = qrCountFilled(c);
   const thin = filled.length < Math.ceil(total / 2);
@@ -8453,6 +8523,8 @@ async function runQrAiAnalysis(id) {
     // (i.e. the analysis was cut off mid-thought). Surface this rather than showing a
     // silently-truncated response. The worker passes the raw API JSON through, so it's here.
     var aiTruncated = (data.stop_reason === 'max_tokens');
+    // Hoist usage out of the try-scoped `data` so the thread-seed code below can read it.
+    var aiUsage = (data && data.usage) ? data.usage : null;
   } catch (err) {
     const info = aiErrorMessage(err);
     out.innerHTML = `<div style="border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:${info.color};line-height:1.5">
@@ -8464,34 +8536,259 @@ async function runQrAiAnalysis(id) {
     return;
   }
 
-  const esc2 = s => esc(s).replace(/\n/g, '<br>');
-  const truncBanner = (typeof aiTruncated !== 'undefined' && aiTruncated) ? `
-      <div style="font-size:9px;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:6px 8px;margin-bottom:8px;line-height:1.45">
-        ⚠ <strong>Output was cut off at the length limit</strong> — the analysis below is incomplete (the model hit the worker's MAX_TOKENS cap). To get the full output, raise MAX_TOKENS in the Anthropic worker and redeploy it, then re-run.
-      </div>` : '';
-  out.innerHTML = `
-    <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-tertiary)">
-      <div style="font-size:8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;border-bottom:1px solid var(--color-border-tertiary);padding-bottom:6px">
-        ⚠ AI-generated reasoning — sounds confident regardless of accuracy. Argues both sides by design. Not a recommendation.
-      </div>
-      ${truncBanner}
-      <div style="font-size:11px;color:var(--color-text-primary);line-height:1.55">${esc2(analysisText)}</div>
-      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
-        <div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px">Now push back on it (this is the point):</div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:6px">
-          • Which claim above is the AI <em>least</em> equipped to actually know?<br>
-          • What did it treat as fact that was really just something you typed?<br>
-          • If the holdings/weights it reasoned from are stale, which point breaks first?
-        </div>
-        <textarea id="qr-pushback-${id}" rows="2" placeholder="Your critique (saved with the candidate)…" style="width:100%;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:6px 8px;resize:vertical">${esc(c.aiPushback || '')}</textarea>
-        <button class="btn btn-sm" onclick="saveQrPushback('${id}')" style="font-size:9px;margin-top:6px">Save my critique</button>
-      </div>
-    </div>`;
   // Cache the analysis text on the candidate (so reopening shows it without a re-call).
   c.aiAnalysis = analysisText;
   c.aiAnalysisAt = new Date().toISOString();
   c.aiTruncated = (typeof aiTruncated !== 'undefined' && aiTruncated);
+  // Seed the conversation thread with this analysis as turn 0 (the model's opening read).
+  // We persist the prompt that produced it so follow-up turns can resend the full context.
+  c.aiThread = [{
+    role: 'ai',
+    text: analysisText,
+    at: c.aiAnalysisAt,
+    truncated: c.aiTruncated,
+    // input tokens we actually sent for the opening call; prefer real usage if the worker gave it.
+    inTok: (aiUsage && typeof aiUsage.input_tokens === 'number') ? aiUsage.input_tokens : qrAiEstTokens(prompt),
+    outTok: (aiUsage && typeof aiUsage.output_tokens === 'number') ? aiUsage.output_tokens : qrAiEstTokens(analysisText),
+    measured: !!(aiUsage && typeof aiUsage.input_tokens === 'number')
+  }];
+  c.aiOpeningPrompt = prompt; // the buildQrAiPrompt() context string; reused as thread head every turn
   scheduleSave();
+  // Render the analysis header + the full conversation thread beneath it.
+  renderQrAiThread(id);
+}
+
+// ---- Argue-back conversation thread ------------------------------------------------
+// chars/4 is a coarse token heuristic; good enough for a running cost gauge, not billing.
+function qrAiEstTokens(s) { return Math.ceil(((s || '').length) / 4); }
+
+// Cumulative cost across the whole thread. The API is STATELESS: each turn resends the
+// entire prior thread as input, so input cost grows ~quadratically with turns. We sum the
+// per-turn input/output tokens we actually tracked rather than re-deriving, so the number
+// matches what was really sent. Sonnet rough pricing: $3 / 1M in, $15 / 1M out.
+function qrAiThreadCost(thread) {
+  let inTok = 0, outTok = 0, anyEstimated = false;
+  (thread || []).forEach(t => {
+    if (t.role === 'ai') { outTok += (t.outTok || 0); inTok += (t.inTok || 0); }
+    else { inTok += (t.inTok || 0); } // user turns carry the input tokens sent for THAT resend
+    if (!t.measured) anyEstimated = true;
+  });
+  const dollars = (inTok / 1e6) * 3 + (outTok / 1e6) * 15;
+  return { inTok, outTok, totalTok: inTok + outTok, dollars, anyEstimated };
+}
+
+// Build the single growing prompt string the worker expects ({ prompt }, NOT a messages array).
+// Structure: opening context + analysis, then each challenge/response pair, then the adversarial
+// framing RE-ASSERTED, then the newest challenge last. The re-assertion is deliberately at the
+// END so it's the most recent instruction the model reads before answering — models drift
+// agreeable over a thread and this is the single thing holding the line.
+function buildQrThreadPrompt(c, newChallenge) {
+  const head = c.aiOpeningPrompt || '';
+  const opening = (c.aiThread && c.aiThread[0] && c.aiThread[0].role === 'ai') ? c.aiThread[0].text : (c.aiAnalysis || '');
+  let parts = [];
+  parts.push(head);
+  parts.push('\n\n=== YOUR OPENING ANALYSIS (already shown to the user) ===\n' + opening);
+  // Replay each subsequent challenge/response pair in order.
+  let round = 0;
+  (c.aiThread || []).slice(1).forEach(t => {
+    if (t.role === 'user') { round++; parts.push(`\n--- USER CHALLENGE (round ${round}) ---\n${t.text}`); }
+    else if (t.role === 'ai') { parts.push(`\n--- YOUR RESPONSE (round ${round}) ---\n${t.text}`); }
+  });
+  const thisRound = round + 1;
+  // Re-asserted adversarial framing — every turn, near the end of the prompt.
+  parts.push(`\n\n=== HOW TO ANSWER THIS NEXT CHALLENGE (re-read every turn) ===
+You are still the critic from the opening analysis. The user is arguing WITH you to stress-test their own thinking — they are NOT looking for reassurance, and agreeing to keep them happy actively harms them.
+- Argue both sides; do NOT capitulate to be agreeable. If the user's pushback is wrong or only partly right, say so plainly and hold the line — explain why.
+- If the user is right, concede SPECIFICALLY: name exactly which earlier objection now falls and which ones still stand. A ledger, not a vibe shift. You may NOT collapse from several standing concerns to "sounds good" because the user pushed once.
+- Stay a critic, not a cheerleader. Do not soften across turns. A concession on one point is not permission to drop the others.
+- This is a FOLLOW-UP rebuttal to a specific point, not a re-run of the full for/against/gaps analysis. Be tight and focused — answer the actual challenge, don't restate the whole case. A few short paragraphs at most.
+- Same evidence rules as before: anything you assert as an outside real-world fact is UNVERIFIED and you must flag it as such; never fabricate a citation or an as-of date.
+
+--- USER CHALLENGE (round ${thisRound}) ---
+${newChallenge}
+
+--- YOUR RESPONSE (round ${thisRound}) ---`);
+  return parts.join('\n');
+}
+
+async function qrAiChallenge(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  const ta = document.getElementById('qr-challenge-' + id);
+  if (!ta) return;
+  const msg = (ta.value || '').trim();
+  if (!msg) { ta.style.borderColor = '#fbbf24'; setTimeout(() => { if (ta) ta.style.borderColor = 'var(--color-border-tertiary)'; }, 800); return; }
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+
+  // If somehow there's no thread yet (e.g. an old cached analysis the user is challenging for the
+  // first time), seed turn 0 from the cached analysis now so the thread is well-formed.
+  if (!Array.isArray(c.aiThread) || !c.aiThread.length) {
+    c.aiThread = [{
+      role: 'ai', text: c.aiAnalysis || '', at: c.aiAnalysisAt || new Date().toISOString(),
+      truncated: !!c.aiTruncated, inTok: qrAiEstTokens(c.aiOpeningPrompt || ''),
+      outTok: qrAiEstTokens(c.aiAnalysis || ''), measured: false
+    }];
+  }
+
+  const prompt = buildQrThreadPrompt(c, msg);
+  const sentInTok = qrAiEstTokens(prompt); // tokens sent for THIS resend (pre-usage estimate)
+
+  // Optimistically append the user turn + a thinking placeholder, then re-render.
+  c.aiThread.push({ role: 'user', text: msg, at: new Date().toISOString(), inTok: sentInTok, measured: false });
+  ta.value = '';
+  renderQrAiThread(id, { pending: true });
+
+  try {
+    let resp;
+    try {
+      resp = await fetch(aiWorkerUrl + '/', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+    } catch (netErr) {
+      const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
+    }
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok || data.error) {
+      const errObj = (data && typeof data.error === 'object') ? data.error : null;
+      const m = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
+      const type = errObj ? (errObj.type || '') : '';
+      const e = new Error(m || ('HTTP ' + resp.status));
+      e.aiKind = classifyAiError(resp.status, type, m); e.httpStatus = resp.status; throw e;
+    }
+    const replyText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if (!replyText) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
+    const trunc = (data.stop_reason === 'max_tokens');
+    const measured = !!(data && data.usage && typeof data.usage.input_tokens === 'number');
+    // If the worker returned real usage, correct the user turn's input tokens to the measured value.
+    if (measured) {
+      const lastUser = [...c.aiThread].reverse().find(t => t.role === 'user');
+      if (lastUser) { lastUser.inTok = data.usage.input_tokens; lastUser.measured = true; }
+    }
+    c.aiThread.push({
+      role: 'ai', text: replyText, at: new Date().toISOString(), truncated: trunc,
+      inTok: 0, // input was accounted on the user turn (the resend); avoid double-counting
+      outTok: measured ? data.usage.output_tokens : qrAiEstTokens(replyText),
+      measured
+    });
+    scheduleSave();
+    renderQrAiThread(id);
+  } catch (err) {
+    // A failed follow-up must NOT lose the thread. Drop the optimistic user turn we appended
+    // (the send didn't land) and re-render the thread WITH an inline error banner.
+    const lastUserIdx = [...c.aiThread].map(t => t.role).lastIndexOf('user');
+    let restoreMsg = msg;
+    if (lastUserIdx === c.aiThread.length - 1) { c.aiThread.splice(lastUserIdx, 1); }
+    scheduleSave();
+    const info = aiErrorMessage(err);
+    renderQrAiThread(id, { error: info, errHttp: err.httpStatus, restoreMsg });
+  }
+}
+
+// Render the analysis header + the whole conversation thread into qr-ai-${id}.
+// opts: { pending:true } shows a thinking row; { error, errHttp, restoreMsg } shows a non-destructive
+// error banner and refills the challenge box with the message that failed to send.
+function renderQrAiThread(id, opts) {
+  opts = opts || {};
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  const out = document.getElementById('qr-ai-' + id);
+  if (!out) return;
+  const esc2 = s => esc(s).replace(/\n/g, '<br>');
+  const thread = Array.isArray(c.aiThread) ? c.aiThread : [];
+  if (!thread.length) { out.innerHTML = ''; return; }
+
+  const truncBanner = t => (t && t.truncated) ? `
+      <div style="font-size:9px;color:#fbbf24;background:rgba(251,191,36,0.12);border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:6px 8px;margin-bottom:8px;line-height:1.45">
+        ⚠ <strong>Output was cut off at the length limit</strong> — incomplete (hit the worker's MAX_TOKENS cap). Raise MAX_TOKENS in the worker and redeploy to get the full output.
+      </div>` : '';
+
+  // Opening analysis (turn 0) keeps the exact look of the original one-shot render.
+  const opening = thread[0];
+  let html = `
+    <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-tertiary)">
+      <div style="font-size:8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;border-bottom:1px solid var(--color-border-tertiary);padding-bottom:6px">
+        ⚠ AI-generated reasoning — sounds confident regardless of accuracy. Argues both sides by design. Not a recommendation.
+      </div>
+      ${truncBanner(opening)}
+      <div style="font-size:11px;color:var(--color-text-primary);line-height:1.55">${esc2(opening.text)}</div>`;
+
+  // Subsequent turns: user challenges (left, blue) and AI rebuttals (full width).
+  let round = 0;
+  for (let i = 1; i < thread.length; i++) {
+    const t = thread[i];
+    if (t.role === 'user') {
+      round++;
+      html += `
+      <div style="margin-top:12px;padding:8px 10px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md)">
+        <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;font-weight:700">Your challenge · round ${round}</div>
+        <div style="font-size:11px;color:var(--color-text-primary);line-height:1.5">${esc2(t.text)}</div>
+      </div>`;
+    } else {
+      html += `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
+        ${truncBanner(t)}
+        <div style="font-size:8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">AI rebuttal · round ${round}</div>
+        <div style="font-size:11px;color:var(--color-text-primary);line-height:1.55">${esc2(t.text)}</div>
+      </div>`;
+    }
+  }
+
+  if (opts.pending) {
+    round++; // the pending response is for the just-added challenge
+    html += `<div style="margin-top:10px;font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:4px 0">AI is responding to round ${round}…</div>`;
+  }
+
+  // Soft guardrail once the argument runs long. Non-blocking — surfaced, never enforced.
+  const completedRounds = thread.filter(t => t.role === 'user').length;
+  if (completedRounds >= 4) {
+    html += `
+      <div style="margin-top:12px;font-size:9px;color:#fbbf24;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.5);border-radius:var(--border-radius-md);padding:7px 9px;line-height:1.5">
+        You've gone ${completedRounds} rounds on this. Worth a gut-check: interrogation can quietly turn into a campaign to get the answer you already want. If you're still genuinely testing the thesis, carry on — if you're hunting for a yes, that's the tell.
+      </div>`;
+  }
+
+  // Live cost / token gauge for the thread.
+  const cost = qrAiThreadCost(thread);
+  const tokK = (cost.totalTok / 1000);
+  const tokStr = tokK >= 1 ? tokK.toFixed(1) + 'K' : cost.totalTok + '';
+  const estMark = cost.anyEstimated ? '~est' : 'measured';
+  html += `
+      <div style="margin-top:12px;padding-top:8px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-tertiary);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+        <span>≈ ${tokStr} tokens · ≈ $${cost.dollars.toFixed(2)} this thread <span style="opacity:0.7">(${estMark})</span></span>
+        <span style="opacity:0.8">each round resends the whole thread — cost climbs faster than turns</span>
+      </div>`;
+
+  // Inline error banner (thread preserved).
+  if (opts.error) {
+    const info = opts.error;
+    html += `
+      <div style="margin-top:10px;border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:9px 11px;font-size:10px;color:${info.color};line-height:1.5">
+        <strong>${info.title}</strong><br>
+        <span style="color:var(--color-text-secondary)">${esc(info.detail)}</span>
+        ${info.raw ? `<br><span style="color:var(--color-text-tertiary);font-size:9px">Raw: ${esc(info.raw)}${opts.errHttp ? ' (HTTP ' + opts.errHttp + ')' : ''}</span>` : ''}
+        <br><span style="color:var(--color-text-tertiary);font-size:9px;font-style:italic">Your thread is intact — your message is back in the box, just resend.</span>
+      </div>`;
+  }
+
+  // Challenge input — the live conversation entry point (replaces the old save-only pushback box).
+  const restore = opts.restoreMsg ? esc(opts.restoreMsg) : '';
+  const busy = !!opts.pending;
+  html += `
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
+        <div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px">Argue back (this is the point — catch its errors, correct its inputs):</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:6px">
+          • Which claim is the AI <em>least</em> equipped to actually know?<br>
+          • What did it treat as fact that was really just something you typed?<br>
+          • If the holdings/weights it reasoned from are stale, which point breaks first?
+        </div>
+        <textarea id="qr-challenge-${id}" rows="3" placeholder="Push back on a specific point…" style="width:100%;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical"${busy ? ' disabled' : ''}>${restore}</textarea>
+        <button class="btn btn-sm btn-primary" onclick="qrAiChallenge('${id}')" style="font-size:10px;margin-top:6px"${busy ? ' disabled' : ''}>${busy ? 'Sending…' : 'Challenge'}</button>
+      </div>
+    </div>`;
+
+  out.innerHTML = html;
 }
 
 function saveQrPushback(id) {
