@@ -4085,7 +4085,7 @@ function renderAddCandidatesTable() {
         const truePct = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
         const via = lts.map(l => `${esc(l.fund)} ${fmtDollarWhole(l.indirectValue)}`).join(' + ');
         passRow = `<tr style="${opacityWrap}">
-          <td colspan="8" style="padding:2px 8px 8px;border-top:none">
+          <td colspan="9" style="padding:2px 8px 8px;border-top:none">
             <div style="font-size:9px;color:#fbbf24;line-height:1.5;padding-left:4px;border-left:2px solid rgba(251,191,36,0.4)">
               <strong>Total ${esc(r.ticker)} you already hold: ~${fmtDollarWhole(trueTotal)}</strong> — direct ${fmtDollarWhole(direct)} + ${fmtDollarWhole(embedded)} via funds (${via}) = <strong>${truePct.toFixed(1)}% of your portfolio</strong>. Adding direct deepens a position that's already this large on a true-exposure basis. <span style="color:var(--color-text-tertiary)">(Embedded approximate — fund weights drift.)</span>
             </div>
@@ -4097,6 +4097,7 @@ function renderAddCandidatesTable() {
         <td><span style="font-size:9px;color:${sleeveColor};background:${sleeveColor}22;padding:1px 5px;border-radius:3px;font-weight:700">${esc(r.sleeve || '—')}</span></td>
         <td><span style="font-size:10px;color:var(--color-text-tertiary)">${esc(r.theme || '—')}</span></td>
         <td class="r"><span style="color:${held.color};font-weight:600">${held.label}</span></td>
+        <td class="r">${fmtDollarWhole(r.totalExit || 0)}</td>
         <td class="r">${portPct}</td>
         <td class="r"><span style="color:var(--color-text-success)">+${fmtDollarWhole(r.totalSpxAlpha)}</span></td>
         <td class="r"><span style="color:var(--color-text-success)">+${fmtDollarWhole(r.totalThemeDollar)}</span> <span style="font-size:9px;color:var(--color-text-success);opacity:0.7">(${ppStr})</span></td>
@@ -4112,6 +4113,7 @@ function renderAddCandidatesTable() {
             <th>Strategy</th>
             <th>Industry</th>
             <th class="r">Held</th>
+            <th class="r">Value</th>
             <th class="r">Managed %</th>
             <th class="r">SPX α</th>
             <th class="r">Theme α</th>
@@ -13129,8 +13131,11 @@ function computeThemeClusters() {
   themeUniverseAll().forEach(t => { if (t.ticker) themeBench[t.name] = t.ticker.toUpperCase(); });
   const benchToThemes = {};
   Object.entries(themeBench).forEach(([thm, b]) => { (benchToThemes[b] = benchToThemes[b] || []).push(thm); });
-  // Canonical cluster label for a benchmark: merges shared-benchmark themes explicitly.
-  const clusterLabelForBench = (b) => benchToThemes[b] ? benchToThemes[b].join(' + ') + ' (' + b + ')' : null;
+  // Canonical cluster label for a benchmark: the theme name(s) only. Shared-benchmark themes merge
+  // via the "+" join (e.g. "Semiconductors + AI Infrastructure"). The benchmark ticker is NOT in the
+  // title — it appears only in per-name reasons, where it names the actual fund a name sits in. This
+  // keeps a ticker like QQQ from meaning two things (cluster identity vs placement mechanism).
+  const clusterLabelForBench = (b) => benchToThemes[b] ? benchToThemes[b].join(' + ') : null;
 
   // Direct theme tags (authoritative), keyed canonically.
   const directTheme = {};
@@ -13357,7 +13362,7 @@ function renderThemeClusters() {
   themeUniverseAll().forEach(t => { if (t.ticker) themeBench[t.name] = t.ticker.toUpperCase(); });
   const benchToThemes = {};
   Object.entries(themeBench).forEach(([thm, b]) => { (benchToThemes[b] = benchToThemes[b] || []).push(thm); });
-  const clusterLabelForBench = (b) => benchToThemes[b] ? benchToThemes[b].join(' + ') + ' (' + b + ')' : null;
+  const clusterLabelForBench = (b) => benchToThemes[b] ? benchToThemes[b].join(' + ') : null;
   const nameThemeFundW = {};
   const store = getIndexLookthrough();
   Object.entries(store).forEach(([fund, tbl]) => {
@@ -13387,12 +13392,15 @@ function renderThemeClusters() {
     const flag = clusterConfidenceFlag(n, ctx);
     const tri = flag ? `<span title="${esc(flag)}" style="color:#fbbf24;cursor:help">⚠</span> ` : '';
     const isOverridden = n.why && n.why.indexOf('you assigned') === 0;
-    // Default option is blank when the tool placed it (no "auto" noise on every confident row); the
-    // reset choice only matters once you've overridden, so it's labeled clearly only then.
+    // The dropdown always reflects the name's CURRENT cluster (whether auto-placed or overridden) by
+    // selecting the theme option whose label matches n.label — so it never shows blank. A "reset to
+    // auto" option is offered only when the name has been overridden (for auto-placed names it'd be
+    // a no-op). Nothing is selected as "—" anymore; the live assignment is always shown.
+    const currentThemeMatch = themeOptions.find(t => clusterLabelForBench(themeBench[t]) === n.label);
     const editControl = clusterEditExpanded ? `
       <select onchange="reassignCluster('${esc(n.key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;margin-left:6px;cursor:pointer">
-        <option value="__auto__"${isOverridden ? '' : ' selected'}>${isOverridden ? '↺ reset to auto' : '—'}</option>
-        ${themeOptions.map(t => `<option value="${esc(t)}"${isOverridden && n.label === clusterLabelForBench(themeBench[t]) ? ' selected' : ''}>${esc(t)}</option>`).join('')}
+        ${isOverridden ? '<option value="__auto__">↺ reset to auto</option>' : ''}
+        ${themeOptions.map(t => `<option value="${esc(t)}"${currentThemeMatch === t ? ' selected' : ''}>${esc(t)}</option>`).join('')}
       </select>` : '';
     // When editing AND this name is flagged, show the reason inline (not just hover) so you can
     // reason about the fix without hunting. The reason already explains the conflict (which clusters
