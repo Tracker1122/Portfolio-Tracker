@@ -12792,9 +12792,14 @@ async function backfillThemeUniverse() {
     return;
   }
 
-  // Only backfill the "missing" tickers — themes you don't currently have exposure to.
-  // Existing themes are already tracked by other systems; no need to fetch historical anchors here.
-  const tickers = THEME_UNIVERSE.missing.map(t => t.ticker);
+  // Backfill historical anchors for ALL universe tickers — owned AND unowned. Owned themes were
+  // previously skipped (their rows showed muted dots by design), but for the side-by-side
+  // performance/diversification view we now show benchmark window returns on owned rows too,
+  // clearly labeled as benchmark-level (not your entry-timed alpha). themeUniverseTickers() dedupes,
+  // so a benchmark shared by two themes (e.g. SMH for Semiconductors AND AI Infrastructure) is
+  // fetched once. Today's price for these already comes via getBenchmarkPrices(), so once the
+  // historical anchor lands, computeThemeReturns() produces the % with no further plumbing.
+  const tickers = themeUniverseTickers();
   const dates = getThemeUniverseTargetDates();
   // Polygon free tier returns 403 for dates older than ~2 years. Only fetch YTD and 1Y windows.
   // 5Y and 10Y stay defined in target dates and display columns but are never fetched on free tier.
@@ -12892,6 +12897,84 @@ function computeThemeExposure(themeName) {
   return { dollars, percentOfActive: pct, hasPositions: themePositions.length > 0 };
 }
 
+// ─────────────────────────────────────────────
+// Theme-benchmark holdings + overlap (structural correlation proxy)
+// Holdings are stored in the SHARED index look-through store (keyed by fund ticker), so a
+// benchmark's holdings pasted here also feed the look-through math, and vice-versa — one source
+// of truth, one staleness clock per fund. We do NOT measure return correlation (no return series
+// is stored); we approximate "these themes move together" by how much their benchmark ETFs hold
+// the same names, weighted by position size. This is a STRUCTURAL proxy, labeled as such in the UI.
+// ─────────────────────────────────────────────
+
+// The distinct benchmark tickers backing the themes the user OWNS (deduped — SMH backs both
+// Semiconductors and AI Infrastructure, so it appears once). Ordered: owned first (by exposure
+// desc), then the unowned universe benchmarks (lower value for this analysis, listed after).
+function themeBenchmarksForCorrelation() {
+  const owned = [], unowned = [];
+  // Build per-benchmark: which themes map to it, and total owned exposure across those themes.
+  const byBench = {};
+  themeUniverseAll().forEach(t => {
+    if (!t.ticker) return;
+    if (!byBench[t.ticker]) byBench[t.ticker] = { ticker: t.ticker, themes: [], exposure: 0, anyOwned: false };
+    const ex = computeThemeExposure(t.name);
+    byBench[t.ticker].themes.push(t.name);
+    byBench[t.ticker].exposure += ex.dollars;
+    if (ex.hasPositions) byBench[t.ticker].anyOwned = true;
+  });
+  Object.values(byBench).forEach(b => { (b.anyOwned ? owned : unowned).push(b); });
+  owned.sort((a, b) => b.exposure - a.exposure);
+  unowned.sort((a, b) => a.ticker.localeCompare(b.ticker));
+  return { owned, unowned };
+}
+
+// Read a benchmark's stored holdings (weights map) from the shared look-through store.
+// Returns { weights: {TICKER: pct}, asOf, count } or null if none stored.
+function benchmarkHoldings(ticker) {
+  if (!ticker) return null;
+  const store = getIndexLookthrough();
+  const entry = store[ticker.toUpperCase()];
+  if (!entry || !entry.weights) return null;
+  const weights = entry.weights;
+  const count = Object.keys(weights).length;
+  if (count === 0) return null;
+  return { weights, asOf: entry.asOf || null, count };
+}
+
+// Weighted holdings overlap between two benchmarks — the structural proxy for co-movement.
+// For each name held by BOTH funds, the contribution is min(weightA, weightB): the exposure that
+// genuinely co-occurs in both. Summing min() across shared names gives an overlap % bounded by the
+// smaller fund's coverage; it doesn't over-credit a name that's huge in one fund but tiny in the
+// other. Returns:
+//   { computable, haveA, haveB, overlapPct, sharedNames:[{ticker,wA,wB,min}], sameBenchmark }
+// computable=false when either side lacks holdings (so the UI shows "paste both", never a fake 0).
+function themeBenchmarkOverlap(tickerA, tickerB) {
+  const a = (tickerA || '').toUpperCase();
+  const b = (tickerB || '').toUpperCase();
+  // Same benchmark backing two themes (e.g. SMH ↔ SMH): identical by definition, not a discovery.
+  if (a && a === b) {
+    const h = benchmarkHoldings(a);
+    const cov = h ? Object.values(h.weights).reduce((s, w) => s + (w || 0), 0) : 0;
+    return { computable: !!h, haveA: !!h, haveB: !!h, overlapPct: h ? cov : 0, sharedNames: [], sameBenchmark: true };
+  }
+  const hA = benchmarkHoldings(a);
+  const hB = benchmarkHoldings(b);
+  if (!hA || !hB) {
+    return { computable: false, haveA: !!hA, haveB: !!hB, overlapPct: 0, sharedNames: [], sameBenchmark: false };
+  }
+  const shared = [];
+  let overlap = 0;
+  Object.entries(hA.weights).forEach(([tk, wA]) => {
+    const wB = hB.weights[tk];
+    if (wB != null && wA != null) {
+      const mn = Math.min(wA, wB);
+      overlap += mn;
+      shared.push({ ticker: tk, wA, wB, min: mn });
+    }
+  });
+  shared.sort((x, y) => y.min - x.min);
+  return { computable: true, haveA: true, haveB: true, overlapPct: overlap, sharedNames: shared, sameBenchmark: false };
+}
+
 // Render the full Theme Universe tab.
 function renderThemeUniverse() {
   const el = document.getElementById('theme-universe-tab-content');
@@ -12919,12 +13002,15 @@ function renderThemeUniverse() {
       ? `<span style="color:var(--color-text-secondary)">${fmtDollarWhole(exposure.dollars)}</span> <span style="color:var(--color-text-tertiary);font-size:9px">(${exposure.percentOfActive.toFixed(1)}%)</span>`
       : `<span style="color:var(--color-text-tertiary);font-style:italic">no exposure</span>`;
 
-    // For existing themes, show "·" muted dots (not tracked by design).
-    // For missing themes, show real returns for YTD/1Y; permanent "—" for 5Y/10Y (free tier limit).
-    const ytdCell = isExisting ? notTrackedCell : fmtRet(returns.ytd);
-    const oneyCell = isExisting ? notTrackedCell : fmtRet(returns['1y']);
-    const fiveyCell = isExisting ? notTrackedCell : longWindowCell;
-    const tenyCell = isExisting ? notTrackedCell : longWindowCell;
+    // YTD/1Y now show real BENCHMARK returns for owned themes too (not just unowned), so the
+    // performance column is comparable across every row for the diversification screen. These are
+    // benchmark-level window returns — NOT your entry-timed alpha; the column header says so. Until
+    // the user re-runs backfill for the newly-included owned tickers, returns.* is null and fmtRet
+    // shows "—" (honest "not fetched yet", not a hidden value). 5Y/10Y remain free-tier-limited for all.
+    const ytdCell = fmtRet(returns.ytd);
+    const oneyCell = fmtRet(returns['1y']);
+    const fiveyCell = longWindowCell;
+    const tenyCell = longWindowCell;
 
     const rowOpacity = isExisting ? '' : 'background:var(--color-background-secondary);';
     return `<tr style="${rowOpacity}">
@@ -12943,7 +13029,8 @@ function renderThemeUniverse() {
       <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span>
       <strong style="color:var(--color-text-primary)">Awareness surface, not recommendation.</strong>
       Shows performance of theme benchmarks across windows alongside your current exposure. Helps surface "what you don't know you don't know" without prescribing action. Highlighted rows are themes you currently own; unhighlighted rows are theme universe additions for context.
-      <div style="margin-top:6px;font-size:10px;color:var(--color-text-tertiary);font-style:italic">YTD and 1Y are populated via Polygon free tier. 5Y and 10Y require Polygon Stocks Starter ($30/mo) — free tier rejects dates older than 2 years.</div>
+      <div style="margin-top:6px;font-size:10px;color:var(--color-text-tertiary);line-height:1.5">YTD/1Y are the <strong>benchmark's</strong> window returns (e.g. QQQ's YTD) — <em>not</em> your own return, which depends on when you bought. They're here so every theme is comparable for screening, not to tell you how your positions did. For your entry-timed performance, see Industry Reference / Industry Spotlight.</div>
+      <div style="margin-top:4px;font-size:10px;color:var(--color-text-tertiary);font-style:italic">YTD and 1Y are populated via Polygon free tier. 5Y and 10Y require Polygon Stocks Starter ($30/mo) — free tier rejects dates older than 2 years.</div>
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
       <button class="btn btn-sm" onclick="backfillThemeUniverse()" style="font-size:10px;padding:5px 12px">⟳ Backfill Theme Universe</button>
@@ -12977,7 +13064,126 @@ function renderThemeUniverse() {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    <div id="theme-bench-holdings-panel" style="margin-top:18px"></div>
   `;
+  renderThemeBenchmarkPanel();
+}
+
+// Dedicated paste panel for benchmark holdings — the data feed for the structural-overlap proxy.
+// Lists owned-theme benchmarks first (the high-value set for "is my book secretly one bet"), then
+// the unowned universe benchmarks collapsed below. Each fund reuses the proven paste UX: live
+// preview chips, unparsed-line flagging, the stockanalysis link, and an as-of staleness stamp.
+// Writes to the SHARED look-through store via pasteThemeBenchHoldings(), so one paste serves both
+// this analysis and the index look-through math.
+function renderThemeBenchmarkPanel() {
+  const host = document.getElementById('theme-bench-holdings-panel');
+  if (!host) return;
+  const { owned, unowned } = themeBenchmarksForCorrelation();
+  const today = new Date().toISOString().slice(0, 10);
+
+  const fundCard = (b) => {
+    const h = benchmarkHoldings(b.ticker);
+    const count = h ? h.count : 0;
+    const cov = h ? Object.values(h.weights).reduce((s, w) => s + (w || 0), 0) : 0;
+    const asOf = h && h.asOf ? h.asOf : '';
+    let ageDays = null, stale = false;
+    if (asOf) { ageDays = Math.floor((Date.now() - new Date(asOf + 'T00:00:00').getTime()) / 86400000); stale = ageDays > 120; }
+    const themesLabel = b.themes.join(' + ');
+    const status = count > 0
+      ? `<span style="font-size:9px;color:var(--color-text-success)">✓ ${count} holding${count > 1 ? 's' : ''} (${cov.toFixed(0)}% of fund)</span>`
+      : `<span style="font-size:9px;color:#fbbf24">no holdings yet</span>`;
+    const staleNote = stale ? `<span style="font-size:9px;color:#fbbf24" title="Pasted ${ageDays} days ago — funds rebalance; consider refreshing">⚠ ${ageDays}d old</span>` : '';
+    return `
+      <div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+          <strong style="font-size:12px;color:var(--color-text-primary)">${esc(b.ticker)}</strong>
+          <span style="font-size:9px;color:var(--color-text-tertiary)">${esc(themesLabel)}</span>
+          ${status} ${staleNote}
+          ${count > 0 ? `<button class="btn btn-sm" onclick="clearThemeBenchHoldings('${esc(b.ticker)}')" style="font-size:9px;margin-left:auto;padding:1px 7px;color:var(--color-text-danger)">Clear</button>` : ''}
+        </div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:5px">
+          Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${esc(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a>
+          <span>opens it on stockanalysis.com (free); copy the table and paste — row #, name &amp; shares are ignored automatically.</span>
+        </div>
+        <textarea id="tbench-paste-${esc(b.ticker)}" rows="2" oninput="renderThemeBenchPreview('${esc(b.ticker)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, AVGO 8% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
+        <div id="tbench-preview-${esc(b.ticker)}" style="margin-top:5px"></div>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+          <button class="btn btn-sm btn-primary" onclick="pasteThemeBenchHoldings('${esc(b.ticker)}')" style="font-size:9px">Parse &amp; store</button>
+          <span style="font-size:8px;color:var(--color-text-tertiary)">stored to the shared holdings table — also feeds index look-through</span>
+        </div>
+        <div id="tbench-msg-${esc(b.ticker)}" style="margin-top:4px"></div>
+      </div>`;
+  };
+
+  const ownedFilled = owned.filter(b => benchmarkHoldings(b.ticker)).length;
+  host.innerHTML = `
+    <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Benchmark holdings — for the overlap / correlation proxy</div>
+      <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">
+        Paste each benchmark's top holdings to let the tracker estimate how much your themes <em>move together</em> — a structural proxy (shared names, weighted by size), <strong>not</strong> measured return correlation. You don't need all of them: any <em>pair</em> where both funds have holdings becomes computable. The two below that share a benchmark (SMH) are the same fund by definition. Owned-theme benchmarks first (${ownedFilled}/${owned.length} have holdings) — these are the high-value ones.
+      </div>
+      ${owned.map(fundCard).join('')}
+      ${unowned.length ? `
+      <details style="margin-top:6px">
+        <summary style="font-size:10px;color:var(--color-text-tertiary);cursor:pointer">Unowned-theme benchmarks (${unowned.length}) — lower value for this analysis, paste only if you want their overlap too</summary>
+        <div style="margin-top:8px">${unowned.map(fundCard).join('')}</div>
+      </details>` : ''}
+    </div>`;
+}
+
+// Live preview of what a paste parses to — mirrors the index look-through preview exactly.
+function renderThemeBenchPreview(ticker) {
+  const ta = document.getElementById('tbench-paste-' + ticker);
+  const out = document.getElementById('tbench-preview-' + ticker);
+  if (!ta || !out) return;
+  const text = (ta.value || '').trim();
+  if (!text) { out.innerHTML = ''; return; }
+  const { parsed, unparsed } = parseHoldings(text);
+  if (!parsed.length && !unparsed.length) { out.innerHTML = ''; return; }
+  const coverage = parsed.reduce((s, p) => s + (p.weight || 0), 0);
+  const chips = parsed.map(p => `<span style="display:inline-block;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:1px 7px;margin:0 4px 3px 0;font-size:9px"><strong style="color:var(--color-text-primary)">${esc(p.ticker)}</strong> <span style="color:var(--color-text-tertiary)">${p.weight != null ? p.weight + '%' : '—'}</span></span>`).join('');
+  out.innerHTML = `
+    <div style="font-size:8px;color:var(--color-text-success);margin-bottom:3px">Will read ${parsed.length} holding${parsed.length > 1 ? 's' : ''} (${coverage.toFixed(1)}% of fund) — verify, then “Parse &amp; store”:</div>
+    <div>${chips}</div>
+    ${unparsed.length ? `<div style="font-size:8px;color:#fbbf24;margin-top:2px">${unparsed.length} line(s) won\u2019t be read: ${unparsed.map(u => esc(u)).join(' · ')}</div>` : ''}`;
+}
+
+// Parse a benchmark's pasted holdings and store them in the SHARED look-through store (so they
+// feed both this overlap proxy and the index look-through math). Paste = authoritative refresh.
+function pasteThemeBenchHoldings(ticker) {
+  const tk = (ticker || '').toUpperCase();
+  const ta = document.getElementById('tbench-paste-' + ticker);
+  const msg = document.getElementById('tbench-msg-' + ticker);
+  if (!ta) return;
+  const { parsed, unparsed } = parseHoldings(ta.value || '');
+  if (!parsed.length) {
+    if (msg) msg.innerHTML = `<div style="font-size:9px;color:#fbbf24">Nothing parsed — paste ticker + weight rows (e.g. "NVDA 22%").</div>`;
+    return;
+  }
+  const store = getIndexLookthrough();
+  if (!store[tk]) store[tk] = { asOf: '', weights: {} };
+  const weights = {};
+  parsed.forEach(p => { weights[p.ticker] = (p.weight != null) ? p.weight : null; });
+  store[tk].weights = weights;
+  store[tk].asOf = new Date().toISOString().slice(0, 10);
+  if (store[tk].blankOnPurpose) delete store[tk].blankOnPurpose;
+  saveIndexLookthrough();
+  const noW = parsed.filter(p => p.weight == null).length;
+  renderThemeBenchmarkPanel(); // refresh statuses
+  const msg2 = document.getElementById('tbench-msg-' + ticker);
+  if (msg2) msg2.innerHTML = `<div style="font-size:9px;color:var(--color-text-success)">✓ Stored ${parsed.length} holding${parsed.length > 1 ? 's' : ''} for ${esc(tk)}.${noW ? ` (${noW} had no weight — won't contribute to overlap math.)` : ''}${unparsed.length ? ` <span style="color:#fbbf24">${unparsed.length} line(s) skipped: ${unparsed.map(u => esc(u)).join(' · ')}</span>` : ''}</div>`;
+}
+
+function clearThemeBenchHoldings(ticker) {
+  const tk = (ticker || '').toUpperCase();
+  const store = getIndexLookthrough();
+  if (!store[tk] || !store[tk].weights) return;
+  const n = Object.keys(store[tk].weights).length;
+  if (n === 0) return;
+  if (!confirm(`Clear all ${n} stored holding${n > 1 ? 's' : ''} for ${tk}? This clears the shared holdings table entry — it also affects index look-through if ${tk} is used there.`)) return;
+  store[tk].weights = {};
+  saveIndexLookthrough();
+  renderThemeBenchmarkPanel();
 }
 
 // Dashboard tile — zero-exposure themes only, sorted by 1Y performance descending.
