@@ -7522,6 +7522,23 @@ function qrRenderRotation() {
           <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
           <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
         </tr></thead><tbody>${body}</tbody></table></div>
+      ${(() => {
+        // "What really moved" — bucket the FULL sim.rows by whether you already held the name
+        // (before>0) vs brand-new exposure (before==0), summing per-name change. Computed from the
+        // same sim, so it covers names the 15-row table truncates.
+        const held = sim.rows.filter(r => r.before > 0);
+        const fresh = sim.rows.filter(r => r.before === 0);
+        const sumChg = arr => arr.reduce((s, r) => s + r.change, 0);
+        const heldNet = sumChg(held);
+        const freshNet = sumChg(fresh);
+        const hiddenFresh = Math.max(0, fresh.length - sim.rows.slice(0, 15).filter(r => r.before === 0).length);
+        const sgn = n => (n >= 0 ? '+' : '\u2212') + fmtDollarWhole(Math.abs(n));
+        return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.55;color:var(--color-text-primary)">
+          <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:4px">What really moved</div>
+          Names you <strong>already had</strong> exposure to (${held.length}): net <strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong> true exposure${heldNet<0?' — almost all of it the positions you\u2019re selling; the ETF tops the rest back up':''}.<br>
+          Names you had <strong>no</strong> exposure to (${fresh.length}): net <strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong> of brand-new exposure${hiddenFresh>0?` (${hiddenFresh} of these are below the 15-row table above)`:''}.
+        </div>`;
+      })()}
       ${sim.sleeveRows.length ? `
       <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">Sleeve impact (your direct book)</div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
@@ -7962,6 +7979,25 @@ function renderQrCardAnalysis(id) {
             <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
             <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
           </tr></thead><tbody>${body}</tbody></table></div>
+        ${(() => {
+          // "What really moved" — bucket the FULL sim.rows (not just the 15 shown) by whether you
+          // already had exposure to that name before the rotation. before>0 = held it (directly or
+          // via funds); before==0 = brand-new exposure the ETF introduces. Sum the per-name change
+          // in each bucket. This is computed locally from the same sim, so it includes the rows the
+          // 15-row table truncates.
+          const held = sim.rows.filter(r => r.before > 0);
+          const fresh = sim.rows.filter(r => r.before === 0);
+          const sumChg = arr => arr.reduce((s, r) => s + r.change, 0);
+          const heldNet = sumChg(held);
+          const freshNet = sumChg(fresh);
+          const hiddenFresh = Math.max(0, fresh.length - sim.rows.slice(0, 15).filter(r => r.before === 0).length);
+          const sgn = n => (n >= 0 ? '+' : '\u2212') + fmtDollarWhole(Math.abs(n));
+          return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.55;color:var(--color-text-primary)">
+            <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:4px">What really moved</div>
+            Names you <strong>already had</strong> exposure to (${held.length}): net <strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong> true exposure${heldNet<0?' — almost all of it the positions you\u2019re selling; the ETF tops the rest back up':''}.<br>
+            Names you had <strong>no</strong> exposure to (${fresh.length}): net <strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong> of brand-new exposure${hiddenFresh>0?` (${hiddenFresh} of these are below the 15-row table above)`:''}.
+          </div>`;
+        })()}
         <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">For names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal. ` : ''}Approximate; tax is an estimate (not advice).</div>`;
     } else {
       tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above to model rotating them into ${esc(etfTicker)} — your choice saves automatically and updates the observations.</div>`;
