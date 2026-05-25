@@ -13523,25 +13523,8 @@ function renderSectorPanel() {
     }
   }
 
-  const sectorBlock = (s, idx) => {
-    const viaTotal = s.names.reduce((t, n) => t + ((n.direct || 0) === 0 ? n.total : 0), 0);
-    const viaPct = s.total > 0 ? (viaTotal / s.total) * 100 : 0;
-    const nameLine = (n) => {
-      const tag = (n.direct > 0 && n.total - n.direct > 0.5) ? 'held directly + in fund' : (n.direct > 0) ? 'held directly' : 'held only in fund';
-      const tagCol = tag === 'held directly' ? '#60a5fa' : tag === 'held only in fund' ? '#34d399' : '#fbbf24';
-      return `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0 2px 12px;font-size:10px">
-        <span style="color:var(--color-text-primary)">${esc(n.display)} <span style="font-size:8px;color:${tagCol}">${tag}</span></span>
-        <span style="color:var(--color-text-tertiary)">${fmtD(n.total)}</span>
-      </div>`;
-    };
-    return `<details${idx === 0 ? ' open' : ''} style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px">
-      <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none">
-        <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(s.label)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">${s.names.length} name${s.names.length > 1 ? 's' : ''}${viaPct >= 60 ? ' · mostly via funds' : ''}</span></span>
-        <strong style="font-size:12px;color:${s.pct >= 25 ? '#fbbf24' : 'var(--color-text-secondary)'}">${s.pct.toFixed(1)}% · ${fmtD(s.total)}</strong>
-      </summary>
-      <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--color-border-tertiary)">${s.names.map(nameLine).join('')}</div>
-    </details>`;
-  };
+  // (former sectorBlock list renderer removed — sectors now render as the compact chip grid below)
+
 
   // ---- The tagging UI (collapsed) — names ranked by exposure, untagged first within that ----
   const { rows } = computeTrueExposure();
@@ -13597,17 +13580,27 @@ function renderSectorPanel() {
         <button class="btn btn-sm" onclick="toggleSectorTag()" style="font-size:9px">${sectorTagExpanded ? 'Done tagging' : '🏷 Tag sectors' + (redCount ? ' (' + redCount + ' untagged)' : '')}</button>
       </div>
 
-      ${emptyHeldETFs.length ? `<div style="font-size:10px;color:var(--color-text-danger);background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.35);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:8px;line-height:1.5"><span style="font-weight:700">● ${emptyHeldETFs.join(', ')} — held ETF${emptyHeldETFs.length > 1 ? 's' : ''} with no holdings pasted.</span> Until you paste ${emptyHeldETFs.length > 1 ? 'their' : 'its'} holdings in the <strong>index look-through table (True Exposure tab)</strong>, the fund's underlying names are missing from true-exposure, clusters, and sectors entirely — a bigger gap than an untagged stock. ${emptyHeldETFs.length > 1 ? 'These' : 'This'} won't decompose until pasted.</div>` : ''}
-      ${redCount ? `<div style="font-size:10px;color:var(--color-text-danger);background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.35);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:8px;line-height:1.5"><span style="font-weight:700">● ${redCount} untagged position${redCount > 1 ? 's' : ''} with real exposure</span> — these carry meaningful dollars but have no sector, so they're missing from the analysis. Hit "Tag sectors" to fix; they sort to the top.</div>` : ''}
+      ${(() => {
+        // DIAGNOSTIC PANEL is this section's identity — "what should I check?" — NOT a concentration
+        // chart (that's the bar above). Lead with alerts when present; show a calm ✓ state when not.
+        // This status-driven shape is what makes the section unmistakable from the clusters bar.
+        const alerts = [];
+        if (emptyHeldETFs.length) alerts.push(`<div style="font-size:10px;color:var(--color-text-danger);line-height:1.5"><span style="font-weight:700">● ${emptyHeldETFs.join(', ')} — held ETF${emptyHeldETFs.length > 1 ? 's' : ''} with no holdings pasted.</span> Paste ${emptyHeldETFs.length > 1 ? 'their' : 'its'} holdings in the index look-through table (True Exposure tab) — until then ${emptyHeldETFs.length > 1 ? 'their' : 'its'} underlying names are missing from every view here.</div>`);
+        if (redCount) alerts.push(`<div style="font-size:10px;color:var(--color-text-danger);line-height:1.5"><span style="font-weight:700">● ${redCount} untagged position${redCount > 1 ? 's' : ''} with real exposure</span> — meaningful dollars with no sector, so they're missing from the breakdown. Hit "Tag sectors"; they sort to the top.</div>`);
+        if (hiddenNote) alerts.push(hiddenNote.replace(/<div[^>]*>/, '<div style="font-size:10px;color:#fbbf24;line-height:1.5">'));
+        if (alerts.length) {
+          return `<div style="background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.3);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:10px;display:flex;flex-direction:column;gap:7px">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-danger)">⚑ Check these — hidden or missing exposure</div>
+            ${alerts.join('')}
+          </div>`;
+        }
+        return `<div style="background:rgba(52,211,153,0.06);border:1px solid rgba(52,211,153,0.25);border-radius:var(--border-radius-md);padding:8px 11px;margin-bottom:10px;font-size:10px;color:#34d399"><span style="font-weight:700">✓ All material exposure is tagged and accounted for.</span> No untagged positions or undecomposed ETFs.</div>`;
+      })()}
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        Your book grouped by sector — a second lens that cuts across your themes to catch clusters scattered through your funds. ${aiCount > 0 ? `<span style="color:var(--color-text-secondary)">Claude pre-labeled ${aiCount} names as a first pass${verifyCount ? `, and flagged <span style="color:#fbbf24">${verifyCount} as "⚠ verify"</span> where it's unsure (international tickers, recent IPOs, ambiguous symbols)</span>` : ''}. Those are suggestions you can override; your own picks win.</span>` : `Sectors aren't guessed; untagged names show separately.`} <span style="color:var(--color-text-danger)">● red = untagged with real exposure</span> · <span style="color:#fbbf24">⚠ = tagged but unsure</span>. ${data.taggedPct < 100 ? `${data.taggedPct.toFixed(0)}% tagged — figures are a floor.` : ''}
+        This lens exists to catch what your theme view above can't: industry exposure hidden inside funds, untagged positions, and undecomposed ETFs — surfaced as the flags above. ${aiCount > 0 ? `Claude pre-labeled ${aiCount} names${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} flagged ⚠ verify</span>` : ''} — yours to override. ` : ''}The full sector ranking mostly echoes the bar above, so it's not shown; tag names below to keep the flags sharp. ${data.taggedPct < 100 ? `<span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged</span> — flags are a floor until the rest is tagged.` : ''}
       </div>
-
-      ${data.sectors.length ? hiddenNote : ''}
-      ${data.sectors.length ? (biggest ? `<div style="font-size:11px;color:var(--color-text-primary);margin-bottom:8px">Biggest sector: <strong>${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong>${data.excluded.total > 0 ? ` <span style="font-size:9px;color:var(--color-text-tertiary)">· ${fmtD(data.excluded.total)} cash/excluded</span>` : ''}</div>` : '') : `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">Nothing tagged yet.${aiCount === 0 ? ' Use the "Apply first pass" button below, or tag by hand.' : ''}</div>`}
-      ${data.sectors.map(sectorBlock).join('')}
-      ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px;padding:6px 0;border-top:1px dashed var(--color-border-tertiary)">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names). Tag the big ones to sharpen this.</div>` : ''}
+      ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names) — tag the big ones below.</div>` : ''}
 
       ${sectorTagExpanded ? `
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
