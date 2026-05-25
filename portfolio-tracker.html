@@ -12938,6 +12938,78 @@ function saveClusterOverrides(o) {
   try { localStorage.setItem('portfolio-cluster-overrides-v1', JSON.stringify(o)); } catch (e) {}
 }
 
+// ─────────────────────────────────────────────
+// SECTOR TAGGING — a SECOND lens, distinct from theme clusters. Themes = your investment bets;
+// sectors = a stable industry taxonomy you tag by hand (the tracker has only ticker+weight, no
+// sector data, and I will NOT supply sectors from my own knowledge — you provide them, the tool
+// reports them). Purpose: catch latent clusters hiding in your "diversified base" — e.g. grid/
+// electrical names scattered across GRID and VOO that read as base but are really a concentration.
+// The vocabulary is LOCKED with definitions + boundary rules baked in, so tagging doesn't drift over
+// time. Sectors are a property of the STOCK, so you tag each ticker once (keyed by canonical key)
+// and it applies across every fund. Honest floor: only covers names you've pasted holdings for.
+// ─────────────────────────────────────────────
+const SECTOR_VOCAB = [
+  { id: 'energy', label: 'Energy', blurb: 'Oil, gas, upstream/midstream — producers, drillers, pipelines, refiners (XOM, CVX, COP, SLB). NOT power utilities, NOT grid hardware. Test: pulls hydrocarbons out of the ground or moves/refines them.' },
+  { id: 'utilities', label: 'Utilities', blurb: 'Regulated power, water, gas distributors that bill end customers (NEE, DUK, SO, EOAN, National Grid). NOT the equipment makers. Test: a regulated entity that bills ratepayers.' },
+  { id: 'grid', label: 'Grid/Electrical Infrastructure', blurb: 'Equipment & engineering behind power — electrical components, grid hardware, electrification, EPC contractors (ETN, ABB, PWR, JCI, NVT, Prysmian). NOT the operating utility, NOT an oil producer. Test: makes or builds the physical electrical/grid kit. (Deliberate split to surface hidden grid concentration.)' },
+  { id: 'semis', label: 'Semiconductors', blurb: 'Chips and chip-making equipment — designers, foundries, fabless, semicap (NVDA, AVGO, AMD, TSM, ASML, LRCX, KLAC). Test: chips or chip-making tools specifically.' },
+  { id: 'bigtech', label: 'Big Tech / Software', blurb: 'Large-cap platform tech & software — enterprise/consumer software, cloud, internet platforms (MSFT, AAPL, AMZN, ORCL, CRM). Includes the ad-platform giants GOOGL & META — by GICS they\u2019re Communications, but they move with the mega-cap tech complex, so they live here in a moves-together taxonomy. NOT chips (Semiconductors), NOT telecom pipes.' },
+  { id: 'comms', label: 'Communications', blurb: 'Carriers, cable, and streaming/media (VZ, CHTR, NFLX, DIS). NOT GOOGL/META (those are Big Tech here). Test: sells connectivity or content, and moves with telecom/media rather than mega-cap tech.' },
+  { id: 'financials', label: 'Financials', blurb: 'Banks, insurers, asset managers, exchanges, payments (JPM, BAC, GS, BLK, V, MA, SPGI). Test: moves, lends, insures, or manages money.' },
+  { id: 'healthcare', label: 'Healthcare', blurb: 'Pharma, biotech, devices, payers, providers (JNJ, UNH, LLY, ABBV, TMO, ISRG). Test: treats, diagnoses, or insures health.' },
+  { id: 'industrials', label: 'Industrials', blurb: 'Machinery, transport, civil aerospace, building products, capital goods NOT electrical-grid-specific (CAT, HON, UPS, DE, CMI, JBHT). If it\u2019s electrical/grid kit it goes to Grid/Electrical, not here. Catch-all for the rest of capital goods.' },
+  { id: 'discretionary', label: 'Consumer Discretionary', blurb: 'Non-essential consumer spend — retail, autos, travel, restaurants, apparel (TSLA, HD, MCD, BKNG, NKE). Recession-sensitive demand. (TSLA/AMZN are judgment calls — Tesla here by GICS; Amazon spans retail + cloud.)' },
+  { id: 'staples', label: 'Consumer Staples', blurb: 'Essentials bought regardless of cycle — food, beverage, household, tobacco, grocers (PG, KO, WMT, COST, PM, MDLZ). Test: would people keep buying it in a recession.' },
+  { id: 'materials', label: 'Materials', blurb: 'Raw/processed inputs as COMPANIES — chemicals, mining/metals producers, packaging, construction materials (LIN, SHW, FCX, NEM). Royalty/streaming names (FNV, WPM) also here — they\u2019re equities with company risk even though they track commodity prices. NOT the commodity itself (that\u2019s Commodities/Metals).' },
+  { id: 'realestate', label: 'Real Estate', blurb: 'REITs and real-estate operators (PLD, AMT, EQIX, WELL, SPG, O). Test: owns/operates income property.' },
+  { id: 'defense', label: 'Defense/Aerospace', blurb: 'Military & aerospace primes and suppliers (LMT, RTX, NOC, GD, LHX, BA, HWM). NOT civil-only industrials. Test: defense/aerospace is its core market.' },
+  { id: 'commodities', label: 'Commodities/Metals', blurb: 'The commodity ITSELF — bullion, metal/commodity funds (GLD). NOT mining companies (those are Materials). Test: raw price exposure, not a business with equity risk.' },
+  { id: 'cash', label: 'Cash/Other (exclude)', blurb: 'Money-market funds, sweep vehicles, cash, anything not a real equity position (FGXXX and similar). Tagged here so it drops OUT of sector clusters rather than polluting one.' },
+];
+const SECTOR_BY_ID = Object.fromEntries(SECTOR_VOCAB.map(s => [s.id, s]));
+
+function loadSectorMap() {
+  try { const r = localStorage.getItem('portfolio-sector-map-v1'); return r ? JSON.parse(r) : {}; } catch (e) { return {}; }
+}
+function saveSectorMap(m) {
+  try { localStorage.setItem('portfolio-sector-map-v1', JSON.stringify(m)); } catch (e) {}
+}
+function setSectorTag(key, sectorId) {
+  const m = loadSectorMap();
+  if (!sectorId || sectorId === '__unset__') delete m[key]; else m[key] = sectorId;
+  saveSectorMap(m);
+  if (typeof renderSectorPanel === 'function') renderSectorPanel();
+}
+
+// Whole-book sector clustering. Every true-exposure name gets its sector from the user's sector map
+// (canonical-key lookup). Names tagged 'cash' are excluded. Untagged names are reported separately
+// (honest coverage), NOT silently dropped or guessed. Returns sectors ranked by $, plus untagged.
+function computeSectorClusters() {
+  const { rows } = computeTrueExposure();
+  const totalBook = rows.reduce((s, r) => s + r.total, 0);
+  const map = loadSectorMap();
+  const sectors = {};
+  let untagged = { total: 0, names: [] };
+  let excluded = { total: 0, names: [] };
+  rows.forEach(r => {
+    const sid = map[r.key];
+    if (!sid) { untagged.total += r.total; untagged.names.push({ display: r.display, total: r.total, key: r.key }); return; }
+    if (sid === 'cash') { excluded.total += r.total; excluded.names.push({ display: r.display, total: r.total, key: r.key }); return; }
+    if (!sectors[sid]) sectors[sid] = { id: sid, label: (SECTOR_BY_ID[sid] || {}).label || sid, total: 0, names: [] };
+    sectors[sid].total += r.total;
+    sectors[sid].names.push({ display: r.display, total: r.total, key: r.key, direct: r.direct, viaFunds: r.viaFunds });
+  });
+  const ranked = Object.values(sectors).map(s => ({
+    ...s, pct: totalBook > 0 ? (s.total / totalBook) * 100 : 0, names: s.names.sort((a, b) => b.total - a.total)
+  })).sort((a, b) => b.total - a.total);
+  return {
+    totalBook, sectors: ranked,
+    untagged: { ...untagged, pct: totalBook > 0 ? (untagged.total / totalBook) * 100 : 0, names: untagged.names.sort((a, b) => b.total - a.total) },
+    excluded: { ...excluded, pct: totalBook > 0 ? (excluded.total / totalBook) * 100 : 0 },
+    taggedPct: totalBook > 0 ? ((totalBook - untagged.total - excluded.total) / totalBook) * 100 : 0
+  };
+}
+
 function computeThemeClusters() {
   const { rows } = computeTrueExposure();
   const totalBook = rows.reduce((s, r) => s + r.total, 0);
@@ -13196,10 +13268,12 @@ function renderThemeUniverse() {
     </div>
     </details>
     <div id="theme-diversification-analysis" style="margin-top:18px"></div>
+    <div id="theme-sector-panel" style="margin-top:18px"></div>
     <div id="theme-discovery" style="margin-top:18px"></div>
     <div id="theme-bench-holdings-panel" style="margin-top:18px"></div>
   `;
   renderThemeClusters();
+  renderSectorPanel();
   renderThemeDiscovery();
   renderThemeBenchmarkPanel();
 }
@@ -13335,6 +13409,108 @@ function renderThemeClusters() {
           ${clusterEditExpanded ? data.base.names.slice(0, 40).map(nameLine).join('') : ''}
         </div>
       </details>` : ''}
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+// SECTOR PANEL (render) — the second lens. Shows your book grouped by the sectors YOU tagged, with
+// a headline that answers "what's hiding in my diversified base?" (e.g. a Grid/Electrical cluster
+// scattered across GRID and VOO). Includes a collapsed tagging UI: names ranked by true exposure so
+// you tag the few that matter first, each dropdown carrying the locked definition on hover so the
+// vocabulary never drifts. Untagged $ is reported honestly; nothing is sector-guessed.
+// ─────────────────────────────────────────────
+let sectorTagExpanded = false;
+function toggleSectorTag() { sectorTagExpanded = !sectorTagExpanded; renderSectorPanel(); }
+
+function renderSectorPanel() {
+  const host = document.getElementById('theme-sector-panel');
+  if (!host) return;
+  const data = computeSectorClusters();
+  const fmtD = (n) => fmtDollarWhole(n);
+
+  // The sector <select> for a name, with each option's definition as a title (hover) tooltip.
+  const sectorSelect = (key, current) => `
+    <select onchange="setSectorTag('${esc(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer">
+      <option value="__unset__"${!current ? ' selected' : ''}>— untagged —</option>
+      ${SECTOR_VOCAB.map(s => `<option value="${s.id}"${current === s.id ? ' selected' : ''} title="${esc(s.blurb)}">${esc(s.label)}</option>`).join('')}
+    </select>`;
+
+  // ---- The by-sector view (what your tags reveal) ----
+  const biggest = data.sectors[0];
+  // "Hidden in base" insight: if a sector is substantially made of names that are NOT direct
+  // positions (i.e. they came via funds / would otherwise be "base"), call it out.
+  let hiddenNote = '';
+  if (data.sectors.length) {
+    const viaHeavy = data.sectors.find(s => {
+      const viaTotal = s.names.reduce((t, n) => t + ((n.direct || 0) === 0 ? n.total : 0), 0);
+      return viaTotal / s.total > 0.6 && s.pct >= 2; // mostly fund-embedded AND material
+    });
+    if (viaHeavy) {
+      const viaTotal = viaHeavy.names.reduce((t, n) => t + ((n.direct || 0) === 0 ? n.total : 0), 0);
+      hiddenNote = `<div style="font-size:10px;color:#fbbf24;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.4);border-radius:var(--border-radius-md);padding:8px 10px;margin:8px 0;line-height:1.5">⚠ <strong>${esc(viaHeavy.label)}</strong> is ${viaHeavy.pct.toFixed(1)}% of your book but ${fmtD(viaTotal)} of it is held only <em>inside funds</em> — it doesn\u2019t show up as positions you\u2019d recognize. This is the kind of latent cluster (scattered across funds like GRID/VOO) that "diversified base" was hiding.</div>`;
+    }
+  }
+
+  const sectorBlock = (s, idx) => {
+    const viaTotal = s.names.reduce((t, n) => t + ((n.direct || 0) === 0 ? n.total : 0), 0);
+    const viaPct = s.total > 0 ? (viaTotal / s.total) * 100 : 0;
+    const nameLine = (n) => {
+      const tag = (n.direct > 0 && n.total - n.direct > 0.5) ? 'both' : (n.direct > 0) ? 'direct' : 'via-fund';
+      const tagCol = tag === 'direct' ? '#60a5fa' : tag === 'via-fund' ? '#34d399' : '#fbbf24';
+      return `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0 2px 12px;font-size:10px">
+        <span style="color:var(--color-text-primary)">${esc(n.display)} <span style="font-size:8px;color:${tagCol}">${tag}</span></span>
+        <span style="color:var(--color-text-tertiary)">${fmtD(n.total)}</span>
+      </div>`;
+    };
+    return `<details${idx === 0 ? ' open' : ''} style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px">
+      <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none">
+        <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(s.label)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">${s.names.length} name${s.names.length > 1 ? 's' : ''}${viaPct >= 60 ? ' · mostly via funds' : ''}</span></span>
+        <strong style="font-size:12px;color:${s.pct >= 25 ? '#fbbf24' : 'var(--color-text-secondary)'}">${s.pct.toFixed(1)}% · ${fmtD(s.total)}</strong>
+      </summary>
+      <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--color-border-tertiary)">${s.names.map(nameLine).join('')}</div>
+    </details>`;
+  };
+
+  // ---- The tagging UI (collapsed) — names ranked by exposure, untagged first within that ----
+  const { rows } = computeTrueExposure();
+  const map = loadSectorMap();
+  const tagRows = rows.slice().sort((a, b) => {
+    const au = map[a.key] ? 1 : 0, bu = map[b.key] ? 1 : 0; // untagged first
+    if (au !== bu) return au - bu;
+    return b.total - a.total;
+  });
+  const TAG_CAP = 40;
+  const tagShown = tagRows.slice(0, TAG_CAP);
+  const untaggedCount = rows.filter(r => !map[r.key]).length;
+
+  const tagLine = (r) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--color-border-tertiary);font-size:10px">
+    <span style="color:var(--color-text-primary)">${esc(r.display)} <span style="font-size:8px;color:var(--color-text-tertiary)">${fmtD(r.total)}</span></span>
+    ${sectorSelect(r.key, map[r.key])}
+  </div>`;
+
+  host.innerHTML = `
+    <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">By sector — what's hiding in your funds</div>
+        <button class="btn btn-sm" onclick="toggleSectorTag()" style="font-size:9px">${sectorTagExpanded ? 'Done tagging' : '🏷 Tag sectors' + (untaggedCount ? ' (' + untaggedCount + ' untagged)' : '')}</button>
+      </div>
+
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
+        Your book grouped by the sectors <strong>you tagged</strong> — a second lens that cuts across your themes to catch clusters scattered through your funds. Sectors aren't guessed; untagged names are shown separately. ${data.taggedPct < 100 ? `<span style="color:#fbbf24">Only ${data.taggedPct.toFixed(0)}% tagged so far — figures are a floor.</span>` : ''} Coverage is also bounded by pasted holdings, like everything else here.
+      </div>
+
+      ${data.sectors.length ? hiddenNote : ''}
+      ${data.sectors.length ? (biggest ? `<div style="font-size:11px;color:var(--color-text-primary);margin-bottom:8px">Biggest sector: <strong>${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong>${data.excluded.total > 0 ? ` <span style="font-size:9px;color:var(--color-text-tertiary)">· ${fmtD(data.excluded.total)} cash/excluded</span>` : ''}</div>` : '') : `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">Nothing tagged yet — hit "Tag sectors" and start with the largest names; the grid/utility cluster you suspected will show up here once those names are tagged.</div>`}
+      ${data.sectors.map(sectorBlock).join('')}
+      ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px;padding:6px 0;border-top:1px dashed var(--color-border-tertiary)">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names). Tag the big ones to sharpen this — the small tail barely moves it.</div>` : ''}
+
+      ${sectorTagExpanded ? `
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
+        <div style="font-size:10px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Tag sectors — biggest / untagged first</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">Tag each name once; it applies everywhere that name appears. Hover any sector option to see its definition (the locked rules — e.g. GOOGL/META = Big Tech, mining company = Materials but the metal itself = Commodities). You only need the top ~15-20 to cover most of your book; the rest is tiny.</div>
+        ${tagShown.map(tagLine).join('')}
+        ${rows.length > TAG_CAP ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Showing top ${TAG_CAP} by exposure. The remaining ${rows.length - TAG_CAP} are small slivers — tag only if you want completeness.</div>` : ''}
+      </div>` : ''}
     </div>`;
 }
 
