@@ -14494,14 +14494,26 @@ Rules:
 - Do NOT give a verdict, score, lean, or recommendation on the book or any ticker. If a conclusion forms, convert it to a condition under "What to pressure-test."
 - Label every claim's basis: FROM INPUTS (restates/arithmetically follows from the facts above), [inference] (your reasoning ON the inputs, no outside facts), or EXTERNAL (any real-world fact not above — what a company does, sector, market cap, competitors, prices). EXTERNAL facts are UNVERIFIED — put them ONLY in a "CLAIMS TO VERIFY" section, each tagged ⚠UNVERIFIED. Never state an external fact inline as if it were given.
 - A fund/theme label is a STRUCTURAL tag (where a name sits in the user's holdings), NOT a license to assert what the business does.
+- THE FACTS ABOVE ARE THE COMPLETE INPUT. Critical limits on what you may treat as FROM INPUTS:
+  • TICKERS: Only ticker symbols that appear VERBATIM in the facts above are known holdings. Do NOT name any other specific ticker as if it were a holding — not even ones you'd expect to be in a theme (e.g. do not assert the user holds "NVDA, AVGO, AMD" in their Semiconductors theme just because those are typical constituents). If you name a ticker not listed above, it is an EXTERNAL guess and belongs in CLAIMS TO VERIFY, tagged ⚠UNVERIFIED — never inline as FROM INPUTS.
+  • COUNTS, NOT NAMES: Each theme line gives a name COUNT and at most a few example names. The unlisted names are NOT provided — do not invent them or characterize them.
+  • ABSENCES: You may note that an asset class or theme is "not listed in the inputs," but do NOT assert the user definitively holds NONE of it — the facts list themes that EXIST, it does not enumerate everything absent. Phrase gaps as "not visible in the computed themes" rather than "the book has no X." This is an [inference] about the inputs, not a FROM INPUTS fact.
+  • RISK FIGURES: maxDD/vol/return numbers exist ONLY for the selected discovery tickers explicitly listed with them. Do not state risk figures for any book holding (none were provided) or for an unfetched candidate.
 
-Output in three sections:
+Output in four sections:
 1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few independent bets, any theme resting on one name). FROM INPUTS, plainly stated.
 2. GAPS & BLIND SPOTS — where the book is thin, absent, or exposed. This is the part that should generate ideas the user takes to a full evaluation.
 3. SELECTED CANDIDATES vs THE GAPS — for each selected discovery ticker: does it ADDRESS a gap or DEEPEN an existing concentration? How would it move true exposure? What would the user need to pressure-test in a full New Position Evaluation? Be willing to say a selected name is a poor structural fit. If none selected, say so and skip.
+4. DIRECTIONS WORTH EXPLORING — turn the gaps and concentrations above into QUESTIONS to investigate, not actions to take. THIS IS THE MOST DELICATE SECTION — strict rules:
+   • You are NOT giving advice. Each item is a QUESTION or a DIRECTION TO INVESTIGATE that the user takes to their New Position Evaluation process — never an instruction.
+   • FORBIDDEN: any imperative or recommendation to buy, sell, add, trim, reduce, increase, rebalance, hedge, or allocate. Do NOT write "add X", "trim Y", "consider buying", "you should", "reduce your Tech weight". If you catch yourself writing a directive, rewrite it as the open QUESTION behind it.
+   • ALLOWED framing: "The question to take to evaluation is whether…", "Worth investigating: does…", "An open question this raises:…", "If [gap] concerns you, the thing to pressure-test is…".
+   • For each GAP: pose the question of what filling it would actually require and the trap to check (e.g. whether a candidate already comes via the user's funds, so a direct add would concentrate not diversify).
+   • For CONCENTRATION: pose the rebalancing QUESTION it raises — e.g. "with ~X% in two correlated themes, the question is what genuinely uncorrelated exposure looks like, and whether [the user's selected tickers] provide it or just add correlated beta." Tie this explicitly to the SELECTED discovery tickers where relevant — frame whether those specific clicked names move toward or away from the concentration, as a question, not a verdict.
+   • Every item ends pointing to the next step: this is candidate-generation; the actual decision happens in New Position Evaluation, not here.
 End with CLAIMS TO VERIFY (the ⚠UNVERIFIED external facts you leaned on, if any).
 
-Keep it tight and scannable. The checkable structure facts are already on the user's screen — your value is the gaps and the candidate screen, not restating every number.`;
+Keep it tight and scannable. The checkable structure facts are already on the user's screen — your value is the gaps, the candidate screen, and the questions to explore, not restating every number.`;
 }
 
 async function runBookAiReview() {
@@ -14589,7 +14601,7 @@ function renderThemeAiReview() {
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
       <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI book review — structure, gaps, and your selected candidates</div>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        A one-shot read of your whole book: what's already visible in the structure, where the gaps are, and how your ${selCount} selected discovery ticker${selCount === 1 ? '' : 's'} ${selCount === 1 ? 'lands' : 'land'} against those gaps (each judged as a hypothesis — may fit or may double-down). Observations only — it hands candidates to New Position Evaluation, it doesn't evaluate or recommend.
+        A one-shot read of your whole book: what's already visible in the structure, where the gaps are, how your ${selCount} selected discovery ticker${selCount === 1 ? '' : 's'} ${selCount === 1 ? 'lands' : 'land'} against those gaps (each judged as a hypothesis — may fit or may double-down), and the open questions worth taking to a full evaluation. Observations and questions only — it hands candidates to New Position Evaluation, it doesn't evaluate, recommend, or tell you to buy/sell/rebalance.
         ${selCount === 0 ? '<br><span style="color:#fbbf24">No discovery tickers selected — it\'ll review the book\'s own gaps. Click names in Discovery above to have them screened against your gaps.</span>' : ''}
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
