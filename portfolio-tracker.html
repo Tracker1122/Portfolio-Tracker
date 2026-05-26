@@ -1700,8 +1700,29 @@
       <select class="modal-input" id="edit-closed-theme" style="width:220px"></select>
       <div id="edit-closed-theme-hint" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
       <div id="edit-closed-rebench-row" style="margin-top:6px;display:none">
-        <button class="btn btn-sm" id="edit-closed-rebench-btn" onclick="rebenchmarkClosedToTheme()" style="font-size:10px;padding:4px 10px" title="Refetch this lot's benchmark prices for the selected theme's benchmark, on its actual buy and sell dates, and re-anchor theme alpha to it. Overwrites the frozen benchmark measurement — this is a deliberate re-measurement, not a label change.">⟳ Re-measure vs <span id="edit-closed-rebench-ticker">—</span></button>
+        <button class="btn btn-sm" id="edit-closed-rebench-btn" onclick="rebenchmarkClosedToTheme()" style="font-size:10px;padding:4px 10px" title="Fetch this lot's benchmark prices for the selected theme's benchmark on its actual buy and sell dates, show them for you to verify, then re-anchor theme alpha. Overwrites the frozen benchmark measurement — a deliberate re-measurement, not a label change.">⟳ Re-measure vs <span id="edit-closed-rebench-ticker">—</span></button>
         <div id="edit-closed-rebench-status" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+        <!-- Verify-before-save panel: prices are SHOWN here (fetched or blank), editable, and not
+             written until Confirm. Auto-fetch is a convenience, not a source of truth — verify each
+             against an external source (the fetch has been observed to return wrong adjusted closes). -->
+        <div id="edit-closed-rebench-verify" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid #f59e0b;border-radius:var(--border-radius-md);background:rgba(245,158,11,0.08)">
+          <div style="font-size:10px;color:#f59e0b;font-weight:600;margin-bottom:6px">Verify before saving — confirm or correct each price against an external source (e.g. Yahoo, <em>adjusted</em> close):</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <div>
+              <label class="modal-label" style="font-size:9px"><span id="edit-closed-rebench-bench-a">SMH</span> at BUY (<span id="edit-closed-rebench-buydate">—</span>) $</label>
+              <input class="modal-input" id="edit-closed-rebench-buypx" type="number" min="0" step="0.0001" style="width:130px">
+            </div>
+            <div>
+              <label class="modal-label" style="font-size:9px"><span id="edit-closed-rebench-bench-b">SMH</span> at SALE (<span id="edit-closed-rebench-selldate">—</span>) $</label>
+              <input class="modal-input" id="edit-closed-rebench-sellpx" type="number" min="0" step="0.0001" style="width:130px">
+            </div>
+          </div>
+          <div id="edit-closed-rebench-preview" style="font-size:10px;color:var(--color-text-tertiary);margin-top:6px"></div>
+          <div style="margin-top:8px;display:flex;gap:8px">
+            <button class="btn btn-sm btn-primary" onclick="commitRebenchmark()" style="font-size:10px;padding:4px 12px">Confirm &amp; save</button>
+            <button class="btn btn-sm" onclick="cancelRebenchmark()" style="font-size:10px;padding:4px 12px">Cancel</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="modal-field">
@@ -16342,6 +16363,12 @@ function openEditClosedPositionModal(posId) {
   const p = positions.find(pos => pos.id === posId);
   if (!p || !p.closed) return;
   _editClosedPositionId = posId;
+  // Fresh start: clear any pending re-measure and hide the verify panel + its stale status.
+  _pendingRebench = null;
+  const _v = document.getElementById('edit-closed-rebench-verify');
+  if (_v) _v.style.display = 'none';
+  const _st = document.getElementById('edit-closed-rebench-status');
+  if (_st) _st.textContent = '';
 
   const modal = document.getElementById('edit-closed-position-modal');
   const subtitle = document.getElementById('edit-closed-subtitle');
@@ -16427,6 +16454,10 @@ function openEditClosedPositionModal(posId) {
 function closeEditClosedPositionModal() {
   document.getElementById('edit-closed-position-modal').classList.add('hidden');
   _editClosedPositionId = null;
+  // Clear any in-progress re-measure so a stale verify panel can't carry to the next lot.
+  _pendingRebench = null;
+  const v = document.getElementById('edit-closed-rebench-verify');
+  if (v) v.style.display = 'none';
 }
 
 function confirmEditClosedPosition() {
@@ -16505,6 +16536,11 @@ function confirmEditClosedPosition() {
 //      accepts pasted prices.
 // ATOMIC: both prices must be obtained or nothing is written. This overwrites frozen
 // historical measurement on purpose — it is a re-measurement, gated behind a clear confirm.
+// Pending re-measure context — set by rebenchmarkClosedToTheme (fetch phase), consumed by
+// commitRebenchmark (write phase). Holds nothing sensitive; cleared on cancel/commit/modal-close.
+let _pendingRebench = null;
+
+// PHASE 1 — fetch (if a key exists) and POPULATE the verify panel. Writes nothing.
 async function rebenchmarkClosedToTheme() {
   if (_editClosedPositionId === null) return;
   const p = positions.find(pos => pos.id === _editClosedPositionId);
@@ -16513,7 +16549,6 @@ async function rebenchmarkClosedToTheme() {
   const statusEl = document.getElementById('edit-closed-rebench-status');
   const setStatus = (msg, color) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color || 'var(--color-text-tertiary)'; } };
 
-  // Target benchmark = the benchmark of the theme currently selected in the dropdown.
   const chosenTheme = document.getElementById('edit-closed-theme').value
     ? canonicalThemeName(document.getElementById('edit-closed-theme').value)
     : p.theme;
@@ -16524,67 +16559,106 @@ async function rebenchmarkClosedToTheme() {
   const buyDate = p.dateBought, sellDate = p.sellDate;
   if (!buyDate || !sellDate) { setStatus('This lot is missing a buy or sell date — cannot anchor historical prices.', '#fbbf24'); return; }
 
-  // Confirm — this overwrites a committed measurement.
-  const ok = confirm(
-    'Re-measure this closed ' + (p.ticker || '') + ' lot against ' + newBench + '?\n\n'
-    + 'This OVERWRITES the frozen benchmark prices (currently ' + (p.benchmarkAtBuy || 'none')
-    + ' at ' + (p.benchmarkPriceAtBuy != null ? p.benchmarkPriceAtBuy : '—')
-    + ' / ' + (p.benchmarkPriceAtSell != null ? p.benchmarkPriceAtSell : '—') + ').\n'
-    + 'Realized theme alpha for this lot will be recomputed vs ' + newBench + '.\n\n'
-    + 'You will need ' + newBench + "'s closing price on:\n"
-    + '  • buy  ' + buyDate + '\n'
-    + '  • sell ' + sellDate + '\n\n'
-    + 'OK to proceed.'
-  );
-  if (!ok) return;
+  // Stash context for the commit phase.
+  _pendingRebench = { posId: p.id, newBench, buyDate, sellDate };
 
-  // Acquire the two prices.
-  let buyPx = null, sellPx = null, buyDateUsed = buyDate, sellDateUsed = sellDate, source = '';
+  // Reveal and label the verify panel.
+  const verify = document.getElementById('edit-closed-rebench-verify');
+  document.getElementById('edit-closed-rebench-bench-a').textContent = newBench;
+  document.getElementById('edit-closed-rebench-bench-b').textContent = newBench;
+  document.getElementById('edit-closed-rebench-buydate').textContent = buyDate;
+  document.getElementById('edit-closed-rebench-selldate').textContent = sellDate;
+  const buyInput = document.getElementById('edit-closed-rebench-buypx');
+  const sellInput = document.getElementById('edit-closed-rebench-sellpx');
+  buyInput.value = ''; sellInput.value = '';
+  buyInput.oninput = updateRebenchPreview;
+  sellInput.oninput = updateRebenchPreview;
+  verify.style.display = 'block';
 
+  // Try to PRE-FILL from Polygon (convenience only). Whatever comes back is shown for the user to
+  // verify/override — it is NOT trusted or written. A wrong fetch (observed for SMH) is now visible.
   const haveKey = (typeof polygonKey !== 'undefined' && polygonKey);
   if (haveKey) {
-    setStatus('Fetching ' + newBench + ' on ' + buyDate + ' and ' + sellDate + ' via Polygon…', '#fbbf24');
+    setStatus('Fetching ' + newBench + ' for ' + buyDate + ' and ' + sellDate + ' (verify before saving)…', '#fbbf24');
     try {
       const b = await fetchHistoricalNearby(newBench, buyDate);
       const s = await fetchHistoricalNearby(newBench, sellDate);
-      if (b.price !== null && s.price !== null) {
-        buyPx = b.price; sellPx = s.price; buyDateUsed = b.dateUsed; sellDateUsed = s.dateUsed; source = 'Polygon';
-      } else {
-        setStatus('Auto-fetch failed (' + ((b.error || s.error) || 'no data') + '). Falling back to manual entry…', '#fbbf24');
-      }
+      // Guard: if the modal moved on (user closed it or started another) abort silently.
+      if (!_pendingRebench || _pendingRebench.posId !== p.id) return;
+      if (b.price !== null) { buyInput.value = b.price; _pendingRebench.buyDateUsed = b.dateUsed; }
+      if (s.price !== null) { sellInput.value = s.price; _pendingRebench.sellDateUsed = s.dateUsed; }
+      const notes = [];
+      if (b.dateUsed && b.dateUsed !== buyDate) notes.push('buy used nearest trading day ' + b.dateUsed);
+      if (s.dateUsed && s.dateUsed !== sellDate) notes.push('sale used nearest trading day ' + s.dateUsed);
+      if (b.price === null || s.price === null) notes.push('one or both fetches returned nothing — enter manually');
+      setStatus('Pre-filled from Polygon (verify each against an external source before saving). '
+        + (notes.length ? notes.join('; ') + '.' : ''), '#fbbf24');
     } catch (e) {
-      setStatus('Auto-fetch error (' + (e.message || e) + '). Falling back to manual entry…', '#fbbf24');
+      if (!_pendingRebench || _pendingRebench.posId !== p.id) return;
+      setStatus('Auto-fetch error (' + (e.message || e) + '). Enter both prices manually below.', '#fbbf24');
     }
+  } else {
+    setStatus('No Polygon key set — look up ' + newBench + "'s adjusted close for both dates (Yahoo, etc.) and enter them below.", 'var(--color-text-tertiary)');
+  }
+  updateRebenchPreview();
+}
+
+// Live preview of the resulting theme alpha as the user edits the two price fields.
+function updateRebenchPreview() {
+  if (!_pendingRebench) return;
+  const previewEl = document.getElementById('edit-closed-rebench-preview');
+  if (!previewEl) return;
+  const p = positions.find(pos => pos.id === _pendingRebench.posId);
+  if (!p) { previewEl.textContent = ''; return; }
+  const buyPx = parseFloat(document.getElementById('edit-closed-rebench-buypx').value);
+  const sellPx = parseFloat(document.getElementById('edit-closed-rebench-sellpx').value);
+  if (!isFinite(buyPx) || buyPx <= 0 || !isFinite(sellPx) || sellPx <= 0) { previewEl.textContent = 'Enter both prices to preview the resulting alpha.'; return; }
+  const paid = parseFloat(p.pricePaid) || 0, exit = parseFloat(p.exitPrice) || 0;
+  if (paid <= 0 || exit <= 0) { previewEl.textContent = ''; return; }
+  const yourRet = (exit - paid) / paid * 100;
+  const benchRet = (sellPx - buyPx) / buyPx * 100;
+  const alpha = yourRet - benchRet;
+  previewEl.innerHTML = `Preview: ${_pendingRebench.newBench} ${buyPx} → ${sellPx} = ${(benchRet >= 0 ? '+' : '') + benchRet.toFixed(1)}%; `
+    + `your return ${(yourRet >= 0 ? '+' : '') + yourRet.toFixed(1)}% → theme alpha <strong>${(alpha >= 0 ? '+' : '') + alpha.toFixed(1)}pp vs ${_pendingRebench.newBench}</strong>.`;
+}
+
+// PHASE 2 — validate the (possibly user-corrected) prices and WRITE. Atomic.
+function commitRebenchmark() {
+  if (!_pendingRebench) return;
+  const p = positions.find(pos => pos.id === _pendingRebench.posId);
+  const statusEl = document.getElementById('edit-closed-rebench-status');
+  const setStatus = (msg, color) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color || 'var(--color-text-tertiary)'; } };
+  if (!p) { cancelRebenchmark(); return; }
+
+  const buyPx = parseFloat(document.getElementById('edit-closed-rebench-buypx').value);
+  const sellPx = parseFloat(document.getElementById('edit-closed-rebench-sellpx').value);
+  if (!isFinite(buyPx) || buyPx <= 0 || !isFinite(sellPx) || sellPx <= 0) {
+    setStatus('Both prices must be valid positive numbers before saving.', '#f87171'); return;
   }
 
-  // Manual fallback (no key, or fetch failed). Prompt for each price; accept blank = abort.
-  if (buyPx === null || sellPx === null) {
-    const bIn = prompt(newBench + ' closing price on the BUY date (' + buyDate + ')?\n'
-      + 'Look it up on Yahoo Finance / Google Finance for ' + newBench + ' on ' + buyDate
-      + '. Leave blank to cancel.', '');
-    if (bIn === null || bIn.trim() === '') { setStatus('Cancelled — no changes made.', 'var(--color-text-tertiary)'); return; }
-    const sIn = prompt(newBench + ' closing price on the SELL date (' + sellDate + ')?\n'
-      + 'Leave blank to cancel.', '');
-    if (sIn === null || sIn.trim() === '') { setStatus('Cancelled — no changes made.', 'var(--color-text-tertiary)'); return; }
-    const bn = parseFloat(bIn), sn = parseFloat(sIn);
-    if (!isFinite(bn) || bn <= 0 || !isFinite(sn) || sn <= 0) { setStatus('Those prices were not valid positive numbers — no changes made.', '#f87171'); return; }
-    buyPx = bn; sellPx = sn; source = 'manual entry';
-  }
-
-  // ATOMIC write — only now that BOTH prices exist.
+  const newBench = _pendingRebench.newBench;
+  // ATOMIC write — both values present and validated.
   p.benchmarkAtBuy = newBench;
   p.benchmarkPriceAtBuy = buyPx;
   p.benchmarkPriceAtSell = sellPx;
 
   const ta = (typeof calcThemeAlpha === 'function') ? calcThemeAlpha(p) : null;
   const alphaStr = ta ? (ta.themeAlphaPct >= 0 ? '+' : '') + ta.themeAlphaPct.toFixed(1) + 'pp vs ' + newBench : '(not computable)';
-  setStatus('Re-measured vs ' + newBench + ' (' + source + '): '
-    + newBench + ' ' + buyPx + ' → ' + sellPx + '. New theme alpha: ' + alphaStr
-    + (buyDateUsed !== buyDate || sellDateUsed !== sellDate ? ' [nearest trading days: ' + buyDateUsed + ' / ' + sellDateUsed + ']' : ''), 'var(--color-text-success)');
+  setStatus('Saved: re-measured vs ' + newBench + ' (' + newBench + ' ' + buyPx + ' → ' + sellPx + '). Theme alpha: ' + alphaStr + '.', 'var(--color-text-success)');
 
+  document.getElementById('edit-closed-rebench-verify').style.display = 'none';
+  _pendingRebench = null;
   renderAll();
   scheduleSave();
   if (typeof runSelfChecks === 'function') { try { runSelfChecks(); } catch (e) {} }
+}
+
+function cancelRebenchmark() {
+  _pendingRebench = null;
+  const v = document.getElementById('edit-closed-rebench-verify');
+  if (v) v.style.display = 'none';
+  const statusEl = document.getElementById('edit-closed-rebench-status');
+  if (statusEl) { statusEl.textContent = 'Cancelled — no changes made.'; statusEl.style.color = 'var(--color-text-tertiary)'; }
 }
 
 function deletePeDeal(id) {
