@@ -3382,7 +3382,7 @@ function renderBookExcludePanel(openArr) {
     </div>
     ${bar}
     ${legend}
-    <details ${bookExclude.tickers.size ? 'open' : ''} style="font-size:12px;margin-top:10px;border-top:1px solid var(--color-border-tertiary);padding-top:8px">
+    <details open style="font-size:12px;margin-top:10px;border-top:1px solid var(--color-border-tertiary);padding-top:8px">
       <summary style="cursor:pointer;color:var(--color-text-tertiary);font-size:11px;padding:2px 0">
         Or turn off a single holding ${bookExclude.tickers.size ? `(${bookExclude.tickers.size} off)` : ''}
       </summary>
