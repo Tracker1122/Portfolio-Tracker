@@ -1305,6 +1305,8 @@
 
     <!-- Closed Positions -->
     <div class="section-heading">Closed Positions</div>
+    <!-- Split-benchmark note: same ticker, multiple closed lots measured vs different benchmarks (filled by renderSplitBenchmarkNote) -->
+    <div id="closed-split-benchmark-note" style="display:none;font-size:10px;color:var(--color-text-secondary);background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.3);border-radius:var(--border-radius-md);padding:6px 10px;margin-bottom:10px;line-height:1.5"></div>
     <div class="summary-grid" id="closed-summary"></div>
     <div class="table-wrapper" id="closed-table-wrapper">
       <table>
@@ -5401,6 +5403,49 @@ function renderDivergenceBanner() {
   if (openOnes.length) parts.push(`<div style="margin-top:4px"><strong>Open (${openOnes.length}):</strong> ${fmtList(openOnes)} — re-tag the theme, or it stays measured against the old benchmark.</div>`);
   if (closedOnes.length) parts.push(`<div style="margin-top:4px"><strong>Closed (${closedOnes.length}):</strong> ${fmtList(closedOnes)} — realized alpha is frozen against the old benchmark. Open the ✎ edit modal to re-measure, or leave as-is if the tag is just a thesis label.</div>`);
   el.innerHTML = `⚠ <strong>${flagged.length} position${flagged.length === 1 ? '' : 's'} where the theme tag and the benchmark used don't line up.</strong> The ⚠ next to each ticker marks them.` + parts.join('');
+  el.style.display = 'block';
+}
+
+// Cross-lot consistency: a SINGLE ticker whose CLOSED lots are measured against DIFFERENT
+// benchmarks (because they carry different themes). Each lot may be perfectly aligned on its own
+// (so the per-lot ⚠ stays silent), but the ticker's realized track record is split across two
+// benchmarks — e.g. ORCL: one lot scored vs QQQ (Big Tech), another vs SMH (AI Infrastructure).
+// This is allowed (you may genuinely have held the same name under different theses at different
+// times), so it's an INFORMATIONAL note, not an error — surfaced at the top of the Closed card.
+function findSplitBenchmarkTickers() {
+  const byTicker = {};
+  positions.filter(p => p.closed && p.ticker).forEach(p => {
+    const t = p.ticker.toUpperCase();
+    if (!byTicker[t]) byTicker[t] = [];
+    if (p.benchmarkAtBuy) byTicker[t].push({ theme: p.theme || '(untagged)', bench: p.benchmarkAtBuy });
+  });
+  const out = [];
+  for (const [ticker, lots] of Object.entries(byTicker)) {
+    const benches = [...new Set(lots.map(l => l.bench))];
+    if (benches.length > 1) {
+      // Pair each distinct benchmark with the theme(s) that produced it, for the note.
+      const byBench = {};
+      lots.forEach(l => { (byBench[l.bench] = byBench[l.bench] || new Set()).add(l.theme); });
+      out.push({ ticker, benches, byBench });
+    }
+  }
+  return out;
+}
+
+function renderSplitBenchmarkNote() {
+  const el = document.getElementById('closed-split-benchmark-note');
+  if (!el) return;
+  const splits = findSplitBenchmarkTickers();
+  if (splits.length === 0) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const lines = splits.map(s => {
+    const detail = s.benches.map(b => {
+      const themes = [...s.byBench[b]].join(', ');
+      return `<strong>${esc(b)}</strong> (${esc(themes)})`;
+    }).join(' and ');
+    return `<strong>${esc(s.ticker)}</strong>: closed lots measured against ${detail}`;
+  });
+  el.innerHTML = `ℹ Same ticker, split benchmark — ${lines.join('; ')}. `
+    + `Each lot is internally consistent; just note this ticker's realized track record isn't scored against a single benchmark.`;
   el.style.display = 'block';
 }
 //
@@ -16723,6 +16768,7 @@ function renderAll() {
   // reported to diagnostics and the remaining panels still render.
   safeRender('renderSummary(open)', () => renderSummary('open-summary', open, true));
   safeRender('renderSummary(closed)', () => renderSummary('closed-summary', closed, false));
+  safeRender('renderSplitBenchmarkNote', renderSplitBenchmarkNote);
   safeRender('renderBookExcludePanel', () => renderBookExcludePanel(open));
   safeRender('renderTrimWatch', renderTrimWatch);
   safeRender('renderAddWatch', renderAddWatch);
