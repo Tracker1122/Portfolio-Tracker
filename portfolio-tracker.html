@@ -1350,6 +1350,8 @@
     <div class="section-heading">True Exposure — Full Breakdown</div>
     <div id="distribution-content"></div>
 
+    <div id="distribution-fund-perf"></div>
+
     <details id="lookthrough-details" style="margin-top:28px;border-top:1px solid var(--color-border-tertiary);padding-top:12px">
       <summary id="lookthrough-summary" style="font-size:11px;color:var(--color-text-secondary);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Index look-through tables (advanced)</summary>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin:8px 0">
@@ -1360,8 +1362,6 @@
       </div>
       <div id="qr-index-editor"></div>
     </details>
-
-    <div id="distribution-fund-perf"></div>
   </div><!-- end tab-distribution -->
 
   <!-- Analysis and Performance Tab -->
@@ -7181,9 +7181,9 @@ function renderDistributionTab() {
       </div>
     </details>`;
 
-  // Fund/ETF performance renders into its OWN div, which sits AFTER the look-through editor
-  // in the tab markup — so the look-through tables (and their new-ETF caution flag) always
-  // appear above fund performance and can't get lost at the very bottom.
+  // Fund/ETF performance renders into its OWN div, which now sits BEFORE the look-through editor
+  // in the tab markup — fund performance is the day-to-day view; look-through tables are only
+  // touched when adding a new ETF, so they live below as a collapsed "advanced" section.
   const fundPerfEl = document.getElementById('distribution-fund-perf');
   if (fundPerfEl) {
     fundPerfEl.innerHTML = `
