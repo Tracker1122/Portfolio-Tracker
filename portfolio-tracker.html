@@ -1647,7 +1647,7 @@
     </div>
     <div class="modal-field">
       <label class="modal-label">Price paid per share</label>
-      <input class="modal-input" id="add-voo-price" type="number" min="0" step="0.01" placeholder="e.g. 651.30" style="width:140px">
+      <input class="modal-input" id="add-voo-price" type="number" min="0" step="0.01" placeholder="e.g. 600.00" style="width:140px">
     </div>
     <div class="modal-field">
       <label class="modal-label">Account</label>
@@ -2174,6 +2174,29 @@
 
 <script>
 // ─────────────────────────────────────────────
+// Global error surfacing. The app is a single large script holding real financial data; an uncaught
+// error (a malformed legacy position, a bad edit) would otherwise leave a blank/half-rendered tab with
+// nothing shown. This pins a visible, dismissable banner so a failure is never silent. It does NOT try
+// to recover — it just makes the failure legible so the user knows to reload / restore a backup.
+(function () {
+  function showGlobalError(msg) {
+    try {
+      let bar = document.getElementById('global-error-bar');
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'global-error-bar';
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#7f1d1d;color:#fff;font:13px/1.5 system-ui,sans-serif;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.4)';
+        document.addEventListener('DOMContentLoaded', () => { if (bar && !bar.parentNode) document.body.appendChild(bar); });
+        if (document.body) document.body.appendChild(bar);
+      }
+      bar.innerHTML = '⚠ Something errored and part of the app may not have loaded correctly. Your saved data is unaffected — try reloading. If it persists, restore your last backup. <span style="text-decoration:underline;cursor:pointer" onclick="this.parentNode.remove()">dismiss</span><br><span style="font-size:11px;opacity:0.85">Detail: ' + String(msg).slice(0, 300) + '</span>';
+    } catch (_) { /* last-resort: never let the error handler throw */ }
+  }
+  window.addEventListener('error', e => showGlobalError(e && e.message ? e.message : 'unknown error'));
+  window.addEventListener('unhandledrejection', e => showGlobalError(e && e.reason ? (e.reason.message || e.reason) : 'unhandled promise rejection'));
+})();
+
+// ─────────────────────────────────────────────
 // Text size (accessibility) — global UI zoom.
 // Scales the whole app via CSS `zoom` on <body>. `zoom` (not transform:scale)
 // because it actually reflows the layout — text rewraps, containers grow — instead
@@ -2355,6 +2378,11 @@ async function savePositions() {
 }
 
 async function loadPositions() {
+  // ⚠ MAINTAINER NOTE: numeric position fields (shares, pricePaid, exitPrice, spxBuy, spxExit) are
+  // stored as STRINGS, not numbers (they come from text inputs and are persisted as-is). All current
+  // math wraps them in parseFloat()/Number() or relies on `*` coercion, so this works — but any NEW
+  // code that does `pos.shares + x` will CONCATENATE, and `.sort()` on a raw field sorts lexically
+  // ("100" < "9"). Always parseFloat before arithmetic or comparison on these fields.
   try {
     const res = localStorage.getItem('portfolio-positions-v2');
     if (res) {
@@ -13945,7 +13973,7 @@ function renderSectorPanel() {
       })()}
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        This lens exists to catch what your theme view above can't: industry exposure hidden inside funds, untagged positions, and undecomposed ETFs — surfaced as the flags above. ${aiCount > 0 ? `Claude pre-labeled ${aiCount} names${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} flagged ⚠ verify</span>` : ''} — yours to override. ` : ''}The full sector ranking mostly echoes the bar above, so it's not shown; tag names below to keep the flags sharp. ${data.taggedPct < 100 ? `<span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged</span> — flags are a floor until the rest is tagged.` : ''}
+        This lens exists to catch what your theme view above can't: industry exposure hidden inside funds, untagged positions, and undecomposed ETFs — surfaced as the flags above. ${aiCount > 0 ? `Claude pre-labeled ${aiCount} names${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} flagged ⚠ verify</span>` : ''} — yours to override. ` : ''}The full sector ranking mostly echoes the bar above, so it's not shown; tag names below to keep the flags sharp. ${data.taggedPct < 100 ? `<span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged</span> — flags are a floor until the rest is tagged.` : ''}<br><span style="color:var(--color-text-tertiary)">Percentages here are share of <em>itemizable</em> exposure (direct positions + decomposed funds). Funds with no pasted holdings aren't in this denominator, so these read slightly higher than share-of-whole-portfolio.</span>
       </div>
       ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names) — tag the big ones below.</div>` : ''}
 
@@ -18344,26 +18372,17 @@ async function init() {
   // logic that made it impossible to change sleeves/themes via the UI without them
   // reverting on next load.
   // ─────────────────────────────────────────────
-  const tickerThemeMap = {
-    'AAPL': 'Big Tech', 'MS': 'Financials', 'NVDA': 'Semiconductors',
-    'WMB': 'Energy & Grid', 'BRK-B': 'Financials',
-    'AMZN': 'Big Tech', 'CRWV': 'AI Infrastructure', 'GLD': 'Commodities',
-    'GRID': 'Energy & Grid', 'MSFT': 'Big Tech', 'NFLX': 'Consumer Discretionary',
-    'ORCL': 'Big Tech', 'RKLB': 'Space & Defense', 'SMH': 'Semiconductors',
-    'SOFI': 'Financials', 'V': 'Financials', 'PANW': 'Cybersecurity',
-    'CRWD': 'Cybersecurity', 'AXP': 'Financials', 'NASA': 'Space & Defense',
-    'DRAM': 'AI Infrastructure'
-  };
-  const tickerSleeveMap = {
-    'MSFT': 'Quality', 'AMZN': 'Quality', 'AAPL': 'Quality',
-    'V': 'Quality', 'AXP': 'Quality', 'BRK-B': 'Quality',
-    'MS': 'Quality', 'SOFI': 'Quality', 'NFLX': 'Quality',
-    'GLD': 'Portfolio Balance Plays', 'GRID': 'Portfolio Balance Plays', 'WMB': 'Portfolio Balance Plays',
-    'CRWV': 'Thesis Plays', 'SMH': 'Thesis Plays', 'DRAM': 'Thesis Plays',
-    'NASA': 'Thesis Plays', 'RKLB': 'Thesis Plays',
-    'ORCL': 'Thesis Plays', 'PANW': 'Thesis Plays', 'CRWD': 'Thesis Plays',
-    'NVDA': 'Thesis Plays',
-  };
+  // Derive theme/sleeve lookups from positions that ALREADY carry tags, rather than hardcoding the
+  // user's holdings into this (public) source file. A position missing a theme/sleeve is healed from
+  // another tagged position of the same ticker. Truly-unknown tickers stay untagged (same as today),
+  // and the user tags them by hand. This keeps the migration capability without leaking holdings.
+  const tickerThemeMap = {};
+  const tickerSleeveMap = {};
+  positions.forEach(p => {
+    if (!p.ticker) return;
+    if (p.theme && !tickerThemeMap[p.ticker]) tickerThemeMap[p.ticker] = p.theme;
+    if (p.sleeve && !tickerSleeveMap[p.ticker]) tickerSleeveMap[p.ticker] = p.sleeve;
+  });
   positions.forEach(p => {
     if (!p.ticker) return;
     // Migration: 'Consumer' theme was renamed to 'Consumer Discretionary' (to make the
@@ -18383,7 +18402,9 @@ async function init() {
       changed = true;
     }
   });
-  const etfTickers = new Set(['SMH','NASA','DRAM','GRID','GLD']);
+  // Derive which tickers are ETFs from positions already flagged isETF (avoids hardcoding holdings).
+  const etfTickers = new Set();
+  positions.forEach(p => { if (p.ticker && p.isETF) etfTickers.add(p.ticker); });
   positions.forEach(p => {
     if (etfTickers.has(p.ticker) && !p.isETF) {
       p.isETF = true;
@@ -18391,55 +18412,15 @@ async function init() {
     }
   });
 
-  // Seed elaboration tags into notes for existing positions — only if not already present
-  const elaborationMap = {
-    'CRWV': 'Thesis: AI', 'SMH': 'Thesis: AI', 'DRAM': 'Thesis: AI',
-    'ORCL': 'Thesis: AI', 'PANW': 'Thesis: AI', 'CRWD': 'Thesis: AI',
-    'NASA': 'Thesis: Space', 'RKLB': 'Thesis: Space',
-    'MSFT': 'Quality rationale: Dominant',
-    'AMZN': 'Quality rationale: Dominant',
-    'AAPL': 'Quality rationale: Dominant',
-    'BRK-B': 'Quality rationale: Dominant',
-    'V': 'Quality rationale: Compounder',
-    'AXP': 'Quality rationale: Compounder',
-    'MS': 'Quality rationale: Compounder',
-    'NFLX': 'Quality rationale: Undervalued',
-    'SOFI': 'Quality rationale: Turnaround',
-    'NVDA': 'Thesis: AI',
-    'WMB': 'Ballast role: Energy transition',
-    'GLD': 'Ballast role: Inflation hedge',
-    'GRID': 'Ballast role: Energy transition',
-  };
-  positions.forEach(p => {
-    if (!p.ticker || !elaborationMap[p.ticker]) return;
-    const tag = elaborationMap[p.ticker];
-    const tagKey = tag.split(':')[0].trim();
-    // Only add if tag not already present
-    if (!p.notes || !p.notes.includes(tagKey)) {
-      p.notes = p.notes ? tag + ' | ' + p.notes : tag;
-      changed = true;
-    }
-  });
-  if (spLots.length === 0) {
-    spLots = [
-      { date: '2026-04-20', shares: 1,   pricePaid: 651.30, account: 'Taxable' },
-      { date: '2026-03-24', shares: 16,  pricePaid: 602.27, account: 'Taxable' },
-      { date: '2025-02-07', shares: 1,   pricePaid: 553.98, account: 'Taxable' },
-      { date: '2025-02-06', shares: 1,   pricePaid: 556.80, account: 'Taxable' },
-      { date: '2024-11-15', shares: 135, pricePaid: 537.49, account: 'Taxable' },
-      { date: '2026-01-02', shares: 11,  pricePaid: 627.88, account: 'IRA' },
-      { date: '2025-03-17', shares: 13,  pricePaid: 518.85, account: 'IRA' },
-      { date: '2024-11-15', shares: 13,  pricePaid: 536.98, account: 'IRA' },
-      { date: '2026-04-15', shares: 1,   pricePaid: 641.08, account: 'Taxable' },
-      { date: '2025-08-01', shares: 50,  pricePaid: 574.02, account: 'Taxable' },
-      { date: '2025-07-18', shares: 50,  pricePaid: 576.69, account: 'Taxable' },
-      { date: '2025-07-01', shares: 50,  pricePaid: 568.31, account: 'Taxable' },
-      { date: '2025-06-30', shares: 50,  pricePaid: 566.32, account: 'Taxable' },
-      { date: '2026-04-21', shares: 16,  pricePaid: 649.59, account: 'IRA' },
-      { date: '2026-04-16', shares: 550, pricePaid: 645.09, account: 'IRA' },
-    ];
-    changed = true;
-  }
+  // (Removed: a one-time notes-seeding migration that embedded per-ticker thesis tags. It had already
+  // run on existing data, only fired on empty notes, and embedded the user's personal investment
+  // theses into this public source file. Existing positions already carry these tags in their notes.)
+
+
+  // (Removed: a one-time seed of the user's actual S&P 500 lot history — dates, share counts, prices,
+  // and account types. It embedded real financial detail into this public source and only fired when
+  // spLots was empty. The user's real lots already live in localStorage and travel with their backup.)
+
   if (changed) {
     spxLive = spxLive || 7165.08;
     // Normalise all open positions to current spxLive — one source of truth
@@ -18474,7 +18455,12 @@ document.addEventListener('wheel', (e) => {
   }
 }, { passive: false });
 
-init();
+init().catch(err => {
+  // init does data load + migration — the riskiest startup path. Surface a failure here explicitly;
+  // the global handler will show the banner, but catching also prevents an unhandledrejection noise.
+  window.dispatchEvent(new ErrorEvent('error', { message: 'Startup (init) failed: ' + ((err && err.message) || err) }));
+  console.error('init() failed:', err);
+});
 </script>
 </body>
 </html>
