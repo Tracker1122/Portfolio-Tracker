@@ -13566,10 +13566,12 @@ function renderThemeUniverse() {
     <div id="theme-sector-panel" style="margin-top:18px"></div>
     <div id="theme-diversification-analysis" style="margin-top:18px"></div>
     <div id="theme-discovery" style="margin-top:18px"></div>
+    <div id="theme-ai-review" style="margin-top:18px"></div>
   `;
   renderSectorPanel();
   renderThemeClusters();
   renderThemeDiscovery();
+  renderThemeAiReview();
 }
 
 // ─────────────────────────────────────────────
@@ -14406,8 +14408,195 @@ function renderThemeDiscovery() {
     </div>`;
 }
 
-// Dashboard tile — zero-exposure themes only, sorted by 1Y performance descending.
-// Shows top 6-8 zero-exposure themes for at-a-glance "what am I missing."
+// ─────────────────────────────────────────────
+// BOOK-LEVEL AI REVIEW (Industry Overview tab)
+// A one-shot AI read of the WHOLE book, reusing the quality-tab transport/error/cost machinery. Two
+// jobs: (1) verbalize what's already visible in the structure, (2) surface gaps/blind spots — and
+// judge the user's ≤5 SELECTED discovery tickers AS HYPOTHESES against those gaps (they may fit a thin
+// spot or deepen a concentration; the review says which). It does NOT do a full New Position
+// Evaluation — it pre-screens and hands off. No verdict on the book, no buy/sell calls, external facts
+// quarantined to ⚠UNVERIFIED. Cost shown LOUDLY before sending given the large book-level prompt.
+// ─────────────────────────────────────────────
+let bookAiReview = null;        // { text, at, truncated, inTok, outTok, measured }
+let bookAiBusy = false;
+
+// Assemble the book context string. All COMPUTED FACTS (with caveats in-prompt); the only USER-ENTERED
+// equivalent is which discovery tickers they've selected. Defensive: any sub-section failure must not
+// break the payload.
+function buildBookAiPrompt() {
+  const lines = [];
+  let clusters = null, sectors = null;
+  try { clusters = computeThemeClusters(); } catch (e) {}
+  try { sectors = computeSectorClusters(); } catch (e) {}
+
+  // --- Book structure (move-together themes) ---
+  if (clusters && clusters.clusters && clusters.clusters.length) {
+    lines.push(`THEME CONCENTRATION (true exposure: direct + your look-through share inside funds you hold). Book behaves like ~${(clusters.effectiveBets || 0).toFixed(1)} independent bets (lower = more concentrated). Diversified base (broad-index tail, not a bet): ${clusters.base ? clusters.base.pct.toFixed(1) : '0'}%.`);
+    clusters.clusters.forEach(c => {
+      const names = (c.names || []).slice(0, 8).map(n => n.display).join(', ');
+      lines.push(`- ${c.label}: ${c.pct.toFixed(1)}% of book ($${Math.round(c.total).toLocaleString()}), ${c.names ? c.names.length : 0} name(s)${names ? ' — ' + names : ''}.`);
+    });
+  } else {
+    lines.push('THEME CONCENTRATION: no clusters computed (insufficient data).');
+  }
+
+  // --- Sector lens (what the user tagged) ---
+  if (sectors && sectors.sectors && sectors.sectors.length) {
+    lines.push(`\nSECTOR TAGS (the lens YOU tagged — what-it-is, may differ from theme/how-it-moves):`);
+    sectors.sectors.slice(0, 12).forEach(s => {
+      lines.push(`- ${s.label}: ${s.pct.toFixed(1)}% ($${Math.round(s.total).toLocaleString()}), ${s.names ? s.names.length : 0} name(s).`);
+    });
+    if (typeof sectors.untaggedPct === 'number' && sectors.untaggedPct > 0) {
+      lines.push(`- Untagged material exposure: ${sectors.untaggedPct.toFixed(1)}% — sectors unknown for this slice.`);
+    }
+  }
+
+  // --- Selected discovery tickers (the hypotheses to judge) ---
+  const selected = [...discoverySelected];
+  if (selected.length) {
+    lines.push(`\nDISCOVERY TICKERS THE USER HAS SELECTED (≤5) — judge each AS A HYPOTHESIS against the gaps above. Each may FILL a thin spot or DEEPEN an existing concentration; say which, and how it would move true exposure. The "theme" here is the fund the name was DISCOVERED in (a structural label — where it sits in the user's fund holdings), NOT a fundamental classification. Do not assert what the company does from this; that would be an EXTERNAL claim.`);
+    selected.forEach(tk => {
+      const fund = (discoverySourceFund[tk] || '').toUpperCase();
+      const perf = discoveryPerf[tk];
+      let perfStr = 'not fetched (no return data — say so; do not infer performance)';
+      if (perf && typeof perf === 'object' && !perf.err) {
+        const m1 = typeof perf.m1 === 'number' ? `${perf.m1 >= 0 ? '+' : ''}${perf.m1.toFixed(1)}%` : 'n/a';
+        const y1 = typeof perf.y1 === 'number' ? `${perf.y1 >= 0 ? '+' : ''}${perf.y1.toFixed(1)}%` : 'n/a';
+        const bench = discoveryBenchPerf[fund];
+        const bStr = (bench && typeof bench === 'object' && typeof bench.y1 === 'number') ? `; source fund ${fund} 1Y ${bench.y1 >= 0 ? '+' : ''}${bench.y1.toFixed(1)}%` : '';
+        const dd = typeof perf.maxDrawdown === 'number' ? `; maxDD ${perf.maxDrawdown.toFixed(0)}%` : '';
+        const vol = typeof perf.annVol === 'number' ? `; vol ${perf.annVol.toFixed(0)}%` : '';
+        const partial = perf.shortHist ? ' (PARTIAL history — 1Y is over less than a full year, read loosely)' : '';
+        perfStr = `1M ${m1}, 1Y ${y1}${bStr}${dd}${vol}${partial}`;
+      } else if (perf && perf.err) {
+        perfStr = `fetch failed (${perf.err}) — no return data`;
+      }
+      lines.push(`- ${tk}${fund ? ` (discovered in ${fund})` : ''}: ${perfStr}.`);
+    });
+  } else {
+    lines.push(`\nDISCOVERY TICKERS SELECTED: none. (The user hasn't clicked any discovery names. Focus on the book's own gaps; note that selecting discovery names would let you screen specific candidates.)`);
+  }
+
+  const ctx = lines.join('\n');
+
+  return `You are a critical portfolio analyst helping someone understand their book's STRUCTURE and find GAPS. You are NOT an advisor and must NOT recommend buying, selling, holding, or rebalancing. Your output feeds the user's own New Position Evaluation process — your job is to surface what's there and what's missing, not to decide.
+
+Everything below is COMPUTED FACTS the tracker calculated from the user's actual holdings. Reliable as arithmetic, BUT: exposure inside funds is approximate (the user's pasted fund holdings are partial — some funds are near-complete, others are top-holdings-only), and there is NO market-cap or per-name size data. Do not over-read precision the inputs don't support.
+
+${ctx}
+
+Rules:
+- Do NOT give a verdict, score, lean, or recommendation on the book or any ticker. If a conclusion forms, convert it to a condition under "What to pressure-test."
+- Label every claim's basis: FROM INPUTS (restates/arithmetically follows from the facts above), [inference] (your reasoning ON the inputs, no outside facts), or EXTERNAL (any real-world fact not above — what a company does, sector, market cap, competitors, prices). EXTERNAL facts are UNVERIFIED — put them ONLY in a "CLAIMS TO VERIFY" section, each tagged ⚠UNVERIFIED. Never state an external fact inline as if it were given.
+- A fund/theme label is a STRUCTURAL tag (where a name sits in the user's holdings), NOT a license to assert what the business does.
+
+Output in three sections:
+1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few independent bets, any theme resting on one name). FROM INPUTS, plainly stated.
+2. GAPS & BLIND SPOTS — where the book is thin, absent, or exposed. This is the part that should generate ideas the user takes to a full evaluation.
+3. SELECTED CANDIDATES vs THE GAPS — for each selected discovery ticker: does it ADDRESS a gap or DEEPEN an existing concentration? How would it move true exposure? What would the user need to pressure-test in a full New Position Evaluation? Be willing to say a selected name is a poor structural fit. If none selected, say so and skip.
+End with CLAIMS TO VERIFY (the ⚠UNVERIFIED external facts you leaned on, if any).
+
+Keep it tight and scannable. The checkable structure facts are already on the user's screen — your value is the gaps and the candidate screen, not restating every number.`;
+}
+
+async function runBookAiReview() {
+  const out = document.getElementById('book-ai-output');
+  if (!out) return;
+  if (bookAiBusy) return;
+  bookAiBusy = true;
+  out.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Reviewing your book — structure, gaps, and your selected candidates…</div>`;
+
+  const prompt = buildBookAiPrompt();
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  if (!aiWorkerUrl) {
+    bookAiBusy = false;
+    out.innerHTML = `<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">
+      No AI worker URL set. The Anthropic API can't be called directly from this deployment (CORS), so the review routes through your Cloudflare worker. Set it via the "AI worker URL" box on the New Position Evaluation tab, then retry.</div>`;
+    return;
+  }
+
+  try {
+    let resp;
+    try {
+      resp = await fetch(aiWorkerUrl + '/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
+    } catch (netErr) {
+      const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
+    }
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok || data.error) {
+      const errObj = (data && typeof data.error === 'object') ? data.error : null;
+      const msg = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
+      const type = errObj ? (errObj.type || '') : '';
+      const e = new Error(msg || ('HTTP ' + resp.status));
+      e.aiKind = classifyAiError(resp.status, type, msg);
+      e.httpStatus = resp.status;
+      throw e;
+    }
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if (!text) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
+    const usage = (data && data.usage) ? data.usage : null;
+    bookAiReview = {
+      text,
+      at: new Date().toISOString(),
+      truncated: (data.stop_reason === 'max_tokens'),
+      inTok: (usage && typeof usage.input_tokens === 'number') ? usage.input_tokens : qrAiEstTokens(prompt),
+      outTok: (usage && typeof usage.output_tokens === 'number') ? usage.output_tokens : qrAiEstTokens(text),
+      measured: !!(usage && typeof usage.input_tokens === 'number'),
+    };
+  } catch (err) {
+    bookAiBusy = false;
+    const info = aiErrorMessage(err);
+    out.innerHTML = `<div style="border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:${info.color};line-height:1.5">
+      <strong>${info.title}</strong><br>
+      <span style="color:var(--color-text-secondary)">${esc(info.detail)}</span>
+      ${info.raw ? `<br><span style="color:var(--color-text-tertiary);font-size:9px">Raw: ${esc(info.raw)}${err.httpStatus ? ' (HTTP ' + err.httpStatus + ')' : ''}</span>` : ''}
+      <br><span style="color:var(--color-text-tertiary);font-size:9px;font-style:italic">The structure and gaps above are computed locally — they don't need the AI.</span>
+    </div>`;
+    return;
+  }
+  bookAiBusy = false;
+  renderThemeAiReview();
+}
+
+function renderThemeAiReview() {
+  const host = document.getElementById('theme-ai-review');
+  if (!host) return;
+
+  // Pre-send cost estimate — LOUD, because the book prompt is large and the credit budget is small.
+  const prompt = buildBookAiPrompt();
+  const estIn = qrAiEstTokens(prompt);
+  const selCount = discoverySelected.size;
+  // Output is unknown ahead of time; assume a generous ~1200-token reply for the estimate ceiling.
+  const estOut = 1200;
+  const estCost = (estIn / 1e6) * 3 + (estOut / 1e6) * 15; // Sonnet ~$3/M in, ~$15/M out
+  const costStr = '$' + estCost.toFixed(3);
+
+  const result = bookAiReview ? `
+    <div style="margin-top:10px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-secondary)">
+      ${bookAiReview.truncated ? `<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">⚠ Response hit the length cap — may be cut off mid-thought.</div>` : ''}
+      <div style="font-size:11px;line-height:1.6;color:var(--color-text-primary);white-space:pre-wrap">${esc(bookAiReview.text)}</div>
+      <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">
+        ${new Date(bookAiReview.at).toLocaleString()} · ${bookAiReview.inTok.toLocaleString()} in / ${bookAiReview.outTok.toLocaleString()} out tokens ${bookAiReview.measured ? '(measured)' : '(estimated)'} · ~$${(((bookAiReview.inTok / 1e6) * 3) + ((bookAiReview.outTok / 1e6) * 15)).toFixed(3)} · observations, not advice — take candidates to New Position Evaluation</div>
+    </div>` : '';
+
+  host.innerHTML = `
+    <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI book review — structure, gaps, and your selected candidates</div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
+        A one-shot read of your whole book: what's already visible in the structure, where the gaps are, and how your ${selCount} selected discovery ticker${selCount === 1 ? '' : 's'} ${selCount === 1 ? 'lands' : 'land'} against those gaps (each judged as a hypothesis — may fit or may double-down). Observations only — it hands candidates to New Position Evaluation, it doesn't evaluate or recommend.
+        ${selCount === 0 ? '<br><span style="color:#fbbf24">No discovery tickers selected — it\'ll review the book\'s own gaps. Click names in Discovery above to have them screened against your gaps.</span>' : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-primary" onclick="runBookAiReview()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Reviewing…' : (bookAiReview ? '↻ Re-run review' : 'Review my book with AI')}</button>
+        <span style="font-size:9px;color:var(--color-text-tertiary)" title="Estimated before sending. Sonnet ~$3/M input, ~$15/M output. Input is measured from the prompt; output is a ~1200-token ceiling assumption — actuals shown after the call.">Est. cost this call: <strong style="color:var(--color-text-secondary)">~${costStr}</strong> (${estIn.toLocaleString()} input tokens + ~${estOut} output)</span>
+      </div>
+      <div id="book-ai-output"></div>
+      ${result}
+    </div>`;
+}
+
+
 function renderThemeUniverseDashTile() {
   const el = document.getElementById('theme-universe-dash-content');
   if (!el) return;
