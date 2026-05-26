@@ -2453,6 +2453,10 @@ let nextId = 1;
 let spxLive = null;
 let spxLiveDate = null;
 let polygonKey = '';
+// Cache of company info (sector / description / market cap) keyed by ticker, fetched on demand from
+// Polygon's ticker-details endpoint and persisted so the discovery panel never re-fetches on re-render.
+// Shape per ticker: { name, sector, description, marketCap, homepage, fetchedDate, userNote }
+let tickerInfo = {};
 let avWorkerUrl = ''; // Cloudflare worker base URL that proxies Alpha Vantage ETF_PROFILE (key stays server-side)
 let aiWorkerUrl = ''; // Cloudflare worker base URL that proxies the Anthropic Messages API (key stays server-side; CORS fix)
 let saveTimeout = null;
@@ -2589,6 +2593,7 @@ async function savePositions() {
     localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
     localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
+    localStorage.setItem('portfolio-ticker-info-v1', JSON.stringify({ tickerInfo }));
     flashSave();
     // Trigger Drive backup (no-op if Drive not connected).
     if (typeof DriveState !== 'undefined' && DriveState.clientId && DriveState.accessToken) {
@@ -2679,7 +2684,12 @@ async function loadPositions() {
       const qrParsed = JSON.parse(qrRes);
       if (Array.isArray(qrParsed.qualityReviews)) qualityReviews = qrParsed.qualityReviews;
     }
-  } catch(e) { /* no pe deals / quality reviews yet */ }
+    const tiRes = localStorage.getItem('portfolio-ticker-info-v1');
+    if (tiRes) {
+      const tiParsed = JSON.parse(tiRes);
+      if (tiParsed.tickerInfo && typeof tiParsed.tickerInfo === 'object') tickerInfo = tiParsed.tickerInfo;
+    }
+  } catch(e) { /* no pe deals / quality reviews / ticker info yet */ }
 
   if (positions.length === 0) {
     positions = [mkPos(), mkPos(), mkPos()];
@@ -5275,6 +5285,59 @@ async function fetchHistoricalBenchmarkPrice(ticker, date) {
   } catch (e) {
     clearTimeout(timeoutId);
     return { price: null, error: e.message || 'network error' };
+  }
+}
+
+// Format a market cap (raw dollars) into a compact human string. Returns null if not a finite number.
+function fmtMarketCap(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n <= 0) return null;
+  if (n >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T';
+  if (n >= 1e9)  return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6)  return '$' + (n / 1e6).toFixed(1) + 'M';
+  return '$' + Math.round(n).toLocaleString();
+}
+
+// Fetch company info (sector / description / market cap) from Polygon's ticker-details endpoint.
+// DEFENSIVE: every field is guarded — micro-caps on the free tier often have a sparse or empty
+// `description`, and sometimes no market_cap. We return whatever is present and let the UI degrade.
+// Result is cached into tickerInfo[ticker] (preserving any existing userNote) so we never re-fetch.
+async function fetchTickerInfo(ticker) {
+  const sym = (ticker || '').toUpperCase().trim();
+  if (!sym) return { ok: false, error: 'no ticker' };
+  if (!polygonKey) { loadPolygonKey(); }
+  if (!polygonKey) return { ok: false, error: 'no API key' };
+
+  const url = `https://api.polygon.io/v3/reference/tickers/${encodeURIComponent(sym)}?apiKey=${polygonKey}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (res.status === 429) return { ok: false, error: 'rate limited — wait a moment and retry' };
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    const r = data && data.results;
+    if (!r) return { ok: false, error: (data && (data.error || data.message)) || 'no data returned' };
+
+    const today = new Date();
+    const fetchedDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    const prior = tickerInfo[sym] || {};
+    const info = {
+      name: r.name || prior.name || '',
+      sector: r.sic_description || prior.sector || '',     // SIC industry label — the reliable "sector" field
+      description: r.description || '',                    // may be empty for micro-caps; UI handles that
+      marketCap: (typeof r.market_cap === 'number') ? r.market_cap : (prior.marketCap || null),
+      homepage: r.homepage_url || prior.homepage || '',
+      fetchedDate,
+      userNote: prior.userNote || ''                       // preserve any manual note across re-fetch
+    };
+    tickerInfo[sym] = info;
+    if (typeof scheduleSave === 'function') scheduleSave();
+    return { ok: true, info, sparse: !info.description };
+  } catch (e) {
+    clearTimeout(timeoutId);
+    return { ok: false, error: (e.name === 'AbortError') ? 'timed out' : (e.message || 'network error') };
   }
 }
 
@@ -14480,6 +14543,89 @@ function toggleDiscoverySelect(ticker) {
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
 }
 
+// Build the info-card HTML for a ticker from the tickerInfo cache. Degrades gracefully: shows
+// whatever fields are present, a clear "no description" line when Polygon returned a sparse record,
+// and an always-present editable note field (manual override / your own one-liner).
+function discoveryInfoCardHtml(key, state) {
+  const info = tickerInfo[key] || {};
+  const cap = (typeof fmtMarketCap === 'function') ? fmtMarketCap(info.marketCap) : null;
+  let inner = '';
+  if (state === 'loading') {
+    inner = `<span style="color:var(--color-text-tertiary)">Fetching ${esc(key)} info…</span>`;
+  } else if (state && state.error) {
+    inner = `<span style="color:#fbbf24">Couldn't fetch ${esc(key)}: ${esc(state.error)}.</span> <span style="color:var(--color-text-tertiary)">You can still add your own note below.</span>`;
+  } else {
+    const bits = [];
+    if (info.name) bits.push(`<strong style="color:var(--color-text-primary)">${esc(info.name)}</strong>`);
+    if (info.sector) bits.push(`<span style="color:var(--color-text-secondary)">${esc(info.sector)}</span>`);
+    if (cap) bits.push(`<span style="color:var(--color-text-secondary)">mkt cap ${cap}</span>`);
+    inner += bits.length ? `<div style="margin-bottom:3px">${bits.join(' · ')}</div>` : '';
+    if (info.description) {
+      inner += `<div style="color:var(--color-text-secondary);line-height:1.5">${esc(info.description)}</div>`;
+    } else {
+      inner += `<div style="color:var(--color-text-tertiary);font-style:italic">No description available from Polygon for ${esc(key)} (common for micro-caps). Add your own below.</div>`;
+    }
+    if (info.homepage) inner += `<div style="margin-top:3px"><a href="${esc(info.homepage)}" target="_blank" rel="noopener" style="color:var(--color-text-info);font-size:9px">${esc(info.homepage)} ↗</a></div>`;
+    if (info.fetchedDate) inner += `<div style="color:var(--color-text-tertiary);font-size:8px;margin-top:2px">via Polygon · fetched ${esc(info.fetchedDate)}</div>`;
+  }
+  const note = (info.userNote || '');
+  const noteField = `<div style="margin-top:5px"><textarea data-info-note="${esc(key)}" placeholder="Your own note on ${esc(key)} (saved automatically)…" oninput="saveDiscoveryNote('${esc(key)}', this.value)" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:9px;background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:4px 6px;resize:vertical" rows="2">${esc(note)}</textarea></div>`;
+  return `<div style="margin-top:6px;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:10px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px">
+      <span style="font-size:10px;font-weight:700;color:var(--color-text-primary)">${esc(key)}</span>
+      <span onclick="hideDiscoveryInfo()" style="cursor:pointer;color:var(--color-text-tertiary);font-size:11px">×</span>
+    </div>
+    ${inner}
+    ${noteField}
+  </div>`;
+}
+
+let _activeInfoTicker = null;
+
+// Render the info card into the info-slot of the bucket containing this ticker's chip.
+function renderDiscoveryInfoInto(key, state) {
+  // Locate the chip via its perf-slot, then find the enclosing <details> bucket and its info-slot.
+  const chip = document.querySelector(`[data-perf-slot="${CSS.escape(key)}"]`);
+  if (!chip) return;
+  const bucket = chip.closest('details');
+  if (!bucket) return;
+  const slot = bucket.querySelector('[data-info-slot]');
+  if (!slot) return;
+  // Clear any other open info card elsewhere first (one at a time).
+  document.querySelectorAll('[data-info-slot]').forEach(s => { if (s !== slot) s.innerHTML = ''; });
+  slot.innerHTML = discoveryInfoCardHtml(key, state);
+}
+
+function hideDiscoveryInfo() {
+  _activeInfoTicker = null;
+  document.querySelectorAll('[data-info-slot]').forEach(s => { s.innerHTML = ''; });
+}
+
+// On-demand: show cached info immediately; fetch from Polygon only if not already cached.
+async function showDiscoveryInfo(ticker) {
+  const key = (ticker || '').toUpperCase();
+  if (!key) return;
+  _activeInfoTicker = key;
+  if (tickerInfo[key] && tickerInfo[key].fetchedDate) {
+    renderDiscoveryInfoInto(key, null); // already cached — no re-fetch
+    return;
+  }
+  renderDiscoveryInfoInto(key, 'loading');
+  const res = await fetchTickerInfo(key);
+  if (_activeInfoTicker !== key) return; // user moved on
+  if (res.ok) renderDiscoveryInfoInto(key, null);
+  else renderDiscoveryInfoInto(key, { error: res.error });
+}
+
+// Manual override / user note — persists into the cache (creating a stub record if none exists yet).
+function saveDiscoveryNote(ticker, text) {
+  const key = (ticker || '').toUpperCase();
+  if (!key) return;
+  if (!tickerInfo[key]) tickerInfo[key] = { name: '', sector: '', description: '', marketCap: null, homepage: '', fetchedDate: '', userNote: '' };
+  tickerInfo[key].userNote = text;
+  if (typeof scheduleSave === 'function') scheduleSave();
+}
+
 // Fetch 1-month AND 1-year return for one ticker in a SINGLE Polygon call. The range-aggregates
 // endpoint returns every daily bar over the window at once, so we read: last bar (latest close),
 // first bar (~1Y ago), and the bar nearest ~30d ago — no per-date hunting, no 404-walk burning the
@@ -14914,6 +15060,7 @@ function renderThemeDiscovery() {
       <span style="font-size:8px;color:var(--color-text-tertiary)">${convictionPhrase(topFund, topW)}${moreNote}</span>
       ${hn ? `<span style="font-size:8px;color:#fbbf24" title="You already hold some of this (computed from your funds, no fetch) — so this 'gap' is partly filled already.">· ${esc(hn)}</span>` : ''}
       <span data-perf-slot="${esc(key)}" style="font-size:8px">${perfInit}</span>
+      <span onclick="event.stopPropagation();showDiscoveryInfo('${esc(key)}')" title="What does this company do? (sector, description, market cap — fetched from Polygon on demand)" style="font-size:9px;color:var(--color-text-info);cursor:help;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;line-height:1.4">ℹ</span>
     </div>`;
   };
 
@@ -14933,6 +15080,7 @@ function renderThemeDiscovery() {
           <span style="white-space:nowrap;font-size:9px;color:var(--color-text-tertiary)">theme 1Y ${fmtRet(perf)}</span>
         </summary>
         <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(tickerLine).join('')}</div>
+        <div data-info-slot="${esc(theme)}"></div>
       </details>`;
   };
 
@@ -17569,6 +17717,7 @@ function exportData() {
     snapshots, benchmarkPrices, benchmarkPricesDate,
     peDeals,
     realizedPeDeals,
+    tickerInfo,
     qualityReviews,
     themeUniverseHistory,
     // Index look-through store (the pasted ETF holdings that feed look-through true-exposure, the
@@ -17612,6 +17761,7 @@ function importData(input) {
       if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
       if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
       if (Array.isArray(data.realizedPeDeals)) realizedPeDeals = data.realizedPeDeals;
+      if (data.tickerInfo && typeof data.tickerInfo === 'object') tickerInfo = data.tickerInfo;
       if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
       if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
       // Restore index look-through store (lives in its own localStorage key,
@@ -18756,6 +18906,7 @@ function driveBuildBackupPayload() {
     snapshots, benchmarkPrices, benchmarkPricesDate,
     peDeals,
     realizedPeDeals,
+    tickerInfo,
     qualityReviews,
     themeUniverseHistory,
     trackRecordMatureOnly, industryAlphaMatureOnly,
@@ -19131,6 +19282,7 @@ async function executeRestore() {
     if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
     if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
     if (Array.isArray(data.realizedPeDeals)) realizedPeDeals = data.realizedPeDeals;
+    if (data.tickerInfo && typeof data.tickerInfo === 'object') tickerInfo = data.tickerInfo;
     if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
     if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
     if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
