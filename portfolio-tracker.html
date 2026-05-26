@@ -1371,6 +1371,7 @@
       Turn off part of the book to see how the rest performs without it. Non-destructive — it filters this view only, never your data. Only directly-held positions can be excluded; a name held only inside an ETF can't be cleanly removed from that ETF's return.
     </div>
     <div class="summary-grid" id="book-isolate-summary" style="margin-bottom:8px"></div>
+    <div id="book-isolate-delta" style="margin-bottom:8px"></div>
     <div id="book-exclude-panel" style="margin:6px 0 20px"></div>
 
     <div class="section-heading" style="margin-top:24px">Add Candidates</div>
@@ -3300,6 +3301,84 @@ function computeBookThemeBar(openArr) {
   return { themes, total };
 }
 
+// Before/after comparison + prose for the isolate view. Shows what changed when blocks/holdings were
+// turned off — book-level only (per-row deltas would mislead, since combined effects aren't additive).
+// The prose states the numeric changes and names what's off; it does NOT editorialize about cause.
+function renderBookIsolateDelta(openArr) {
+  const host = document.getElementById('book-isolate-delta');
+  if (!host) return;
+  if (!openArr || !openArr.length || !bookExcludeActive()) { host.innerHTML = ''; return; }
+
+  const full = calcSummary(openArr);
+  const kept = openArr.filter(p => !isBookExcluded(p));
+  const filt = calcSummary(kept);
+  const removed = openArr.filter(isBookExcluded);
+
+  // What's off, in words: theme names and/or individual tickers.
+  const offThemes = [...bookExclude.themes];
+  const offTickers = [...bookExclude.tickers];
+  const namePart = (arr, suffix) => arr.length ? arr.join(', ') + suffix : '';
+  const offList = [namePart(offThemes, offThemes.length > 1 ? ' (themes)' : ' (theme)'), namePart(offTickers, '')].filter(Boolean).join(' and ');
+
+  // Signed delta formatter in percentage points (for return / alpha, which are percents).
+  const dPp = (a, b) => {
+    if (a === null || b === null || a === undefined || b === undefined) return null;
+    return b - a; // filtered minus full
+  };
+  const fmtPair = (label, fullV, filtV, unit) => {
+    // unit: 'pct' (return, shown as %), 'pp' (alpha, shown as pp), or 'dollar'.
+    const one = (v) => {
+      if (v === null || v === undefined) return '—';
+      if (unit === 'dollar') return fmtDollarWhole(v);
+      return `${v >= 0 ? '+' : ''}${v.toFixed(1)}${unit === 'pp' ? 'pp' : '%'}`;
+    };
+    const fv = one(fullV), tv = one(filtV);
+    const d = (typeof fullV === 'number' && typeof filtV === 'number') ? filtV - fullV : null;
+    const dStr = d === null ? '' : (unit === 'dollar' ? `${d >= 0 ? '+' : ''}${fmtDollarWhole(d)}` : `${d >= 0 ? '+' : ''}${d.toFixed(1)}pp`);
+    const dCol = d === null ? 'var(--color-text-tertiary)' : d >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    return `<div style="display:flex;align-items:baseline;gap:8px;font-size:11px;padding:2px 0">
+      <span style="color:var(--color-text-tertiary);min-width:120px">${label}</span>
+      <span style="color:var(--color-text-secondary)">${fv}</span>
+      <span style="color:var(--color-text-tertiary)">→</span>
+      <span style="color:var(--color-text-primary);font-weight:600">${tv}</span>
+      ${dStr ? `<span style="color:${dCol};font-weight:600">(${dStr})</span>` : ''}
+    </div>`;
+  };
+
+  const retD = dPp(full.yourReturn, filt.yourReturn);
+  const alphaD = dPp(full.vsSpx, filt.vsSpx);
+  const dollarAlphaD = (typeof full.dollarAlpha === 'number' && typeof filt.dollarAlpha === 'number') ? filt.dollarAlpha - full.dollarAlpha : null;
+
+  // ---- Prose: verbalize the deltas. Direction words come straight from the sign; no interpretation. ----
+  const dirWord = (d) => d === null ? '' : d > 0.05 ? 'rises' : d < -0.05 ? 'drops' : 'is essentially unchanged';
+  const ppAbs = (d) => Math.abs(d).toFixed(1);
+  let prose = `With ${esc(offList || 'the selection')} turned off, the remaining ${kept.length} of ${openArr.length} positions `;
+  if (retD !== null) {
+    prose += `return ${filt.yourReturn >= 0 ? '+' : ''}${filt.yourReturn.toFixed(1)}% versus ${full.yourReturn >= 0 ? '+' : ''}${full.yourReturn.toFixed(1)}% for the full book — `;
+    prose += retD === null ? '' : (Math.abs(retD) < 0.05 ? 'essentially no change' : `your return ${dirWord(retD)} ${ppAbs(retD)} points`);
+  }
+  if (alphaD !== null) {
+    prose += `, and the edge over the S&P ${dirWord(alphaD)}`;
+    prose += Math.abs(alphaD) < 0.05 ? '' : ` by ${ppAbs(alphaD)} points (to ${filt.vsSpx >= 0 ? '+' : ''}${filt.vsSpx.toFixed(1)}pp)`;
+  }
+  prose += '.';
+  // A second, purely-descriptive sentence on the capital removed — helps read whether the change is
+  // a big or small slice. Still just stating magnitudes.
+  const removedVal = removed.reduce((s, p) => s + ((parseFloat(p.shares) || 0) * (parseFloat(p.exitPrice) || 0)), 0);
+  if (full.totalExit > 0) {
+    prose += ` You've set aside ${fmtDollarWhole(removedVal)} of current value (${((removedVal / full.totalExit) * 100).toFixed(0)}% of the book) across ${removed.length} position${removed.length > 1 ? 's' : ''}.`;
+  }
+
+  host.innerHTML = `
+    <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-tertiary);margin-bottom:6px">Full book → without what's turned off</div>
+      ${fmtPair('Your return', full.yourReturn, filt.yourReturn, 'pct')}
+      ${fmtPair('Edge vs S&P', full.vsSpx, filt.vsSpx, 'pp')}
+      ${fmtPair('Dollar alpha', full.dollarAlpha, filt.dollarAlpha, 'dollar')}
+      <div style="font-size:11px;line-height:1.55;color:var(--color-text-primary);margin-top:8px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)">${prose}</div>
+    </div>`;
+}
+
 function renderBookExcludePanel(openArr) {
   // Render the filtered book summary into the Analysis-tab isolate card (the recomputed numbers that
   // react to the toggles). Lives here so the cause (toggles) and effect (numbers) are on the same tab.
@@ -3308,6 +3387,11 @@ function renderBookExcludePanel(openArr) {
     if (openArr && openArr.length) renderSummary('book-isolate-summary', openArr.filter(p => !isBookExcluded(p)), true, true);
     else isoEl.innerHTML = '';
   }
+
+  // Before/after comparison + prose — only when a filter is active (no baseline to compare otherwise).
+  // Computes the FULL open book vs the FILTERED book and shows the change in the performance metrics.
+  // The prose VERBALIZES the deltas; it does not interpret them (no "X is driving your book" claims).
+  renderBookIsolateDelta(openArr);
 
   const el = document.getElementById('book-exclude-panel');
   if (!el) return;
