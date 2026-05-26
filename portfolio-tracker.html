@@ -14688,6 +14688,44 @@ async function runBookAiReview() {
   renderThemeAiReview();
 }
 
+// Post-hoc verification of the AI review against actual holdings. The model still occasionally invents
+// tickers as holdings despite the prompt guards (it has strong priors — "defense → LMT", "healthcare →
+// LLY/ABT"). This runs AFTER generation, in code, against real data, so the model can't suppress it.
+// Strategy: find ticker-like tokens in the review BODY (excluding the CLAIMS TO VERIFY section, where
+// unverified external names legitimately live), drop anything that's a legitimate name (held, a
+// selected candidate, a source fund) or a known non-ticker word, and flag the rest — those are names
+// the review introduced into its analysis as if real. Conservative: only flags clear ticker-shaped
+// tokens, so a missed fabrication is possible, but a false alarm is unlikely.
+const BOOK_AI_STOPWORDS = new Set([
+  // section/framework words and common all-caps that match the ticker shape but aren't tickers
+  'WHAT','FROM','TO','AND','OR','THE','FOR','NOT','AI','US','EM','ETF','ETFS','NAV','PE','EPS','YTD',
+  'CEO','CFO','IPO','SEC','GDP','CPI','FED','REIT','REITS','TIPS','ESG','USD','EUR','UK','EU','GAAP',
+  'INPUTS','VERIFY','CLAIMS','GAPS','MAXDD','VOL','ST','LT','IRA','VOO','SPX','OK','NO','YES','MOST',
+  'ALL','ONE','TWO','EACH','BUT','ITS','VS','PP','MM','YOY','QOQ','API',
+]);
+function verifyBookReviewTickers(text) {
+  if (!text) return [];
+  // Drop the CLAIMS TO VERIFY section — externals there are correctly flagged, not asserted holdings.
+  const cut = text.search(/CLAIMS TO VERIFY/i);
+  const body = cut >= 0 ? text.slice(0, cut) : text;
+  // Legitimate names the review may discuss: actual holdings + selected candidates + their source funds.
+  const legit = new Set();
+  positions.filter(p => !p.closed && p.ticker).forEach(p => legit.add(p.ticker.toUpperCase()));
+  discoverySelected.forEach(t => legit.add(t.toUpperCase()));
+  Object.values(discoverySourceFund).forEach(f => { if (f) legit.add(f.toUpperCase()); });
+  // Also treat the review's own snapshot of what it ran against as legitimate (candidates it screened).
+  if (bookAiReview && Array.isArray(bookAiReview.selectedAtRun)) bookAiReview.selectedAtRun.forEach(t => legit.add(t.toUpperCase()));
+
+  const found = new Set();
+  const tokens = body.match(/\b[A-Z]{2,5}\b/g) || [];
+  tokens.forEach(tok => {
+    if (BOOK_AI_STOPWORDS.has(tok)) return;
+    if (legit.has(tok)) return;
+    found.add(tok);
+  });
+  return [...found];
+}
+
 function renderThemeAiReview() {
   const host = document.getElementById('theme-ai-review');
   if (!host) return;
@@ -14708,9 +14746,16 @@ function renderThemeAiReview() {
         ⚠ Your discovery selection has changed since this review ran. It was run against ${ranAgainst.length ? esc(ranAgainst.join(', ')) : 'no selected tickers'}; you now have ${discoverySelected.size ? esc([...discoverySelected].join(', ')) : 'none'} selected. Re-analyze to update it to your current choices.
       </div>` : '';
 
+  const suspectTickers = bookAiReview ? verifyBookReviewTickers(bookAiReview.text) : [];
+  const verifyBanner = suspectTickers.length ? `
+      <div style="background:rgba(248,113,113,0.12);border:1px solid rgba(248,113,113,0.5);border-radius:6px;padding:8px 11px;margin-bottom:8px;font-size:10px;color:#f87171;line-height:1.55">
+        ⚠ <strong>Accuracy check:</strong> this review names ${suspectTickers.map(t => `<strong>${esc(t)}</strong>`).join(', ')} — ${suspectTickers.length === 1 ? 'a ticker' : 'tickers'} you don't hold and ${suspectTickers.length === 1 ? "didn't" : "didn't"} select as ${suspectTickers.length === 1 ? 'a candidate' : 'candidates'}. The model likely invented ${suspectTickers.length === 1 ? 'it' : 'them'} from its priors. <strong>Treat any claim about ${suspectTickers.length === 1 ? 'this name' : 'these names'} as the model's error, not your data.</strong>
+      </div>` : '';
+
   const result = bookAiReview ? `
     <div style="margin-top:10px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-secondary)">
       ${staleBanner}
+      ${verifyBanner}
       ${bookAiReview.truncated ? `<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">⚠ Response hit the length cap — may be cut off mid-thought.</div>` : ''}
       <div style="font-size:11px;line-height:1.6;color:var(--color-text-primary);white-space:pre-wrap">${esc(bookAiReview.text)}</div>
       <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">
