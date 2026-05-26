@@ -1693,6 +1693,11 @@
     <div class="modal-title">Edit Closed Position</div>
     <div class="modal-subtitle" id="edit-closed-subtitle">Sale details. Editable for closed positions only.</div>
     <div class="modal-field">
+      <label class="modal-label" title="Theme tag for this closed position. Recording the thesis you held while you owned it keeps your track record honest.">Theme</label>
+      <select class="modal-input" id="edit-closed-theme" style="width:220px"></select>
+      <div id="edit-closed-theme-hint" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+    </div>
+    <div class="modal-field">
       <label class="modal-label">Sale date</label>
       <input class="modal-input" id="edit-closed-sell-date" type="date" style="width:170px">
     </div>
@@ -16299,6 +16304,36 @@ function openEditClosedPositionModal(posId) {
   document.getElementById('edit-closed-spx-exit').value = p.spxExit || '';
   document.getElementById('edit-closed-bench-exit').value = (p.benchmarkPriceAtSell != null) ? p.benchmarkPriceAtSell : '';
 
+  // Theme selector — same source of truth as the open-position row editor (THEMES, dropdown:true).
+  const themeSel = document.getElementById('edit-closed-theme');
+  const themeHint = document.getElementById('edit-closed-theme-hint');
+  themeSel.innerHTML = '<option value="">(no theme)</option>'
+    + Object.entries(THEMES).filter(([_, cfg]) => cfg.dropdown)
+        .map(([t]) => `<option value="${esc(t)}" ${p.theme === t ? 'selected' : ''}>${esc(t)}</option>`).join('');
+  // Hint: if the chosen theme's benchmark differs from the benchmark this lot was actually
+  // measured against (benchmarkAtBuy), say so plainly. Re-tagging changes the THESIS LABEL; it
+  // does NOT move the frozen buy/sell benchmark prices, and theme-alpha stays anchored to the
+  // benchmark the lot was bought against. This is correct and keeps closed track-record intact.
+  const updateThemeHint = () => {
+    const chosen = themeSel.value;
+    const themeBench = (typeof getThemeBenchmark === 'function') ? getThemeBenchmark(chosen) : null;
+    const anchor = p.benchmarkAtBuy;
+    if (chosen && themeBench && anchor && themeBench !== anchor) {
+      themeHint.innerHTML = `<span style="color:#fbbf24">Note:</span> "${esc(chosen)}" benchmarks to <strong>${esc(themeBench)}</strong>, `
+        + `but this lot was measured against <strong>${esc(anchor)}</strong> (frozen at buy/sale). `
+        + `Re-tagging changes the thesis label only — theme alpha stays measured vs ${esc(anchor)}, `
+        + `preserving what this closed bet was actually scored against. The benchmark prices are not altered.`;
+    } else if (chosen && themeBench && anchor && themeBench === anchor) {
+      themeHint.innerHTML = `Tag and benchmark agree (${esc(anchor)}).`;
+    } else if (chosen && themeBench && !anchor) {
+      themeHint.innerHTML = `"${esc(chosen)}" benchmarks to ${esc(themeBench)}, but no benchmark was anchored at buy — theme alpha won't compute for this lot.`;
+    } else {
+      themeHint.textContent = '';
+    }
+  };
+  themeSel.onchange = updateThemeHint;
+  updateThemeHint();
+
   // Customize the benchmark label and hint to show which benchmark this position uses
   const benchTicker = p.benchmarkAtBuy;
   if (benchTicker) {
@@ -16378,6 +16413,12 @@ function confirmEditClosedPosition() {
   // Apply
   p.sellDate = sellDateStr;
   p.exitPrice = exitPrice;
+  // Theme: apply the chosen tag (canonicalized). Empty string clears it. We deliberately do
+  // NOT touch benchmarkAtBuy / benchmarkPriceAtBuy / benchmarkPriceAtSell — those are frozen
+  // measurements; theme alpha anchors to benchmarkAtBuy regardless of the tag. Re-tagging is a
+  // thesis-label edit, not a re-measurement.
+  const themeStr = document.getElementById('edit-closed-theme').value;
+  p.theme = themeStr ? (typeof canonicalThemeName === 'function' ? canonicalThemeName(themeStr) : themeStr) : '';
   // For SPX/bench, allow clearing back to empty/null if user removed the value
   p.spxExit = spxExit !== null ? String(spxExit) : '';
   if (benchExit !== null) {
