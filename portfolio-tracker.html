@@ -14374,7 +14374,7 @@ function renderThemeDiscovery() {
     return `
       <details${open ? ' open' : ''} style="border:1px solid ${src.isNiche ? 'rgba(52,211,153,0.3)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);padding:8px 11px;margin-bottom:6px;${src.isNiche ? '' : 'opacity:0.78'}">
         <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none;flex-wrap:wrap">
-          <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(theme)}</strong> ${srcBadge} <span style="font-size:9px;color:var(--color-text-tertiary)">you hold ${gap < 0.05 ? '<span style="color:#34d399">none</span>' : gap.toFixed(1) + '%'} · ${names.length} name${names.length > 1 ? 's' : ''}</span></span>
+          <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(theme)}</strong> ${srcBadge} <span style="font-size:9px;color:var(--color-text-tertiary)" title="True exposure = your direct positions in this theme PLUS your look-through share of theme names sitting inside funds you hold, as a percent of your whole book. Same lens as 'How your holdings move together' — NOT the direct-only percent on the Isolate bar.">${gap < 0.05 ? '<span style="color:#34d399">no true exposure yet</span>' : 'true exposure: ' + gap.toFixed(1) + '% of your book'} · ${names.length} name${names.length > 1 ? 's' : ''}</span></span>
           <span style="white-space:nowrap;font-size:9px;color:var(--color-text-tertiary)">theme 1Y ${fmtRet(perf)}</span>
         </summary>
         <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(tickerLine).join('')}</div>
