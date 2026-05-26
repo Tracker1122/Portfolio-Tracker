@@ -2439,6 +2439,7 @@ let spLots = []; // { date, shares, pricePaid, account } — S&P passive core po
 let spCurrentPrice = 0; // current VOO/SPY price, updated manually
 let snapshots = []; // forward-only history captured by Take Snapshot
 let peDeals = []; // private equity / direct private investments — kept fully separate from public book
+let realizedPeDeals = []; // PE deals that have exited (IPO'd / acquired) — kept for the realized private track record
 let qualityReviews = []; // saved pre-purchase quality checklists for stock/ETF candidates
 // peDeal shape: { id, company, investmentDate, amountInvested, currentValue, lastValuationDate, stage, notes }
 let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Benchmarks
@@ -2521,7 +2522,15 @@ function mkPos() {
     benchmarkPriceAtSell: null,   // benchmark price on sellDate (closed positions only)
     // Capital source tracking — see Capital Deployed metric. Default 0 (treat as new capital).
     // User-supplied at time of purchase via the capital-modal.
-    redeployedAmount: 0
+    redeployedAmount: 0,
+    // PE-conversion provenance — set ONLY when this public position came from a private deal that
+    // IPO'd/exited. pricePaid/dateBought carry the ORIGINAL pre-IPO basis (tax-true), so this
+    // position's gain commingles private-era appreciation with public return. These fields let the
+    // tracker flag it and, where useful, separate "since IPO" from "total incl. private era".
+    peConverted: false,   // true if converted from a private deal
+    peIpoDate: null,      // the IPO / liquidity date (when it became public)
+    peIpoPrice: null,     // per-share price at IPO (the private→public handoff mark)
+    peCompany: null       // original private-deal company name, for the record
   };
 }
 
@@ -2631,6 +2640,7 @@ async function loadPositions() {
     if (peRes) {
       const peParsed = JSON.parse(peRes);
       if (Array.isArray(peParsed.peDeals)) peDeals = peParsed.peDeals;
+      if (Array.isArray(peParsed.realizedPeDeals)) realizedPeDeals = peParsed.realizedPeDeals;
     }
     const qrRes = localStorage.getItem('portfolio-quality-reviews-v1');
     if (qrRes) {
@@ -4129,7 +4139,7 @@ function renderClosedRow(pos) {
   const d = v => v || '<span class="dash">—</span>';
   return `
   <tr class="closed-row" data-id="${pos.id}">
-    <td class="calc-cell" style="text-align:left">${benchmarkDivergenceBadge(pos)}${d(esc(pos.ticker))}</td>
+    <td class="calc-cell" style="text-align:left">${benchmarkDivergenceBadge(pos)}${d(esc(pos.ticker))}${peConvertedBadge(pos)}</td>
     <td class="calc-cell" style="text-align:left">${d(esc(pos.account))}</td>
     <td class="calc-cell" style="text-align:left">${d(esc(pos.dateBought))}</td>
     <td class="calc-cell">${pos.shares || '<span class="dash">—</span>'}</td>
@@ -4195,7 +4205,7 @@ function renderRow(pos) {
 
   return `
   <tr class="${isClosed ? 'closed-row' : ''}" data-id="${pos.id}">
-    <td style="white-space:nowrap"><input class="cell-input ticker-input" type="text" placeholder="AAPL" value="${esc(pos.ticker)}" onblur="setField(${pos.id},'ticker',this.value.toUpperCase())" oninput="this.value=this.value.toUpperCase()" ${isClosed?'disabled':''}>${benchmarkDivergenceBadge(pos)}</td>
+    <td style="white-space:nowrap"><input class="cell-input ticker-input" type="text" placeholder="AAPL" value="${esc(pos.ticker)}" onblur="setField(${pos.id},'ticker',this.value.toUpperCase())" oninput="this.value=this.value.toUpperCase()" ${isClosed?'disabled':''}>${benchmarkDivergenceBadge(pos)}${peConvertedBadge(pos)}</td>
     <td><input class="cell-input account-input" type="text" placeholder="Brokerage" value="${esc(pos.account)}" onblur="setField(${pos.id},'account',this.value)" ${isClosed?'disabled':''}></td>
     <td><input class="cell-input date-input" type="text" placeholder="YYYY-MM-DD" value="${esc(pos.dateBought)}" onblur="handleDateBlur(${pos.id},'dateBought',this)" ${isClosed?'disabled':''}></td>
     <td class="calc-cell held-cell" style="text-align:center;white-space:nowrap">${(() => {
@@ -5369,6 +5379,17 @@ function benchmarkDivergence(pos) {
   if (!usedBench) return { themeBench, usedBench: '(none)', closed: !!pos.closed, missing: true };
   if (themeBench === usedBench) return null; // aligned
   return { themeBench, usedBench, closed: !!pos.closed };
+}
+
+// Small marker for a position that was converted from a private deal at IPO. Its cost basis is the
+// pre-IPO price, so its gain includes years of private-era appreciation — this badge calls that out
+// so the position's outsized return isn't misread as public-market stock-picking performance.
+function peConvertedBadge(pos) {
+  if (!pos || !pos.peConverted) return '';
+  const tip = `Converted from private deal${pos.peCompany ? ' (' + pos.peCompany + ')' : ''} at IPO${pos.peIpoDate ? ' on ' + pos.peIpoDate : ''}. `
+    + `Cost basis is your PRE-IPO price, so this position's gain includes private-era appreciation — `
+    + `it is not pure public-market return. Treat its % and theme-alpha as inflated relative to your other public picks.`;
+  return ` <span title="${esc(tip)}" style="cursor:help;font-size:8px;background:rgba(52,211,153,0.15);color:#34d399;padding:1px 5px;border-radius:3px;font-weight:700;white-space:nowrap">IPO'd PE</span>`;
 }
 
 // Small inline marker for a position row when its tag and benchmark diverge. Empty string if fine.
@@ -12539,6 +12560,7 @@ function _renderCardOverlay(type) {
         html += '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary)">' + esc(d.company || '(unnamed)') + (d.stage ? ' <span style="font-size:10px;color:var(--color-text-tertiary);font-weight:400">· ' + esc(d.stage) + '</span>' : '') + '</div>';
         html += '<div style="display:flex;gap:4px">';
         html += '<button onclick="closeCardOverlay();openAddPeDealModal(' + JSON.stringify(d.id) + ')" title="Edit deal" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;font-family:inherit">edit</button>';
+        html += '<button onclick="closeCardOverlay();convertPeDealToPublic(' + JSON.stringify(d.id) + ')" title="Converts this private deal into a public stock position when it IPOs or is acquired. Keeps your pre-IPO cost basis and original date (tax-true); moves the deal to your realized private record." style="background:none;border:1px solid rgba(52,211,153,0.4);color:#34d399;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;font-family:inherit">↗ IPO\'d</button>';
         html += '<button onclick="deletePeDeal(' + JSON.stringify(d.id) + ')" title="Delete deal" style="background:none;border:1px solid var(--color-border-tertiary);color:var(--color-text-danger);border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;font-family:inherit">×</button>';
         html += '</div>';
         html += '</div>';
@@ -14750,7 +14772,16 @@ function renderThemeDiscovery() {
     });
   });
 
-  const TINY = 0.005 * totalBook; // "own only tinily" threshold = 0.5% of book
+  // Ownership-filter threshold denominator: LIQUID AUM = managed positions + VOO passive core at
+  // market, EXCLUDING private equity (illiquid, and not a public-book gap candidate). This is the
+  // base the user thinks of targets against. NOTE: deliberately NOT totalBook (the true-exposure
+  // sum), because look-through only decomposes the pasted top-holdings of VOO — its untracked tail
+  // is missing, so totalBook understates the real book by ~40% and would set the bar too low.
+  const _aumManaged = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const _aumSp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+  const _aumVoo = _aumSp ? (_aumSp.price > 0 ? _aumSp.currentValue : _aumSp.totalInvested) : 0;
+  const liquidAum = _aumManaged + _aumVoo; // managed + VOO, no PE
+  const TINY = 0.005 * (liquidAum > 0 ? liquidAum : totalBook); // "own only tinily" = 0.5% of liquid AUM
   let junkCount = 0;
   let disc = Object.entries(cand).map(([k, c]) => ({
     display: c.display, inFunds: c.inFunds, themes: [...c.themes], maxW: c.maxW, owned: ownedTrue[k] || 0
@@ -16829,6 +16860,81 @@ function deletePeDeal(id) {
   }
 }
 
+// Convert a private deal to a public position when it IPOs / becomes liquid. Per the chosen design:
+// the new public position carries the ORIGINAL pre-IPO cost basis and the ORIGINAL investment date
+// (tax-true: that's what you paid and when your holding clock started). Consequence — the position
+// will show its full private-era appreciation as gain from day one, which is correct for tax/net
+// worth but commingles private and public return; the peConverted flag lets the tracker call that
+// out. The deal is moved to realizedPeDeals (record preserved) and removed from active peDeals so it
+// stops counting toward live AUM — guarding against double-counting the same capital.
+function convertPeDealToPublic(id) {
+  const idx = peDeals.findIndex(d => d.id === id);
+  if (idx < 0) return;
+  const deal = peDeals[idx];
+  const c = calcPeDeal(deal);
+  if (!c) { alert('This deal is missing the cost data (amount + price per share at buy) needed to convert it to shares. Add those first.'); return; }
+  if (c.shares == null) { alert('Cannot derive your share count — this deal has no "price per share at buy". Add it before converting.'); return; }
+
+  const ticker = (prompt(`Converting ${deal.company} to a public position.\n\nNew public ticker symbol (e.g. SPACE):`, '') || '').trim().toUpperCase();
+  if (!ticker) return;
+  if (!/^[A-Z]{1,5}(\.[A-Z])?$/.test(ticker)) { alert('That does not look like a valid ticker symbol.'); return; }
+  if (positions.some(p => !p.closed && (p.ticker || '').toUpperCase() === ticker)) {
+    if (!confirm(`You already hold an open ${ticker} position. Create a SECOND lot from this conversion anyway?`)) return;
+  }
+
+  const ipoDate = (prompt('IPO / liquidity date (YYYY-MM-DD):', '') || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ipoDate)) { alert('Please enter the IPO date as YYYY-MM-DD.'); return; }
+  const ipoPriceStr = (prompt('Per-share price at IPO (the private→public handoff mark, for the record):', c.ppsCur > 0 ? String(c.ppsCur) : '') || '').trim();
+  const ipoPrice = parseFloat(ipoPriceStr);
+  if (!(ipoPrice > 0)) { alert('IPO price must be a positive number.'); return; }
+  const account = (prompt('Which account holds it — type "Taxable" or "IRA":', 'Taxable') || '').trim();
+  if (account !== 'Taxable' && account !== 'IRA') { alert('Account must be exactly "Taxable" or "IRA".'); return; }
+
+  const ppsBuy = c.ppsBuy;
+  if (!(ppsBuy > 0)) { alert('Original price per share at buy is required to set the public cost basis. Add it to the deal first.'); return; }
+
+  const pos = mkPos();
+  pos.ticker = ticker;
+  pos.account = account;
+  pos.dateBought = deal.investmentDate || '';
+  pos.shares = c.shares;
+  pos.pricePaid = ppsBuy;
+  pos.peConverted = true;
+  pos.peIpoDate = ipoDate;
+  pos.peIpoPrice = ipoPrice;
+  pos.peCompany = deal.company || '';
+  pos.notes = (deal.notes ? deal.notes + ' · ' : '') + `Converted from private deal (${deal.company}) at IPO ${ipoDate}. Basis is pre-IPO cost; gain includes private-era appreciation.`;
+
+  const confirmMsg = `Convert ${deal.company} → public ${ticker}?\n\n`
+    + `Shares: ${c.shares >= 1 ? c.shares.toFixed(4) : c.shares.toFixed(6)}\n`
+    + `Cost basis (pre-IPO): ${fmtDollar(ppsBuy)}/sh  ·  total ${fmtDollar(c.inv)}\n`
+    + `Bought (original date): ${deal.investmentDate || '—'}\n`
+    + `IPO date: ${ipoDate}  ·  IPO price: ${fmtDollar(ipoPrice)}/sh\n`
+    + `Account: ${account}\n\n`
+    + `The private deal will be moved to your realized private record (not deleted), and removed from active PE so it stops counting in AUM.\n\nProceed?`;
+  if (!confirm(confirmMsg)) return;
+
+  realizedPeDeals.push({
+    ...deal,
+    exitType: 'IPO',
+    exitDate: ipoDate,
+    exitPricePerShare: ipoPrice,
+    exitValue: c.shares * ipoPrice,
+    realizedMultiple: (c.shares * ipoPrice) / c.inv,
+    convertedToTicker: ticker,
+    convertedAt: Date.now()
+  });
+  peDeals.splice(idx, 1);
+  positions.push(pos);
+
+  renderPeDeals();
+  renderCapitalDeployed();
+  if (typeof renderAll === 'function') renderAll();
+  scheduleSave();
+  if (typeof runSelfChecks === 'function') { try { runSelfChecks(); } catch (e) {} }
+  alert(`Done. ${ticker} added as a public position at your pre-IPO basis of ${fmtDollar(ppsBuy)}/sh. It's flagged as PE-converted — its gain reflects the full private-era appreciation, which the tracker will call out where it matters.`);
+}
+
 function renderAll() {
   const open = positions.filter(p => !p.closed);
   const closed = positions.filter(p => p.closed);
@@ -17298,6 +17404,7 @@ function exportData() {
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
     peDeals,
+    realizedPeDeals,
     qualityReviews,
     themeUniverseHistory,
     // Index look-through store (the pasted ETF holdings that feed look-through true-exposure, the
@@ -17340,6 +17447,7 @@ function importData(input) {
       if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
       if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
       if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
+      if (Array.isArray(data.realizedPeDeals)) realizedPeDeals = data.realizedPeDeals;
       if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
       if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
       // Restore index look-through store (lives in its own localStorage key,
@@ -18483,6 +18591,7 @@ function driveBuildBackupPayload() {
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
     peDeals,
+    realizedPeDeals,
     qualityReviews,
     themeUniverseHistory,
     trackRecordMatureOnly, industryAlphaMatureOnly,
@@ -18857,6 +18966,7 @@ async function executeRestore() {
     if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
     if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
     if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
+    if (Array.isArray(data.realizedPeDeals)) realizedPeDeals = data.realizedPeDeals;
     if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
     if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
     if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
