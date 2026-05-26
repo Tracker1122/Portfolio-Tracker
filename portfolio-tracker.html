@@ -14676,6 +14676,13 @@ async function runBookAiReview() {
       outTok: (usage && typeof usage.output_tokens === 'number') ? usage.output_tokens : qrAiEstTokens(text),
       measured: !!(usage && typeof usage.input_tokens === 'number'),
       selectedAtRun: [...discoverySelected],  // snapshot for staleness detection
+      openingPrompt: prompt,   // the full book context; reused as the head of every argue turn
+      thread: [{               // conversation turns; turn 0 is the opening analysis
+        role: 'ai', text,
+        inTok: (usage && typeof usage.input_tokens === 'number') ? usage.input_tokens : qrAiEstTokens(prompt),
+        outTok: (usage && typeof usage.output_tokens === 'number') ? usage.output_tokens : qrAiEstTokens(text),
+        measured: !!(usage && typeof usage.input_tokens === 'number'),
+      }],
     };
     saveBookAiReview();
   } catch (err) {
@@ -14767,6 +14774,97 @@ function verifyBookReviewTickers(text) {
   return { invented: [...invented], misowned: [...misowned] };
 }
 
+// Build the prompt for an argue/challenge turn on the book review. Re-asserts the framing every turn
+// (models drift agreeable across a thread). Crucially encodes THREE modes so the user can both correct
+// facts AND argue substance without the model confusing them.
+function buildBookThreadPrompt(newChallenge) {
+  const r = bookAiReview;
+  if (!r) return '';
+  // Back-compat: a review saved before the argue feature has no thread/openingPrompt. Seed them so
+  // the conversation is well-formed (the opening prompt is gone, but the analysis text is the head).
+  if (!Array.isArray(r.thread) || !r.thread.length) {
+    r.thread = [{ role: 'ai', text: r.text || '', inTok: r.inTok || 0, outTok: r.outTok || 0, measured: !!r.measured }];
+  }
+  const parts = [];
+  parts.push(r.openingPrompt || '(The original book-context prompt was not saved with this review. Work from your opening analysis below.)');
+  parts.push('\n\n=== YOUR OPENING REVIEW (already shown to the user) ===\n' + (r.thread && r.thread[0] ? r.thread[0].text : r.text));
+  // Replay prior challenge/response pairs.
+  let round = 0;
+  (r.thread || []).slice(1).forEach(t => {
+    if (t.role === 'user') { round++; parts.push(`\n--- USER (round ${round}) ---\n${t.text}`); }
+    else if (t.role === 'ai') { parts.push(`\n--- YOUR RESPONSE (round ${round}) ---\n${t.text}`); }
+  });
+  const thisRound = round + 1;
+  parts.push(`\n\n=== HOW TO ANSWER THIS NEXT MESSAGE (re-read every turn) ===
+The user is engaging with your review. Their message will be ONE of two kinds — identify which, and handle it correctly. Do not confuse them.
+
+(1) A FACTUAL CORRECTION about their own portfolio — e.g. "I don't hold X", "there's no Healthcare theme", "X is a candidate I'm considering, not a holding". The user is AUTHORITATIVE about their own book; you are not. ACCEPT such a correction immediately and completely — do NOT argue, do NOT defend your earlier statement. Then do the valuable part: trace what ELSE in your analysis depended on the wrong fact and state plainly which earlier points now fall as a result. A correction to one fact often invalidates a downstream conclusion — surface that.
+
+(2) A SUBSTANTIVE DISAGREEMENT about your interpretation or judgment — e.g. "you're underweighting the correlation between my defense names", "I don't think that's a real gap". Here you ENGAGE as a critic. If the user's point is right, concede it specifically (name which earlier point falls, which still stand — a ledger, not a vibe shift). If it's wrong or only partly right, say so plainly and hold the line with reasoning. Do NOT capitulate just to be agreeable — folding on sound analysis to keep the user happy actively harms them. A concession on one point is not permission to drop the others.
+
+THE LINE: a correction about WHAT THE USER OWNS or what's in their data → accept, you were wrong about a fact. A disagreement about WHAT IT MEANS → argue it honestly. Never treat a judgment challenge as a fact you must cave to, and never argue back against a correction about the user's own holdings.
+
+Other rules, unchanged: This is a focused reply to THIS message, not a re-run of the full review — a few tight paragraphs. Same evidence discipline — any outside real-world fact is UNVERIFIED, flag it; never fabricate. Only name tickers that are the user's actual holdings or their selected candidates; do not introduce new tickers as if held.
+
+--- USER (round ${thisRound}) ---
+${newChallenge}
+
+--- YOUR RESPONSE (round ${thisRound}) ---`);
+  return parts.join('\n');
+}
+
+async function runBookAiChallenge() {
+  const r = bookAiReview;
+  if (!r) return;
+  const ta = document.getElementById('book-ai-challenge-input');
+  if (!ta) return;
+  const msg = (ta.value || '').trim();
+  if (!msg) { ta.style.borderColor = '#fbbf24'; setTimeout(() => { if (ta) ta.style.borderColor = 'var(--color-border-tertiary)'; }, 800); return; }
+  if (bookAiBusy) return;
+  bookAiBusy = true;
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  if (!aiWorkerUrl) { bookAiBusy = false; renderThemeAiReview(); return; }
+
+  // Append the user turn now so the thread shows it immediately; the AI reply fills in after.
+  r.thread = r.thread || [];
+  r.thread.push({ role: 'user', text: msg });
+  saveBookAiReview();
+  ta.value = '';
+  renderThemeAiReview();
+
+  const prompt = buildBookThreadPrompt(msg);
+  try {
+    let resp;
+    try {
+      resp = await fetch(aiWorkerUrl + '/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
+    } catch (netErr) { const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e; }
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok || data.error) {
+      const errObj = (data && typeof data.error === 'object') ? data.error : null;
+      const m = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
+      const e = new Error(m || ('HTTP ' + resp.status)); e.aiKind = classifyAiError(resp.status, errObj ? errObj.type : '', m); e.httpStatus = resp.status; throw e;
+    }
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if (!text) { const e = new Error('Empty response'); e.aiKind = 'empty'; throw e; }
+    const usage = (data && data.usage) ? data.usage : null;
+    r.thread.push({
+      role: 'ai', text,
+      inTok: (usage && typeof usage.input_tokens === 'number') ? usage.input_tokens : qrAiEstTokens(prompt),
+      outTok: (usage && typeof usage.output_tokens === 'number') ? usage.output_tokens : qrAiEstTokens(text),
+      measured: !!(usage && typeof usage.input_tokens === 'number'),
+    });
+    saveBookAiReview();
+  } catch (err) {
+    const info = aiErrorMessage(err);
+    // record the failure as an AI turn so the user sees what happened, and can retry
+    r.thread.push({ role: 'ai', text: `⚠ ${info.title}: ${info.detail}`, error: true });
+    saveBookAiReview();
+  }
+  bookAiBusy = false;
+  renderThemeAiReview();
+}
+
 function renderThemeAiReview() {
   const host = document.getElementById('theme-ai-review');
   if (!host) return;
@@ -14813,6 +14911,45 @@ function renderThemeAiReview() {
         · <span style="cursor:pointer;text-decoration:underline" onclick="if(confirm('Clear the saved AI book review?')){bookAiReview=null;saveBookAiReview();renderThemeAiReview();}">clear saved review</span></div>
     </div>` : '';
 
+  // ---- Argue thread: turns 1+ (turn 0 is the opening review above), the input box, running cost. ----
+  let threadHtml = '';
+  if (bookAiReview) {
+    const turns = (bookAiReview.thread || []).slice(1); // skip opening analysis
+    const turnHtml = turns.map(t => {
+      if (t.role === 'user') {
+        return `<div style="margin:8px 0 4px;padding:7px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;color:var(--color-text-primary)"><span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">You</span><br>${esc(t.text)}</div>`;
+      }
+      if (t.error) {
+        return `<div style="margin:4px 0 8px;padding:7px 10px;border:1px solid #f87171;border-radius:var(--border-radius-md);font-size:10px;color:#f87171">${esc(t.text)} <span style="cursor:pointer;text-decoration:underline" onclick="renderThemeAiReview()">dismiss</span></div>`;
+      }
+      // AI reply — run the SAME accuracy checker so a rebuttal can't smuggle in a fresh hallucination.
+      const v = verifyBookReviewTickers(t.text);
+      const flags = [];
+      if (v.invented.length) flags.push(`invented: ${v.invented.join(', ')}`);
+      if (v.misowned.length) flags.push(`wrongly says you own: ${v.misowned.join(', ')}`);
+      const flagHtml = flags.length ? `<div style="font-size:9px;color:#f87171;margin-bottom:4px">⚠ Accuracy check — ${flags.join(' · ')} (your data wins).</div>` : '';
+      return `<div style="margin:4px 0 8px;padding:7px 10px;border-left:2px solid #60a5fa;background:var(--color-background-secondary);border-radius:var(--border-radius-md);font-size:10px;line-height:1.55;color:var(--color-text-primary)"><span style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em">AI</span><br>${flagHtml}<span style="white-space:pre-wrap">${esc(t.text)}</span></div>`;
+    }).join('');
+    const totalIn = (bookAiReview.thread || []).reduce((s, t) => s + (t.inTok || 0), 0);
+    const totalOut = (bookAiReview.thread || []).reduce((s, t) => s + (t.outTok || 0), 0);
+    const totalCost = (totalIn / 1e6) * 3 + (totalOut / 1e6) * 15;
+    const argueRounds = turns.filter(t => t.role === 'user').length;
+    threadHtml = `
+      <div style="margin-top:10px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background)">
+        <div style="font-size:10px;font-weight:700;color:var(--color-text-primary);margin-bottom:2px">Argue with this review</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:6px">
+          Correct a factual error (e.g. "I don't hold X" — it'll accept it and re-examine what else that breaks) or push back on a point you disagree with (it'll defend a sound call, concede a fair one). Each reply is re-checked against your holdings.
+        </div>
+        ${turnHtml}
+        ${bookAiBusy && turns.length && turns[turns.length - 1].role === 'user' ? `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;padding:4px 0">Thinking…</div>` : ''}
+        <textarea id="book-ai-challenge-input" placeholder="e.g. I don't hold LMT — re-check what that changes. Or: I think you're underweighting how correlated my semis are." style="width:100%;box-sizing:border-box;min-height:48px;margin-top:4px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-size:10px;padding:6px 8px;font-family:inherit"></textarea>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:4px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-primary" onclick="runBookAiChallenge()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Sending…' : 'Send'}</button>
+          <span style="font-size:8px;color:var(--color-text-tertiary)">${argueRounds} round${argueRounds === 1 ? '' : 's'} · thread total ${(totalIn + totalOut).toLocaleString()} tokens · ~$${totalCost.toFixed(3)} so far. Each turn resends the full conversation, so cost grows per round.</span>
+        </div>
+      </div>`;
+  }
+
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
       <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI book review — structure, gaps, and your selected candidates</div>
@@ -14826,6 +14963,7 @@ function renderThemeAiReview() {
       </div>
       <div id="book-ai-output"></div>
       ${result}
+      ${threadHtml}
     </div>`;
 }
 
