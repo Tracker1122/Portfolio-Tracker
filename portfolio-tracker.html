@@ -2248,7 +2248,10 @@ function loadBookExclude() {
     const raw = JSON.parse(localStorage.getItem('portfolio-book-exclude-v1') || '{}');
     bookExclude.tickers = new Set(raw.tickers || []);
     bookExclude.themes = new Set(raw.themes || []);
-    bookExclude.sleeves = new Set(raw.sleeves || []);
+    // Sleeve exclusion was removed from the UI (sleeve-level attribution lives in the Sleeve Value-Add
+    // section instead). Drop any sleeve exclusion saved by the prior version so it can't get stuck on
+    // with no control to clear it. The field is kept in the shape for safety but always loads empty.
+    bookExclude.sleeves = new Set();
   } catch (e) { /* leave empty on parse failure */ }
 }
 function saveBookExclude() {
@@ -3276,6 +3279,27 @@ function colorClass(v) {
 // a chip excludes (or re-includes) it; the summary above recomputes without the excluded positions.
 // A loud banner makes clear when the summary is FILTERED, so a partial book is never misread as whole.
 // ─────────────────────────────────────────────
+// Group the DIRECT open book by theme, sized by current market value, for the isolate stacked bar.
+// Mirrors the move-together graph's shape but on a DIFFERENT universe: direct positions only (the only
+// names with real per-position returns), NOT true exposure. So the same theme's % here will differ
+// from the move-together graph — that's expected, and the header says so.
+function computeBookThemeBar(openArr) {
+  const byTheme = {};
+  let total = 0;
+  openArr.forEach(p => {
+    const cv = (parseFloat(p.shares) || 0) * (parseFloat(p.exitPrice) || 0);
+    const t = p.theme || '(untagged)';
+    if (!byTheme[t]) byTheme[t] = { label: t, value: 0, names: [], positions: [] };
+    byTheme[t].value += cv;
+    byTheme[t].positions.push(p);
+    if (p.ticker && !byTheme[t].names.includes(p.ticker)) byTheme[t].names.push(p.ticker);
+    total += cv;
+  });
+  const themes = Object.values(byTheme).sort((a, b) => b.value - a.value);
+  themes.forEach(t => { t.pct = total > 0 ? (t.value / total) * 100 : 0; });
+  return { themes, total };
+}
+
 function renderBookExcludePanel(openArr) {
   // Render the filtered book summary into the Analysis-tab isolate card (the recomputed numbers that
   // react to the toggles). Lives here so the cause (toggles) and effect (numbers) are on the same tab.
@@ -3289,10 +3313,44 @@ function renderBookExcludePanel(openArr) {
   if (!el) return;
   if (!openArr || openArr.length === 0) { el.innerHTML = ''; return; }
 
-  // Distinct, sorted toggle values from the open book.
   const tickers = [...new Set(openArr.map(p => p.ticker).filter(Boolean))].sort();
-  const themes = [...new Set(openArr.map(p => p.theme).filter(Boolean))].sort();
-  const sleeves = [...new Set(openArr.map(p => p.sleeve).filter(Boolean))].sort();
+  const { themes, total } = computeBookThemeBar(openArr);
+  const palette = ['#60a5fa', '#a78bfa', '#f472b6', '#34d399', '#fbbf24', '#fb923c', '#22d3ee', '#c084fc', '#4ade80', '#facc15', '#f87171'];
+  const fmtD = (n) => fmtDollarWhole(n);
+
+  // Per-theme filtered return: the return of just that theme's positions (so the legend shows not only
+  // size but how that block itself performed). Uses the same calcSummary math on the theme's slice.
+  const themeStats = {};
+  themes.forEach(t => { themeStats[t.label] = calcSummary(t.positions); });
+
+  // ---- Stacked bar: each theme a proportional segment, click to toggle off. Excluded segments render
+  // hollow (outline only) so the bar still shows the theme's slot but signals it's removed. ----
+  const bar = `<div style="display:flex;width:100%;height:34px;border-radius:var(--border-radius-md);overflow:hidden;margin-bottom:8px;border:1px solid var(--color-border-tertiary)">
+    ${themes.map((t, i) => {
+      const off = bookExclude.themes.has(t.label);
+      const color = palette[i % palette.length];
+      const fill = off ? `background:repeating-linear-gradient(45deg,transparent,transparent 3px,${color}22 3px,${color}22 6px);border:1px dashed ${color}` : `background:${color}`;
+      const lbl = (t.pct >= 7 && !off) ? `<span style="font-size:9px;color:#0b0b0f;font-weight:700;white-space:nowrap;overflow:hidden;padding:0 2px">${t.pct.toFixed(0)}%</span>` : '';
+      return `<div title="${esc(t.label)} — ${t.pct.toFixed(1)}% of direct book · ${fmtD(t.value)}${off ? ' (turned OFF)' : ' · click to turn off'}" onclick="toggleBookExclude('themes','${esc(t.label).replace(/'/g, "\\'")}')" style="width:${t.pct}%;${fill};cursor:pointer;display:flex;align-items:center;justify-content:center;min-width:2px">${lbl}</div>`;
+    }).join('')}
+  </div>`;
+
+  // ---- Legend: theme rows mirroring the move-together legend (color chip · name · N names · %·$),
+  // plus this theme's own return, click to toggle off. ----
+  const legend = themes.map((t, i) => {
+    const off = bookExclude.themes.has(t.label);
+    const color = palette[i % palette.length];
+    const st = themeStats[t.label];
+    const ret = st && st.yourReturn !== null ? `${st.yourReturn >= 0 ? '+' : ''}${st.yourReturn.toFixed(1)}%` : '—';
+    const retCol = st && st.yourReturn >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    return `<div onclick="toggleBookExclude('themes','${esc(t.label).replace(/'/g, "\\'")}')" style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--border-radius-sm);cursor:pointer;font-size:11px;${off ? 'opacity:0.5' : ''}" onmouseover="this.style.background='var(--color-background-secondary)'" onmouseout="this.style.background='transparent'">
+      <span style="width:10px;height:10px;border-radius:2px;background:${color};flex-shrink:0;${off ? 'outline:1px solid ' + color + ';background:transparent' : ''}"></span>
+      <span style="color:var(--color-text-primary);flex:1;${off ? 'text-decoration:line-through' : ''}"><strong>${esc(t.label)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">${t.names.length} name${t.names.length > 1 ? 's' : ''}</span></span>
+      <span style="font-size:9px;color:${retCol};white-space:nowrap;margin-right:6px" title="This theme's own return (its positions only)">${ret}</span>
+      <span style="font-weight:700;font-size:11px;color:var(--color-text-secondary);white-space:nowrap">${t.pct.toFixed(1)}% · ${fmtD(t.value)}</span>
+      <span style="color:#fbbf24;font-size:9px;width:14px;text-align:right">${off ? '✕' : ''}</span>
+    </div>`;
+  }).join('');
 
   const chip = (kind, value, label) => {
     const off = bookExclude[kind].has(value);
@@ -3300,31 +3358,35 @@ function renderBookExcludePanel(openArr) {
     const style = off
       ? base + 'background:rgba(251,191,36,0.16);border-color:rgba(251,191,36,0.5);color:#fbbf24;text-decoration:line-through;'
       : base + 'background:var(--color-surface-2,rgba(255,255,255,0.04));border-color:var(--color-border,rgba(255,255,255,0.12));color:var(--color-text-secondary);';
-    return `<span style="${style}" onclick="toggleBookExclude('${kind}','${esc(value).replace(/'/g, "\\'")}')" title="${off ? 'Excluded from the summary — click to put back' : 'Click to exclude from the summary'}">${off ? '✕ ' : ''}${esc(label)}</span>`;
+    return `<span style="${style}" onclick="toggleBookExclude('${kind}','${esc(value).replace(/'/g, "\\'")}')" title="${off ? 'Excluded — click to put back' : 'Click to exclude'}">${off ? '✕ ' : ''}${esc(label)}</span>`;
   };
 
-  const nOff = bookExclude.tickers.size + bookExclude.themes.size + bookExclude.sleeves.size;
   const excludedCount = openArr.filter(isBookExcluded).length;
   const shownCount = openArr.length - excludedCount;
 
   const banner = bookExcludeActive()
-    ? `<div style="background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:7px 12px;margin-bottom:8px;font-size:12px;color:#fbbf24;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-         <span><strong>Summary is filtered</strong> — showing ${shownCount} of ${openArr.length} positions (${excludedCount} turned off). This is NOT your full book.</span>
+    ? `<div style="background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:7px 12px;margin-bottom:10px;font-size:12px;color:#fbbf24;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+         <span><strong>Summary is filtered</strong> — showing ${shownCount} of ${openArr.length} positions (${excludedCount} turned off). The cards above reflect the book WITHOUT them.</span>
          <span style="cursor:pointer;text-decoration:underline" onclick="clearBookExclude()">show all</span>
        </div>`
     : '';
 
   el.innerHTML = `
     ${banner}
-    <details ${bookExcludeActive() ? 'open' : ''} style="font-size:12px">
-      <summary style="cursor:pointer;color:var(--color-text-tertiary);font-size:12px;padding:2px 0">
-        Turn off part of the book ${nOff ? `(${nOff} active)` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">Your directly-held book by theme — click to turn a block off</div>
+    </div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
+      Sized by current value of <strong>positions you hold directly</strong> (${fmtD(total)} across ${openArr.length} positions). Click a block — in the bar or the legend — to remove it; the summary cards above recompute without it.
+      <span style="color:var(--color-text-secondary)">These %s won't match "How your holdings move together"</span> — that graph uses <em>true exposure</em> (your look-through share of names inside funds too), so mega-cap-heavy themes like Big Tech read much larger there. This is the direct book only, because direct positions are the only names with a real return to turn off.
+    </div>
+    ${bar}
+    ${legend}
+    <details ${bookExclude.tickers.size ? 'open' : ''} style="font-size:12px;margin-top:10px;border-top:1px solid var(--color-border-tertiary);padding-top:8px">
+      <summary style="cursor:pointer;color:var(--color-text-tertiary);font-size:11px;padding:2px 0">
+        Or turn off a single holding ${bookExclude.tickers.size ? `(${bookExclude.tickers.size} off)` : ''}
       </summary>
-      <div style="margin-top:6px">
-        <div style="margin-bottom:4px"><span style="color:var(--color-text-tertiary);font-size:10px;text-transform:uppercase;letter-spacing:0.04em">By sleeve</span><br>${sleeves.map(s => chip('sleeves', s, s)).join('')}</div>
-        <div style="margin-bottom:4px"><span style="color:var(--color-text-tertiary);font-size:10px;text-transform:uppercase;letter-spacing:0.04em">By theme</span><br>${themes.map(t => chip('themes', t, t)).join('')}</div>
-        <div><span style="color:var(--color-text-tertiary);font-size:10px;text-transform:uppercase;letter-spacing:0.04em">By holding</span><br>${tickers.map(t => chip('tickers', t, t)).join('')}</div>
-      </div>
+      <div style="margin-top:6px">${tickers.map(t => chip('tickers', t, t)).join('')}</div>
     </details>`;
 }
 
