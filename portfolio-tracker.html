@@ -13935,6 +13935,11 @@ function toggleDiscoverySelect(ticker) {
     discoverySelected.add(key);
   }
   renderThemeDiscovery();
+  // The AI book-review card shows the selected-ticker count + cost estimate; it lives in a separate
+  // container that renderThemeDiscovery doesn't touch, so refresh it here or it goes stale (shows the
+  // old count) until the next full tab render. The review itself reads discoverySelected live, but the
+  // displayed count must track the selection too.
+  if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
 }
 
 // Fetch 1-month AND 1-year return for one ticker in a SINGLE Polygon call. The range-aggregates
@@ -14400,7 +14405,7 @@ function renderThemeDiscovery() {
         <span style="font-size:10px;color:var(--color-text-primary);font-weight:600">${discoverySelected.size} of ${DISCOVERY_MAX_SELECT} selected:</span>
         <span style="font-size:9px;color:var(--color-text-tertiary)">${[...discoverySelected].map(esc).join(', ')}</span>
         <button id="disc-fetch-btn" class="btn btn-sm btn-primary" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:auto">↡ Fetch ${discoverySelected.size} selected (1M + 1Y)</button>
-        <button class="btn btn-sm" onclick="discoverySelected.clear();renderThemeDiscovery()" style="font-size:9px">Clear</button>
+        <button class="btn btn-sm" onclick="discoverySelected.clear();renderThemeDiscovery();renderThemeAiReview()" style="font-size:9px">Clear</button>
         <div id="disc-fetch-status" style="flex-basis:100%;margin-top:2px"></div>
       </div>` : ''}
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
