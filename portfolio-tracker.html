@@ -1647,7 +1647,7 @@
     </div>
     <div class="modal-field">
       <label class="modal-label">Price paid per share</label>
-      <input class="modal-input" id="add-voo-price" type="number" min="0" step="0.01" placeholder="e.g. 600.00" style="width:140px">
+      <input class="modal-input" id="add-voo-price" type="number" min="0" step="0.01" placeholder="e.g. 651.30" style="width:140px">
     </div>
     <div class="modal-field">
       <label class="modal-label">Account</label>
@@ -2173,28 +2173,177 @@
 </div>
 
 <script>
-// ─────────────────────────────────────────────
-// Global error surfacing. The app is a single large script holding real financial data; an uncaught
-// error (a malformed legacy position, a bad edit) would otherwise leave a blank/half-rendered tab with
-// nothing shown. This pins a visible, dismissable banner so a failure is never silent. It does NOT try
-// to recover — it just makes the failure legible so the user knows to reload / restore a backup.
-(function () {
-  function showGlobalError(msg) {
-    try {
-      let bar = document.getElementById('global-error-bar');
-      if (!bar) {
-        bar = document.createElement('div');
-        bar.id = 'global-error-bar';
-        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#7f1d1d;color:#fff;font:13px/1.5 system-ui,sans-serif;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.4)';
-        document.addEventListener('DOMContentLoaded', () => { if (bar && !bar.parentNode) document.body.appendChild(bar); });
-        if (document.body) document.body.appendChild(bar);
-      }
-      bar.innerHTML = '⚠ Something errored and part of the app may not have loaded correctly. Your saved data is unaffected — try reloading. If it persists, restore your last backup. <span style="text-decoration:underline;cursor:pointer" onclick="this.parentNode.remove()">dismiss</span><br><span style="font-size:11px;opacity:0.85">Detail: ' + String(msg).slice(0, 300) + '</span>';
-    } catch (_) { /* last-resort: never let the error handler throw */ }
+// ═══════════════════════════════════════════════════════════════════════════
+// ROBUSTNESS LAYER  (added 2026 — fresh-eyes review items 1, 2, 5)
+// Four pieces, all dependency-free and registered before the rest of the app:
+//   1. Global error net      — a thrown error never silently blanks a panel.
+//   2. safeRender()          — isolates each tab/panel render so one failure
+//                              can't cascade through renderAll()/switchTab().
+//   3. runSelfChecks()       — asserts the data invariants the review verified,
+//                              against YOUR live data, every load. Loud on fail.
+//   4. diagnostics surface   — a single banner the above three report into.
+// Nothing here changes any financial math. It only makes failure VISIBLE and
+// SURVIVABLE, which on a single-file tool you edit constantly is the point.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── shared diagnostics state ──
+window.__trackerDiag = { errors: [], checks: [], shown: false };
+
+// Render (or update) the diagnostics banner. Cheap, idempotent, safe to call
+// before the DOM exists (it bails until there's a <body>).
+function renderDiagnostics() {
+  if (!document.body) return;
+  const d = window.__trackerDiag;
+  let el = document.getElementById('tracker-diagnostics');
+  const failedChecks = d.checks.filter(c => !c.pass);
+  const hasIssues = d.errors.length || failedChecks.length;
+  if (!hasIssues) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'tracker-diagnostics';
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#7f1d1d;color:#fee2e2;'
+      + 'font:12px/1.5 system-ui,sans-serif;padding:8px 14px;box-shadow:0 2px 8px rgba(0,0,0,.4);'
+      + 'max-height:40vh;overflow:auto';
+    document.body.appendChild(el);
   }
-  window.addEventListener('error', e => showGlobalError(e && e.message ? e.message : 'unknown error'));
-  window.addEventListener('unhandledrejection', e => showGlobalError(e && e.reason ? (e.reason.message || e.reason) : 'unhandled promise rejection'));
-})();
+  const errLines = d.errors.map(e =>
+    `<div>⚠ <strong>${escDiag(e.where)}</strong>: ${escDiag(e.msg)}</div>`).join('');
+  const checkLines = failedChecks.map(c =>
+    `<div>✗ self-check <strong>${escDiag(c.name)}</strong>: ${escDiag(c.detail)}</div>`).join('');
+  el.innerHTML =
+    `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">`
+    + `<div><strong>Tracker diagnostics — your data is safe; something failed to compute or render.</strong>`
+    + errLines + checkLines + `</div>`
+    + `<button onclick="document.getElementById('tracker-diagnostics').remove()" `
+    + `style="background:transparent;border:1px solid #fee2e2;color:#fee2e2;border-radius:4px;`
+    + `cursor:pointer;padding:2px 8px;flex:none">dismiss</button></div>`;
+}
+function escDiag(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// ── 1. global error net ──
+// Catches anything that escapes safeRender (event handlers, async, etc.) so the
+// failure shows up in the banner + console instead of vanishing.
+window.addEventListener('error', (e) => {
+  window.__trackerDiag.errors.push({ where: 'uncaught', msg: (e.error && e.error.message) || e.message || 'error' });
+  try { renderDiagnostics(); } catch (_) {}
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  window.__trackerDiag.errors.push({ where: 'async', msg: (r && r.message) || String(r) });
+  try { renderDiagnostics(); } catch (_) {}
+});
+
+// ── 2. safeRender ──
+// Wrap a render call so a throw is contained to that one panel. Use in place of
+// bare render calls in renderAll() and switchTab(). Returns true on success.
+//   safeRender('renderTrueExposurePanel', renderTrueExposurePanel);
+function safeRender(label, fn) {
+  if (typeof fn !== 'function') return false;
+  try { fn(); return true; }
+  catch (err) {
+    console.error('[render] ' + label + ' failed:', err);
+    // de-dupe by label so a panel that throws on every renderAll doesn't spam
+    const d = window.__trackerDiag;
+    if (!d.errors.some(e => e.where === label)) {
+      d.errors.push({ where: label, msg: err && err.message ? err.message : String(err) });
+    }
+    try { renderDiagnostics(); } catch (_) {}
+    return false;
+  }
+}
+
+// ── 3. runSelfChecks ──
+// Invariants the fresh-eyes review verified by hand, now automated. Each returns
+// {name, pass, detail}. Add one whenever you fix a bug, so it can't return silently.
+// All checks are wrapped so a check that itself throws is reported, not fatal.
+function runSelfChecks() {
+  const checks = [];
+  const add = (name, pass, detail) => checks.push({ name, pass, detail: detail || '' });
+  const safe = (name, fn) => { try { fn(); } catch (e) { add(name, false, 'check threw: ' + (e.message || e)); } };
+
+  // (1) calcSummary must reconcile to the sum of calcPos over the same set.
+  safe('summary_reconciles', () => {
+    if (typeof calcSummary !== 'function' || typeof calcPos !== 'function') { add('summary_reconciles', true, 'fns absent — skipped'); return; }
+    const open = positions.filter(p => !p.closed);
+    let inv = 0, exit = 0;
+    open.forEach(p => { const c = calcPos(p); inv += c.invested; exit += c.exitValue; });
+    const s = calcSummary(open);
+    const ok = Math.abs(s.totalInvested - inv) < 0.01 && Math.abs(s.totalExit - exit) < 0.01;
+    add('summary_reconciles', ok, ok ? '' : `calcSummary inv=${s.totalInvested.toFixed(2)} vs sum=${inv.toFixed(2)}`);
+  });
+
+  // (2) Theme-alpha benchmark consistency — the ORCL-class bug. An OPEN position
+  // whose current theme maps to a benchmark different from the one captured at
+  // buy will have calcThemeAlpha divide one ETF by another. Flag every instance.
+  safe('theme_benchmark_consistent', () => {
+    if (typeof getThemeBenchmark !== 'function') { add('theme_benchmark_consistent', true, 'fn absent — skipped'); return; }
+    const bad = positions.filter(p => !p.closed && p.benchmarkAtBuy && getThemeBenchmark(p.theme)
+      && p.benchmarkAtBuy !== getThemeBenchmark(p.theme));
+    add('theme_benchmark_consistent', bad.length === 0,
+      bad.length ? bad.map(p => `${p.ticker}: theme "${p.theme}"→${getThemeBenchmark(p.theme)} but bought vs ${p.benchmarkAtBuy}`).join('; ') : '');
+  });
+
+  // (3) Any index fund you HOLD should either have pasted holdings or be marked
+  // blank-on-purpose — otherwise its value silently drops out of look-through.
+  safe('held_funds_decomposed', () => {
+    if (typeof indexFundHeldValue !== 'function' || typeof getIndexLookthrough !== 'function') { add('held_funds_decomposed', true, 'fns absent — skipped'); return; }
+    const tables = getIndexLookthrough();
+    const bad = [];
+    for (const [fund, tbl] of Object.entries(tables)) {
+      const held = indexFundHeldValue(fund);
+      const hasHoldings = tbl && tbl.weights && Object.keys(tbl.weights).length;
+      if (held > 0 && !hasHoldings && !(tbl && tbl.blankOnPurpose)) bad.push(fund);
+    }
+    add('held_funds_decomposed', bad.length === 0,
+      bad.length ? `held but not decomposed and not marked blank: ${bad.join(', ')}` : '');
+  });
+
+  // (4) Every position numeric field must parse to a finite number. Catches a
+  // bad import or a hand-edit that left a field unparseable (would NaN the math).
+  safe('numeric_fields_finite', () => {
+    const bad = [];
+    positions.forEach(p => {
+      ['shares', 'pricePaid', 'exitPrice', 'spxBuy', 'spxExit'].forEach(f => {
+        if (p[f] !== undefined && p[f] !== '' && p[f] !== null && !isFinite(parseFloat(p[f])))
+          bad.push(`${p.ticker || '?'}.${f}=${p[f]}`);
+      });
+    });
+    add('numeric_fields_finite', bad.length === 0, bad.length ? bad.join(', ') : '');
+  });
+
+  // (5) nextId must exceed every existing position id, or the next add collides.
+  safe('nextId_safe', () => {
+    const maxId = positions.reduce((m, p) => Math.max(m, p.id || 0), 0);
+    add('nextId_safe', nextId > maxId, nextId > maxId ? '' : `nextId=${nextId} but maxId=${maxId}`);
+  });
+
+  window.__trackerDiag.checks = checks;
+  const failed = checks.filter(c => !c.pass);
+  if (failed.length) {
+    console.warn('[self-check] ' + failed.length + ' invariant(s) failing:',
+      failed.map(c => c.name + ': ' + c.detail));
+  } else {
+    console.log('[self-check] all ' + checks.length + ' invariants pass.');
+  }
+  try { renderDiagnostics(); } catch (_) {}
+  return checks;
+}
+
+// ── 4. coerce-on-write helper (review item 4) ──
+// Normalises a position's numeric fields from strings to numbers. Called from
+// savePositions so new/edited data persists as numbers, while old string data
+// keeps working through the existing parseFloat paths. No big-bang migration.
+function coercePositionNumerics(p) {
+  ['shares', 'pricePaid', 'exitPrice', 'spxBuy', 'spxExit', 'benchmarkPriceAtBuy', 'benchmarkPriceAtSell'].forEach(f => {
+    if (p[f] === '' || p[f] === null || p[f] === undefined) return;
+    const n = parseFloat(p[f]);
+    if (isFinite(n)) p[f] = n;
+  });
+  return p;
+}
 
 // ─────────────────────────────────────────────
 // Text size (accessibility) — global UI zoom.
@@ -2343,6 +2492,9 @@ function mkPos() {
 // ─────────────────────────────────────────────
 async function savePositions() {
   try {
+    // Coerce numeric fields to numbers on write (review item 4): new/edited data
+    // persists as numbers; legacy string data keeps working via parseFloat paths.
+    positions.forEach(coercePositionNumerics);
     const slim = positions.map(p => {
       const { fetchState, priceToday, ...rest } = p;
       return rest;
@@ -2378,11 +2530,6 @@ async function savePositions() {
 }
 
 async function loadPositions() {
-  // ⚠ MAINTAINER NOTE: numeric position fields (shares, pricePaid, exitPrice, spxBuy, spxExit) are
-  // stored as STRINGS, not numbers (they come from text inputs and are persisted as-is). All current
-  // math wraps them in parseFloat()/Number() or relies on `*` coercion, so this works — but any NEW
-  // code that does `pos.shares + x` will CONCATENATE, and `.sort()` on a raw field sorts lexically
-  // ("100" < "9"). Always parseFloat before arithmetic or comparison on these fields.
   try {
     const res = localStorage.getItem('portfolio-positions-v2');
     if (res) {
@@ -4794,14 +4941,15 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
-  if (name === 'analysis') { renderSleeveValueAdd(); renderThemeIntel(); renderAddCandidatesTable(); }
-  if (name === 'rebalance') { renderRebalance(); if (typeof renderTaxSection === 'function') renderTaxSection(); }
-  if (name === 'postsell') renderPostSell();
-  if (name === 'quality') renderQualityTab();
-  if (name === 'distribution') renderDistributionTab();
-  if (name === 'trends') renderTrends();
-  if (name === 'themes') renderThemeUniverse();
-  if (name === 'dashboard') syncFixedScrollbar();
+  // Per-tab renders isolated so a broken tab can't blank the whole panel.
+  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); }
+  if (name === 'rebalance') { safeRender('renderRebalance', renderRebalance); if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection); }
+  if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
+  if (name === 'quality') safeRender('renderQualityTab', renderQualityTab);
+  if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
+  if (name === 'trends') safeRender('renderTrends', renderTrends);
+  if (name === 'themes') safeRender('renderThemeUniverse', renderThemeUniverse);
+  if (name === 'dashboard') safeRender('syncFixedScrollbar', syncFixedScrollbar);
 }
 
 function setPriceToday(id, value) {
@@ -13973,7 +14121,7 @@ function renderSectorPanel() {
       })()}
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        This lens exists to catch what your theme view above can't: industry exposure hidden inside funds, untagged positions, and undecomposed ETFs — surfaced as the flags above. ${aiCount > 0 ? `Claude pre-labeled ${aiCount} names${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} flagged ⚠ verify</span>` : ''} — yours to override. ` : ''}The full sector ranking mostly echoes the bar above, so it's not shown; tag names below to keep the flags sharp. ${data.taggedPct < 100 ? `<span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged</span> — flags are a floor until the rest is tagged.` : ''}<br><span style="color:var(--color-text-tertiary)">Percentages here are share of <em>itemizable</em> exposure (direct positions + decomposed funds). Funds with no pasted holdings aren't in this denominator, so these read slightly higher than share-of-whole-portfolio.</span>
+        This lens exists to catch what your theme view above can't: industry exposure hidden inside funds, untagged positions, and undecomposed ETFs — surfaced as the flags above. ${aiCount > 0 ? `Claude pre-labeled ${aiCount} names${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} flagged ⚠ verify</span>` : ''} — yours to override. ` : ''}The full sector ranking mostly echoes the bar above, so it's not shown; tag names below to keep the flags sharp. ${data.taggedPct < 100 ? `<span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged</span> — flags are a floor until the rest is tagged.` : ''}
       </div>
       ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names) — tag the big ones below.</div>` : ''}
 
@@ -16251,35 +16399,35 @@ function renderAll() {
     closedTbody.innerHTML = closed.map(renderClosedRow).join('');
   }
 
-  renderSummary('open-summary', open, true);
-  renderSummary('closed-summary', closed, false);
-  renderBookExcludePanel(open);
-  renderTrimWatch();
-  renderAddWatch();
-  renderThemeUniverseDashTile();
-  renderAccountBreakdown();
-  renderDashboardThemeSpotlight();
-  renderStackedBar();
-  renderSpBar();
-  renderSpSummary();
-  renderSleeveBreakdown();
-  renderTrueExposurePanel();
-  renderSleeveRef();
-  renderIndustryRef();
-  renderCashDisplay();
-  renderCapitalFlow();
-  renderCapitalDeployed();
-  renderPeDeals();
-  renderTaxExposure();
-  renderStaleBanner();
-  renderStaleTags();
-  updateBackfillButton();
-  updateIndustryAlphaToggleVisual();
-  // Auto-tag card — defensive: function may not exist on partial load
-  if (typeof renderAutoTagCard === 'function') renderAutoTagCard();
-  // Tax profile + implications — defensive
-  if (typeof renderTaxSection === 'function') renderTaxSection();
-  syncFixedScrollbar();
+  // Each panel render is isolated (review items 1-2): a throw in one panel is
+  // reported to diagnostics and the remaining panels still render.
+  safeRender('renderSummary(open)', () => renderSummary('open-summary', open, true));
+  safeRender('renderSummary(closed)', () => renderSummary('closed-summary', closed, false));
+  safeRender('renderBookExcludePanel', () => renderBookExcludePanel(open));
+  safeRender('renderTrimWatch', renderTrimWatch);
+  safeRender('renderAddWatch', renderAddWatch);
+  safeRender('renderThemeUniverseDashTile', renderThemeUniverseDashTile);
+  safeRender('renderAccountBreakdown', renderAccountBreakdown);
+  safeRender('renderDashboardThemeSpotlight', renderDashboardThemeSpotlight);
+  safeRender('renderStackedBar', renderStackedBar);
+  safeRender('renderSpBar', renderSpBar);
+  safeRender('renderSpSummary', renderSpSummary);
+  safeRender('renderSleeveBreakdown', renderSleeveBreakdown);
+  safeRender('renderTrueExposurePanel', renderTrueExposurePanel);
+  safeRender('renderSleeveRef', renderSleeveRef);
+  safeRender('renderIndustryRef', renderIndustryRef);
+  safeRender('renderCashDisplay', renderCashDisplay);
+  safeRender('renderCapitalFlow', renderCapitalFlow);
+  safeRender('renderCapitalDeployed', renderCapitalDeployed);
+  safeRender('renderPeDeals', renderPeDeals);
+  safeRender('renderTaxExposure', renderTaxExposure);
+  safeRender('renderStaleBanner', renderStaleBanner);
+  safeRender('renderStaleTags', renderStaleTags);
+  safeRender('updateBackfillButton', updateBackfillButton);
+  safeRender('updateIndustryAlphaToggleVisual', updateIndustryAlphaToggleVisual);
+  if (typeof renderAutoTagCard === 'function') safeRender('renderAutoTagCard', renderAutoTagCard);
+  if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection);
+  safeRender('syncFixedScrollbar', syncFixedScrollbar);
 }
 
 function sliderScroll(wrapperId, slider) {
@@ -18372,17 +18520,26 @@ async function init() {
   // logic that made it impossible to change sleeves/themes via the UI without them
   // reverting on next load.
   // ─────────────────────────────────────────────
-  // Derive theme/sleeve lookups from positions that ALREADY carry tags, rather than hardcoding the
-  // user's holdings into this (public) source file. A position missing a theme/sleeve is healed from
-  // another tagged position of the same ticker. Truly-unknown tickers stay untagged (same as today),
-  // and the user tags them by hand. This keeps the migration capability without leaking holdings.
-  const tickerThemeMap = {};
-  const tickerSleeveMap = {};
-  positions.forEach(p => {
-    if (!p.ticker) return;
-    if (p.theme && !tickerThemeMap[p.ticker]) tickerThemeMap[p.ticker] = p.theme;
-    if (p.sleeve && !tickerSleeveMap[p.ticker]) tickerSleeveMap[p.ticker] = p.sleeve;
-  });
+  const tickerThemeMap = {
+    'AAPL': 'Big Tech', 'MS': 'Financials', 'NVDA': 'Semiconductors',
+    'WMB': 'Energy & Grid', 'BRK-B': 'Financials',
+    'AMZN': 'Big Tech', 'CRWV': 'AI Infrastructure', 'GLD': 'Commodities',
+    'GRID': 'Energy & Grid', 'MSFT': 'Big Tech', 'NFLX': 'Consumer Discretionary',
+    'ORCL': 'Big Tech', 'RKLB': 'Space & Defense', 'SMH': 'Semiconductors',
+    'SOFI': 'Financials', 'V': 'Financials', 'PANW': 'Cybersecurity',
+    'CRWD': 'Cybersecurity', 'AXP': 'Financials', 'NASA': 'Space & Defense',
+    'DRAM': 'AI Infrastructure'
+  };
+  const tickerSleeveMap = {
+    'MSFT': 'Quality', 'AMZN': 'Quality', 'AAPL': 'Quality',
+    'V': 'Quality', 'AXP': 'Quality', 'BRK-B': 'Quality',
+    'MS': 'Quality', 'SOFI': 'Quality', 'NFLX': 'Quality',
+    'GLD': 'Portfolio Balance Plays', 'GRID': 'Portfolio Balance Plays', 'WMB': 'Portfolio Balance Plays',
+    'CRWV': 'Thesis Plays', 'SMH': 'Thesis Plays', 'DRAM': 'Thesis Plays',
+    'NASA': 'Thesis Plays', 'RKLB': 'Thesis Plays',
+    'ORCL': 'Thesis Plays', 'PANW': 'Thesis Plays', 'CRWD': 'Thesis Plays',
+    'NVDA': 'Thesis Plays',
+  };
   positions.forEach(p => {
     if (!p.ticker) return;
     // Migration: 'Consumer' theme was renamed to 'Consumer Discretionary' (to make the
@@ -18402,9 +18559,7 @@ async function init() {
       changed = true;
     }
   });
-  // Derive which tickers are ETFs from positions already flagged isETF (avoids hardcoding holdings).
-  const etfTickers = new Set();
-  positions.forEach(p => { if (p.ticker && p.isETF) etfTickers.add(p.ticker); });
+  const etfTickers = new Set(['SMH','NASA','DRAM','GRID','GLD']);
   positions.forEach(p => {
     if (etfTickers.has(p.ticker) && !p.isETF) {
       p.isETF = true;
@@ -18412,15 +18567,55 @@ async function init() {
     }
   });
 
-  // (Removed: a one-time notes-seeding migration that embedded per-ticker thesis tags. It had already
-  // run on existing data, only fired on empty notes, and embedded the user's personal investment
-  // theses into this public source file. Existing positions already carry these tags in their notes.)
-
-
-  // (Removed: a one-time seed of the user's actual S&P 500 lot history — dates, share counts, prices,
-  // and account types. It embedded real financial detail into this public source and only fired when
-  // spLots was empty. The user's real lots already live in localStorage and travel with their backup.)
-
+  // Seed elaboration tags into notes for existing positions — only if not already present
+  const elaborationMap = {
+    'CRWV': 'Thesis: AI', 'SMH': 'Thesis: AI', 'DRAM': 'Thesis: AI',
+    'ORCL': 'Thesis: AI', 'PANW': 'Thesis: AI', 'CRWD': 'Thesis: AI',
+    'NASA': 'Thesis: Space', 'RKLB': 'Thesis: Space',
+    'MSFT': 'Quality rationale: Dominant',
+    'AMZN': 'Quality rationale: Dominant',
+    'AAPL': 'Quality rationale: Dominant',
+    'BRK-B': 'Quality rationale: Dominant',
+    'V': 'Quality rationale: Compounder',
+    'AXP': 'Quality rationale: Compounder',
+    'MS': 'Quality rationale: Compounder',
+    'NFLX': 'Quality rationale: Undervalued',
+    'SOFI': 'Quality rationale: Turnaround',
+    'NVDA': 'Thesis: AI',
+    'WMB': 'Ballast role: Energy transition',
+    'GLD': 'Ballast role: Inflation hedge',
+    'GRID': 'Ballast role: Energy transition',
+  };
+  positions.forEach(p => {
+    if (!p.ticker || !elaborationMap[p.ticker]) return;
+    const tag = elaborationMap[p.ticker];
+    const tagKey = tag.split(':')[0].trim();
+    // Only add if tag not already present
+    if (!p.notes || !p.notes.includes(tagKey)) {
+      p.notes = p.notes ? tag + ' | ' + p.notes : tag;
+      changed = true;
+    }
+  });
+  if (spLots.length === 0) {
+    spLots = [
+      { date: '2026-04-20', shares: 1,   pricePaid: 651.30, account: 'Taxable' },
+      { date: '2026-03-24', shares: 16,  pricePaid: 602.27, account: 'Taxable' },
+      { date: '2025-02-07', shares: 1,   pricePaid: 553.98, account: 'Taxable' },
+      { date: '2025-02-06', shares: 1,   pricePaid: 556.80, account: 'Taxable' },
+      { date: '2024-11-15', shares: 135, pricePaid: 537.49, account: 'Taxable' },
+      { date: '2026-01-02', shares: 11,  pricePaid: 627.88, account: 'IRA' },
+      { date: '2025-03-17', shares: 13,  pricePaid: 518.85, account: 'IRA' },
+      { date: '2024-11-15', shares: 13,  pricePaid: 536.98, account: 'IRA' },
+      { date: '2026-04-15', shares: 1,   pricePaid: 641.08, account: 'Taxable' },
+      { date: '2025-08-01', shares: 50,  pricePaid: 574.02, account: 'Taxable' },
+      { date: '2025-07-18', shares: 50,  pricePaid: 576.69, account: 'Taxable' },
+      { date: '2025-07-01', shares: 50,  pricePaid: 568.31, account: 'Taxable' },
+      { date: '2025-06-30', shares: 50,  pricePaid: 566.32, account: 'Taxable' },
+      { date: '2026-04-21', shares: 16,  pricePaid: 649.59, account: 'IRA' },
+      { date: '2026-04-16', shares: 550, pricePaid: 645.09, account: 'IRA' },
+    ];
+    changed = true;
+  }
   if (changed) {
     spxLive = spxLive || 7165.08;
     // Normalise all open positions to current spxLive — one source of truth
@@ -18439,6 +18634,8 @@ async function init() {
   renderSleeveBreakdown();
   renderSleeveRef();
   renderAll();
+  // Self-checks run after first full render, against your live data (review item 2).
+  try { runSelfChecks(); } catch (e) { console.warn('Self-checks failed to run', e); }
   // Drive backup — runs last so it doesn't block UI render
   driveInit().catch(e => console.warn('Drive init failed', e.message));
 }
@@ -18455,12 +18652,7 @@ document.addEventListener('wheel', (e) => {
   }
 }, { passive: false });
 
-init().catch(err => {
-  // init does data load + migration — the riskiest startup path. Surface a failure here explicitly;
-  // the global handler will show the banner, but catching also prevents an unhandledrejection noise.
-  window.dispatchEvent(new ErrorEvent('error', { message: 'Startup (init) failed: ' + ((err && err.message) || err) }));
-  console.error('init() failed:', err);
-});
+init();
 </script>
 </body>
 </html>
