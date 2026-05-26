@@ -1051,6 +1051,9 @@
     <!-- Stale Prices Banner (filled by renderStaleBanner) -->
     <div id="stale-banner" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.35);border-radius:var(--border-radius-md);padding:8px 14px;margin-bottom:14px;font-size:11px;color:#fbbf24;display:flex;align-items:center;gap:10px"></div>
 
+    <!-- Benchmark Divergence Banner (filled by renderDivergenceBanner) -->
+    <div id="divergence-banner" style="display:none;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.45);border-radius:var(--border-radius-md);padding:8px 14px;margin-bottom:14px;font-size:11px;color:#f59e0b;line-height:1.5"></div>
+
     <!-- Managed Positions -->
     <div class="section-heading">Managed Positions</div>
     <div class="summary-grid" id="open-summary"></div>
@@ -4103,7 +4106,7 @@ function renderClosedRow(pos) {
   const d = v => v || '<span class="dash">—</span>';
   return `
   <tr class="closed-row" data-id="${pos.id}">
-    <td class="calc-cell" style="text-align:left">${d(esc(pos.ticker))}</td>
+    <td class="calc-cell" style="text-align:left">${benchmarkDivergenceBadge(pos)}${d(esc(pos.ticker))}</td>
     <td class="calc-cell" style="text-align:left">${d(esc(pos.account))}</td>
     <td class="calc-cell" style="text-align:left">${d(esc(pos.dateBought))}</td>
     <td class="calc-cell">${pos.shares || '<span class="dash">—</span>'}</td>
@@ -4126,7 +4129,7 @@ function renderClosedRow(pos) {
     })()}</td>
     <td>${resultHtml}</td>
     <td><span class="sold-badge" onclick="toggleClosed(${pos.id})" title="Click to reopen">Sold</span></td>
-    <td class="calc-cell" style="text-align:left">${esc(pos.theme||'') || '<span class="dash">—</span>'}${benchmarkDivergenceBadge(pos)}</td>
+    <td class="calc-cell" style="text-align:left">${esc(pos.theme||'') || '<span class="dash">—</span>'}</td>
     <td class="calc-cell" style="text-align:left;max-width:160px;white-space:normal">${esc(pos.notes||'') || '<span class="dash">—</span>'}</td>
     <td style="white-space:nowrap"><button class="btn btn-sm" onclick="openEditClosedPositionModal(${pos.id})" title="Edit sale details" style="margin-right:4px">✎</button><button class="btn btn-sm btn-danger" onclick="deletePosition(${pos.id})" title="Delete">✕</button></td>
   </tr>`;
@@ -4169,7 +4172,7 @@ function renderRow(pos) {
 
   return `
   <tr class="${isClosed ? 'closed-row' : ''}" data-id="${pos.id}">
-    <td><input class="cell-input ticker-input" type="text" placeholder="AAPL" value="${esc(pos.ticker)}" onblur="setField(${pos.id},'ticker',this.value.toUpperCase())" oninput="this.value=this.value.toUpperCase()" ${isClosed?'disabled':''}></td>
+    <td style="white-space:nowrap"><input class="cell-input ticker-input" type="text" placeholder="AAPL" value="${esc(pos.ticker)}" onblur="setField(${pos.id},'ticker',this.value.toUpperCase())" oninput="this.value=this.value.toUpperCase()" ${isClosed?'disabled':''}>${benchmarkDivergenceBadge(pos)}</td>
     <td><input class="cell-input account-input" type="text" placeholder="Brokerage" value="${esc(pos.account)}" onblur="setField(${pos.id},'account',this.value)" ${isClosed?'disabled':''}></td>
     <td><input class="cell-input date-input" type="text" placeholder="YYYY-MM-DD" value="${esc(pos.dateBought)}" onblur="handleDateBlur(${pos.id},'dateBought',this)" ${isClosed?'disabled':''}></td>
     <td class="calc-cell held-cell" style="text-align:center;white-space:nowrap">${(() => {
@@ -4203,7 +4206,7 @@ function renderRow(pos) {
       <select class="cell-input theme-select" onchange="setField(${pos.id},'theme',this.value)" style="width:130px;cursor:pointer">
         <option value="">— Industry —</option>
         ${Object.entries(THEMES).filter(([_, cfg]) => cfg.dropdown).map(([t]) => `<option value="${t}" ${pos.theme===t?'selected':''}>${t}</option>`).join('')}
-      </select>${benchmarkDivergenceBadge(pos)}
+      </select>
     </td>
     <td>
       <select class="cell-input" onchange="setField(${pos.id},'sleeve',this.value)" style="width:130px;cursor:pointer;border-left:3px solid ${SLEEVE_COLORS[pos.sleeve]||'var(--color-border-tertiary)'}">
@@ -5351,6 +5354,25 @@ function benchmarkDivergenceBadge(pos) {
         ? ` (frozen at buy/sale). Realized alpha was scored vs ${div.usedBench}. Open the edit modal to re-measure vs ${div.themeBench}.`
         : `. Re-tag or it will measure vs ${div.usedBench}.`);
   return ` <span class="bench-divergence-flag" title="${esc(tip)}" style="cursor:help;color:#f59e0b;font-weight:700">⚠</span>`;
+}
+
+// Top-of-dashboard banner summarizing every tripped benchmark-divergence flag, so they can't
+// get lost at the right edge of a wide table. Lists affected tickers and splits open (re-tag
+// fixes it) from closed (re-measure or accept). Hidden entirely when nothing diverges.
+function renderDivergenceBanner() {
+  const el = document.getElementById('divergence-banner');
+  if (!el) return;
+  const flagged = positions.map(p => ({ p, d: benchmarkDivergence(p) })).filter(x => x.d);
+  if (flagged.length === 0) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const openOnes = flagged.filter(x => !x.p.closed);
+  const closedOnes = flagged.filter(x => x.p.closed);
+  const fmtList = arr => arr.map(({ p, d }) =>
+    `<strong>${esc(p.ticker || '?')}</strong> (${esc(p.theme)}→${esc(d.themeBench)}, measured vs ${esc(d.usedBench)})`).join(', ');
+  const parts = [];
+  if (openOnes.length) parts.push(`<div style="margin-top:4px"><strong>Open (${openOnes.length}):</strong> ${fmtList(openOnes)} — re-tag the theme, or it stays measured against the old benchmark.</div>`);
+  if (closedOnes.length) parts.push(`<div style="margin-top:4px"><strong>Closed (${closedOnes.length}):</strong> ${fmtList(closedOnes)} — realized alpha is frozen against the old benchmark. Open the ✎ edit modal to re-measure, or leave as-is if the tag is just a thesis label.</div>`);
+  el.innerHTML = `⚠ <strong>${flagged.length} position${flagged.length === 1 ? '' : 's'} where the theme tag and the benchmark used don't line up.</strong> The ⚠ next to each ticker marks them.` + parts.join('');
+  el.style.display = 'block';
 }
 //
 // Returns an object with:
@@ -16628,6 +16650,7 @@ function renderAll() {
   safeRender('renderPeDeals', renderPeDeals);
   safeRender('renderTaxExposure', renderTaxExposure);
   safeRender('renderStaleBanner', renderStaleBanner);
+  safeRender('renderDivergenceBanner', renderDivergenceBanner);
   safeRender('renderStaleTags', renderStaleTags);
   safeRender('updateBackfillButton', updateBackfillButton);
   safeRender('updateIndustryAlphaToggleVisual', updateIndustryAlphaToggleVisual);
