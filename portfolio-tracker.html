@@ -16647,10 +16647,20 @@ function commitRebenchmark() {
   setStatus('Saved: re-measured vs ' + newBench + ' (' + newBench + ' ' + buyPx + ' → ' + sellPx + '). Theme alpha: ' + alphaStr + '.', 'var(--color-text-success)');
 
   document.getElementById('edit-closed-rebench-verify').style.display = 'none';
+  const committedId = _pendingRebench.posId;
   _pendingRebench = null;
   renderAll();
   scheduleSave();
   if (typeof runSelfChecks === 'function') { try { runSelfChecks(); } catch (e) {} }
+  // Refresh the modal in place so its own warning + benchmark fields reflect the new benchmark
+  // (otherwise they keep showing the pre-save state — data is correct, but the panel looked stale).
+  // Re-running the opener repopulates the theme hint, the "vs X" labels, and clears the divergence
+  // warning. We re-show the saved-confirmation afterward so the user still sees what just happened.
+  if (typeof openEditClosedPositionModal === 'function') {
+    openEditClosedPositionModal(committedId);
+    const st = document.getElementById('edit-closed-rebench-status');
+    if (st) { st.textContent = 'Saved: re-measured vs ' + newBench + ' (' + newBench + ' ' + buyPx + ' → ' + sellPx + '). Theme alpha: ' + alphaStr + '.'; st.style.color = 'var(--color-text-success)'; }
+  }
 }
 
 function cancelRebenchmark() {
