@@ -14489,8 +14489,33 @@ function renderThemeDiscovery() {
 // Evaluation — it pre-screens and hands off. No verdict on the book, no buy/sell calls, external facts
 // quarantined to ⚠UNVERIFIED. Cost shown LOUDLY before sending given the large book-level prompt.
 // ─────────────────────────────────────────────
-let bookAiReview = null;        // { text, at, truncated, inTok, outTok, measured }
+let bookAiReview = null;        // { text, at, truncated, inTok, outTok, measured, selectedAtRun:[tickers] }
 let bookAiBusy = false;
+
+// Persist the book review so it survives refresh AND travels with export/import (it's a saved
+// artifact the user comes back to, not a transient view). selectedAtRun records which discovery
+// tickers were selected when it ran, so we can detect when the current selection has drifted (stale).
+function loadBookAiReview() {
+  try {
+    const raw = localStorage.getItem('portfolio-book-ai-review-v1');
+    if (raw) bookAiReview = JSON.parse(raw);
+  } catch (e) { bookAiReview = null; }
+}
+function saveBookAiReview() {
+  try {
+    if (bookAiReview) localStorage.setItem('portfolio-book-ai-review-v1', JSON.stringify(bookAiReview));
+    else localStorage.removeItem('portfolio-book-ai-review-v1');
+  } catch (e) { /* storage full / unavailable — non-fatal, review just won't persist */ }
+}
+// True when the current discovery selection differs from what the saved review was run against.
+function bookAiReviewStale() {
+  if (!bookAiReview) return false;
+  const ran = new Set(bookAiReview.selectedAtRun || []);
+  const now = discoverySelected;
+  if (ran.size !== now.size) return true;
+  for (const t of now) if (!ran.has(t)) return true;
+  return false;
+}
 
 // Assemble the book context string. All COMPUTED FACTS (with caveats in-prompt); the only USER-ENTERED
 // equivalent is which discovery tickers they've selected. Defensive: any sub-section failure must not
@@ -14505,8 +14530,13 @@ function buildBookAiPrompt() {
   if (clusters && clusters.clusters && clusters.clusters.length) {
     lines.push(`THEME CONCENTRATION (true exposure: direct + your look-through share inside funds you hold). Book behaves like ~${(clusters.effectiveBets || 0).toFixed(1)} independent bets (lower = more concentrated). Diversified base (broad-index tail, not a bet): ${clusters.base ? clusters.base.pct.toFixed(1) : '0'}%.`);
     clusters.clusters.forEach(c => {
-      const names = (c.names || []).slice(0, 8).map(n => n.display).join(', ');
-      lines.push(`- ${c.label}: ${c.pct.toFixed(1)}% of book ($${Math.round(c.total).toLocaleString()}), ${c.names ? c.names.length : 0} name(s)${names ? ' — ' + names : ''}.`);
+      const all = (c.names || []).map(n => n.display);
+      const shown = all.slice(0, 25);
+      const names = shown.join(', ');
+      // State explicitly whether this is the COMPLETE name list, so the model never needs to guess the
+      // rest. Only the rare >25-name cluster is truncated; say so when it is.
+      const completeness = all.length <= 25 ? ' [complete list]' : ` [first 25 of ${all.length}; the rest are not listed — do not guess them]`;
+      lines.push(`- ${c.label}: ${c.pct.toFixed(1)}% of book ($${Math.round(c.total).toLocaleString()}), ${all.length} name(s)${names ? ' — ' + names : ''}${names ? completeness : ''}.`);
     });
   } else {
     lines.push('THEME CONCENTRATION: no clusters computed (insufficient data).');
@@ -14526,9 +14556,15 @@ function buildBookAiPrompt() {
   // --- Selected discovery tickers (the hypotheses to judge) ---
   const selected = [...discoverySelected];
   if (selected.length) {
-    lines.push(`\nDISCOVERY TICKERS THE USER HAS SELECTED (≤5) — judge each AS A HYPOTHESIS against the gaps above. Each may FILL a thin spot or DEEPEN an existing concentration; say which, and how it would move true exposure. The "theme" here is the fund the name was DISCOVERED in (a structural label — where it sits in the user's fund holdings), NOT a fundamental classification. Do not assert what the company does from this; that would be an EXTERNAL claim.`);
+    // Which source funds the user ACTUALLY HOLDS (a direct open position), vs funds whose holdings are
+    // merely pasted for benchmark/theme coverage. CRITICAL: "discovered in FUND" does NOT mean the user
+    // holds FUND — many discovery names come from tracked benchmark funds (e.g. ITA) the user does not
+    // own. Without this, the model wrongly infers "you hold ITA, so look-through overlap exists."
+    const heldFunds = new Set(positions.filter(p => !p.closed && p.ticker).map(p => p.ticker.toUpperCase()));
+    lines.push(`\nDISCOVERY TICKERS THE USER HAS SELECTED (≤5) — judge each AS A HYPOTHESIS against the gaps above. Each may FILL a thin spot or DEEPEN an existing concentration; say which, and how it would move true exposure. "Discovered in FUND" is a STRUCTURAL label — the name appears in that fund's holdings — and is NOT a fundamental classification of the business. CRITICAL: whether the user HOLDS that source fund is stated per-ticker below; do NOT assume they hold it. If a name's source fund is NOT held, there is NO look-through/overlap exposure from that fund — do not raise a "you already own this via the fund" concern for unheld funds.`);
     selected.forEach(tk => {
       const fund = (discoverySourceFund[tk] || '').toUpperCase();
+      const fundHeld = fund && heldFunds.has(fund);
       const perf = discoveryPerf[tk];
       let perfStr = 'not fetched (no return data — say so; do not infer performance)';
       if (perf && typeof perf === 'object' && !perf.err) {
@@ -14543,7 +14579,12 @@ function buildBookAiPrompt() {
       } else if (perf && perf.err) {
         perfStr = `fetch failed (${perf.err}) — no return data`;
       }
-      lines.push(`- ${tk}${fund ? ` (discovered in ${fund})` : ''}: ${perfStr}.`);
+      const fundLabel = fund
+        ? (fundHeld
+            ? ` (discovered in ${fund}, which you HOLD — so some look-through exposure to this name may already exist via that fund)`
+            : ` (discovered in ${fund}, a tracked benchmark you do NOT hold — its holdings are pasted for theme coverage only, so there is NO existing exposure to this name through ${fund})`)
+        : '';
+      lines.push(`- ${tk}${fundLabel}: ${perfStr}.`);
     });
   } else {
     lines.push(`\nDISCOVERY TICKERS SELECTED: none. (The user hasn't clicked any discovery names. Focus on the book's own gaps; note that selecting discovery names would let you screen specific candidates.)`);
@@ -14562,8 +14603,10 @@ Rules:
 - Label every claim's basis: FROM INPUTS (restates/arithmetically follows from the facts above), [inference] (your reasoning ON the inputs, no outside facts), or EXTERNAL (any real-world fact not above — what a company does, sector, market cap, competitors, prices). EXTERNAL facts are UNVERIFIED — put them ONLY in a "CLAIMS TO VERIFY" section, each tagged ⚠UNVERIFIED. Never state an external fact inline as if it were given.
 - A fund/theme label is a STRUCTURAL tag (where a name sits in the user's holdings), NOT a license to assert what the business does.
 - THE FACTS ABOVE ARE THE COMPLETE INPUT. Critical limits on what you may treat as FROM INPUTS:
-  • TICKERS: Only ticker symbols that appear VERBATIM in the facts above are known holdings. Do NOT name any other specific ticker as if it were a holding — not even ones you'd expect to be in a theme (e.g. do not assert the user holds "NVDA, AVGO, AMD" in their Semiconductors theme just because those are typical constituents). If you name a ticker not listed above, it is an EXTERNAL guess and belongs in CLAIMS TO VERIFY, tagged ⚠UNVERIFIED — never inline as FROM INPUTS.
-  • COUNTS, NOT NAMES: Each theme line gives a name COUNT and at most a few example names. The unlisted names are NOT provided — do not invent them or characterize them.
+  • TICKERS: Only ticker symbols that appear VERBATIM in the facts above are known holdings. Do NOT name any other specific ticker as if it were a holding — not even ones you'd expect to be in a theme (e.g. do not assert the user holds "NVDA, AVGO, AMD" in their Semiconductors theme just because those are typical constituents, and do NOT fill a "Defense" bucket with names like LMT or a "Healthcare" bucket with names like LLY/ABT if those tickers are not listed above). If you name a ticker not listed above, it is an EXTERNAL guess and belongs in CLAIMS TO VERIFY, tagged ⚠UNVERIFIED — never inline as FROM INPUTS.
+  • THEMES: Only themes that appear VERBATIM as a line above exist in the user's book. Do NOT invent a theme that isn't listed (e.g. do not introduce a "Healthcare" or "Industrials" section as if the user holds it). If a theme/sector is not listed, treat it as a possible GAP ("not visible in the computed themes"), never as a holding.
+  • COUNTS, NOT NAMES: Each theme line gives a name COUNT and at most a few example names. The unlisted names are NOT provided — do not invent them or characterize them. If the count exceeds the examples shown, the extra names are unknown to you — say so, don't guess them.
+  • SELECTED CANDIDATES ARE NOT HOLDINGS: A selected discovery ticker is something the user is CONSIDERING, not something they own — UNLESS that exact ticker also appears verbatim as a held name in the theme lists above. Do NOT say a candidate is "already held" or would "deepen an existing position" unless its ticker literally appears in the holdings facts. Check before claiming it.
   • ABSENCES: You may note that an asset class or theme is "not listed in the inputs," but do NOT assert the user definitively holds NONE of it — the facts list themes that EXIST, it does not enumerate everything absent. Phrase gaps as "not visible in the computed themes" rather than "the book has no X." This is an [inference] about the inputs, not a FROM INPUTS fact.
   • RISK FIGURES: maxDD/vol/return numbers exist ONLY for the selected discovery tickers explicitly listed with them. Do not state risk figures for any book holding (none were provided) or for an unfetched candidate.
 
@@ -14627,7 +14670,9 @@ async function runBookAiReview() {
       inTok: (usage && typeof usage.input_tokens === 'number') ? usage.input_tokens : qrAiEstTokens(prompt),
       outTok: (usage && typeof usage.output_tokens === 'number') ? usage.output_tokens : qrAiEstTokens(text),
       measured: !!(usage && typeof usage.input_tokens === 'number'),
+      selectedAtRun: [...discoverySelected],  // snapshot for staleness detection
     };
+    saveBookAiReview();
   } catch (err) {
     bookAiBusy = false;
     const info = aiErrorMessage(err);
@@ -14656,12 +14701,21 @@ function renderThemeAiReview() {
   const estCost = (estIn / 1e6) * 3 + (estOut / 1e6) * 15; // Sonnet ~$3/M in, ~$15/M out
   const costStr = '$' + estCost.toFixed(3);
 
+  const stale = bookAiReviewStale();
+  const ranAgainst = (bookAiReview && bookAiReview.selectedAtRun) ? bookAiReview.selectedAtRun : [];
+  const staleBanner = (bookAiReview && stale) ? `
+      <div style="background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:10px;color:#fbbf24;line-height:1.5">
+        ⚠ Your discovery selection has changed since this review ran. It was run against ${ranAgainst.length ? esc(ranAgainst.join(', ')) : 'no selected tickers'}; you now have ${discoverySelected.size ? esc([...discoverySelected].join(', ')) : 'none'} selected. Re-analyze to update it to your current choices.
+      </div>` : '';
+
   const result = bookAiReview ? `
     <div style="margin-top:10px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-secondary)">
+      ${staleBanner}
       ${bookAiReview.truncated ? `<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">⚠ Response hit the length cap — may be cut off mid-thought.</div>` : ''}
       <div style="font-size:11px;line-height:1.6;color:var(--color-text-primary);white-space:pre-wrap">${esc(bookAiReview.text)}</div>
       <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">
-        ${new Date(bookAiReview.at).toLocaleString()} · ${bookAiReview.inTok.toLocaleString()} in / ${bookAiReview.outTok.toLocaleString()} out tokens ${bookAiReview.measured ? '(measured)' : '(estimated)'} · ~$${(((bookAiReview.inTok / 1e6) * 3) + ((bookAiReview.outTok / 1e6) * 15)).toFixed(3)} · observations, not advice — take candidates to New Position Evaluation</div>
+        ${new Date(bookAiReview.at).toLocaleString()} · ran against ${ranAgainst.length ? esc(ranAgainst.join(', ')) : 'no selected tickers'} · ${bookAiReview.inTok.toLocaleString()} in / ${bookAiReview.outTok.toLocaleString()} out tokens ${bookAiReview.measured ? '(measured)' : '(estimated)'} · ~$${(((bookAiReview.inTok / 1e6) * 3) + ((bookAiReview.outTok / 1e6) * 15)).toFixed(3)} · observations, not advice — take candidates to New Position Evaluation
+        · <span style="cursor:pointer;text-decoration:underline" onclick="if(confirm('Clear the saved AI book review?')){bookAiReview=null;saveBookAiReview();renderThemeAiReview();}">clear saved review</span></div>
     </div>` : '';
 
   host.innerHTML = `
@@ -14672,7 +14726,7 @@ function renderThemeAiReview() {
         ${selCount === 0 ? '<br><span style="color:#fbbf24">No discovery tickers selected — it\'ll review the book\'s own gaps. Click names in Discovery above to have them screened against your gaps.</span>' : ''}
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button class="btn btn-sm btn-primary" onclick="runBookAiReview()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Reviewing…' : (bookAiReview ? '↻ Re-run review' : 'Review my book with AI')}</button>
+        <button class="btn btn-sm btn-primary" onclick="runBookAiReview()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Reviewing…' : (bookAiReview ? (stale ? '↻ Re-analyze (selection changed)' : '↻ Re-run review') : 'Review my book with AI')}</button>
         <span style="font-size:9px;color:var(--color-text-tertiary)" title="Estimated before sending. Sonnet ~$3/M input, ~$15/M output. Input is measured from the prompt; output is a ~1200-token ceiling assumption — actuals shown after the call.">Est. cost this call: <strong style="color:var(--color-text-secondary)">~${costStr}</strong> (${estIn.toLocaleString()} input tokens + ~${estOut} output)</span>
       </div>
       <div id="book-ai-output"></div>
@@ -16392,6 +16446,7 @@ function exportData() {
     indexLookthrough: getIndexLookthrough(),
     trackRecordMatureOnly, industryAlphaMatureOnly,
     taxProfile,
+    bookAiReview,  // saved AI book review (a kept artifact; travels with the backup)
     version: "2.2",
     benchmarks: BENCHMARKS
   };
@@ -16435,6 +16490,8 @@ function importData(input) {
       if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
       if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
       if (data.taxProfile && typeof data.taxProfile === 'object') { taxProfile = { ...taxProfile, ...data.taxProfile }; applyTaxProfile(); }
+      // Restore saved AI book review (lives in its own localStorage key — persist explicitly).
+      if (data.bookAiReview && typeof data.bookAiReview === 'object') { bookAiReview = data.bookAiReview; saveBookAiReview(); }
       // Run v1 → v2 migration on imported data (idempotent)
       migratePositionsV1ToV2();
       await savePositions();
@@ -17944,6 +18001,7 @@ async function executeRestore() {
     if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
     if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
     if (data.taxProfile && typeof data.taxProfile === 'object') { taxProfile = { ...taxProfile, ...data.taxProfile }; applyTaxProfile(); }
+    if (data.bookAiReview && typeof data.bookAiReview === 'object') { bookAiReview = data.bookAiReview; saveBookAiReview(); }
 
     migratePositionsV1ToV2();
 
@@ -18039,6 +18097,7 @@ async function driveInit() {
 async function init() {
   await loadPositions();
   loadBookExclude();
+  loadBookAiReview();
   let changed = false;
 
   // ─────────────────────────────────────────────
