@@ -2275,15 +2275,34 @@ function runSelfChecks() {
     add('summary_reconciles', ok, ok ? '' : `calcSummary inv=${s.totalInvested.toFixed(2)} vs sum=${inv.toFixed(2)}`);
   });
 
-  // (2) Theme-alpha benchmark consistency — the ORCL-class bug. An OPEN position
-  // whose current theme maps to a benchmark different from the one captured at
-  // buy will have calcThemeAlpha divide one ETF by another. Flag every instance.
-  safe('theme_benchmark_consistent', () => {
-    if (typeof getThemeBenchmark !== 'function') { add('theme_benchmark_consistent', true, 'fn absent — skipped'); return; }
-    const bad = positions.filter(p => !p.closed && p.benchmarkAtBuy && getThemeBenchmark(p.theme)
+  // (2a) Theme-alpha anchor must be PRICED — the real math hazard. calcThemeAlpha now
+  // anchors numerator and denominator to pos.benchmarkAtBuy (the ORCL-class bug fix).
+  // The thing that would still break the math is an anchor ticker with no current price
+  // in benchmarkPrices (open positions): calcThemeAlpha returns null and the alpha vanishes
+  // silently. Flag any open position whose buy-anchor isn't priced. HARD check.
+  safe('theme_alpha_anchor_priced', () => {
+    if (typeof benchmarkPrices === 'undefined') { add('theme_alpha_anchor_priced', true, 'prices absent — skipped'); return; }
+    const bad = positions.filter(p => {
+      if (p.closed || !p.benchmarkPriceAtBuy) return false;
+      const anchor = p.benchmarkAtBuy || (typeof getThemeBenchmark === 'function' ? getThemeBenchmark(p.theme) : null);
+      return anchor && !benchmarkPrices[anchor]; // anchor exists but has no current price
+    });
+    add('theme_alpha_anchor_priced', bad.length === 0,
+      bad.length ? bad.map(p => `${p.ticker}: anchor ${p.benchmarkAtBuy || getThemeBenchmark(p.theme)} has no current price`).join('; ') : '');
+  });
+
+  // (2b) Tag/benchmark divergence — INFORMATIONAL, not an error. After the anchor fix the
+  // math is correct even when a position's theme→benchmark mapping differs from the benchmark
+  // it was bought against (e.g. ORCL tagged "AI Infrastructure"→SMH but bought vs QQQ). The
+  // math now correctly uses QQQ. This note just surfaces the divergence so you can decide
+  // whether the TAG is right — it's a portfolio judgment, not a bug. Always passes; the detail
+  // is the signal. (Shown in console; not a red banner.)
+  safe('theme_tag_benchmark_divergence', () => {
+    if (typeof getThemeBenchmark !== 'function') { add('theme_tag_benchmark_divergence', true, 'fn absent — skipped'); return; }
+    const diverged = positions.filter(p => !p.closed && p.benchmarkAtBuy && getThemeBenchmark(p.theme)
       && p.benchmarkAtBuy !== getThemeBenchmark(p.theme));
-    add('theme_benchmark_consistent', bad.length === 0,
-      bad.length ? bad.map(p => `${p.ticker}: theme "${p.theme}"→${getThemeBenchmark(p.theme)} but bought vs ${p.benchmarkAtBuy}`).join('; ') : '');
+    add('theme_tag_benchmark_divergence', true,  // informational — never fails
+      diverged.length ? `note (not an error): ${diverged.map(p => `${p.ticker} tagged "${p.theme}"→${getThemeBenchmark(p.theme)} but benchmarked vs ${p.benchmarkAtBuy}; math correctly uses ${p.benchmarkAtBuy}`).join('; ')}` : '');
   });
 
   // (3) Any index fund you HOLD should either have pasted holdings or be marked
@@ -2321,6 +2340,10 @@ function runSelfChecks() {
   });
 
   window.__trackerDiag.checks = checks;
+  // Informational notes: checks that pass but carry a detail (e.g. tag/benchmark divergence).
+  // Surfaced to console only — they're observations, not errors, so no red banner.
+  const notes = checks.filter(c => c.pass && c.detail);
+  notes.forEach(c => console.info('[self-check note] ' + c.name + ': ' + c.detail));
   const failed = checks.filter(c => !c.pass);
   if (failed.length) {
     console.warn('[self-check] ' + failed.length + ' invariant(s) failing:',
@@ -5247,8 +5270,16 @@ async function backfillThemeBenchmarks() {
 // For closed positions: compares your-return-buy-to-sell against benchmark-return-buy-to-sell.
 // Returns null when data is missing (no benchmark for theme, no buy-date data, etc.).
 function calcThemeAlpha(pos) {
-  const themeBench = getThemeBenchmark(pos.theme);
-  if (!themeBench) return null;
+  // BENCHMARK ANCHOR (bug fix): the buy price (benchmarkPriceAtBuy) was captured against
+  // pos.benchmarkAtBuy — the ETF this position was bought against. The benchmark RETURN must
+  // therefore measure that SAME ETF end-to-end. Re-deriving the benchmark from the CURRENT
+  // theme (getThemeBenchmark) was wrong whenever a position's theme→ETF mapping had changed
+  // since purchase (e.g. ORCL bought vs QQQ, later tagged "AI Infrastructure"→SMH): it divided
+  // SMH's current price by QQQ's buy price — two unrelated funds. Anchor to benchmarkAtBuy so
+  // numerator and denominator are always the same security. themeBench is only a legacy
+  // fallback for old positions that never stored benchmarkAtBuy.
+  const anchor = pos.benchmarkAtBuy || getThemeBenchmark(pos.theme);
+  if (!anchor) return null;
   if (!pos.benchmarkPriceAtBuy) return null;
   const paid = parseFloat(pos.pricePaid) || 0;
   const shares = parseFloat(pos.shares) || 0;
@@ -5260,10 +5291,12 @@ function calcThemeAlpha(pos) {
 
   let benchEnd;
   if (pos.closed) {
+    // benchmarkPriceAtSell is captured against benchmarkAtBuy at close (consistent anchor).
     if (!pos.benchmarkPriceAtSell) return null;
     benchEnd = pos.benchmarkPriceAtSell;
   } else {
-    benchEnd = benchmarkPrices[themeBench];
+    // Open: current price of the SAME ticker the buy was measured against.
+    benchEnd = benchmarkPrices[anchor];
     if (!benchEnd) return null;
   }
   const benchReturn = ((benchEnd - pos.benchmarkPriceAtBuy) / pos.benchmarkPriceAtBuy) * 100;
@@ -5278,7 +5311,7 @@ function calcThemeAlpha(pos) {
     themeAlphaPct,        // percentage points (position-specific)
     themeAlphaDollar,     // dollar value
     invested,             // capital basis (for dollar-weighted aggregation)
-    benchTicker: themeBench
+    benchTicker: anchor   // report the ACTUAL benchmark used, so the "vs X" label matches the math
   };
 }
 
