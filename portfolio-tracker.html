@@ -1552,6 +1552,10 @@
       <input class="modal-input" id="sell-price" type="number" min="0" step="0.0001" style="width:170px">
       <div id="sell-proceeds-preview" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
     </div>
+    <div class="modal-field">
+      <label class="modal-label" title="Optional. Brokerage fees / commission paid to sell. Reduces your net proceeds and net realized gain only — it does not change the vs-S&P comparison.">Fees / commission at sale ($) <span style="color:var(--color-text-tertiary);font-weight:400">— optional</span></label>
+      <input class="modal-input" id="sell-fees" type="number" min="0" step="0.01" placeholder="0.00" style="width:170px">
+    </div>
     <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px;padding:6px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">SPX and theme benchmark values at sell are captured from current live data at the moment of marking sold. If you backdate the sale significantly, those values will reflect today rather than the actual sale date.</div>
     <div class="modal-field">
       <label class="modal-label">Why are you selling now?</label>
@@ -1718,6 +1722,10 @@
       <div id="edit-closed-proceeds-preview" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
     </div>
     <div class="modal-field">
+      <label class="modal-label" title="Optional. Brokerage fees / commission paid to sell. Reduces net proceeds and net realized gain only — not the vs-S&P comparison.">Fees / commission at sale ($) <span style="color:var(--color-text-tertiary);font-weight:400">— optional</span></label>
+      <input class="modal-input" id="edit-closed-fees" type="number" min="0" step="0.01" placeholder="0.00" style="width:170px">
+    </div>
+    <div class="modal-field">
       <label class="modal-label" title="S&P 500 index value on the sale date. Used for 'vs S&P' return calculation.">S&P 500 at sale</label>
       <input class="modal-input" id="edit-closed-spx-exit" type="number" min="0" step="0.01" placeholder="e.g. 6896.24" style="width:170px">
     </div>
@@ -1785,6 +1793,21 @@
       <label class="modal-label">Stage / round (optional)</label>
       <input class="modal-input" id="add-pe-stage" type="text" placeholder="e.g. Seed, Series A" style="width:200px">
     </div>
+
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin:10px 0 4px;text-transform:uppercase;letter-spacing:0.04em">Fees (all optional)</div>
+    <div class="modal-field">
+      <label class="modal-label" title="One-time fees paid at entry (legal, placement, deal). Sunk cost — reduces net gain now and permanently.">Up-front fees ($)</label>
+      <input class="modal-input" id="add-pe-fee-upfront" type="number" min="0" step="0.01" placeholder="0.00" style="width:170px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" title="Total ongoing/management fees paid TO DATE while holding privately. A running dollar total you update yourself — you'll get a reminder every ~6 months.">Maintenance fees to date ($)</label>
+      <input class="modal-input" id="add-pe-fee-maint" type="number" min="0" step="0.01" placeholder="0.00" style="width:170px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" title="Carried interest — the % of TOTAL gain (from your original basis) the GP takes when you SELL. Not paid until sale; shown on the card as a projected drag. Travels with the position through IPO.">Carry (% of total gain, paid at sale)</label>
+      <input class="modal-input" id="add-pe-fee-carry" type="number" min="0" max="100" step="0.1" placeholder="e.g. 20" style="width:170px">
+    </div>
+
     <div class="modal-field">
       <label class="modal-label">Notes (optional)</label>
       <textarea class="modal-input" id="add-pe-notes" rows="3" placeholder="Thesis, terms, vesting, anything to remember" style="width:300px;font-family:inherit;resize:vertical"></textarea>
@@ -2514,6 +2537,9 @@ function mkPos() {
     ticker: '', account: '', dateBought: '',
     shares: '', pricePaid: '', exitPrice: '',
     sellDate: '', spxBuy: '', spxExit: '',
+    feesAtSale: 0,                // fees/commission paid when SELLING (closed positions). Reduces net
+                                  // proceeds and net realized gain only — NOT the gross gain or the
+                                  // vs-S&P comparison (you'd pay fees buying the index too).
     closed: false, fetchState: 'idle',
     notes: '', priceToday: '', theme: '', sleeve: '', isETF: false,
     // Step 4a: theme-relative alpha math — historical benchmark prices anchored to position dates
@@ -2530,7 +2556,13 @@ function mkPos() {
     peConverted: false,   // true if converted from a private deal
     peIpoDate: null,      // the IPO / liquidity date (when it became public)
     peIpoPrice: null,     // per-share price at IPO (the private→public handoff mark)
-    peCompany: null       // original private-deal company name, for the record
+    peCompany: null,      // original private-deal company name, for the record
+    // Carried-over private-era fees (set at conversion). peUpfront + peMaintenance are already-paid
+    // sunk costs; peCarryPct is the carry rate that becomes payable when these shares are SOLD,
+    // computed on the FULL gain from the pre-IPO basis. Folded into the eventual realized sale.
+    peUpfrontFee: 0,
+    peMaintenanceFee: 0,
+    peCarryPct: 0
   };
 }
 
@@ -3421,9 +3453,28 @@ function calcPos(pos) {
   const invested = shares * pricePaid;
   const exitValue = shares * exitPrice;
   const gainLoss = exitValue - invested;
-  const yourReturn = invested > 0 ? ((exitValue - invested) / invested) * 100 : null;
+
+  // Selling fees/commission. Your REALIZED return is genuinely net of fees — a fee is a real cost of
+  // the position — so yourReturn and gainLoss are reported NET and reconcile with each other.
+  // The vs-S&P comparison, however, uses your GROSS return vs the gross index (fair: indexing has its
+  // own near-zero fees, and this isolates stock-selection alpha from transaction cost).
+  const brokerageFee = parseFloat(pos.feesAtSale) || 0;
+  // PE-converted positions carry private-era fees that become payable AT THE SALE: up-front +
+  // maintenance (already-paid sunk costs) and carry (carryPct% of the FULL gain from pre-IPO basis,
+  // payable only now, and only on a gain). These add to the brokerage fee to form total sale fees.
+  const peUpfront = parseFloat(pos.peUpfrontFee) || 0;
+  const peMaint = parseFloat(pos.peMaintenanceFee) || 0;
+  const peCarryPct = parseFloat(pos.peCarryPct) || 0;
+  const peCarry = (pos.peConverted && peCarryPct > 0 && gainLoss > 0) ? gainLoss * (peCarryPct / 100) : 0;
+  const peFees = (pos.peConverted) ? (peUpfront + peMaint + peCarry) : 0;
+  const fees = brokerageFee + peFees;
+  const netExitValue = exitValue - fees;
+  const netGainLoss = gainLoss - fees;
+
+  const grossReturn = invested > 0 ? ((exitValue - invested) / invested) * 100 : null;
+  const yourReturn = invested > 0 ? (netGainLoss / invested) * 100 : null; // NET — matches netGainLoss
   const spxReturn = spxBuy > 0 && spxExit > 0 ? ((spxExit - spxBuy) / spxBuy) * 100 : null;
-  const vsSpx = yourReturn !== null && spxReturn !== null ? yourReturn - spxReturn : null;
+  const vsSpx = grossReturn !== null && spxReturn !== null ? grossReturn - spxReturn : null; // gross-vs-gross
 
   let result = null;
   if (vsSpx !== null) {
@@ -3432,7 +3483,7 @@ function calcPos(pos) {
     else result = 'Tied';
   }
 
-  return { invested, exitValue, gainLoss, yourReturn, spxReturn, vsSpx, result };
+  return { invested, exitValue, gainLoss: netGainLoss, grossGainLoss: gainLoss, yourReturn, grossReturn, spxReturn, vsSpx, result, fees, brokerageFee, peFees, peCarry, netExitValue, netGainLoss };
 }
 
 // ─────────────────────────────────────────────
@@ -4150,7 +4201,7 @@ function renderClosedRow(pos) {
     <td class="calc-cell">${pos.spxExit || '<span class="dash">—</span>'}</td>
     <td class="calc-cell">${c.invested > 0 ? fmtDollar(c.invested) : '<span class="dash">—</span>'}</td>
     <td class="calc-cell">${c.exitValue > 0 ? fmtDollar(c.exitValue) : '<span class="dash">—</span>'}</td>
-    <td class="calc-cell ${gainClass}">${c.invested > 0 && c.exitValue > 0 ? fmtDollar(c.gainLoss) : '<span class="dash">—</span>'}</td>
+    <td class="calc-cell ${gainClass}">${c.invested > 0 && c.exitValue > 0 ? (c.fees > 0 ? `<span title="Net of ${fmtDollar(c.fees)} sale fees (gross gain was ${fmtDollar(c.grossGainLoss)}). Return % is also net; vs-S&P stays gross-vs-gross.">${fmtDollar(c.gainLoss)}</span>` : fmtDollar(c.gainLoss)) : '<span class="dash">—</span>'}</td>
     <td class="calc-cell ${retClass}">${c.yourReturn !== null && c.invested > 0 && c.exitValue > 0 ? fmtPct(c.yourReturn) : '<span class="dash">—</span>'}</td>
     <td class="calc-cell ${spxRetClass}">${c.spxReturn !== null ? fmtPct(c.spxReturn) : '<span class="dash">—</span>'}</td>
     <td class="calc-cell ${vsClass}">${c.vsSpx !== null ? fmtPp(c.vsSpx) : '<span class="dash">—</span>'}</td>
@@ -16075,10 +16126,28 @@ function calcPeDeal(d) {
   const ppsReturn = (ppsBuy > 0 && ppsCur > 0) ? (ppsCur / ppsBuy - 1) : null;
   const valReturn = (valBuy > 0 && valCur > 0) ? (valCur / valBuy - 1) : null;
 
+  // ── Fees ──────────────────────────────────────────────────────────────────
+  // Two lifecycle buckets, because they bite at different times:
+  //   PAID SO FAR (real, sunk now): up-front + maintenance-to-date.
+  //   CONTINGENT (not paid until shares are sold): carry = carryPct% of the gain.
+  // So we surface two net figures: net of fees PAID, and net IF SOLD TODAY (also minus projected
+  // carry). Carry is only ever a projection while private — it becomes real at the eventual sale.
+  const feeUpfront = parseFloat(d.feeUpfront) || 0;
+  const feeMaintenance = parseFloat(d.feeMaintenance) || 0;
+  const carryPct = parseFloat(d.carryPct) || 0;
+  const feesPaid = feeUpfront + feeMaintenance;            // real, incurred
+  const glNetOfPaid = gl - feesPaid;                       // net of fees actually paid so far
+  // Projected carry: carryPct% of the gain. Only positive gains incur carry (no carry on a loss).
+  const projectedCarry = (carryPct > 0 && gl > 0) ? gl * (carryPct / 100) : 0;
+  const glNetIfSoldToday = glNetOfPaid - projectedCarry;   // all-in net if you exited at today's mark
+  const hasFees = feesPaid > 0 || carryPct > 0;
+
   return {
     inv, ppsBuy, ppsCur, valBuy, valCur,
     shares, currentValue, gl, multiple,
-    ppsReturn, valReturn
+    ppsReturn, valReturn,
+    feeUpfront, feeMaintenance, carryPct, feesPaid, projectedCarry,
+    glNetOfPaid, glNetIfSoldToday, hasFees
   };
 }
 
@@ -16181,6 +16250,37 @@ function renderPeDeals() {
     html += '<div style="font-size:9px;color:var(--color-text-tertiary)">' + c.multiple.toFixed(2) + 'x ' + staleWarn + '</div>';
     html += addBtn;
     html += '</div>';
+
+    // ── Fee breakdown (only if any fee is set) ──────────────────────────────
+    if (c.hasFees) {
+      const fmtD = (n) => fmtDollarWhole(n);
+      const glColor = c.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      html += '<div style="grid-column:1/-1;margin-top:8px;padding-top:8px;border-top:1px solid var(--color-border-tertiary);font-size:10px">';
+      html += '<div style="display:flex;justify-content:space-between"><span style="color:var(--color-text-tertiary)">Gross gain</span><span style="color:' + glColor + '">' + fmtD(c.gl) + '</span></div>';
+      if (c.feeUpfront > 0)
+        html += '<div style="display:flex;justify-content:space-between"><span style="color:var(--color-text-tertiary)">− up-front fees</span><span style="color:var(--color-text-danger)">−' + fmtD(c.feeUpfront) + '</span></div>';
+      if (c.feeMaintenance > 0)
+        html += '<div style="display:flex;justify-content:space-between"><span style="color:var(--color-text-tertiary)">− maintenance to date</span><span style="color:var(--color-text-danger)">−' + fmtD(c.feeMaintenance) + '</span></div>';
+      if (c.feesPaid > 0)
+        html += '<div style="display:flex;justify-content:space-between;font-weight:700"><span>Net of fees paid</span><span>' + fmtD(c.glNetOfPaid) + '</span></div>';
+      if (c.carryPct > 0) {
+        html += '<div style="display:flex;justify-content:space-between" title="Carry isn\'t paid until you sell. This is a projection of ' + c.carryPct + '% of the current gain — it moves as the mark moves, and travels with the position through IPO."><span style="color:var(--color-text-tertiary)">− projected carry (' + c.carryPct + '%, at sale)</span><span style="color:var(--color-text-warning)">−' + fmtD(c.projectedCarry) + '</span></div>';
+        html += '<div style="display:flex;justify-content:space-between;font-weight:700"><span>Net if sold today</span><span style="color:' + (c.glNetIfSoldToday >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)') + '">' + fmtD(c.glNetIfSoldToday) + '</span></div>';
+      }
+      html += '</div>';
+    }
+
+    // ── 6-month maintenance-fee staleness nudge ─────────────────────────────
+    if (d.feesUpdatedDate) {
+      const fu = new Date(d.feesUpdatedDate + 'T00:00:00');
+      if (!isNaN(fu.getTime())) {
+        const monthsSince = (Date.now() - fu.getTime()) / (1000 * 60 * 60 * 24 * 30.44);
+        if (monthsSince >= 6) {
+          html += '<div style="grid-column:1/-1;margin-top:6px;padding:5px 8px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:4px;font-size:9px;color:var(--color-text-warning)">⚠ Maintenance fees last updated ' + Math.floor(monthsSince) + ' months ago — edit the deal to bump the running total.</div>';
+        }
+      }
+    }
+
     html += '</div>';
     html += '</div>';
     el.innerHTML = html;
@@ -16241,6 +16341,9 @@ function openAddPeDealModal(editId) {
   document.getElementById('add-pe-val-current').value = editing ? safe(editing.valuationCurrent) : '';
   document.getElementById('add-pe-valuation-date').value = editing ? safe(editing.lastValuationDate) : todayStr;
   document.getElementById('add-pe-stage').value = editing ? safe(editing.stage) : '';
+  document.getElementById('add-pe-fee-upfront').value = editing ? safe(editing.feeUpfront) : '';
+  document.getElementById('add-pe-fee-maint').value = editing ? safe(editing.feeMaintenance) : '';
+  document.getElementById('add-pe-fee-carry').value = editing ? safe(editing.carryPct) : '';
   document.getElementById('add-pe-notes').value = editing ? safe(editing.notes) : '';
   document.getElementById('add-pe-preview').textContent = '';
   document.getElementById('add-pe-shares-derived').textContent = '';
@@ -16300,6 +16403,9 @@ function confirmAddPeDeal() {
   const valCurStr = document.getElementById('add-pe-val-current').value;
   const valuationDate = document.getElementById('add-pe-valuation-date').value;
   const stage = document.getElementById('add-pe-stage').value.trim();
+  const feeUpfrontStr = document.getElementById('add-pe-fee-upfront').value;
+  const feeMaintStr = document.getElementById('add-pe-fee-maint').value;
+  const carryStr = document.getElementById('add-pe-fee-carry').value;
   const notes = document.getElementById('add-pe-notes').value.trim();
   const errEl = document.getElementById('add-pe-error');
   const showErr = (msg) => { errEl.textContent = msg; errEl.style.display = 'block'; };
@@ -16341,6 +16447,27 @@ function confirmAddPeDeal() {
     if (vDate > today) return showErr('Date of current mark cannot be in the future.');
   }
 
+  // Fees — all optional, non-negative; carry is a percent 0–100.
+  let feeUpfront, feeMaint, carryPct;
+  try {
+    feeUpfront = parseOptional(feeUpfrontStr, 'Up-front fees');
+    feeMaint = parseOptional(feeMaintStr, 'Maintenance fees');
+  } catch(e) { return; }
+  if (carryStr === '' || carryStr == null) {
+    carryPct = null;
+  } else {
+    carryPct = parseFloat(carryStr);
+    if (isNaN(carryPct) || carryPct < 0 || carryPct > 100) return showErr('Carry must be between 0 and 100 (or leave blank).');
+  }
+
+  const todayStr2 = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const prior = (_peEditId !== null) ? peDeals.find(d => d.id === _peEditId) : null;
+  // Stamp feesUpdatedDate when maintenance is first set or changed; otherwise preserve prior stamp.
+  const maintChanged = !prior || (parseFloat(prior.feeMaintenance) || 0) !== (feeMaint || 0);
+  const feesUpdatedDate = (maintChanged && (feeMaint || 0) > 0)
+    ? todayStr2
+    : (prior ? (prior.feesUpdatedDate || '') : '');
+
   const deal = {
     id: _peEditId !== null ? _peEditId : ('pe_' + Date.now() + '_' + Math.floor(Math.random() * 1000)),
     company,
@@ -16352,6 +16479,10 @@ function confirmAddPeDeal() {
     valuationCurrent: valCur !== null ? valCur : '',
     lastValuationDate: valuationDate || '',
     stage,
+    feeUpfront: feeUpfront !== null ? feeUpfront : '',
+    feeMaintenance: feeMaint !== null ? feeMaint : '',
+    carryPct: carryPct !== null ? carryPct : '',
+    feesUpdatedDate,
     notes
   };
 
@@ -16548,6 +16679,7 @@ function openEditClosedPositionModal(posId) {
 
   document.getElementById('edit-closed-sell-date').value = p.sellDate || '';
   document.getElementById('edit-closed-exit-price').value = p.exitPrice || '';
+  document.getElementById('edit-closed-fees').value = (p.feesAtSale != null && p.feesAtSale !== 0) ? p.feesAtSale : '';
   document.getElementById('edit-closed-spx-exit').value = p.spxExit || '';
   document.getElementById('edit-closed-bench-exit').value = (p.benchmarkPriceAtSell != null) ? p.benchmarkPriceAtSell : '';
 
@@ -16670,9 +16802,18 @@ function confirmEditClosedPosition() {
     if (isNaN(benchExit) || benchExit <= 0) return showErr('Benchmark value must be greater than 0 (or leave blank).');
   }
 
+  // Fees — optional, non-negative if provided.
+  const feesStr = document.getElementById('edit-closed-fees').value;
+  let fees = 0;
+  if (feesStr !== '' && feesStr != null) {
+    fees = parseFloat(feesStr);
+    if (isNaN(fees) || fees < 0) return showErr('Fees must be zero or a positive number (or leave blank).');
+  }
+
   // Apply
   p.sellDate = sellDateStr;
   p.exitPrice = exitPrice;
+  p.feesAtSale = fees;
   // Theme: apply the chosen tag (canonicalized). Empty string clears it. We deliberately do
   // NOT touch benchmarkAtBuy / benchmarkPriceAtBuy / benchmarkPriceAtSell — those are frozen
   // measurements; theme alpha anchors to benchmarkAtBuy regardless of the tag. Re-tagging is a
@@ -16903,6 +17044,9 @@ function convertPeDealToPublic(id) {
   pos.peIpoDate = ipoDate;
   pos.peIpoPrice = ipoPrice;
   pos.peCompany = deal.company || '';
+  pos.peUpfrontFee = parseFloat(deal.feeUpfront) || 0;
+  pos.peMaintenanceFee = parseFloat(deal.feeMaintenance) || 0;
+  pos.peCarryPct = parseFloat(deal.carryPct) || 0;
   pos.notes = (deal.notes ? deal.notes + ' · ' : '') + `Converted from private deal (${deal.company}) at IPO ${ipoDate}. Basis is pre-IPO cost; gain includes private-era appreciation.`;
 
   const confirmMsg = `Convert ${deal.company} → public ${ticker}?\n\n`
@@ -17222,15 +17366,21 @@ function toggleClosed(id) {
     // Update proceeds preview as user types
     const updatePreview = () => {
       const price = parseFloat(document.getElementById('sell-price').value);
+      const fees = parseFloat(document.getElementById('sell-fees').value) || 0;
       const shares = parseFloat(pos.shares) || 0;
       const previewEl = document.getElementById('sell-proceeds-preview');
       if (price > 0 && shares > 0) {
-        previewEl.textContent = `Proceeds: ${shares} × ${fmtDollar(price)} = ${fmtDollar(shares * price)}`;
+        const gross = shares * price;
+        previewEl.textContent = fees > 0
+          ? `Proceeds: ${shares} × ${fmtDollar(price)} = ${fmtDollar(gross)} − ${fmtDollar(fees)} fees = ${fmtDollar(gross - fees)} net`
+          : `Proceeds: ${shares} × ${fmtDollar(price)} = ${fmtDollar(gross)}`;
       } else {
         previewEl.textContent = '';
       }
     };
     document.getElementById('sell-price').oninput = updatePreview;
+    document.getElementById('sell-fees').value = '';
+    document.getElementById('sell-fees').oninput = updatePreview;
     updatePreview();
 
     setTimeout(() => document.getElementById('sell-price').focus(), 100);
@@ -17242,8 +17392,9 @@ function skipSellThesis() {
   const saleDate = document.getElementById('sell-date').value;
   const salePriceStr = document.getElementById('sell-price').value;
   const salePrice = parseFloat(salePriceStr);
+  const fees = parseFloat(document.getElementById('sell-fees').value) || 0;
   document.getElementById('sell-modal').classList.add('hidden');
-  executeSell(pendingSellId, '', { saleDate, salePrice: isNaN(salePrice) ? null : salePrice });
+  executeSell(pendingSellId, '', { saleDate, salePrice: isNaN(salePrice) ? null : salePrice, fees });
   pendingSellId = null;
 }
 
@@ -17268,13 +17419,21 @@ function confirmSellThesis() {
   const salePrice = parseFloat(salePriceStr);
   if (isNaN(salePrice) || salePrice <= 0) return showErr('Sale price must be greater than 0.');
 
+  // Fees — optional, but if provided must be a non-negative number.
+  const feesStr = document.getElementById('sell-fees').value;
+  let fees = 0;
+  if (feesStr !== '' && feesStr != null) {
+    fees = parseFloat(feesStr);
+    if (isNaN(fees) || fees < 0) return showErr('Fees must be zero or a positive number (or leave blank).');
+  }
+
   let sellNote = '';
   if (verdict) sellNote += `Exit verdict: ${verdict}`;
   if (why) sellNote += (sellNote ? ' | ' : '') + `Reason: ${why}`;
   if (proceeds) sellNote += (sellNote ? ' | ' : '') + `Proceeds: ${proceeds}`;
 
   document.getElementById('sell-modal').classList.add('hidden');
-  executeSell(pendingSellId, sellNote, { saleDate, salePrice });
+  executeSell(pendingSellId, sellNote, { saleDate, salePrice, fees });
   pendingSellId = null;
 }
 
@@ -17291,6 +17450,7 @@ function executeSell(id, sellNote, saleInfo) {
   const info = saleInfo || {};
   const userSaleDate = info.saleDate;
   const userSalePrice = (typeof info.salePrice === 'number' && info.salePrice > 0) ? info.salePrice : null;
+  const userFees = (typeof info.fees === 'number' && info.fees >= 0) ? info.fees : 0;
 
   // Apply user-supplied price BEFORE computing proceeds — so proceeds reflect what
   // actually happened, not the last-refreshed market price.
@@ -17308,10 +17468,11 @@ function executeSell(id, sellNote, saleInfo) {
   undoState = {
     id, prevNotes: pos.notes, prevClosed: pos.closed,
     prevSellDate: pos.sellDate, prevExitPrice: pos.exitPrice, prevSpxExit: pos.spxExit,
-    prevBenchmarkPriceAtSell: pos.benchmarkPriceAtSell
+    prevBenchmarkPriceAtSell: pos.benchmarkPriceAtSell, prevFeesAtSale: pos.feesAtSale
   };
 
   pos.closed = true;
+  pos.feesAtSale = userFees;
 
   // Sale date: prefer user-supplied, else default to today
   if (userSaleDate) {
@@ -17386,6 +17547,9 @@ function undoSell() {
       // benchmarkPriceAtSell may not be present on older undo states — only restore if it was recorded
       if ('prevBenchmarkPriceAtSell' in undoState) {
         pos.benchmarkPriceAtSell = undoState.prevBenchmarkPriceAtSell;
+      }
+      if ('prevFeesAtSale' in undoState) {
+        pos.feesAtSale = undoState.prevFeesAtSale;
       }
     }
   }
