@@ -1366,6 +1366,13 @@
     <div class="section-heading">Industry Intelligence</div>
     <div id="theme-intel-wrap" style="margin-bottom:20px"></div>
 
+    <div class="section-heading" style="margin-top:24px">Book Performance — Isolate &amp; Compare</div>
+    <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
+      Turn off part of the book to see how the rest performs without it. Non-destructive — it filters this view only, never your data. Only directly-held positions can be excluded; a name held only inside an ETF can't be cleanly removed from that ETF's return.
+    </div>
+    <div class="summary-grid" id="book-isolate-summary" style="margin-bottom:8px"></div>
+    <div id="book-exclude-panel" style="margin:6px 0 20px"></div>
+
     <div class="section-heading" style="margin-top:24px">Add Candidates</div>
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
       Positions beating both SPX and theme by ≥+$300. Tier 1 = past sleeve soak, fair to consider for adding. Tier 2 = early strength, still in soak — informational only, not action-eligible. Portfolio Balance Plays excluded.
@@ -2227,6 +2234,48 @@ let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Be
 let benchmarkPricesDate = null; // ISO timestamp of last benchmark fetch
 let trackRecordMatureOnly = false; // toggle: filter Track Record cards to mature positions only
 let industryAlphaMatureOnly = false; // toggle: filter Industry Intelligence/Spotlight theme alpha to mature open positions only
+
+// Book-exclusion state — a NON-DESTRUCTIVE view filter for the OPEN-book summary. Lets you "turn off"
+// part of the book (a directly-held ticker, an ETF, a theme, or a sleeve) so the summary recomputes
+// WITHOUT those positions and the rest isn't drowned out. It never edits `positions`; it only filters
+// the array handed to calcSummary. Excluded rows stay visible in the table (dimmed) so you can see
+// what's off and toggle it back. NOTE: only DIRECT holdings can be excluded — a name held only inside
+// an ETF can't be removed from that ETF's return honestly (no per-constituent return data), so it gets
+// no toggle. Persisted so the view survives reload.
+const bookExclude = { tickers: new Set(), themes: new Set(), sleeves: new Set() };
+function loadBookExclude() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('portfolio-book-exclude-v1') || '{}');
+    bookExclude.tickers = new Set(raw.tickers || []);
+    bookExclude.themes = new Set(raw.themes || []);
+    bookExclude.sleeves = new Set(raw.sleeves || []);
+  } catch (e) { /* leave empty on parse failure */ }
+}
+function saveBookExclude() {
+  localStorage.setItem('portfolio-book-exclude-v1', JSON.stringify({
+    tickers: [...bookExclude.tickers], themes: [...bookExclude.themes], sleeves: [...bookExclude.sleeves],
+  }));
+}
+// True if this position is excluded by ANY active toggle (ticker OR theme OR sleeve). Ticker match is
+// by symbol, so excluding "AAPL" drops every AAPL lot, not just one.
+function isBookExcluded(p) {
+  return bookExclude.tickers.has(p.ticker) || bookExclude.themes.has(p.theme) || bookExclude.sleeves.has(p.sleeve);
+}
+function bookExcludeActive() {
+  return bookExclude.tickers.size + bookExclude.themes.size + bookExclude.sleeves.size > 0;
+}
+function toggleBookExclude(kind, value) {
+  const set = bookExclude[kind];
+  if (!set) return;
+  if (set.has(value)) set.delete(value); else set.add(value);
+  saveBookExclude();
+  renderAll();
+}
+function clearBookExclude() {
+  bookExclude.tickers.clear(); bookExclude.themes.clear(); bookExclude.sleeves.clear();
+  saveBookExclude();
+  renderAll();
+}
 
 // Theme Universe historical price cache.
 // Shape: { TICKER: { ytd: 412.50, '1y': 380.21, '5y': 215.40, '10y': 145.20, fetched: ISO_string } }
@@ -3221,7 +3270,65 @@ function colorClass(v) {
 // ─────────────────────────────────────────────
 // Render summary cards
 // ─────────────────────────────────────────────
-function renderSummary(containerId, posArr, isOpen) {
+// ─────────────────────────────────────────────
+// Book-exclude panel — the "turn off" toggles for the open-book summary.
+// Renders chips for each directly-held ticker, each theme, and each sleeve in the open book. Clicking
+// a chip excludes (or re-includes) it; the summary above recomputes without the excluded positions.
+// A loud banner makes clear when the summary is FILTERED, so a partial book is never misread as whole.
+// ─────────────────────────────────────────────
+function renderBookExcludePanel(openArr) {
+  // Render the filtered book summary into the Analysis-tab isolate card (the recomputed numbers that
+  // react to the toggles). Lives here so the cause (toggles) and effect (numbers) are on the same tab.
+  const isoEl = document.getElementById('book-isolate-summary');
+  if (isoEl) {
+    if (openArr && openArr.length) renderSummary('book-isolate-summary', openArr.filter(p => !isBookExcluded(p)), true, true);
+    else isoEl.innerHTML = '';
+  }
+
+  const el = document.getElementById('book-exclude-panel');
+  if (!el) return;
+  if (!openArr || openArr.length === 0) { el.innerHTML = ''; return; }
+
+  // Distinct, sorted toggle values from the open book.
+  const tickers = [...new Set(openArr.map(p => p.ticker).filter(Boolean))].sort();
+  const themes = [...new Set(openArr.map(p => p.theme).filter(Boolean))].sort();
+  const sleeves = [...new Set(openArr.map(p => p.sleeve).filter(Boolean))].sort();
+
+  const chip = (kind, value, label) => {
+    const off = bookExclude[kind].has(value);
+    const base = 'display:inline-block;padding:3px 9px;margin:2px;border-radius:12px;font-size:11px;cursor:pointer;user-select:none;border:1px solid;';
+    const style = off
+      ? base + 'background:rgba(251,191,36,0.16);border-color:rgba(251,191,36,0.5);color:#fbbf24;text-decoration:line-through;'
+      : base + 'background:var(--color-surface-2,rgba(255,255,255,0.04));border-color:var(--color-border,rgba(255,255,255,0.12));color:var(--color-text-secondary);';
+    return `<span style="${style}" onclick="toggleBookExclude('${kind}','${esc(value).replace(/'/g, "\\'")}')" title="${off ? 'Excluded from the summary — click to put back' : 'Click to exclude from the summary'}">${off ? '✕ ' : ''}${esc(label)}</span>`;
+  };
+
+  const nOff = bookExclude.tickers.size + bookExclude.themes.size + bookExclude.sleeves.size;
+  const excludedCount = openArr.filter(isBookExcluded).length;
+  const shownCount = openArr.length - excludedCount;
+
+  const banner = bookExcludeActive()
+    ? `<div style="background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:7px 12px;margin-bottom:8px;font-size:12px;color:#fbbf24;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+         <span><strong>Summary is filtered</strong> — showing ${shownCount} of ${openArr.length} positions (${excludedCount} turned off). This is NOT your full book.</span>
+         <span style="cursor:pointer;text-decoration:underline" onclick="clearBookExclude()">show all</span>
+       </div>`
+    : '';
+
+  el.innerHTML = `
+    ${banner}
+    <details ${bookExcludeActive() ? 'open' : ''} style="font-size:12px">
+      <summary style="cursor:pointer;color:var(--color-text-tertiary);font-size:12px;padding:2px 0">
+        Turn off part of the book ${nOff ? `(${nOff} active)` : ''}
+      </summary>
+      <div style="margin-top:6px">
+        <div style="margin-bottom:4px"><span style="color:var(--color-text-tertiary);font-size:10px;text-transform:uppercase;letter-spacing:0.04em">By sleeve</span><br>${sleeves.map(s => chip('sleeves', s, s)).join('')}</div>
+        <div style="margin-bottom:4px"><span style="color:var(--color-text-tertiary);font-size:10px;text-transform:uppercase;letter-spacing:0.04em">By theme</span><br>${themes.map(t => chip('themes', t, t)).join('')}</div>
+        <div><span style="color:var(--color-text-tertiary);font-size:10px;text-transform:uppercase;letter-spacing:0.04em">By holding</span><br>${tickers.map(t => chip('tickers', t, t)).join('')}</div>
+      </div>
+    </details>`;
+}
+
+function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
   const el = document.getElementById(containerId);
   const s = calcSummary(posArr);
   const exitLabel = isOpen ? 'Current Value' : 'Exit Value';
@@ -3264,7 +3371,7 @@ function renderSummary(containerId, posArr, isOpen) {
       <div class="summary-card-label">Trailing S&P</div>
       <div class="summary-card-value ${s.countTrail > 0 ? 'danger' : ''}">${posArr.length > 0 ? s.countTrail : '—'}</div>
     </div>
-    ${isOpen ? renderTrackRecordCards() : ''}
+    ${isOpen && !suppressTrackRecord ? renderTrackRecordCards() : ''}
   `;
 }
 
@@ -15412,6 +15519,7 @@ function renderAll() {
 
   renderSummary('open-summary', open, true);
   renderSummary('closed-summary', closed, false);
+  renderBookExcludePanel(open);
   renderTrimWatch();
   renderAddWatch();
   renderThemeUniverseDashTile();
@@ -15536,6 +15644,7 @@ function updateSummaries() {
   const closed = positions.filter(p => p.closed);
   renderSummary('open-summary', open, true);
   renderSummary('closed-summary', closed, false);
+  renderBookExcludePanel(open);
   renderTrimWatch();
   renderAddWatch();
   renderThemeUniverseDashTile();
@@ -17510,6 +17619,7 @@ async function driveInit() {
 // ─────────────────────────────────────────────
 async function init() {
   await loadPositions();
+  loadBookExclude();
   let changed = false;
 
   // ─────────────────────────────────────────────
