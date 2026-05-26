@@ -13723,6 +13723,11 @@ async function fetchTickerWindows(ticker) {
   // Annualized volatility from daily log returns (× √252). A coarse "how jumpy" gauge. Needs a few
   // bars to be meaningful; null if too thin.
   let annVol = null;
+  // Upside vol share: of the total day-to-day variance, how much comes from UP days vs DOWN days.
+  // This is the measurement that resolves "high vol + shallow drawdown" — if ~all the jumpiness is to
+  // the upside, a big vol number is the rocket going up, not a scary two-way ride. ~50% = symmetric
+  // (genuinely whippy both ways); ~90%+ = jumps are mostly upward. null when too thin to judge.
+  let upVolShare = null;
   if (bars.length > 20) {
     const rets = [];
     for (let i = 1; i < bars.length; i++) { if (bars[i - 1].c > 0) rets.push(Math.log(bars[i].c / bars[i - 1].c)); }
@@ -13730,13 +13735,19 @@ async function fetchTickerWindows(ticker) {
       const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
       const variance = rets.reduce((a, r) => a + (r - mean) * (r - mean), 0) / (rets.length - 1);
       annVol = Math.sqrt(variance) * Math.sqrt(252) * 100; // percent
+      // Sum of squared moves split by sign (using raw returns, not demeaned — we want directional
+      // contribution to gross jumpiness, which is what the caption narrates).
+      let upSq = 0, dnSq = 0;
+      for (const r of rets) { if (r > 0) upSq += r * r; else if (r < 0) dnSq += r * r; }
+      const totSq = upSq + dnSq;
+      if (totSq > 0) upVolShare = (upSq / totSq) * 100;
     }
   }
 
   return {
     m1: monthBar ? ((latest - monthBar) / monthBar) * 100 : null,
     y1: yearBar ? ((latest - yearBar) / yearBar) * 100 : null,
-    histDays, shortHist, maxDrawdown, annVol,
+    histDays, shortHist, maxDrawdown, annVol, upVolShare,
   };
 }
 
@@ -13860,6 +13871,43 @@ function fmtRisk(perf) {
   return bits.length ? ` · <span style="font-size:8px">${bits.join(' · ')}</span>` : '';
 }
 
+// Plain-language caption translating the risk numbers into the story they tell — conservative-plus:
+// mechanics, ONE characterizing word strictly licensed by the vol number, no buy/sell verb. The
+// direction clause ("mostly upward" / "both directions") appears ONLY when the measured up/down vol
+// split actually supports it; in the ambiguous middle it stays silent rather than guessing. Partial
+// history downgrades the caption's own confidence explicitly.
+function fmtRiskCaption(perf) {
+  if (!perf || typeof perf !== 'object' || typeof perf.annVol !== 'number') return '';
+  const v = perf.annVol;
+  // One word, licensed purely by the vol magnitude. (Index ~15-20% for reference.)
+  let word;
+  if (v < 25) word = 'steady';
+  else if (v < 60) word = 'jumpy';
+  else if (v < 90) word = 'volatile';
+  else word = 'speculative';
+
+  // Drawdown clause: plain mechanics, only if there was a material dip.
+  const dd = (typeof perf.maxDrawdown === 'number' && perf.maxDrawdown < -1)
+    ? `, fell ${Math.abs(perf.maxDrawdown).toFixed(0)}% at its worst`
+    : '';
+
+  // Direction clause, only when the up/down split is decisive. Note: in a sharp downturn the same vol
+  // word would pair with a "mostly downward" — but that's rare in discovery (these are names that
+  // showed up via funds), so we phrase the high-up-share case and the symmetric case; a low up-share
+  // (mostly-down jumpiness) also reads honestly as "and mostly downward."
+  let dir = '';
+  if (typeof perf.upVolShare === 'number') {
+    if (perf.upVolShare >= 85) dir = ' — the swings were mostly upward';
+    else if (perf.upVolShare <= 35) dir = ' — and mostly downward';
+    else if (perf.upVolShare <= 60) dir = ' — in both directions';
+    // 60-85: genuinely mixed, say nothing about direction
+  }
+
+  const partial = perf.shortHist ? ' (over a partial window — read loosely)' : '';
+  const txt = `Daily moves ~${(v / 17.5).toFixed(0)}× the market — a ${word} name${dd}${dir}${partial}.`;
+  return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px;font-style:italic" title="A plain-language read of the volatility and drawdown numbers. Describes how the price moved; not a view on whether to buy it.">${esc(txt)}</div>`;
+}
+
 // Compare the name's 1Y to its SOURCE FUND's 1Y. The framing adapts to magnitude, because a fixed
 // "percentage points" delta is misleading when the gap is huge: "+1473% vs +36% → +1437 pts" invites
 // reading "pts" as "%". So: when the name ran to a large MULTIPLE of the fund (both positive), say
@@ -13908,7 +13956,7 @@ function updatePerfSlot(key) {
     if (v && v.err === 'rate') { el.innerHTML = '<span style="color:#fbbf24" title="Polygon rate limit (free tier ~5/min) — wait a moment and fetch again">rate · retry</span>'; return; }
     if (v && v.err === 'nokey') { el.innerHTML = '<span style="color:#fbbf24" title="Set your Polygon key via Get Benchmarks first">need key</span>'; return; }
     if (v && v.err) { el.innerHTML = '<span style="color:var(--color-text-tertiary)" title="Could not fetch — ticker may be unavailable on Polygon">n/a</span>'; return; }
-    if (v && typeof v === 'object') { el.innerHTML = `${fmtWin(v.m1, '1M')} · ${fmtY1(v)}${fmtBenchCompare(key, v)}${fmtRisk(v)}`; }
+    if (v && typeof v === 'object') { el.innerHTML = `${fmtWin(v.m1, '1M')} · ${fmtY1(v)}${fmtBenchCompare(key, v)}${fmtRisk(v)}${fmtRiskCaption(v)}`; }
   });
 }
 
@@ -14048,7 +14096,7 @@ function renderThemeDiscovery() {
     else if (cached && cached.err === 'rate') perfInit = '<span style="color:#fbbf24">rate · retry</span>';
     else if (cached && cached.err === 'nokey') perfInit = '<span style="color:#fbbf24">need key</span>';
     else if (cached && cached.err) perfInit = '<span style="color:var(--color-text-tertiary)">n/a</span>';
-    else if (cached && typeof cached === 'object') perfInit = `${fmtWin(cached.m1, '1M')} · ${fmtY1(cached)}${fmtBenchCompare(key, cached)}${fmtRisk(cached)}`;
+    else if (cached && typeof cached === 'object') perfInit = `${fmtWin(cached.m1, '1M')} · ${fmtY1(cached)}${fmtBenchCompare(key, cached)}${fmtRisk(cached)}${fmtRiskCaption(cached)}`;
     const atCap = discoverySelected.size >= DISCOVERY_MAX_SELECT && !selected;
     const hn = holdingNote(c.display);
     return `<div onclick="toggleDiscoverySelect('${esc(key)}')" title="${atCap ? '5 selected — deselect one to add another' : 'Click to ' + (selected ? 'deselect' : 'select for fetch')}" style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:${selected ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)'};border:1px solid ${selected ? 'var(--color-accent)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);cursor:${atCap ? 'not-allowed' : 'pointer'};${atCap ? 'opacity:0.5' : ''}">
