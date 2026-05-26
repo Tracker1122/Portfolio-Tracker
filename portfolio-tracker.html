@@ -5361,7 +5361,10 @@ function benchmarkDivergence(pos) {
   const themeBench = getThemeBenchmark(pos.theme);
   if (!themeBench) return null;          // theme has no benchmark (e.g. "Other") — nothing to align
   const usedBench = pos.benchmarkAtBuy;
-  if (!usedBench) return null;           // never anchored — no measurement to be out of line with
+  // No benchmark anchored at all, but the theme expects one → flag it. Previously this returned
+  // null ("nothing to be out of line with"), which silently hid a position whose theme alpha
+  // can't even be computed. That's a divergence worth surfacing, not suppressing.
+  if (!usedBench) return { themeBench, usedBench: '(none)', closed: !!pos.closed, missing: true };
   if (themeBench === usedBench) return null; // aligned
   return { themeBench, usedBench, closed: !!pos.closed };
 }
@@ -5370,10 +5373,15 @@ function benchmarkDivergence(pos) {
 function benchmarkDivergenceBadge(pos) {
   const div = benchmarkDivergence(pos);
   if (!div) return '';
-  const tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position's theme-alpha was measured against ${div.usedBench}`
-    + (div.closed
-        ? ` (frozen at buy/sale). Realized alpha was scored vs ${div.usedBench}. Open the edit modal to re-measure vs ${div.themeBench}.`
-        : `. Re-tag or it will measure vs ${div.usedBench}.`);
+  let tip;
+  if (div.missing) {
+    tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position has NO benchmark anchored — theme alpha can't be computed. Open the edit modal to set its benchmark.`;
+  } else {
+    tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position's theme-alpha was measured against ${div.usedBench}`
+      + (div.closed
+          ? ` (frozen at buy/sale). Realized alpha was scored vs ${div.usedBench}. Open the edit modal to re-measure vs ${div.themeBench}.`
+          : `. Re-tag or it will measure vs ${div.usedBench}.`);
+  }
   return ` <span class="bench-divergence-flag" title="${esc(tip)}" style="cursor:help;color:#f59e0b;font-weight:700">⚠</span>`;
 }
 
