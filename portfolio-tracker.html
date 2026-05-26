@@ -14561,10 +14561,12 @@ function buildBookAiPrompt() {
     // holds FUND — many discovery names come from tracked benchmark funds (e.g. ITA) the user does not
     // own. Without this, the model wrongly infers "you hold ITA, so look-through overlap exists."
     const heldFunds = new Set(positions.filter(p => !p.closed && p.ticker).map(p => p.ticker.toUpperCase()));
-    lines.push(`\nDISCOVERY TICKERS THE USER HAS SELECTED (≤5) — judge each AS A HYPOTHESIS against the gaps above. Each may FILL a thin spot or DEEPEN an existing concentration; say which, and how it would move true exposure. "Discovered in FUND" is a STRUCTURAL label — the name appears in that fund's holdings — and is NOT a fundamental classification of the business. CRITICAL: whether the user HOLDS that source fund is stated per-ticker below; do NOT assume they hold it. If a name's source fund is NOT held, there is NO look-through/overlap exposure from that fund — do not raise a "you already own this via the fund" concern for unheld funds.`);
+    const heldTickers = heldFunds; // same set — any open position ticker
+    lines.push(`\nDISCOVERY TICKERS THE USER HAS SELECTED (≤5) — judge each AS A HYPOTHESIS against the gaps above. Each may FILL a thin spot or DEEPEN an existing concentration; say which, and how it would move true exposure. "Discovered in FUND" is a STRUCTURAL label — the name appears in that fund's holdings — and is NOT a fundamental classification of the business. CRITICAL: a selected ticker is a HYPOTHETICAL the user is considering — they do NOT own it unless its line below explicitly says "ALREADY OWNED." Do NOT describe a not-owned candidate as "held," "a current holding," "already in your book," or "appears in your theme list." Whether the user holds the source fund is stated per-ticker too; do NOT assume they hold it.`);
     selected.forEach(tk => {
       const fund = (discoverySourceFund[tk] || '').toUpperCase();
       const fundHeld = fund && heldFunds.has(fund);
+      const tickerHeld = heldTickers.has(tk.toUpperCase());
       const perf = discoveryPerf[tk];
       let perfStr = 'not fetched (no return data — say so; do not infer performance)';
       if (perf && typeof perf === 'object' && !perf.err) {
@@ -14584,7 +14586,10 @@ function buildBookAiPrompt() {
             ? ` (discovered in ${fund}, which you HOLD — so some look-through exposure to this name may already exist via that fund)`
             : ` (discovered in ${fund}, a tracked benchmark you do NOT hold — its holdings are pasted for theme coverage only, so there is NO existing exposure to this name through ${fund})`)
         : '';
-      lines.push(`- ${tk}${fundLabel}: ${perfStr}.`);
+      const ownTag = tickerHeld
+        ? `[ALREADY OWNED — this candidate is also a current holding]`
+        : `[NOT OWNED — hypothetical you're considering; you hold zero shares of this]`;
+      lines.push(`- ${tk} ${ownTag}${fundLabel}: ${perfStr}.`);
     });
   } else {
     lines.push(`\nDISCOVERY TICKERS SELECTED: none. (The user hasn't clicked any discovery names. Focus on the book's own gaps; note that selecting discovery names would let you screen specific candidates.)`);
@@ -14704,26 +14709,62 @@ const BOOK_AI_STOPWORDS = new Set([
   'ALL','ONE','TWO','EACH','BUT','ITS','VS','PP','MM','YOY','QOQ','API',
 ]);
 function verifyBookReviewTickers(text) {
-  if (!text) return [];
+  if (!text) return { invented: [], misowned: [] };
   // Drop the CLAIMS TO VERIFY section — externals there are correctly flagged, not asserted holdings.
   const cut = text.search(/CLAIMS TO VERIFY/i);
   const body = cut >= 0 ? text.slice(0, cut) : text;
-  // Legitimate names the review may discuss: actual holdings + selected candidates + their source funds.
-  const legit = new Set();
-  positions.filter(p => !p.closed && p.ticker).forEach(p => legit.add(p.ticker.toUpperCase()));
-  discoverySelected.forEach(t => legit.add(t.toUpperCase()));
-  Object.values(discoverySourceFund).forEach(f => { if (f) legit.add(f.toUpperCase()); });
-  // Also treat the review's own snapshot of what it ran against as legitimate (candidates it screened).
-  if (bookAiReview && Array.isArray(bookAiReview.selectedAtRun)) bookAiReview.selectedAtRun.forEach(t => legit.add(t.toUpperCase()));
 
-  const found = new Set();
+  const heldSet = new Set();
+  positions.filter(p => !p.closed && p.ticker).forEach(p => heldSet.add(p.ticker.toUpperCase()));
+  // Candidates the review concerns: current selection + the snapshot it actually ran against.
+  const candidateSet = new Set();
+  discoverySelected.forEach(t => candidateSet.add(t.toUpperCase()));
+  if (bookAiReview && Array.isArray(bookAiReview.selectedAtRun)) bookAiReview.selectedAtRun.forEach(t => candidateSet.add(t.toUpperCase()));
+  // Source funds the review may legitimately name.
+  const fundSet = new Set();
+  Object.values(discoverySourceFund).forEach(f => { if (f) fundSet.add(f.toUpperCase()); });
+
+  // Legitimate-to-NAME = held + candidates + funds. Anything else ticker-shaped is invented.
+  const legit = new Set([...heldSet, ...candidateSet, ...fundSet]);
+
+  const invented = new Set();
   const tokens = body.match(/\b[A-Z]{2,5}\b/g) || [];
   tokens.forEach(tok => {
     if (BOOK_AI_STOPWORDS.has(tok)) return;
     if (legit.has(tok)) return;
-    found.add(tok);
+    invented.add(tok);
   });
-  return [...found];
+
+  // MISOWNED: a candidate that the user does NOT actually hold, but the review asserts CURRENT ownership
+  // of. Because a clicked-and-not-held candidate is BY DEFINITION not owned (the fact we also state in
+  // the prompt), a current-ownership claim near its mention is an error. Phrases are restricted to
+  // genuine present-tense ownership ("already held", "current holding", "you own/hold it", "in your
+  // book/holdings") — NOT future/hypothetical actions like "adding" or "would deepen", which describe
+  // the candidate move itself and are legitimate. Window is tight (±70 chars) and the flagged ticker
+  // must be the CLOSEST candidate ticker to the phrase, so one candidate's claim can't bleed onto another.
+  const ownRe = /\b(already (?:held|owned)|currently (?:hold|own)s?|a current holding|is (?:already )?held|you (?:already )?(?:hold|own)|in your (?:book|holdings|portfolio)|appears? verbatim in)/i;
+  const misowned = new Set();
+  const notHeldCandidates = [...candidateSet].filter(tk => !heldSet.has(tk));
+  if (notHeldCandidates.length) {
+    // find each ownership-phrase occurrence, then attribute it to the nearest candidate ticker within window
+    let mm;
+    const phraseRe = new RegExp(ownRe.source, 'ig');
+    while ((mm = phraseRe.exec(body)) !== null) {
+      const at = mm.index;
+      let nearest = null, nearestDist = Infinity;
+      notHeldCandidates.forEach(tk => {
+        const tRe = new RegExp('\\b' + tk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
+        let tm;
+        while ((tm = tRe.exec(body)) !== null) {
+          const dist = Math.abs(tm.index - at);
+          if (dist < nearestDist && dist <= 70) { nearestDist = dist; nearest = tk; }
+        }
+      });
+      if (nearest) misowned.add(nearest);
+    }
+  }
+
+  return { invented: [...invented], misowned: [...misowned] };
 }
 
 function renderThemeAiReview() {
@@ -14746,10 +14787,19 @@ function renderThemeAiReview() {
         ⚠ Your discovery selection has changed since this review ran. It was run against ${ranAgainst.length ? esc(ranAgainst.join(', ')) : 'no selected tickers'}; you now have ${discoverySelected.size ? esc([...discoverySelected].join(', ')) : 'none'} selected. Re-analyze to update it to your current choices.
       </div>` : '';
 
-  const suspectTickers = bookAiReview ? verifyBookReviewTickers(bookAiReview.text) : [];
-  const verifyBanner = suspectTickers.length ? `
+  const verify = bookAiReview ? verifyBookReviewTickers(bookAiReview.text) : { invented: [], misowned: [] };
+  const suspectTickers = verify.invented;
+  const misowned = verify.misowned;
+  const flagLines = [];
+  if (suspectTickers.length) {
+    flagLines.push(`names ${suspectTickers.map(t => `<strong>${esc(t)}</strong>`).join(', ')} — ${suspectTickers.length === 1 ? 'a ticker' : 'tickers'} you don't hold and didn't select. The model likely invented ${suspectTickers.length === 1 ? 'it' : 'them'} from its priors.`);
+  }
+  if (misowned.length) {
+    flagLines.push(`claims you already own ${misowned.map(t => `<strong>${esc(t)}</strong>`).join(', ')} — ${misowned.length === 1 ? 'this is a candidate you\'re considering, not a holding' : 'these are candidates you\'re considering, not holdings'}. You hold zero shares; any "already held / deepens existing position" claim about ${misowned.length === 1 ? 'it' : 'them'} is the model's error.`);
+  }
+  const verifyBanner = flagLines.length ? `
       <div style="background:rgba(248,113,113,0.12);border:1px solid rgba(248,113,113,0.5);border-radius:6px;padding:8px 11px;margin-bottom:8px;font-size:10px;color:#f87171;line-height:1.55">
-        ⚠ <strong>Accuracy check:</strong> this review names ${suspectTickers.map(t => `<strong>${esc(t)}</strong>`).join(', ')} — ${suspectTickers.length === 1 ? 'a ticker' : 'tickers'} you don't hold and ${suspectTickers.length === 1 ? "didn't" : "didn't"} select as ${suspectTickers.length === 1 ? 'a candidate' : 'candidates'}. The model likely invented ${suspectTickers.length === 1 ? 'it' : 'them'} from its priors. <strong>Treat any claim about ${suspectTickers.length === 1 ? 'this name' : 'these names'} as the model's error, not your data.</strong>
+        ⚠ <strong>Accuracy check:</strong> this review ${flagLines.join(' It also ')} <strong>Treat ${(suspectTickers.length + misowned.length) === 1 ? 'that claim' : 'those claims'} as the model's error, not your data.</strong>
       </div>` : '';
 
   const result = bookAiReview ? `
