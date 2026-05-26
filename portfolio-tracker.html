@@ -14568,6 +14568,19 @@ function discoveryInfoCardHtml(key, state) {
     if (info.homepage) inner += `<div style="margin-top:3px"><a href="${esc(info.homepage)}" target="_blank" rel="noopener" style="color:var(--color-text-info);font-size:9px">${esc(info.homepage)} ↗</a></div>`;
     if (info.fetchedDate) inner += `<div style="color:var(--color-text-tertiary);font-size:8px;margin-top:2px">via Polygon · fetched ${esc(info.fetchedDate)}</div>`;
   }
+  // Research links — generic {ticker}-templated URLs to common analysis sites. No data needed/stored;
+  // they just deep-link the symbol. Mirrors the style of the PE-card "Research" row.
+  const t = encodeURIComponent(key);
+  const links = [
+    { label: 'StockAnalysis', url: 'https://stockanalysis.com/stocks/' + t + '/', hint: 'Financial statements, ratios — clean & free' },
+    { label: 'Finviz', url: 'https://finviz.com/quote.ashx?t=' + t, hint: 'Fundamentals snapshot + technicals, fast read' },
+    { label: 'Yahoo Finance', url: 'https://finance.yahoo.com/quote/' + t, hint: 'Summary, chart, financials, news' },
+    { label: 'TradingView', url: 'https://www.tradingview.com/symbols/' + t + '/', hint: 'Charting' },
+    { label: 'SEC Filings', url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker=' + t + '&type=10-K&dateb=&owner=include&count=40', hint: 'EDGAR filings for this issuer' }
+  ];
+  const linkRow = `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:5px">` + links.map(l =>
+    `<a href="${esc(l.url)}" target="_blank" rel="noopener" title="${esc(l.hint)}" style="font-size:9px;color:var(--color-text-info);text-decoration:none;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:2px 7px;white-space:nowrap">${esc(l.label)} ↗</a>`
+  ).join('') + `</div>`;
   const note = (info.userNote || '');
   const noteField = `<div style="margin-top:5px"><textarea data-info-note="${esc(key)}" placeholder="Your own note on ${esc(key)} (saved automatically)…" oninput="saveDiscoveryNote('${esc(key)}', this.value)" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:9px;background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:4px 6px;resize:vertical" rows="2">${esc(note)}</textarea></div>`;
   return `<div style="margin-top:6px;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:10px">
@@ -14576,6 +14589,7 @@ function discoveryInfoCardHtml(key, state) {
       <span onclick="hideDiscoveryInfo()" style="cursor:pointer;color:var(--color-text-tertiary);font-size:11px">×</span>
     </div>
     ${inner}
+    ${linkRow}
     ${noteField}
   </div>`;
 }
