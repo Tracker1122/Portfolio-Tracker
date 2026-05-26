@@ -1696,6 +1696,10 @@
       <label class="modal-label" title="Theme tag for this closed position. Recording the thesis you held while you owned it keeps your track record honest.">Theme</label>
       <select class="modal-input" id="edit-closed-theme" style="width:220px"></select>
       <div id="edit-closed-theme-hint" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+      <div id="edit-closed-rebench-row" style="margin-top:6px;display:none">
+        <button class="btn btn-sm" id="edit-closed-rebench-btn" onclick="rebenchmarkClosedToTheme()" style="font-size:10px;padding:4px 10px" title="Refetch this lot's benchmark prices for the selected theme's benchmark, on its actual buy and sell dates, and re-anchor theme alpha to it. Overwrites the frozen benchmark measurement — this is a deliberate re-measurement, not a label change.">⟳ Re-measure vs <span id="edit-closed-rebench-ticker">—</span></button>
+        <div id="edit-closed-rebench-status" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+      </div>
     </div>
     <div class="modal-field">
       <label class="modal-label">Sale date</label>
@@ -2296,18 +2300,17 @@ function runSelfChecks() {
       bad.length ? bad.map(p => `${p.ticker}: anchor ${p.benchmarkAtBuy || getThemeBenchmark(p.theme)} has no current price`).join('; ') : '');
   });
 
-  // (2b) Tag/benchmark divergence — INFORMATIONAL, not an error. After the anchor fix the
-  // math is correct even when a position's theme→benchmark mapping differs from the benchmark
-  // it was bought against (e.g. ORCL tagged "AI Infrastructure"→SMH but bought vs QQQ). The
-  // math now correctly uses QQQ. This note just surfaces the divergence so you can decide
-  // whether the TAG is right — it's a portfolio judgment, not a bug. Always passes; the detail
-  // is the signal. (Shown in console; not a red banner.)
+  // (2b) Tag/benchmark divergence — INFORMATIONAL, not an error. Uses the same
+  // benchmarkDivergence() helper the inline row badges use, so the console note and the
+  // on-row ⚠ flags always agree. Covers BOTH open and closed lots. For closed lots the
+  // realized alpha is frozen against the old benchmark; the edit modal's "Re-measure"
+  // button can realign it. Always passes — the detail is the signal, not a failure.
   safe('theme_tag_benchmark_divergence', () => {
-    if (typeof getThemeBenchmark !== 'function') { add('theme_tag_benchmark_divergence', true, 'fn absent — skipped'); return; }
-    const diverged = positions.filter(p => !p.closed && p.benchmarkAtBuy && getThemeBenchmark(p.theme)
-      && p.benchmarkAtBuy !== getThemeBenchmark(p.theme));
+    if (typeof benchmarkDivergence !== 'function') { add('theme_tag_benchmark_divergence', true, 'helper absent — skipped'); return; }
+    const diverged = positions.map(p => ({ p, d: benchmarkDivergence(p) })).filter(x => x.d);
     add('theme_tag_benchmark_divergence', true,  // informational — never fails
-      diverged.length ? `note (not an error): ${diverged.map(p => `${p.ticker} tagged "${p.theme}"→${getThemeBenchmark(p.theme)} but benchmarked vs ${p.benchmarkAtBuy}; math correctly uses ${p.benchmarkAtBuy}`).join('; ')}` : '');
+      diverged.length ? `${diverged.length} position(s) where tag and benchmark don't line up (flagged inline with ⚠): `
+        + diverged.map(({ p, d }) => `${p.ticker}${p.closed ? ' [closed]' : ''} tagged "${p.theme}"→${d.themeBench} but measured vs ${d.usedBench}`).join('; ') : '');
   });
 
   // (3) Any index fund you HOLD should either have pasted holdings or be marked
@@ -4123,7 +4126,7 @@ function renderClosedRow(pos) {
     })()}</td>
     <td>${resultHtml}</td>
     <td><span class="sold-badge" onclick="toggleClosed(${pos.id})" title="Click to reopen">Sold</span></td>
-    <td class="calc-cell" style="text-align:left">${esc(pos.theme||'') || '<span class="dash">—</span>'}</td>
+    <td class="calc-cell" style="text-align:left">${esc(pos.theme||'') || '<span class="dash">—</span>'}${benchmarkDivergenceBadge(pos)}</td>
     <td class="calc-cell" style="text-align:left;max-width:160px;white-space:normal">${esc(pos.notes||'') || '<span class="dash">—</span>'}</td>
     <td style="white-space:nowrap"><button class="btn btn-sm" onclick="openEditClosedPositionModal(${pos.id})" title="Edit sale details" style="margin-right:4px">✎</button><button class="btn btn-sm btn-danger" onclick="deletePosition(${pos.id})" title="Delete">✕</button></td>
   </tr>`;
@@ -4200,7 +4203,7 @@ function renderRow(pos) {
       <select class="cell-input theme-select" onchange="setField(${pos.id},'theme',this.value)" style="width:130px;cursor:pointer">
         <option value="">— Industry —</option>
         ${Object.entries(THEMES).filter(([_, cfg]) => cfg.dropdown).map(([t]) => `<option value="${t}" ${pos.theme===t?'selected':''}>${t}</option>`).join('')}
-      </select>
+      </select>${benchmarkDivergenceBadge(pos)}
     </td>
     <td>
       <select class="cell-input" onchange="setField(${pos.id},'sleeve',this.value)" style="width:130px;cursor:pointer;border-left:3px solid ${SLEEVE_COLORS[pos.sleeve]||'var(--color-border-tertiary)'}">
@@ -5320,8 +5323,35 @@ function calcThemeAlpha(pos) {
   };
 }
 
-// Aggregate theme alpha across a set of positions using dollar-weighted percentage points.
-// This is the more honest aggregate framing: pp deviation on actual capital deployed.
+// ─────────────────────────────────────────────
+// Benchmark divergence detector — single source of truth for the "tag and benchmark
+// don't line up" flag. A position's theme implies a benchmark (getThemeBenchmark), but the
+// benchmark it was actually MEASURED against is frozen in benchmarkAtBuy. When those differ,
+// the theme-alpha number is computed against a benchmark the current tag no longer implies.
+// For an OPEN position the fix is cheap (re-tag, or the live benchmark just gets used). For a
+// CLOSED position the measurement is already committed (benchmarkPriceAtBuy / ...AtSell are
+// frozen), so realigning requires refetching historical prices for the new benchmark.
+// Returns null if aligned (or not enough info to judge), else { themeBench, usedBench, closed }.
+function benchmarkDivergence(pos) {
+  if (!pos || !pos.theme) return null;
+  const themeBench = getThemeBenchmark(pos.theme);
+  if (!themeBench) return null;          // theme has no benchmark (e.g. "Other") — nothing to align
+  const usedBench = pos.benchmarkAtBuy;
+  if (!usedBench) return null;           // never anchored — no measurement to be out of line with
+  if (themeBench === usedBench) return null; // aligned
+  return { themeBench, usedBench, closed: !!pos.closed };
+}
+
+// Small inline marker for a position row when its tag and benchmark diverge. Empty string if fine.
+function benchmarkDivergenceBadge(pos) {
+  const div = benchmarkDivergence(pos);
+  if (!div) return '';
+  const tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position's theme-alpha was measured against ${div.usedBench}`
+    + (div.closed
+        ? ` (frozen at buy/sale). Realized alpha was scored vs ${div.usedBench}. Open the edit modal to re-measure vs ${div.themeBench}.`
+        : `. Re-tag or it will measure vs ${div.usedBench}.`);
+  return ` <span class="bench-divergence-flag" title="${esc(tip)}" style="cursor:help;color:#fbbf24;font-weight:700">⚠</span>`;
+}
 //
 // Returns an object with:
 //   - totalDollar: sum of per-position theme alpha dollars
@@ -16318,17 +16348,26 @@ function openEditClosedPositionModal(posId) {
     const chosen = themeSel.value;
     const themeBench = (typeof getThemeBenchmark === 'function') ? getThemeBenchmark(chosen) : null;
     const anchor = p.benchmarkAtBuy;
+    const rebenchRow = document.getElementById('edit-closed-rebench-row');
+    const rebenchTicker = document.getElementById('edit-closed-rebench-ticker');
+    const rebenchStatus = document.getElementById('edit-closed-rebench-status');
+    if (rebenchStatus) rebenchStatus.textContent = '';
     if (chosen && themeBench && anchor && themeBench !== anchor) {
-      themeHint.innerHTML = `<span style="color:#fbbf24">Note:</span> "${esc(chosen)}" benchmarks to <strong>${esc(themeBench)}</strong>, `
-        + `but this lot was measured against <strong>${esc(anchor)}</strong> (frozen at buy/sale). `
-        + `Re-tagging changes the thesis label only — theme alpha stays measured vs ${esc(anchor)}, `
-        + `preserving what this closed bet was actually scored against. The benchmark prices are not altered.`;
+      themeHint.innerHTML = `<span style="color:#fbbf24">Doesn't line up:</span> "${esc(chosen)}" benchmarks to <strong>${esc(themeBench)}</strong>, `
+        + `but this lot's realized alpha was measured against <strong>${esc(anchor)}</strong> (frozen at buy/sale). `
+        + `Two choices: keep it as-is (the tag is just a thesis label; alpha stays scored vs ${esc(anchor)}), `
+        + `or re-measure vs ${esc(themeBench)} using the button below (needs ${esc(themeBench)}'s historical prices).`;
+      if (rebenchRow) rebenchRow.style.display = 'block';
+      if (rebenchTicker) rebenchTicker.textContent = themeBench;
     } else if (chosen && themeBench && anchor && themeBench === anchor) {
       themeHint.innerHTML = `Tag and benchmark agree (${esc(anchor)}).`;
+      if (rebenchRow) rebenchRow.style.display = 'none';
     } else if (chosen && themeBench && !anchor) {
       themeHint.innerHTML = `"${esc(chosen)}" benchmarks to ${esc(themeBench)}, but no benchmark was anchored at buy — theme alpha won't compute for this lot.`;
+      if (rebenchRow) rebenchRow.style.display = 'none';
     } else {
       themeHint.textContent = '';
+      if (rebenchRow) rebenchRow.style.display = 'none';
     }
   };
   themeSel.onchange = updateThemeHint;
@@ -16431,6 +16470,99 @@ function confirmEditClosedPosition() {
   closeEditClosedPositionModal();
   renderAll();
   scheduleSave();
+}
+
+// ─────────────────────────────────────────────
+// Re-measure a closed lot against its CURRENT theme's benchmark (Route A).
+// The closed lot's benchmark prices are frozen against the OLD benchmark (benchmarkAtBuy).
+// Realigning to the theme's benchmark requires that benchmark's historical close on the
+// lot's actual buy and sell dates. Two acquisition paths:
+//   1. Auto-fetch via Polygon (if an API key is set) — uses the same fetchHistoricalNearby
+//      the backfill uses, so weekend/holiday dates walk back to the nearest trading day.
+//   2. Manual entry — prompts for the exact ticker + dates to look up (Yahoo, etc.) and
+//      accepts pasted prices.
+// ATOMIC: both prices must be obtained or nothing is written. This overwrites frozen
+// historical measurement on purpose — it is a re-measurement, gated behind a clear confirm.
+async function rebenchmarkClosedToTheme() {
+  if (_editClosedPositionId === null) return;
+  const p = positions.find(pos => pos.id === _editClosedPositionId);
+  if (!p || !p.closed) return;
+
+  const statusEl = document.getElementById('edit-closed-rebench-status');
+  const setStatus = (msg, color) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color || 'var(--color-text-tertiary)'; } };
+
+  // Target benchmark = the benchmark of the theme currently selected in the dropdown.
+  const chosenTheme = document.getElementById('edit-closed-theme').value
+    ? canonicalThemeName(document.getElementById('edit-closed-theme').value)
+    : p.theme;
+  const newBench = getThemeBenchmark(chosenTheme);
+  if (!newBench) { setStatus('Selected theme has no benchmark — nothing to measure against.', '#fbbf24'); return; }
+  if (newBench === p.benchmarkAtBuy) { setStatus('Already measured against ' + newBench + '. Nothing to do.', 'var(--color-text-tertiary)'); return; }
+
+  const buyDate = p.dateBought, sellDate = p.sellDate;
+  if (!buyDate || !sellDate) { setStatus('This lot is missing a buy or sell date — cannot anchor historical prices.', '#fbbf24'); return; }
+
+  // Confirm — this overwrites a committed measurement.
+  const ok = confirm(
+    'Re-measure this closed ' + (p.ticker || '') + ' lot against ' + newBench + '?\n\n'
+    + 'This OVERWRITES the frozen benchmark prices (currently ' + (p.benchmarkAtBuy || 'none')
+    + ' at ' + (p.benchmarkPriceAtBuy != null ? p.benchmarkPriceAtBuy : '—')
+    + ' / ' + (p.benchmarkPriceAtSell != null ? p.benchmarkPriceAtSell : '—') + ').\n'
+    + 'Realized theme alpha for this lot will be recomputed vs ' + newBench + '.\n\n'
+    + 'You will need ' + newBench + "'s closing price on:\n"
+    + '  • buy  ' + buyDate + '\n'
+    + '  • sell ' + sellDate + '\n\n'
+    + 'OK to proceed.'
+  );
+  if (!ok) return;
+
+  // Acquire the two prices.
+  let buyPx = null, sellPx = null, buyDateUsed = buyDate, sellDateUsed = sellDate, source = '';
+
+  const haveKey = (typeof polygonKey !== 'undefined' && polygonKey);
+  if (haveKey) {
+    setStatus('Fetching ' + newBench + ' on ' + buyDate + ' and ' + sellDate + ' via Polygon…', '#fbbf24');
+    try {
+      const b = await fetchHistoricalNearby(newBench, buyDate);
+      const s = await fetchHistoricalNearby(newBench, sellDate);
+      if (b.price !== null && s.price !== null) {
+        buyPx = b.price; sellPx = s.price; buyDateUsed = b.dateUsed; sellDateUsed = s.dateUsed; source = 'Polygon';
+      } else {
+        setStatus('Auto-fetch failed (' + ((b.error || s.error) || 'no data') + '). Falling back to manual entry…', '#fbbf24');
+      }
+    } catch (e) {
+      setStatus('Auto-fetch error (' + (e.message || e) + '). Falling back to manual entry…', '#fbbf24');
+    }
+  }
+
+  // Manual fallback (no key, or fetch failed). Prompt for each price; accept blank = abort.
+  if (buyPx === null || sellPx === null) {
+    const bIn = prompt(newBench + ' closing price on the BUY date (' + buyDate + ')?\n'
+      + 'Look it up on Yahoo Finance / Google Finance for ' + newBench + ' on ' + buyDate
+      + '. Leave blank to cancel.', '');
+    if (bIn === null || bIn.trim() === '') { setStatus('Cancelled — no changes made.', 'var(--color-text-tertiary)'); return; }
+    const sIn = prompt(newBench + ' closing price on the SELL date (' + sellDate + ')?\n'
+      + 'Leave blank to cancel.', '');
+    if (sIn === null || sIn.trim() === '') { setStatus('Cancelled — no changes made.', 'var(--color-text-tertiary)'); return; }
+    const bn = parseFloat(bIn), sn = parseFloat(sIn);
+    if (!isFinite(bn) || bn <= 0 || !isFinite(sn) || sn <= 0) { setStatus('Those prices were not valid positive numbers — no changes made.', '#f87171'); return; }
+    buyPx = bn; sellPx = sn; source = 'manual entry';
+  }
+
+  // ATOMIC write — only now that BOTH prices exist.
+  p.benchmarkAtBuy = newBench;
+  p.benchmarkPriceAtBuy = buyPx;
+  p.benchmarkPriceAtSell = sellPx;
+
+  const ta = (typeof calcThemeAlpha === 'function') ? calcThemeAlpha(p) : null;
+  const alphaStr = ta ? (ta.themeAlphaPct >= 0 ? '+' : '') + ta.themeAlphaPct.toFixed(1) + 'pp vs ' + newBench : '(not computable)';
+  setStatus('Re-measured vs ' + newBench + ' (' + source + '): '
+    + newBench + ' ' + buyPx + ' → ' + sellPx + '. New theme alpha: ' + alphaStr
+    + (buyDateUsed !== buyDate || sellDateUsed !== sellDate ? ' [nearest trading days: ' + buyDateUsed + ' / ' + sellDateUsed + ']' : ''), 'var(--color-text-success)');
+
+  renderAll();
+  scheduleSave();
+  if (typeof runSelfChecks === 'function') { try { runSelfChecks(); } catch (e) {} }
 }
 
 function deletePeDeal(id) {
