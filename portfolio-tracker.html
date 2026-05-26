@@ -7560,6 +7560,71 @@ let qrRotationState = { parsed: [], etfTicker: '', candidates: [] };
 // naive double-up. Normalized tickers. Reset when a new candidate/ETF is loaded.
 let qrRotateChecked = new Set();
 
+// Builds the prose "what really moved" breakdown from a rotation sim. Everything here is COMPUTED from
+// sim fields — no asserted facts. Describes (a) the held-vs-new split, (b) how little true exposure
+// actually drops on names the ETF hands back, (c) the position-count change, (d) the tax split and any
+// harvestable loss — then frames it as reshuffle-vs-reduce WITHOUT a verdict on whether to do it.
+function buildWhatReallyMovedParagraph(sim, etfTicker) {
+  if (!sim || !Array.isArray(sim.rows)) return '';
+  const held = sim.rows.filter(r => r.before > 0);
+  const fresh = sim.rows.filter(r => r.before === 0);
+  const sumChg = arr => arr.reduce((s, r) => s + r.change, 0);
+  const heldNet = sumChg(held), freshNet = sumChg(fresh);
+  const sells = sim.soldCount || 0;
+  const D = (n) => fmtDollarWhole(Math.abs(n));
+
+  // Names the ETF "hands back": held names whose true exposure barely changes despite being part of
+  // the rotation (|change| small relative to their before). Quantify how much of the sold exposure
+  // comes right back rather than asserting it.
+  const handedBack = held.filter(r => r.before > 0 && Math.abs(r.change) < r.before * 0.34);
+  const reshuffleShare = (() => {
+    const soldExposure = Math.abs(sumChg(held.filter(r => r.change < 0)));
+    if (soldExposure <= 0) return null;
+    // of the exposure cut from held names, how much is offset by the ETF/VOO handing the same names
+    // back (positive changes on held names) — i.e. net cut is much smaller than gross cut.
+    const grossCut = held.filter(r => r.change < 0).reduce((s, r) => s + Math.abs(r.change), 0);
+    const handBack = held.filter(r => r.change > 0).reduce((s, r) => s + r.change, 0);
+    if (grossCut <= 0) return null;
+    return Math.min(100, Math.round((handBack / grossCut) * 100));
+  })();
+
+  const parts = [];
+  // 1. The headline trade.
+  if (heldNet < 0 && freshNet > 0) {
+    parts.push(`This rotation cuts a net ${D(heldNet)} from names you already had exposure to (largely the ${sells} position${sells === 1 ? '' : 's'} you're selling) and introduces ${D(freshNet)} of genuinely new exposure through ${esc(etfTicker)}.`);
+  } else if (heldNet >= 0 && freshNet > 0) {
+    parts.push(`This rotation adds ${D(freshNet)} of new exposure via ${esc(etfTicker)} and nets ${D(heldNet)} more into names you already held.`);
+  } else if (freshNet === 0) {
+    parts.push(`This rotation introduces no new exposure — it reshuffles ${D(heldNet)} among names you already held.`);
+  } else {
+    parts.push(`Net change across held and new names: ${heldNet + freshNet >= 0 ? '+' : '\u2212'}${D(heldNet + freshNet)}.`);
+  }
+  // 2. The hand-back / reshuffle point — the actual insight.
+  if (reshuffleShare !== null && reshuffleShare >= 15) {
+    parts.push(`But for names ${esc(etfTicker)} also holds, much of what you sell comes straight back: roughly ${reshuffleShare}% of the exposure you cut from the sold names is handed back through the ETF (and VOO still holds them on top of that)${handedBack.length ? `, so ${handedBack.length} of your held name${handedBack.length === 1 ? "'s true exposure barely moves" : "s' true exposure barely moves"}` : ''}. The trade is closer to a reshuffle of the same exposure than a reduction of it.`);
+  } else if (heldNet < 0 && freshNet > 0) {
+    parts.push(`Most of the cut on held names is not handed back by ${esc(etfTicker)}, so this does meaningfully shift exposure rather than just reshuffle it.`);
+  }
+  // 3. Position-count effect (concrete answer to "does my book get simpler").
+  if (typeof sim.posBefore === 'number' && typeof sim.posAfter === 'number' && sim.posBefore !== sim.posAfter) {
+    const d = sim.posBefore - sim.posAfter;
+    parts.push(`Position count goes ${sim.posBefore} → ${sim.posAfter} (${d > 0 ? d + ' fewer line' + (d === 1 ? '' : 's') + ' to track' : Math.abs(d) + ' more line' + (Math.abs(d) === 1 ? '' : 's')}).`);
+  }
+  // 4. Tax, split by shelter where relevant.
+  if (sim.estTax > 0) {
+    let taxStr = `Estimated tax to do this: ~${fmtDollarWhole(sim.estTax)}`;
+    if (sim.shelteredProceeds > 0 && sim.taxableProceeds > 0) {
+      taxStr += ` (only the ${fmtDollarWhole(sim.taxableProceeds)} sold from taxable accounts is taxed; ${fmtDollarWhole(sim.shelteredProceeds)} is in sheltered accounts)`;
+    }
+    taxStr += '.';
+    parts.push(taxStr);
+  } else if (sim.anyLoss) {
+    parts.push(`No tax cost estimated — the sells include harvestable losses rather than gains.`);
+  }
+
+  return parts.join(' ');
+}
+
 function qrSimulateRotation(parsed, etfTicker, sellNormsSet, targetSleeveOverride) {
   // Proceeds from selling the checked direct positions, plus the estimated tax on doing so.
   // Tax = gain × the position's rate (ST/LT by holding period; IRA sheltered = 0). Losses don't
@@ -7803,6 +7868,7 @@ function qrRenderRotation() {
           <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
           <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh>0?`, ${hiddenFresh} below table`:''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
           <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
+          <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${buildWhatReallyMovedParagraph(sim, etfTicker)}</div>
         </div>`;
       })()}
       ${sim.sleeveRows.length ? `
@@ -8269,6 +8335,7 @@ function renderQrCardAnalysis(id) {
             <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
             <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh>0?`, ${hiddenFresh} below table`:''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
             <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
+            <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${buildWhatReallyMovedParagraph(sim, etfTicker)}</div>
           </div>`;
         })()}
         <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">For names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal. ` : ''}Approximate; tax is an estimate (not advice).</div>`;
