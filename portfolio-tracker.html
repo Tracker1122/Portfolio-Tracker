@@ -3594,6 +3594,24 @@ function renderBookIsolateDelta(openArr) {
     prose += Math.abs(alphaD) < 0.05 ? '' : ` by ${ppAbs(alphaD)} points (to ${filt.vsSpx >= 0 ? '+' : ''}${filt.vsSpx.toFixed(1)}pp)`;
   }
   prose += '.';
+  // WTD S&P shift — turning positions off reweights the book, so the capital-weighted S&P
+  // benchmark itself moves. Purely descriptive: state the shift, don't interpret it.
+  const spxD = dPp(full.weightedSpx, filt.weightedSpx);
+  if (spxD !== null && Math.abs(spxD) >= 0.05) {
+    prose += ` The capital-weighted S&P benchmark ${dirWord(spxD)} ${ppAbs(spxD)} points`
+      + ` (${full.weightedSpx >= 0 ? '+' : ''}${full.weightedSpx.toFixed(1)}% → ${filt.weightedSpx >= 0 ? '+' : ''}${filt.weightedSpx.toFixed(1)}%)`
+      + ` as the remaining positions reweight what you're measured against.`;
+  }
+  // Beat/Trail count change — how the win/loss tally shifts. State the before→after counts.
+  const beatD = filt.countBeat - full.countBeat;
+  const trailD = filt.countTrail - full.countTrail;
+  if (beatD !== 0 || trailD !== 0) {
+    prose += ` Beat/trail goes from ${full.countBeat} beating / ${full.countTrail} trailing the S&P`
+      + ` to ${filt.countBeat} / ${filt.countTrail}`
+      + ` (${beatD >= 0 ? '+' : ''}${beatD} beating, ${trailD >= 0 ? '+' : ''}${trailD} trailing).`;
+  } else {
+    prose += ` Beat/trail is unchanged at ${filt.countBeat} beating / ${filt.countTrail} trailing.`;
+  }
   // A second, purely-descriptive sentence on the capital removed — helps read whether the change is
   // a big or small slice. Still just stating magnitudes.
   const removedVal = removed.reduce((s, p) => s + ((parseFloat(p.shares) || 0) * (parseFloat(p.exitPrice) || 0)), 0);
@@ -3605,6 +3623,7 @@ function renderBookIsolateDelta(openArr) {
     <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px">
       <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-tertiary);margin-bottom:6px">Full book → without what's turned off</div>
       ${fmtPair('Your return', full.yourReturn, filt.yourReturn, 'pct')}
+      ${fmtPair('WTD S&P %', full.weightedSpx, filt.weightedSpx, 'pct')}
       ${fmtPair('Edge vs S&P', full.vsSpx, filt.vsSpx, 'pp')}
       ${fmtPair('Dollar alpha', full.dollarAlpha, filt.dollarAlpha, 'dollar')}
       <div style="font-size:11px;line-height:1.55;color:var(--color-text-primary);margin-top:8px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)">${prose}</div>
