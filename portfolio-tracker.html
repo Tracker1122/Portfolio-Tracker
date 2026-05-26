@@ -13706,9 +13706,37 @@ async function fetchTickerWindows(ticker) {
   const target = Date.now() - 30 * 86400 * 1000;
   let monthBar = null, best = Infinity;
   for (const b of bars) { const diff = Math.abs(b.t - target); if (diff < best) { best = diff; monthBar = b.c; } }
+
+  // ---- Free extras (no extra call): everything below comes from the bars we already have. ----
+  // How much trading history Polygon actually returned. If the earliest bar is well short of a year,
+  // the "1Y" figure spans LESS than a year (recent IPO/listing) and is not a clean 1Y return — we
+  // flag it rather than present it as if it were. Days = span of the window in calendar days.
+  const histDays = Math.round((bars[bars.length - 1].t - bars[0].t) / 86400000);
+  const shortHist = histDays < 350; // < ~11.5 months of history → treat 1Y as partial
+
+  // Max drawdown over the window: largest peak-to-trough decline on a closing basis. Answers "how
+  // ugly did it get along the way," which a single +X% return number completely hides.
+  let peak = bars[0].c, maxDD = 0;
+  for (const b of bars) { if (b.c > peak) peak = b.c; const dd = (b.c - peak) / peak; if (dd < maxDD) maxDD = dd; }
+  const maxDrawdown = maxDD * 100; // negative percent, e.g. -42.3
+
+  // Annualized volatility from daily log returns (× √252). A coarse "how jumpy" gauge. Needs a few
+  // bars to be meaningful; null if too thin.
+  let annVol = null;
+  if (bars.length > 20) {
+    const rets = [];
+    for (let i = 1; i < bars.length; i++) { if (bars[i - 1].c > 0) rets.push(Math.log(bars[i].c / bars[i - 1].c)); }
+    if (rets.length > 1) {
+      const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+      const variance = rets.reduce((a, r) => a + (r - mean) * (r - mean), 0) / (rets.length - 1);
+      annVol = Math.sqrt(variance) * Math.sqrt(252) * 100; // percent
+    }
+  }
+
   return {
     m1: monthBar ? ((latest - monthBar) / monthBar) * 100 : null,
     y1: yearBar ? ((latest - yearBar) / yearBar) * 100 : null,
+    histDays, shortHist, maxDrawdown, annVol,
   };
 }
 
@@ -13803,23 +13831,73 @@ function fmtWin(v, label) {
   return `<span style="color:${col};font-weight:600">${label} ${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
 }
 
-// Format the "vs FUND +z% → +Δ pts" comparison for a name's chip, given the name's perf and its source
-// fund. Honest degradation: if we don't yet have the fund's value (uncached, loading, or it failed),
-// or the name's own 1Y is null, we don't fabricate a delta — we show "vs FUND —" or nothing.
-// The delta is in PERCENTAGE POINTS (name 1Y minus fund 1Y), not a ratio — it's the simplest honest
-// read of "did the name out- or under-perform the fund it came from over the same window."
+// 1Y window, with a "partial history" marker when Polygon returned less than ~a year of bars (recent
+// listing). In that case the number is NOT a clean 1-year return and we say so, rather than letting a
+// 7-month return masquerade as a year. Shows the actual span so you know what you're looking at.
+function fmtY1(perf) {
+  if (!perf || typeof perf.y1 !== 'number') return `<span style="color:var(--color-text-tertiary)">1Y —</span>`;
+  const col = perf.y1 >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const v = `${perf.y1 >= 0 ? '+' : ''}${perf.y1.toFixed(1)}%`;
+  if (perf.shortHist) {
+    const mo = perf.histDays ? Math.round(perf.histDays / 30) : null;
+    return `<span style="color:${col};font-weight:600" title="Polygon only has ~${mo || '<12'} months of history for this ticker — this is the return over that PARTIAL window, not a full year. Likely a recent listing. Don't compare it like-for-like against a full-year figure.">${mo ? mo + 'mo' : '<1Y'}* ${v}</span>`;
+  }
+  return `<span style="color:${col};font-weight:600">1Y ${v}</span>`;
+}
+
+// Risk context, free from the bars: worst peak-to-trough drawdown and annualized vol over the window.
+// A +1400% return with a -60% drawdown along the way is a very different animal from a smooth +1400%;
+// this stops the headline return from being read in a vacuum.
+function fmtRisk(perf) {
+  if (!perf || typeof perf !== 'object') return '';
+  const bits = [];
+  if (typeof perf.maxDrawdown === 'number' && perf.maxDrawdown < -0.05) {
+    bits.push(`<span style="color:var(--color-text-tertiary)" title="Worst peak-to-trough decline on a closing-price basis over the fetched window. How deep the drops got, regardless of the end-to-end return.">maxDD ${perf.maxDrawdown.toFixed(0)}%</span>`);
+  }
+  if (typeof perf.annVol === 'number') {
+    bits.push(`<span style="color:var(--color-text-tertiary)" title="Annualized volatility from daily moves over the window (std dev of daily log returns × √252). Rough 'how jumpy' gauge — higher = wilder ride. For reference, a broad index sits ~15-20%.">vol ${perf.annVol.toFixed(0)}%</span>`);
+  }
+  return bits.length ? ` · <span style="font-size:8px">${bits.join(' · ')}</span>` : '';
+}
+
+// Compare the name's 1Y to its SOURCE FUND's 1Y. The framing adapts to magnitude, because a fixed
+// "percentage points" delta is misleading when the gap is huge: "+1473% vs +36% → +1437 pts" invites
+// reading "pts" as "%". So: when the name ran to a large MULTIPLE of the fund (both positive), say
+// "~Nx the fund"; when they're in a comparable range, the point delta is honest and we keep it; when
+// either is negative, points are the clearest read. Honest degradation if the fund value isn't loaded.
 function fmtBenchCompare(name, namePerf) {
   const fund = (discoverySourceFund[name] || '').toUpperCase();
   if (!fund) return '';
   const b = discoveryBenchPerf[fund];
-  // Name's own 1Y must exist to compare; if not, nothing meaningful to say.
   if (!(namePerf && typeof namePerf === 'object' && typeof namePerf.y1 === 'number')) return '';
   if (b === 'loading') return ` · <span style="color:var(--color-text-tertiary)">vs ${esc(fund)} …</span>`;
   if (!b) return ` · <span style="color:var(--color-text-tertiary)" title="Fetch the batch to load this benchmark">vs ${esc(fund)} —</span>`;
   if (b.err || typeof b.y1 !== 'number') return ` · <span style="color:var(--color-text-tertiary)" title="Benchmark return unavailable">vs ${esc(fund)} —</span>`;
-  const delta = namePerf.y1 - b.y1; // percentage points
-  const dCol = delta >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-  return ` · <span style="color:var(--color-text-tertiary)">vs ${esc(fund)} ${b.y1 >= 0 ? '+' : ''}${b.y1.toFixed(1)}%</span> <span style="color:${dCol};font-weight:600" title="1-year return minus the fund's 1-year return, in percentage points. Positive = the name outpaced the fund it was found in over the same window.">→ ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pts</span>`;
+
+  const n = namePerf.y1, f = b.y1;
+  const fundStr = `${f >= 0 ? '+' : ''}${f.toFixed(1)}%`;
+  // If either window is partial, comparing 1Y-to-1Y is apples-to-oranges; flag it in the tooltip.
+  const mismatch = namePerf.shortHist;
+  const beat = n > f;
+  const col = beat ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+
+  // Choose the framing. Multiple only makes sense when both are positive and the name is a sizable
+  // multiple of a non-trivial fund return. Otherwise use points.
+  let rel;
+  if (n > 0 && f > 0.5 && n / f >= 3) {
+    rel = `${(n / f).toFixed(1)}× the fund`;
+  } else if (f >= -0.5 && f <= 0.5 && n > 0) {
+    // fund genuinely flat (near zero, either sign) but name up — a multiple would explode/mislead.
+    // A negative fund is NOT flat: it falls through to points so "beat a losing fund" reads correctly.
+    rel = `fund ~flat, name up`;
+  } else {
+    const delta = n - f;
+    rel = `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pts`;
+  }
+  const tip = mismatch
+    ? `The name's window is PARTIAL (recent listing) but the fund's is a full year — so this is not a clean like-for-like comparison. Read it loosely.`
+    : `The name's 1-year return relative to the fund it was found in, over the same window. Direction, not a buy signal.`;
+  return ` · <span style="color:var(--color-text-tertiary)">vs ${esc(fund)} ${fundStr}</span> <span style="color:${col};font-weight:600" title="${tip}">${mismatch ? '≈ ' : ''}${rel}${beat ? ' ↑' : ' ↓'}</span>`;
 }
 
 // Update a single chip's perf slot in place.
@@ -13830,7 +13908,7 @@ function updatePerfSlot(key) {
     if (v && v.err === 'rate') { el.innerHTML = '<span style="color:#fbbf24" title="Polygon rate limit (free tier ~5/min) — wait a moment and fetch again">rate · retry</span>'; return; }
     if (v && v.err === 'nokey') { el.innerHTML = '<span style="color:#fbbf24" title="Set your Polygon key via Get Benchmarks first">need key</span>'; return; }
     if (v && v.err) { el.innerHTML = '<span style="color:var(--color-text-tertiary)" title="Could not fetch — ticker may be unavailable on Polygon">n/a</span>'; return; }
-    if (v && typeof v === 'object') { el.innerHTML = `${fmtWin(v.m1, '1M')} · ${fmtWin(v.y1, '1Y')}${fmtBenchCompare(key, v)}`; }
+    if (v && typeof v === 'object') { el.innerHTML = `${fmtWin(v.m1, '1M')} · ${fmtY1(v)}${fmtBenchCompare(key, v)}${fmtRisk(v)}`; }
   });
 }
 
@@ -13970,7 +14048,7 @@ function renderThemeDiscovery() {
     else if (cached && cached.err === 'rate') perfInit = '<span style="color:#fbbf24">rate · retry</span>';
     else if (cached && cached.err === 'nokey') perfInit = '<span style="color:#fbbf24">need key</span>';
     else if (cached && cached.err) perfInit = '<span style="color:var(--color-text-tertiary)">n/a</span>';
-    else if (cached && typeof cached === 'object') perfInit = `${fmtWin(cached.m1, '1M')} · ${fmtWin(cached.y1, '1Y')}`;
+    else if (cached && typeof cached === 'object') perfInit = `${fmtWin(cached.m1, '1M')} · ${fmtY1(cached)}${fmtBenchCompare(key, cached)}${fmtRisk(cached)}`;
     const atCap = discoverySelected.size >= DISCOVERY_MAX_SELECT && !selected;
     const hn = holdingNote(c.display);
     return `<div onclick="toggleDiscoverySelect('${esc(key)}')" title="${atCap ? '5 selected — deselect one to add another' : 'Click to ' + (selected ? 'deselect' : 'select for fetch')}" style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:${selected ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)'};border:1px solid ${selected ? 'var(--color-accent)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);cursor:${atCap ? 'not-allowed' : 'pointer'};${atCap ? 'opacity:0.5' : ''}">
