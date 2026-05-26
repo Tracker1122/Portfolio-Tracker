@@ -15254,10 +15254,29 @@ function renderThemeAiReview() {
   if (misowned.length) {
     flagLines.push(`claims you already own ${misowned.map(t => `<strong>${esc(t)}</strong>`).join(', ')} — ${misowned.length === 1 ? 'this is a candidate you\'re considering, not a holding' : 'these are candidates you\'re considering, not holdings'}. You hold zero shares; any "already held / deepens existing position" claim about ${misowned.length === 1 ? 'it' : 'them'} is the model's error.`);
   }
-  const verifyBanner = flagLines.length ? `
+  // Scope line — ALWAYS shown so silence never reads as "verified clean". States plainly what this
+  // automated check can and cannot catch: it matches UPPERCASE ticker-shaped tokens against your
+  // holdings/candidates, so it CANNOT catch a name written lowercase, a company named in prose
+  // without a ticker, or an ownership claim phrased outside its set patterns. The check is a
+  // backstop, not a guarantee — the reader is the final verifier.
+  const scopeCaveat = `This automated check only matches uppercase ticker symbols against your holdings and selected candidates. `
+    + `It can miss a stock written in lowercase, named in prose without its ticker, or an ownership claim worded unusually — `
+    + `read the review yourself for any name it didn't catch.`;
+  let verifyBanner;
+  if (flagLines.length) {
+    // Flagged: red, list the problems, then the honest scope caveat.
+    verifyBanner = `
       <div style="background:rgba(248,113,113,0.12);border:1px solid rgba(248,113,113,0.5);border-radius:6px;padding:8px 11px;margin-bottom:8px;font-size:10px;color:#f87171;line-height:1.55">
-        ⚠ <strong>Accuracy check:</strong> this review ${flagLines.join(' It also ')} <strong>Treat ${(suspectTickers.length + misowned.length) === 1 ? 'that claim' : 'those claims'} as the model's error, not your data.</strong>
-      </div>` : '';
+        ⚠ <strong>Accuracy check flagged:</strong> this review ${flagLines.join(' It also ')} <strong>Treat ${(suspectTickers.length + misowned.length) === 1 ? 'that claim' : 'those claims'} as the model's error, not your data.</strong>
+        <div style="color:#fca5a5;margin-top:5px;font-weight:400">${scopeCaveat}</div>
+      </div>`;
+  } else {
+    // Clean: calm grey "ran, found nothing" — but still states scope so it isn't read as a guarantee.
+    verifyBanner = `
+      <div style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:6px;padding:7px 11px;margin-bottom:8px;font-size:10px;color:var(--color-text-tertiary);line-height:1.55">
+        ✓ <strong style="color:var(--color-text-secondary)">Accuracy check ran — no invented or misowned tickers detected.</strong> ${scopeCaveat}
+      </div>`;
+  }
 
   const result = bookAiReview ? `
     <div style="margin-top:10px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px;background:var(--color-background-secondary)">
@@ -15286,7 +15305,11 @@ function renderThemeAiReview() {
       const flags = [];
       if (v.invented.length) flags.push(`invented: ${v.invented.join(', ')}`);
       if (v.misowned.length) flags.push(`wrongly says you own: ${v.misowned.join(', ')}`);
-      const flagHtml = flags.length ? `<div style="font-size:9px;color:#f87171;margin-bottom:4px">⚠ Accuracy check — ${flags.join(' · ')} (your data wins).</div>` : '';
+      // Never silent: flagged → red; clean → faint "checked" marker (scope caveat is stated once in
+      // the main banner above the thread, so it isn't repeated on every reply).
+      const flagHtml = flags.length
+        ? `<div style="font-size:9px;color:#f87171;margin-bottom:4px">⚠ Accuracy check — ${flags.join(' · ')} (your data wins). Uppercase-ticker check only; read for names it can't catch.</div>`
+        : `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px">✓ Accuracy check ran — no invented/misowned tickers (uppercase-ticker check only).</div>`;
       return `<div style="margin:4px 0 8px;padding:7px 10px;border-left:2px solid #60a5fa;background:var(--color-background-secondary);border-radius:var(--border-radius-md);font-size:10px;line-height:1.55;color:var(--color-text-primary)"><span style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em">AI</span><br>${flagHtml}<span style="white-space:pre-wrap">${esc(t.text)}</span></div>`;
     }).join('');
     const totalIn = (bookAiReview.thread || []).reduce((s, t) => s + (t.inTok || 0), 0);
