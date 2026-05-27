@@ -13649,7 +13649,31 @@ const THEME_COLORS = {
 // "Picking flattering benchmarks defeats the purpose" — these do not change.
 // ─────────────────────────────────────────────
 // ─────────────────────────────────────────────
-// THEMES — single source of truth for theme configuration
+// Benchmark ETF blurbs — one factual line per benchmark, shown above each theme's discovery list as
+// selection context. DURABLE FACTS ONLY: what index the fund tracks, its mandate, weighting, and what
+// it pointedly includes/excludes. Deliberately NO numbers that drift (expense ratios, AUM, exact
+// holding counts, current top-weights) — those would silently go stale in static text. Holding counts
+// are given only approximately and only where the fund's structure makes them stable. The few funds
+// whose exact mandate isn't common knowledge (CIBR's index, VEA/VWO's developed-vs-emerging split)
+// were verified against fund sources rather than asserted from memory.
+const BENCHMARK_BLURBS = {
+  IWM:  'iShares Russell 2000 — the standard US small-cap benchmark, ~2,000 small companies, market-cap weighted. Broad and unconcentrated: even the largest holdings are a fraction of a percent, so it captures the small-cap asset class rather than any single bet.',
+  QQQ:  'Invesco QQQ — the Nasdaq-100: the 100 largest non-financial companies on the Nasdaq, market-cap weighted. Heavily tilted to mega-cap tech and the "Magnificent 7," so the top handful of names drive most of its movement. A concentrated large-cap growth proxy, not a diversified market index.',
+  SMH:  'VanEck Semiconductor — ~25 of the largest semiconductor companies (chipmakers and chip-equipment), market-cap weighted and highly concentrated at the top (NVDA/TSM-class names dominate). A focused bet on the chip cycle, not broad tech.',
+  CIBR: 'First Trust Nasdaq Cybersecurity — tracks the Nasdaq CTA Cybersecurity Index: companies classified as cybersecurity by the Consumer Technology Association. Concentrated (~40 holdings), liquidity-weighted with caps. Pure-play security names, plus some larger networking/infrastructure firms that touch security.',
+  ITA:  'iShares US Aerospace & Defense — US-listed aerospace and defense manufacturers, tracking a Dow Jones sub-index. Concentrated at the top in the prime contractors (Boeing, RTX, Lockheed-class names). A defense-primes bet, not diversified industrials.',
+  XLE:  'Energy Select Sector SPDR — the energy slice of the S&P 500: large US oil & gas (integrated majors, E&P, services, pipelines). Top-heavy in the supermajors (XOM/CVX-class). Tracks the sector, so it moves with oil & gas, not the broad market.',
+  XLF:  'Financial Select Sector SPDR — the financials slice of the S&P 500: banks, insurers, capital markets, payments, and some financial-services names. Large-cap only (S&P 500 members), market-cap weighted within the sector.',
+  XLV:  'Health Care Select Sector SPDR — the health-care slice of the S&P 500: pharma, biotech, devices, insurers, and providers. Large-cap only, market-cap weighted, top-heavy in the biggest pharma and managed-care names.',
+  XLP:  'Consumer Staples Select Sector SPDR — the staples slice of the S&P 500: food, beverage, household & personal products, and staples retail. Defensive, large-cap only, concentrated in the household-name consumer giants.',
+  XLU:  'Utilities Select Sector SPDR — the utilities slice of the S&P 500: electric, gas, water, and multi-utilities. Defensive and rate-sensitive, large-cap only, a relatively small and concentrated sector.',
+  XLY:  'Consumer Discretionary Select Sector SPDR — the discretionary slice of the S&P 500: retail, autos, travel/leisure, restaurants. Top-heavy in a couple of mega-caps (AMZN/TSLA-class) that dominate the sector weight.',
+  GLD:  'SPDR Gold Shares — holds physical gold bullion; the share price tracks the spot gold price (less fees). Not equities at all: no companies, no earnings, no dividend — a direct commodity-price exposure used as a diversifier/hedge.',
+  AGG:  'iShares Core US Aggregate Bond — the broad US investment-grade bond market (Bloomberg US Aggregate): Treasuries, agency MBS, and investment-grade corporates. A bonds-not-stocks benchmark; moves with interest rates and credit, not equity prices.',
+  VNQ:  'Vanguard Real Estate — US REITs and real-estate companies (an MSCI US REIT-style index). Sector exposure to property (residential, retail, industrial, data centers, towers); rate-sensitive and income-oriented.',
+  VEA:  'Vanguard FTSE Developed Markets — developed economies outside the US (FTSE Developed All Cap ex-US): Europe, Japan, Canada, Australia, and — notably — South Korea, which FTSE classifies as developed. All-cap, thousands of names. Pure developed-international: no emerging markets, no US.',
+  VWO:  'Vanguard FTSE Emerging Markets — emerging economies (FTSE Emerging All Cap China A Inclusion): China (including mainland A-shares), India, Taiwan, Brazil, and others. Notably excludes South Korea (FTSE calls it developed). Higher growth, higher volatility; no US, no developed markets.'
+};
 // ─────────────────────────────────────────────
 // Each theme has:
 //   - benchmark: ETF ticker for theme alpha math (null = no benchmark, no alpha computed)
@@ -15264,6 +15288,12 @@ function renderThemeDiscovery() {
           <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(theme)}</strong> ${srcBadge} <span style="font-size:9px;color:var(--color-text-tertiary)" title="True exposure = your direct positions in this theme PLUS your look-through share of theme names sitting inside funds you hold, as a percent of your whole book. Same lens as 'How your holdings move together' — NOT the direct-only percent on the Isolate bar.">${gap < 0.05 ? '<span style="color:#34d399">no true exposure yet</span>' : 'true exposure: ' + gap.toFixed(1) + '% of your book'} · ${names.length} name${names.length > 1 ? 's' : ''}</span></span>
           <span style="white-space:nowrap;font-size:9px;color:var(--color-text-tertiary)">theme 1Y ${fmtRet(perf)}</span>
         </summary>
+        ${(() => {
+          const bench = (typeof getThemeBenchmark === 'function') ? getThemeBenchmark(theme) : (THEMES[theme] && THEMES[theme].benchmark);
+          const blurb = bench ? BENCHMARK_BLURBS[bench] : null;
+          if (!bench || !blurb) return '';
+          return `<div style="margin-top:7px;padding:7px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:9px;line-height:1.55;color:var(--color-text-secondary)"><span style="font-weight:700;color:var(--color-text-primary)">Benchmark · ${esc(bench)}</span> — ${esc(blurb)} <span style="color:var(--color-text-tertiary);font-style:italic">These names come from this fund; the benchmark is what the theme is measured against.</span></div>`;
+        })()}
         <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(tickerLine).join('')}</div>
         <div data-info-slot="${esc(theme)}"></div>
       </details>`;
