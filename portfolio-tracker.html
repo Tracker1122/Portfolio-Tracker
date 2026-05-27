@@ -10682,7 +10682,7 @@ function renderSleeveValueAdd() {
   const spValue = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
   const totalPortfolio = open.reduce((s,p) => s+(calcPos(p).exitValue||0), 0) + spValue;
   const perf = {};
-  SLEEVES.forEach(s => perf[s] = { value: 0, glSum: 0, beats: 0, trails: 0, tickers: [] });
+  SLEEVES.forEach(s => perf[s] = { value: 0, glSum: 0, alphaSum: 0, alphaCount: 0, beats: 0, trails: 0, tickers: [] });
   open.forEach(p => {
     if (!p.sleeve || !perf[p.sleeve]) return;
     const c = calcPos(p);
@@ -10691,6 +10691,7 @@ function renderSleeveValueAdd() {
     const d = perf[p.sleeve];
     d.value += c.exitValue || 0;
     d.glSum += c.gainLoss || 0;
+    if (alpha !== null) { d.alphaSum += alpha; d.alphaCount++; }
     d.tickers.push({ ticker: p.ticker, value: c.exitValue || 0, gl: c.gainLoss || 0, alpha });
     if (c.result === 'Beat') d.beats++;
     else if (c.result === 'Trail') d.trails++;
@@ -10736,6 +10737,55 @@ function renderSleeveValueAdd() {
           </div>`;
         }).join('');
 
+    // Totals rows: Top 5 total (sum of the 5 rows above) + Sleeve total (whole sleeve).
+    // α here is SPX-alpha (matches what the per-ticker α rows show); the headline theme-α
+    // and SPX-α figures at the top of the card are separate metrics, untouched.
+    let totalsRows = '';
+    if (top5.length > 0) {
+      const t5Val = top5.reduce((s,t) => s + (t.value || 0), 0);
+      const t5GL  = top5.reduce((s,t) => s + (t.gl || 0), 0);
+      const t5Alphas = top5.filter(t => t.alpha !== null);
+      const t5Alpha = t5Alphas.length ? t5Alphas.reduce((s,t) => s + t.alpha, 0) : null;
+      const t5AlphaPartial = (t5Alphas.length > 0 && t5Alphas.length < top5.length);
+
+      const slVal = pf.value;
+      const slGL  = pf.glSum;
+      const slAlpha = pf.alphaCount > 0 ? pf.alphaSum : null;
+      const slAlphaPartial = (pf.alphaCount > 0 && pf.alphaCount < pf.tickers.length);
+
+      const t5GlColor = t5GL >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const t5AColor = t5Alpha === null ? 'var(--color-text-tertiary)' : t5Alpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const slGlColor = slGL >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const slAColor = slAlpha === null ? 'var(--color-text-tertiary)' : slAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+
+      // Footer rows: same column structure as ticker rows so they read as a continuation.
+      // Top border separates totals from the per-ticker list.
+      totalsRows = `
+        <div style="border-top:1px solid var(--color-border-tertiary);margin-top:6px;padding-top:5px">
+          <div style="display:flex;align-items:baseline;gap:10px;font-size:10px;padding:1px 0">
+            <span style="font-weight:700;min-width:48px;color:var(--color-text-secondary)">Top 5</span>
+            <span style="color:var(--color-text-primary);min-width:78px;text-align:right;font-weight:600">${fmtDollarWhole(t5Val)}</span>
+            <span style="color:${t5GlColor};min-width:84px;text-align:right;font-weight:600">G/L ${fmtDollarWhole(t5GL)}</span>
+            <span style="color:${t5AColor};text-align:right;font-weight:600">α ${t5Alpha !== null ? fmtDollarWhole(t5Alpha) : '—'}${t5AlphaPartial ? '<span style="color:var(--color-text-tertiary);font-size:9px">*</span>' : ''}</span>
+          </div>
+          ${pf.tickers.length > top5.length ? `
+          <div style="display:flex;align-items:baseline;gap:10px;font-size:10px;padding:1px 0" title="All ${pf.tickers.length} positions in this sleeve. α uses SPX-alpha — same metric the per-ticker α shows.">
+            <span style="font-weight:700;min-width:48px;color:var(--color-text-secondary)">Sleeve</span>
+            <span style="color:var(--color-text-primary);min-width:78px;text-align:right;font-weight:600">${fmtDollarWhole(slVal)}</span>
+            <span style="color:${slGlColor};min-width:84px;text-align:right;font-weight:600">G/L ${fmtDollarWhole(slGL)}</span>
+            <span style="color:${slAColor};text-align:right;font-weight:600">α ${slAlpha !== null ? fmtDollarWhole(slAlpha) : '—'}${slAlphaPartial ? '<span style="color:var(--color-text-tertiary);font-size:9px">*</span>' : ''}</span>
+          </div>
+          <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:3px;line-height:1.4">
+            Top 5 = sum of the 5 rows above. Sleeve = all ${pf.tickers.length} positions in ${esc(sleeve)}. α is SPX-alpha (same as per-ticker rows; differs from the "vs Theme ETF" $${fmtDollarWhole(Math.abs(o.themeDollar)).replace('$','')} at the top of the card).          ${(t5AlphaPartial || slAlphaPartial) ? ' <span title="Some positions don\u2019t have an α value yet (no S&P benchmark return computed) — those are excluded from the α sum.">*partial α coverage</span>' : ''}
+          </div>
+          ` : `
+          <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:3px;line-height:1.4">
+            Sleeve has ${pf.tickers.length} position${pf.tickers.length === 1 ? '' : 's'} — Top 5 = whole sleeve. α is SPX-alpha (differs from the "vs Theme ETF" $${fmtDollarWhole(Math.abs(o.themeDollar)).replace('$','')} headline above).          ${t5AlphaPartial ? ' <span title="Some positions don\u2019t have an α value yet.">*partial α coverage</span>' : ''}
+          </div>
+          `}
+        </div>`;
+    }
+
     return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${color};border-radius:var(--border-radius-lg);padding:12px;cursor:default"
       data-sleeve="${sleeveKey}">
       <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">${sleeve}</div>
@@ -10776,6 +10826,7 @@ function renderSleeveValueAdd() {
       <div style="border-top:1px solid var(--color-border-tertiary);padding-top:8px;margin-top:8px">
         <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Top 5 by value</div>
         ${inlineHoldings}
+        ${totalsRows}
       </div>
       <div id="sleeve-tip-${sleeveKey}" style="display:none" data-title="${sleeve}" data-color="${color}" data-rows="${esc(tooltipRows)}"></div>
     </div>`;
