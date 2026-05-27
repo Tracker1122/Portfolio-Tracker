@@ -4889,7 +4889,7 @@ function renderThemeIntel() {
   // true-vs-true-avg). Returns the level word + an on-DARK text color; the caller appends the number.
   function concTag(pct, avg) {
     if (avg > 0 && pct > avg * 1.5) return { label: 'Above average', fg: 'var(--color-text-danger)' };
-    if (avg > 0 && pct < avg * 0.5) return { label: 'Below average', fg: 'var(--color-text-info)' };
+    if (avg > 0 && pct < avg * 0.5) return { label: 'Below average', fg: 'var(--color-text-success)' };
     return { label: 'Average', fg: 'var(--color-text-secondary)' };
   }
   // Picks tag (Beating / Trailing / Too few / No data) from the matured-aware verdict alpha + count.
@@ -4935,7 +4935,7 @@ function renderThemeIntel() {
       <div style="text-align:right;color:${alphaColor}">${alphaStr}</div>
       <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-end">
         <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">your picks</span><span style="font-size:9px;color:${wtActive.fg};font-weight:500;white-space:nowrap">${r.allocPct.toFixed(1)}% of sleeve</span></div>
-        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};font-weight:500;white-space:nowrap">${wtTrue.label} · ${truePrefix}${r.truePct.toFixed(1)}% of portfolio</span></div>
+        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};font-weight:500;white-space:nowrap">${truePrefix}${r.truePct.toFixed(1)}% of portfolio</span></div>
       </div>
       <div style="text-align:center"><span style="font-size:9px;color:${pk.fg};font-weight:500">${pk.label}</span></div>
     </div>
