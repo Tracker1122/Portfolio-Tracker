@@ -14908,11 +14908,12 @@ async function fetchTickerWindows(ticker) {
 // or the error kind ('rate'|'nokey'|'err') on failure. Skips (returns 'cached') if already a good
 // value. Errors are NOT treated as cached, so a re-run re-attempts only the misses — this is what
 // makes "retry to grab what it missed" cost only the failed calls.
-async function _polyFetchInto(cache, key, slotUpdater) {
+async function _polyFetchInto(cache, key, slotUpdater, spacingMs) {
   if (typeof cache[key] === 'object' && cache[key] && !cache[key].err) return 'cached';
   cache[key] = 'loading'; if (slotUpdater) slotUpdater(key);
+  const gap = (typeof spacingMs === 'number') ? spacingMs : 400;
   const since = Date.now() - _lastPolyFetch;
-  if (since < 400) await new Promise(r => setTimeout(r, 400 - since));
+  if (since < gap) await new Promise(r => setTimeout(r, gap - since));
   _lastPolyFetch = Date.now();
   try {
     cache[key] = await fetchTickerWindows(key);
@@ -14986,6 +14987,96 @@ function renderDiscoveryFetchStatus(s) {
     : ` — some tickers returned no data (thin/unavailable on Polygon).`;
   el.innerHTML = `<span style="color:#fbbf24;font-size:9px;line-height:1.5">⚠ Missed ${parts.join(' + ')}${rateNote}</span>
     <button class="btn btn-sm" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:6px">↻ Retry the misses</button>`;
+}
+
+// Per-theme rank store: themeName -> { tickerKey: rankNumber } by 1Y return (best=1). Populated by
+// fetchThemeAndRank; read by tickerLine to show a rank badge. Survives re-renders.
+const discoveryThemeRank = {};
+
+// Fetch EVERY ticker in one theme (not just selected 5) and rank them best→worst by 1Y return.
+// Reuses _polyFetchInto, which self-spaces ~400ms and skips already-cached tickers — so this stays
+// inside the free-tier rate budget (it just takes a while for big themes; the user accepted that).
+// Also fetches each name's source-fund benchmark once (cached/deduped). After fetching, computes the
+// rank purely from the cached y1 values and re-renders so the badges appear; we do NOT reorder the
+// chips (fragile with the live click handlers) — the rank shows as a badge on each chip.
+async function fetchThemeAndRank(themeJson, btnId) {
+  let theme;
+  try { theme = JSON.parse(decodeURIComponent(themeJson)); } catch (e) { return; }
+  // Resolve the theme's ticker list from the same buckets the render builds. We recompute here rather
+  // than capture, so it's robust to re-renders between click and run.
+  const tickers = _discoveryThemeTickers(theme);
+  if (!tickers.length) return;
+  const btn = document.getElementById(btnId);
+  const statusId = btnId + '-status';
+  const setStatus = (html) => { const el = document.getElementById(statusId); if (el) el.innerHTML = html; };
+  if (btn) { btn.disabled = true; }
+
+  let done = 0, miss = 0, rateMiss = 0, noKey = false;
+  const funds = [...new Set(tickers.map(t => (discoverySourceFund[t.toUpperCase()] || '')).filter(Boolean).map(f => f.toUpperCase()))];
+  const total = tickers.length + funds.length;
+  const SAFE_SPACING = 12000; // 12s between calls = ~5/min — the proven free-tier-safe pace (per Get Benchmarks)
+  const estMin = Math.ceil((total * SAFE_SPACING) / 60000);
+
+  // Phase 1: every name in the theme.
+  for (const tk of tickers) {
+    const key = tk.toUpperCase();
+    if (btn) btn.textContent = `Fetching ${++done}/${total}… (~${estMin}min)`;
+    const r = await _polyFetchInto(discoveryPerf, key, updatePerfSlot, SAFE_SPACING);
+    if (r !== 'cached' && r !== 'ok') { miss++; if (r === 'rate') rateMiss++; if (r === 'nokey') noKey = true; }
+  }
+  // Phase 2: distinct source-fund benchmarks (for the vs-benchmark line), deduped/cached.
+  for (const fund of funds) {
+    if (btn) btn.textContent = `Fetching ${++done}/${total}… (~${estMin}min)`;
+    const r = await _polyFetchInto(discoveryBenchPerf, fund, () => {
+      tickers.forEach(n => { if ((discoverySourceFund[n.toUpperCase()] || '').toUpperCase() === fund) updatePerfSlot(n.toUpperCase()); });
+    }, SAFE_SPACING);
+    if (r !== 'cached' && r !== 'ok') { miss++; if (r === 'rate') rateMiss++; if (r === 'nokey') noKey = true; }
+  }
+
+  // Compute rank from whatever y1 values landed (names that failed/are thin are unranked).
+  _recomputeThemeRank(theme, tickers);
+  renderThemeDiscovery();
+
+  // Status line.
+  if (noKey) setStatus(`<span style="color:#fbbf24;font-size:9px">No Polygon key set — set it via "Get Benchmarks" first, then retry.</span>`);
+  else if (miss) {
+    const note = rateMiss
+      ? ` — hit the ~5/min ceiling. Wait ~60s and click again; it fetches only what's still missing.`
+      : ` — some tickers returned no data (thin/unavailable on Polygon).`;
+    setStatus(`<span style="color:#fbbf24;font-size:9px;line-height:1.5">⚠ ${miss} of ${total} didn't fetch${note}</span>`);
+  } else setStatus(`<span style="color:var(--color-text-success);font-size:9px">✓ Ranked all ${tickers.length} by 1-year return.</span>`);
+  if (btn) { btn.disabled = false; btn.textContent = `↻ Re-fetch & rank (${tickers.length})`; }
+}
+
+// Resolve a theme's discovery ticker list. Mirrors how renderThemeDiscovery builds buckets, but we
+// only need the display tickers here. Falls back to scraping the rendered chips if buckets aren't in
+// scope (defensive — the render owns the canonical list).
+function _discoveryThemeTickers(theme) {
+  const out = [];
+  document.querySelectorAll('details').forEach(d => {
+    const strong = d.querySelector('summary strong');
+    // Exact theme-name match on the bold title (not startsWith — avoids "Consumer" catching
+    // "Consumer Staples"). The <strong> holds exactly the theme label.
+    if (strong && strong.textContent.trim() === theme) {
+      d.querySelectorAll('[data-perf-slot]').forEach(s => { const k = s.getAttribute('data-perf-slot'); if (k) out.push(k); });
+    }
+  });
+  return [...new Set(out)];
+}
+
+// Compute best→worst rank by 1Y return for a theme's tickers, from cached perf. Only ranks names with
+// a real numeric y1 (thin/failed names are left unranked rather than sorted as if they were zero).
+function _recomputeThemeRank(theme, tickers) {
+  const scored = [];
+  tickers.forEach(tk => {
+    const k = tk.toUpperCase();
+    const p = discoveryPerf[k];
+    if (p && typeof p === 'object' && typeof p.y1 === 'number') scored.push({ k, y1: p.y1 });
+  });
+  scored.sort((a, b) => b.y1 - a.y1);
+  const rankMap = {};
+  scored.forEach((s, i) => { rankMap[s.k] = { rank: i + 1, of: scored.length }; });
+  discoveryThemeRank[theme] = rankMap;
 }
 
 // Render one window's value as colored text, or a dash.
@@ -15246,7 +15337,7 @@ function renderThemeDiscovery() {
     const tier = w >= 8 ? 'a top holding in' : w >= 3 ? 'a sizable position in' : w >= 1 ? 'a small position in' : 'a minor holding in';
     return `${tier} ${esc(fund)} (${w.toFixed(1)}%)`;
   };
-  const tickerLine = (c) => {
+  const tickerLine = (c, theme) => {
     // Lead with the single highest-conviction fund — secondary funds (e.g. a 0.6% tail in a broad
     // index) add noise, not signal. The strongest fund carries the discovery case.
     const sorted = Object.entries(c.inFunds).sort((a, b) => b[1] - a[1]);
@@ -15264,7 +15355,19 @@ function renderThemeDiscovery() {
     else if (cached && typeof cached === 'object') perfInit = `${fmtWin(cached.m1, '1M')} · ${fmtY1(cached)}${fmtBenchCompare(key, cached)}${fmtRisk(cached)}${fmtRiskCaption(cached)}`;
     const atCap = discoverySelected.size >= DISCOVERY_MAX_SELECT && !selected;
     const hn = holdingNote(c.display);
+    // Rank badge — present only after this theme has been fetched-and-ranked. Best 1Y = #1. Color the
+    // top few green and the bottom few muted, so the ordering reads at a glance without reordering chips.
+    const rk = (theme && discoveryThemeRank[theme]) ? discoveryThemeRank[theme][key] : null;
+    let rankBadge = '';
+    if (rk) {
+      const top = rk.rank <= Math.max(1, Math.ceil(rk.of * 0.25));
+      const bot = rk.rank > rk.of - Math.max(1, Math.ceil(rk.of * 0.25));
+      const col = top ? '#34d399' : bot ? 'var(--color-text-tertiary)' : 'var(--color-text-secondary)';
+      const bg = top ? 'rgba(52,211,153,0.15)' : 'var(--color-background-tertiary)';
+      rankBadge = `<span title="Rank by 1-year return within this theme (best = #1), of ${rk.of} names with data" style="font-size:8px;font-weight:700;color:${col};background:${bg};border-radius:var(--border-radius-sm);padding:0 5px">#${rk.rank}</span>`;
+    }
     return `<div onclick="toggleDiscoverySelect('${esc(key)}')" title="${atCap ? '5 selected — deselect one to add another' : 'Click to ' + (selected ? 'deselect' : 'select for fetch')}" style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:${selected ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)'};border:1px solid ${selected ? 'var(--color-accent)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);cursor:${atCap ? 'not-allowed' : 'pointer'};${atCap ? 'opacity:0.5' : ''}">
+      ${rankBadge}
       <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${selected ? '✓ ' : ''}${esc(c.display)}</span>
       <span style="font-size:8px;color:var(--color-text-tertiary)">${convictionPhrase(topFund, topW)}${moreNote}</span>
       ${hn ? `<span style="font-size:8px;color:#fbbf24" title="You already hold some of this (computed from your funds, no fetch) — so this 'gap' is partly filled already.">· ${esc(hn)}</span>` : ''}
@@ -15275,13 +15378,31 @@ function renderThemeDiscovery() {
 
   // One theme bucket as an idea-board card: niche buckets flagged as the real finds, broad ones muted.
   const bucketHtml = (theme, idx, open) => {
-    const names = buckets[theme].slice().sort((a, b) => b.maxW - a.maxW);
+    let names = buckets[theme].slice().sort((a, b) => b.maxW - a.maxW);
     const gap = themePct[theme] ?? 0;
     const perf = themePerf(theme);
     const src = bucketSource(names);
+    // If this theme has been ranked, order the chips best→worst by that rank (ranked names first, in
+    // rank order; unranked/thin names trail in their original conviction order). This is the "actually
+    // reorder" option; the #N badge still shows so the ordering is also explicit, not just positional.
+    const rankMap = discoveryThemeRank[theme];
+    if (rankMap) {
+      names = names.slice().sort((a, b) => {
+        const ra = rankMap[(a.display || '').toUpperCase()];
+        const rb = rankMap[(b.display || '').toUpperCase()];
+        if (ra && rb) return ra.rank - rb.rank;
+        if (ra) return -1;
+        if (rb) return 1;
+        return 0;
+      });
+    }
     const srcBadge = src.isNiche
       ? `<span style="font-size:8px;color:#34d399;background:rgba(52,211,153,0.12);padding:1px 6px;border-radius:var(--border-radius-sm);white-space:nowrap">niche find · ${esc(src.fund)}</span>`
       : `<span style="font-size:8px;color:var(--color-text-tertiary);background:var(--color-background-tertiary);padding:1px 6px;border-radius:var(--border-radius-sm);white-space:nowrap">broad fund · likely familiar</span>`;
+    const themeEnc = encodeURIComponent(JSON.stringify(theme));
+    const rankBtnId = 'themerank-' + theme.replace(/[^a-zA-Z0-9]/g, '');
+    const ranked = !!rankMap;
+    const rankBtn = `<button id="${rankBtnId}" class="btn btn-sm" onclick="event.preventDefault();event.stopPropagation();fetchThemeAndRank('${themeEnc}','${rankBtnId}')" style="font-size:9px" title="Fetches the 1-year return for every name in this theme, paced at ~12s/call so it never trips Polygon's 5/min free-tier limit — so a 13-name theme takes ~3 min. Then ranks them best→worst and reorders the chips. Already-fetched names are skipped, so re-running is fast.">${ranked ? `↻ Re-fetch & rank (${names.length})` : `↡ Fetch all ${names.length} & rank by 1Y (~${Math.ceil(names.length * 12 / 60)}min)`}</button>`;
     return `
       <details${open ? ' open' : ''} style="border:1px solid ${src.isNiche ? 'rgba(52,211,153,0.3)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);padding:8px 11px;margin-bottom:6px;${src.isNiche ? '' : 'opacity:0.78'}">
         <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none;flex-wrap:wrap">
@@ -15294,7 +15415,12 @@ function renderThemeDiscovery() {
           if (!bench || !blurb) return '';
           return `<div style="margin-top:7px;padding:7px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:9px;line-height:1.55;color:var(--color-text-secondary)"><span style="font-weight:700;color:var(--color-text-primary)">Benchmark · ${esc(bench)}</span> — ${esc(blurb)} <span style="color:var(--color-text-tertiary);font-style:italic">These names come from this fund; the benchmark is what the theme is measured against.</span></div>`;
         })()}
-        <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(tickerLine).join('')}</div>
+        <div style="margin-top:7px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${rankBtn}
+          ${ranked ? '<span style="font-size:8px;color:var(--color-text-tertiary)">ordered best→worst by 1Y; #N badge shows rank</span>' : ''}
+          <span id="${rankBtnId}-status" style="flex-basis:100%;font-size:9px"></span>
+        </div>
+        <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(c => tickerLine(c, theme)).join('')}</div>
         <div data-info-slot="${esc(theme)}"></div>
       </details>`;
   };
