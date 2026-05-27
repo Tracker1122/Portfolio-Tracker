@@ -4886,20 +4886,20 @@ function renderThemeIntel() {
 
   // Concentration level (Below average / Average / Above average) — pct vs the average of its OWN
   // lens, so the active and true tags are each internally consistent (active-vs-active-avg,
-  // true-vs-true-avg). Returns the level word + colors; the caller appends the number + unit.
+  // true-vs-true-avg). Returns the level word + an on-DARK text color; the caller appends the number.
   function concTag(pct, avg) {
-    if (avg > 0 && pct > avg * 1.5) return { label: 'Above average', fg: '#A32D2D', bg: '#FCEBEB' };
-    if (avg > 0 && pct < avg * 0.5) return { label: 'Below average', fg: '#185FA5', bg: '#E6F1FB' };
-    return { label: 'Average', fg: '#5F5E5A', bg: '#F1EFE8' };
+    if (avg > 0 && pct > avg * 1.5) return { label: 'Above average', fg: 'var(--color-text-danger)' };
+    if (avg > 0 && pct < avg * 0.5) return { label: 'Below average', fg: 'var(--color-text-info)' };
+    return { label: 'Average', fg: 'var(--color-text-secondary)' };
   }
   // Picks tag (Beating / Trailing / Too few / No data) from the matured-aware verdict alpha + count.
   function picksTag(verdictAlpha, verdictN) {
-    if (industryAlphaMatureOnly && verdictN === 0) return { label: 'No data', fg: '#5F5E5A', bg: '#F1EFE8' };
-    if (industryAlphaMatureOnly && verdictN > 0 && verdictN <= 2) return { label: 'Too few', fg: '#5F5E5A', bg: '#F1EFE8' };
-    if (verdictAlpha === null) return { label: '—', fg: '#5F5E5A', bg: '#F1EFE8' };
-    if (verdictAlpha > 0) return { label: 'Beating', fg: '#3B6D11', bg: '#EAF3DE' };
-    if (verdictAlpha < 0) return { label: 'Trailing', fg: '#A32D2D', bg: '#FCEBEB' };
-    return { label: 'Even', fg: '#5F5E5A', bg: '#F1EFE8' };
+    if (industryAlphaMatureOnly && verdictN === 0) return { label: 'No data', fg: 'var(--color-text-tertiary)' };
+    if (industryAlphaMatureOnly && verdictN > 0 && verdictN <= 2) return { label: 'Too few', fg: 'var(--color-text-tertiary)' };
+    if (verdictAlpha === null) return { label: '—', fg: 'var(--color-text-tertiary)' };
+    if (verdictAlpha > 0) return { label: 'Beating', fg: 'var(--color-text-success)' };
+    if (verdictAlpha < 0) return { label: 'Trailing', fg: 'var(--color-text-danger)' };
+    return { label: 'Even', fg: 'var(--color-text-secondary)' };
   }
 
   const hdr = (key, label, sub, align) => {
@@ -4934,10 +4934,10 @@ function renderThemeIntel() {
       <div style="text-align:right;color:${r.incidentalPct > 0 ? '#BA7517' : 'var(--color-text-tertiary)'}">${incidPrefix}${r.incidentalPct.toFixed(1)}%</div>
       <div style="text-align:right;color:${alphaColor}">${alphaStr}</div>
       <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-end">
-        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">your picks</span><span style="font-size:9px;color:${wtActive.fg};background:${wtActive.bg};padding:1px 7px;border-radius:4px;font-weight:500;white-space:nowrap">${wtActive.label} · ${r.allocPct.toFixed(1)}% of sleeve</span></div>
-        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};background:${wtTrue.bg};padding:1px 7px;border-radius:4px;font-weight:500;white-space:nowrap">${wtTrue.label} · ${truePrefix}${r.truePct.toFixed(1)}% of portfolio</span></div>
+        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">your picks</span><span style="font-size:9px;color:${wtActive.fg};font-weight:500;white-space:nowrap">${r.allocPct.toFixed(1)}% of sleeve</span></div>
+        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};font-weight:500;white-space:nowrap">${wtTrue.label} · ${truePrefix}${r.truePct.toFixed(1)}% of portfolio</span></div>
       </div>
-      <div style="text-align:center"><span style="font-size:9px;color:${pk.fg};background:${pk.bg};padding:2px 7px;border-radius:4px;font-weight:500">${pk.label}</span></div>
+      <div style="text-align:center"><span style="font-size:9px;color:${pk.fg};font-weight:500">${pk.label}</span></div>
     </div>
     <div class="intel-drill" id="intel-drill-${themeKey}" style="display:none">${renderIntelDeepDive(r, totalValue, grandTotal)}</div>`;
   }).join('');
