@@ -15627,6 +15627,25 @@ function renderThemeDiscovery() {
           <span id="${rankBtnId}-status" style="flex-basis:100%;font-size:9px"></span>
         </div>
         <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(c => tickerLine(c, theme)).join('')}</div>
+        ${(() => {
+          // Per-card action strip: shows only when this theme contains selected names, and sits right
+          // under the chips so the controls are next to what you're clicking. The buttons act on your
+          // FULL selection (Deeper dive can't be per-card — it operates on everything selected), so the
+          // wording is honest about being a per-card slice when your picks span themes.
+          const here = names
+            .map(c => (c.display || '').toUpperCase())
+            .filter(k => discoverySelected.has(k));
+          if (!here.length) return '';
+          const total = discoverySelected.size;
+          const sliceNote = here.length === total
+            ? `${total} selected: ${here.map(esc).join(', ')}`
+            : `${here.length} of your ${total} selected are here: ${here.map(esc).join(', ')}`;
+          return `<div style="margin-top:8px;padding:8px 10px;background:rgba(96,165,250,0.10);border:1px solid var(--color-accent);border-radius:var(--border-radius-md);display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+            <span style="font-size:10px;color:var(--color-text-primary);font-weight:600">${sliceNote}</span>
+            <button class="btn btn-sm btn-primary" onclick="event.preventDefault();event.stopPropagation();fetchSelectedDiscovery()" style="font-size:9px;margin-left:auto">↡ Fetch ${total} (1M + 1Y)</button>
+            <button class="btn btn-sm" onclick="event.preventDefault();event.stopPropagation();deepFetchSelected()" title="Re-pulls current prices + the 3M/6M/YTD windows for ALL your selected names, shown in each 📊 detail. No added API cost beyond the names." style="font-size:9px">🔄 Deeper dive ${total} (latest + 3M/6M/YTD)</button>
+          </div>`;
+        })()}
         <div data-info-slot="${esc(theme)}"></div>
       </details>`;
   };
