@@ -4940,7 +4940,7 @@ function renderThemeIntel() {
     const rowThemeAlphaStr = rowThemeAlpha === null ? '—' : (rowThemeAlpha >= 0 ? '+' : '') + fmtDollarCompact(rowThemeAlpha);
     const rowThemeAlphaColor = rowThemeAlpha === null ? 'var(--color-text-tertiary)' : rowThemeAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
     const rowBeatColor = rowBeatTotal === 0 ? 'var(--color-text-tertiary)' : rowBeating === rowBeatTotal ? 'var(--color-text-success)' : rowBeating === 0 ? 'var(--color-text-danger)' : '#fbbf24';
-    return `<div class="intel-row" data-key="${themeKey}" onclick="toggleIntelRow('${themeKey}')" style="display:grid;grid-template-columns:1.6fr 0.6fr 0.6fr 0.6fr 0.6fr 3.6fr 0.8fr;gap:0;align-items:center;padding:8px 10px;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer">
+    return `<div class="intel-row" data-key="${themeKey}" onclick="toggleIntelRow('${themeKey}')" style="display:grid;grid-template-columns:1.6fr 0.6fr 0.6fr 0.6fr 0.6fr 0.8fr 3.6fr;gap:0;align-items:center;padding:8px 10px;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer">
       <div>
         <div style="display:flex;align-items:center;gap:7px"><span style="width:9px;height:9px;border-radius:2px;background:${color};flex-shrink:0"></span><span style="font-weight:500">${esc(r.theme)}</span><span class="intel-caret" id="caret-${themeKey}" style="color:var(--color-text-tertiary);font-size:13px">›</span></div>
         <div style="font-size:10px;color:var(--color-text-tertiary);margin:3px 0 0 16px;letter-spacing:0.02em">${esc(tickersLine)}</div>
@@ -4949,11 +4949,11 @@ function renderThemeIntel() {
       <div style="text-align:right;color:#BA7517;font-weight:500">${truePrefix}${r.truePct.toFixed(1)}%</div>
       <div style="text-align:right;color:${r.incidentalPct > 0 ? '#BA7517' : 'var(--color-text-tertiary)'}">${incidPrefix}${r.incidentalPct.toFixed(1)}%</div>
       <div style="text-align:right;color:${alphaColor}">${alphaStr}</div>
+      <div style="text-align:center;display:flex;flex-direction:column;gap:1px;align-items:center"><span style="font-size:11px;font-weight:600;color:${rowThemeAlphaColor}">${rowThemeAlphaStr}</span><span style="font-size:8px;font-weight:500;color:${rowBeatColor}">${rowBeatTotal === 0 ? 'no matured' : rowBeating + '/' + rowBeatTotal + ' beating'}</span></div>
       <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-end">
         <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">your picks</span><span style="font-size:9px;color:${wtActive.fg};font-weight:500;white-space:nowrap">${r.allocPct.toFixed(1)}% of sleeve</span></div>
         <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};font-weight:500;white-space:nowrap">${truePrefix}${r.truePct.toFixed(1)}% of portfolio <span style="color:var(--color-text-tertiary);font-weight:400">incl. pass-through</span></span></div>
       </div>
-      <div style="text-align:center;display:flex;flex-direction:column;gap:1px;align-items:center"><span style="font-size:11px;font-weight:600;color:${rowThemeAlphaColor}">${rowThemeAlphaStr}</span><span style="font-size:8px;font-weight:500;color:${rowBeatColor}">${rowBeatTotal === 0 ? 'no matured' : rowBeating + '/' + rowBeatTotal + ' beating'}</span></div>
     </div>
     <div class="intel-drill" id="intel-drill-${themeKey}" style="display:none">${renderIntelDeepDive(r, totalValue, grandTotal)}</div>`;
   }).join('');
@@ -4971,14 +4971,14 @@ function renderThemeIntel() {
       <div style="font-size:11px;color:var(--color-text-tertiary)">Click a row to expand · sorted by ${sortKey === 'truePct' ? 'true exposure' : sortKey}</div>
       ${matToggle}
     </div>
-    <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:1.6fr 0.6fr 0.6fr 0.6fr 0.6fr 3.6fr 0.8fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
+    <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:1.6fr 0.6fr 0.6fr 0.6fr 0.6fr 0.8fr 3.6fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
       ${hdr('theme', 'Theme &amp; positions', '', 'left')}
       ${hdr('alloc', 'Allocation', '% of active sleeve', 'right')}
       ${hdr('truePct', 'True exposure', '% of portfolio · incl. pass-through', 'right')}
       ${hdr('incidental', 'Incidental', '% via funds only · pass-through', 'right')}
       ${hdr('alpha', 'Dollar alpha', 'vs SPX', 'right')}
-      <div style="text-align:center">Concentration<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">your picks vs real (pass-through) risk</div></div>
       <div style="text-align:center">Stock-picking<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">$ vs theme · how many beating</div></div>
+      <div style="text-align:center">Concentration<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">your picks vs real (pass-through) risk</div></div>
     </div>
     ${tableRows}
     ${footnote}`;
