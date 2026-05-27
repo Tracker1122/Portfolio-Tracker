@@ -1388,6 +1388,7 @@
         <thead>
           <tr>
             <th onclick="sortRebal('ticker')" class="sortable">Position <span id="sort-ticker"></span></th>
+            <th class="r" title="Current market value of this position (all tranches at current price).">Value<div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">at current price</div></th>
             <th onclick="sortRebal('daysHeld')" class="sortable r">Held <span id="sort-daysHeld"></span></th>
             <th class="r" title="Soak status — whether this position has been held long enough that its alpha numbers are meaningful signal vs noise. Per-sleeve thresholds: Thesis Plays 180d, Quality 365d, PBP 1095d. Informational only — does not change signal logic.">Soak</th>
             <th>Strategy</th>
@@ -16514,6 +16515,10 @@ function renderRebalance() {
     const _tickerTotal = tickerTotalHeld(ticker);
     const industryPct = _tickerTotal > 0 ? (totalExit / _tickerTotal) * 100 : null;
     const themeApprox = tickerHasEmbedded(ticker); // ≥ when any of the denominator is pass-through
+    // What's left of your TOTAL holding of this name after selling this lot (other lots + pass-through).
+    // Cut-share is an upper bound (partial VOO) → remaining is a lower bound, flagged ≥ when pass-through is involved.
+    const remainingValue = _tickerTotal > 0 ? Math.max(_tickerTotal - totalExit, 0) : null;
+    const remainingPct = industryPct !== null ? Math.max(100 - industryPct, 0) : null;
     const strategyPct = strategyTotal > 0 ? (totalExit / strategyTotal) * 100 : null;
     const totalGl = tranches.reduce((s, d) => s + (d.gl || 0), 0);
     const totalAlpha = tranches.every(d => d.dollarAlpha !== null)
@@ -16575,7 +16580,7 @@ function renderRebalance() {
     return { ticker: g.ticker, account: g.account, count, isIRA,
       holdingLabel, allLT, allST, daysHeldMin,
       vsSpx, totalAlpha, totalThemeAlpha, totalGl, totalEstTax, totalInvested, totalExit, portfolioPct,
-      industryPct, themeApprox, strategyPct, industryName, strategyName,
+      industryPct, themeApprox, remainingValue, remainingPct, strategyPct, industryName, strategyName,
       signal, signalClass };
   });
 
@@ -16679,11 +16684,12 @@ function renderRebalance() {
         <br><span style="color:var(--color-text-tertiary);font-size:10px">${esc(r.account)}</span>
         <span style="font-size:9px;color:${holdColor};margin-left:6px">${r.holdingLabel}</span>
       </td>
+      <td class="r" style="font-weight:600;color:var(--color-text-secondary)">${fmtDollar(r.totalExit)}</td>
       <td class="r" style="font-weight:600;color:${heldColor}">${heldLabel}</td>
       <td class="r" style="font-size:10px;color:${soakColor};font-weight:600" title="${soakTooltip}">${soakLabel}</td>
       <td style="white-space:nowrap"><span style="font-size:10px;font-weight:600;color:${sleeveColor};border-left:3px solid ${sleeveColor};padding-left:5px">${sleeve || '—'}</span></td>
       <td class="r" style="font-weight:600;color:var(--color-text-secondary)">${r.portfolioPct !== null ? r.portfolioPct.toFixed(1) + '%' : '—'}</td>
-      <td class="r" style="font-size:10px;color:var(--color-text-tertiary)">${r.industryPct !== null ? (r.themeApprox ? '≤' : '') + r.industryPct.toFixed(1) + '%' : '—'}</td>
+      <td class="r" style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5">${r.industryPct !== null ? `<div>${(r.themeApprox ? '≤' : '') + r.industryPct.toFixed(1)}% <span style="color:var(--color-text-success);font-weight:600">${fmtDollar(r.totalExit)}</span></div><div style="color:var(--color-text-tertiary);font-size:9px">leaves <span style="color:var(--color-text-danger);font-weight:600">${(r.themeApprox ? '≥' : '') + r.remainingPct.toFixed(1)}% · ${fmtDollar(r.remainingValue)}</span></div>` : '—'}</td>
       <td class="r" style="font-weight:700;font-size:13px;background:${alphaBg};color:${alphaColor}">${r.totalAlpha !== null ? fmtDollar(r.totalAlpha) : '—'}</td>
       <td class="r" style="font-weight:600;font-size:12px;background:${(() => {
           if (r.totalThemeAlpha === null) return 'transparent';
