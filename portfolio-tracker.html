@@ -14722,6 +14722,60 @@ const discoverySelected = new Set(); // tickers the user has picked (max 5) to f
 let _lastPolyFetch = 0; // timestamp guard so rapid calls self-space a little
 const DISCOVERY_MAX_SELECT = 5;
 
+// ── Discovery persistence ─────────────────────────────────────────────────
+// Everything Discovery fetches lives in module-level objects that die on refresh. We persist them so
+// fetched performance, the per-theme ranking, the source-fund map, AND the ≤5 selection all survive a
+// reload. This is also what makes the book-AI selection stick: the AI candidate set IS discoverySelected,
+// so persisting it is why your picks (and therefore the AI's candidates) are still there after a refresh.
+// We deliberately do NOT persist transient states: a value mid-flight ('loading') or an error slot
+// ({err}) is dropped on save, so a reload never resurrects a stuck "loading…" or a stale rate-limit
+// error — only real fetched numbers persist; misses simply re-fetch on demand.
+const DISCOVERY_CACHE_KEY = 'portfolio-discovery-cache-v1';
+function saveDiscoveryCache() {
+  try {
+    const clean = (obj) => {
+      const out = {};
+      for (const k in obj) { const v = obj[k]; if (v && typeof v === 'object' && !v.err) out[k] = v; }
+      return out;
+    };
+    localStorage.setItem(DISCOVERY_CACHE_KEY, JSON.stringify({
+      perf: clean(discoveryPerf),
+      benchPerf: clean(discoveryBenchPerf),
+      sourceFund: discoverySourceFund,
+      themeRank: discoveryThemeRank,
+      selected: [...discoverySelected],
+    }));
+  } catch (e) { /* localStorage full or unavailable — fetched data just won't persist this session */ }
+}
+function loadDiscoveryCache() {
+  try {
+    const raw = localStorage.getItem(DISCOVERY_CACHE_KEY);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (d.perf && typeof d.perf === 'object') Object.assign(discoveryPerf, d.perf);
+    if (d.benchPerf && typeof d.benchPerf === 'object') Object.assign(discoveryBenchPerf, d.benchPerf);
+    if (d.sourceFund && typeof d.sourceFund === 'object') Object.assign(discoverySourceFund, d.sourceFund);
+    if (d.themeRank && typeof d.themeRank === 'object') Object.assign(discoveryThemeRank, d.themeRank);
+    if (Array.isArray(d.selected)) d.selected.slice(0, DISCOVERY_MAX_SELECT).forEach(t => discoverySelected.add(t));
+  } catch (e) { /* corrupt or absent — start clean */ }
+}
+
+// Freshness of a fetched perf value, from its fetchedAt timestamp. Returns {dot, label, color} so the
+// chip can show a colored cue: green <24h, yellow 1–7d, red >7d. Old data is still SHOWN (a week-old
+// price isn't useless) — it's just visibly flagged so you know you're looking at a stale number, not a
+// live one. A value fetched before fetchedAt existed (older cache) reads as unknown → treated as stale.
+function discoveryFreshness(perf) {
+  if (!perf || typeof perf !== 'object' || typeof perf.fetchedAt !== 'number') {
+    return { dot: '⚪', color: 'var(--color-text-tertiary)', label: 'age unknown' };
+  }
+  const ageMs = Date.now() - perf.fetchedAt;
+  const hrs = ageMs / 3600000;
+  if (hrs < 24) return { dot: '🟢', color: 'var(--color-text-success)', label: hrs < 1 ? 'just now' : Math.round(hrs) + 'h old' };
+  const days = hrs / 24;
+  if (days <= 7) return { dot: '🟡', color: '#fbbf24', label: Math.round(days) + 'd old' };
+  return { dot: '🔴', color: 'var(--color-text-danger)', label: Math.round(days) + 'd old — re-fetch for current' };
+}
+
 // Toggle a ticker into/out of the selection (cap at 5). Re-renders to update highlight + counter.
 function toggleDiscoverySelect(ticker) {
   const key = ticker.toUpperCase();
@@ -14730,6 +14784,7 @@ function toggleDiscoverySelect(ticker) {
     if (discoverySelected.size >= DISCOVERY_MAX_SELECT) return; // at cap — ignore
     discoverySelected.add(key);
   }
+  saveDiscoveryCache(); // selection IS the book-AI candidate set — persist so it survives refresh
   renderThemeDiscovery();
   // The AI book-review card shows the selected-ticker count + cost estimate; it lives in a separate
   // container that renderThemeDiscovery doesn't touch, so refresh it here or it goes stale (shows the
@@ -14860,6 +14915,32 @@ async function fetchTickerWindows(ticker) {
   let monthBar = null, best = Infinity;
   for (const b of bars) { const diff = Math.abs(b.t - target); if (diff < best) { best = diff; monthBar = b.c; } }
 
+  // ---- Extra time windows (no extra call): 3M, 6M, YTD all live inside the ~1Y of daily bars we
+  // already pulled, so they're free — same pattern as the 1-month anchor above. We only return a
+  // window if the window's start is actually COVERED by the bars; a name with 4 months of history
+  // gets a real 3M but a null 6M (we don't fabricate a 6M from a 4-month window). _anchor finds the
+  // closest bar to a target timestamp but only if a bar exists at/before it (within ~5 trading days
+  // of slack), else null — so partial-history names honestly show — for the windows they can't fill.
+  const firstT = bars[0].t;
+  const _anchor = (targetMs) => {
+    // If our earliest bar starts AFTER the target (don't have that much history), bail — null, not a lie.
+    if (firstT > targetMs + 5 * 86400 * 1000) return null;
+    let bar = null, bd = Infinity;
+    for (const b of bars) { const diff = Math.abs(b.t - targetMs); if (diff < bd) { bd = diff; bar = b.c; } }
+    return bar;
+  };
+  const nowMs = Date.now();
+  const bar3m = _anchor(nowMs - 91 * 86400 * 1000);
+  const bar6m = _anchor(nowMs - 182 * 86400 * 1000);
+  // YTD: anchor to the last close of the prior year (Jan 1 of this year as the target; the closest
+  // bar will be the final trading day of December or the first of January). Null if our window
+  // doesn't reach back to the start of this year (e.g. fetched late in a long year with a short hist).
+  const jan1 = new Date(new Date().getFullYear(), 0, 1).getTime();
+  const barYtd = _anchor(jan1);
+  const m3 = bar3m ? ((latest - bar3m) / bar3m) * 100 : null;
+  const m6 = bar6m ? ((latest - bar6m) / bar6m) * 100 : null;
+  const ytd = barYtd ? ((latest - barYtd) / barYtd) * 100 : null;
+
   // ---- Free extras (no extra call): everything below comes from the bars we already have. ----
   // How much trading history Polygon actually returned. If the earliest bar is well short of a year,
   // the "1Y" figure spans LESS than a year (recent IPO/listing) and is not a clean 1Y return — we
@@ -14900,7 +14981,9 @@ async function fetchTickerWindows(ticker) {
   return {
     m1: monthBar ? ((latest - monthBar) / monthBar) * 100 : null,
     y1: yearBar ? ((latest - yearBar) / yearBar) * 100 : null,
+    m3, m6, ytd,
     histDays, shortHist, maxDrawdown, annVol, upVolShare,
+    fetchedAt: Date.now(), // wall-clock of this fetch — drives the freshness dot + survives in localStorage
   };
 }
 
@@ -14918,6 +15001,7 @@ async function _polyFetchInto(cache, key, slotUpdater, spacingMs) {
   try {
     cache[key] = await fetchTickerWindows(key);
     if (slotUpdater) slotUpdater(key);
+    saveDiscoveryCache(); // persist the freshly fetched value so it survives refresh
     return 'ok';
   } catch (e) {
     const kind = e.message === 'rate' ? 'rate' : e.message === 'nokey' ? 'nokey' : 'err';
@@ -14966,13 +15050,62 @@ async function fetchSelectedDiscovery() {
   renderDiscoveryFetchStatus({ names: names.length, funds: funds.length, nameMiss, benchMiss, rateMiss, noKey });
 }
 
+// "Additional performance data" for the ≤5 selected names. Distinct from the fetch button above in two
+// honest ways: (1) it FORCE-refreshes — it drops the cached slot for each selected name and its source
+// fund first, so it re-pulls CURRENT prices even if a value is already cached (the plain fetch skips
+// cached values). That's what gets you fresh numbers when the freshness dot has gone yellow/red, and
+// it upgrades any value fetched before the 3M/6M/YTD windows existed. (2) Once fetched, every name's
+// 📊 detail panel shows the full window set (1M/3M/6M/YTD/1Y + drawdown/vol) — all FREE from the one
+// range call, no extra API cost. Same ≤5 cap and 400ms burst spacing as the select fetch (5 names +
+// their funds fit comfortably under the ~5/min limit). The selected set IS the book-AI candidate set,
+// so these are exactly the names a "Review my book" run will screen.
+async function deepFetchSelected() {
+  const names = [...discoverySelected];
+  if (!names.length) return;
+  const btn = document.getElementById('disc-deep-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+
+  const funds = [...new Set(names.map(n => discoverySourceFund[n]).filter(Boolean).map(f => f.toUpperCase()))];
+
+  // Force path: clear the selected names' + their funds' cached slots so _polyFetchInto re-pulls them
+  // (it skips good cached values, so without this a re-run would no-op on already-fetched names).
+  names.forEach(k => { delete discoveryPerf[k]; updatePerfSlot(k); });
+  funds.forEach(f => { delete discoveryBenchPerf[f]; });
+
+  let nameMiss = 0, benchMiss = 0, rateMiss = 0, noKey = false;
+  for (const key of names) {
+    const r = await _polyFetchInto(discoveryPerf, key, updatePerfSlot);
+    if (r === 'cached' || r === 'ok') continue;
+    nameMiss++; if (r === 'rate') rateMiss++; if (r === 'nokey') noKey = true;
+    updatePerfSlot(key);
+  }
+  for (const fund of funds) {
+    const r = await _polyFetchInto(discoveryBenchPerf, fund, () => {
+      names.forEach(n => { if ((discoverySourceFund[n] || '').toUpperCase() === fund) updatePerfSlot(n); });
+    });
+    if (r === 'cached' || r === 'ok') continue;
+    benchMiss++; if (r === 'rate') rateMiss++; if (r === 'nokey') noKey = true;
+  }
+  // Re-rank any themes these names belong to, since their fresh numbers may change the order.
+  if (typeof discoveryThemeRank === 'object') {
+    Object.keys(discoveryThemeRank).forEach(theme => {
+      if (typeof _discoveryThemeTickers === 'function') {
+        const ts = _discoveryThemeTickers(theme);
+        if (ts && ts.some(t => discoverySelected.has(t.toUpperCase()))) _recomputeThemeRank(theme, ts);
+      }
+    });
+  }
+  if (btn) { btn.disabled = false; btn.textContent = `🔄 Refresh ${names.length} selected (latest + deeper windows)`; }
+  renderDiscoveryFetchStatus({ names: names.length, funds: funds.length, nameMiss, benchMiss, rateMiss, noKey, deep: true });
+}
+
 // Explicit post-batch status. Loud about rate failures (the user asked for no silent rate misses) and
 // offers a one-click retry that re-attempts ONLY the failed names/funds (successes are skipped).
 function renderDiscoveryFetchStatus(s) {
   const el = document.getElementById('disc-fetch-status');
   if (!el) return;
   if (!s.nameMiss && !s.benchMiss) {
-    el.innerHTML = `<span style="color:var(--color-text-success);font-size:9px">✓ Fetched ${s.names} name${s.names > 1 ? 's' : ''} + ${s.funds} benchmark${s.funds === 1 ? '' : 's'}.</span>`;
+    el.innerHTML = `<span style="color:var(--color-text-success);font-size:9px">✓ ${s.deep ? 'Refreshed' : 'Fetched'} ${s.names} name${s.names > 1 ? 's' : ''} + ${s.funds} benchmark${s.funds === 1 ? '' : 's'}.${s.deep ? ' Latest prices + 3M/6M/YTD now in each 📊 detail.' : ''}</span>`;
     return;
   }
   if (s.noKey) {
@@ -15077,6 +15210,7 @@ function _recomputeThemeRank(theme, tickers) {
   const rankMap = {};
   scored.forEach((s, i) => { rankMap[s.k] = { rank: i + 1, of: scored.length }; });
   discoveryThemeRank[theme] = rankMap;
+  saveDiscoveryCache(); // persist the ranking alongside the perf data it's derived from
 }
 
 // Per-ticker performance detail panel — toggled by the 📊 button on a chip. Shows EVERYTHING we
@@ -15105,6 +15239,9 @@ function toggleDiscoveryDetail(key) {
     : `<span style="color:${v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'};font-weight:600">${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
   const rows = [];
   rows.push(row('1-month return', pct(p.m1)));
+  rows.push(row('3-month return', pct(p.m3)));
+  rows.push(row('6-month return', pct(p.m6)));
+  rows.push(row('year-to-date return', pct(p.ytd)));
   rows.push(row(p.shortHist ? `return since listing (~${p.histDays ? Math.round(p.histDays / 30) : '<12'}mo, partial)` : '1-year return', pct(p.y1)));
   if (typeof p.maxDrawdown === 'number') rows.push(row('max drawdown (worst peak→trough)', `<span style="color:var(--color-text-danger)">${p.maxDrawdown.toFixed(1)}%</span>`));
   if (typeof p.annVol === 'number') rows.push(row('annualized volatility', `${p.annVol.toFixed(0)}% <span style="color:var(--color-text-tertiary)">(index ~15-20%)</span>`));
@@ -15119,8 +15256,10 @@ function toggleDiscoveryDetail(key) {
   }
   // Reuse the plain-language risk caption.
   const caption = (typeof fmtRiskCaption === 'function') ? fmtRiskCaption(p) : '';
+  const fr = discoveryFreshness(p);
   slot.innerHTML = `<div style="margin:3px 2px 6px;padding:8px 11px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:9px;line-height:1.6">
     <div style="font-weight:700;color:var(--color-text-primary);margin-bottom:3px">${esc(key)} — performance detail <span style="font-weight:400;color:var(--color-text-tertiary)">(from data already fetched; no new API call)</span></div>
+    <div style="margin-bottom:3px;color:${fr.color}">${fr.dot} data ${esc(fr.label)}</div>
     ${rows.join('')}
     ${caption}
     <div style="margin-top:4px;color:var(--color-text-tertiary);font-style:italic">Price history, not analysis — a record of how it moved, not a view on whether to own it.</div>
@@ -15248,7 +15387,7 @@ function updatePerfSlot(key) {
     if (v && v.err === 'rate') { el.innerHTML = '<span style="color:#fbbf24" title="Polygon rate limit (free tier ~5/min) — wait a moment and fetch again">rate · retry</span>'; return; }
     if (v && v.err === 'nokey') { el.innerHTML = '<span style="color:#fbbf24" title="Set your Polygon key via Get Benchmarks first">need key</span>'; return; }
     if (v && v.err) { el.innerHTML = '<span style="color:var(--color-text-tertiary)" title="Could not fetch — ticker may be unavailable on Polygon">n/a</span>'; return; }
-    if (v && typeof v === 'object') { el.innerHTML = `${fmtWin(v.m1, '1M')} · ${fmtY1(v)}${fmtBenchCompare(key, v)}${fmtRisk(v)}${fmtRiskCaption(v)}`; }
+    if (v && typeof v === 'object') { const _fr = discoveryFreshness(v); el.innerHTML = `<span title="${(_fr.label || '').replace(/"/g, '')}">${_fr.dot}</span> ${fmtWin(v.m1, '1M')} · ${fmtY1(v)}${fmtBenchCompare(key, v)}${fmtRisk(v)}${fmtRiskCaption(v)}`; }
   });
 }
 
@@ -15400,7 +15539,7 @@ function renderThemeDiscovery() {
     else if (cached && cached.err === 'rate') perfInit = '<span style="color:#fbbf24">rate · retry</span>';
     else if (cached && cached.err === 'nokey') perfInit = '<span style="color:#fbbf24">need key</span>';
     else if (cached && cached.err) perfInit = '<span style="color:var(--color-text-tertiary)">n/a</span>';
-    else if (cached && typeof cached === 'object') perfInit = `${fmtWin(cached.m1, '1M')} · ${fmtY1(cached)}${fmtBenchCompare(key, cached)}${fmtRisk(cached)}${fmtRiskCaption(cached)}`;
+    else if (cached && typeof cached === 'object') { const _fr = discoveryFreshness(cached); perfInit = `<span title="${esc(_fr.label)}">${_fr.dot}</span> ${fmtWin(cached.m1, '1M')} · ${fmtY1(cached)}${fmtBenchCompare(key, cached)}${fmtRisk(cached)}${fmtRiskCaption(cached)}`; }
     const atCap = discoverySelected.size >= DISCOVERY_MAX_SELECT && !selected;
     const hn = holdingNote(c.display);
     // Rank badge — present only after this theme has been fetched-and-ranked. Best 1Y = #1. Color the
@@ -15494,7 +15633,9 @@ function renderThemeDiscovery() {
         <span style="font-size:10px;color:var(--color-text-primary);font-weight:600">${discoverySelected.size} of ${DISCOVERY_MAX_SELECT} selected:</span>
         <span style="font-size:9px;color:var(--color-text-tertiary)">${[...discoverySelected].map(esc).join(', ')}</span>
         <button id="disc-fetch-btn" class="btn btn-sm btn-primary" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:auto">↡ Fetch ${discoverySelected.size} selected (1M + 1Y)</button>
-        <button class="btn btn-sm" onclick="discoverySelected.clear();renderThemeDiscovery();renderThemeAiReview()" style="font-size:9px">Clear</button>
+        <button id="disc-deep-btn" class="btn btn-sm" onclick="deepFetchSelected()" title="Force-refresh these names: re-pulls current prices (even if already cached) and the deeper windows (3M / 6M / YTD), all shown in each name's 📊 detail. Free extra windows from the same call — no added API cost. ~5 names + funds fit under the rate limit." style="font-size:9px">🔄 Refresh ${discoverySelected.size} (latest + deeper windows)</button>
+        <button class="btn btn-sm" onclick="discoverySelected.clear();saveDiscoveryCache();renderThemeDiscovery();renderThemeAiReview()" style="font-size:9px">Clear</button>
+        <div style="flex-basis:100%;font-size:8px;color:var(--color-text-tertiary);line-height:1.45">These ${discoverySelected.size} selected name${discoverySelected.size === 1 ? '' : 's'} ${discoverySelected.size === 1 ? 'is' : 'are'} the candidate set the <strong>AI book review</strong> (below) screens against your gaps. 📊 on any fetched chip shows its full window set — no new API call. Selection survives refresh.</div>
         <div id="disc-fetch-status" style="flex-basis:100%;margin-top:2px"></div>
       </div>` : ''}
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
@@ -19854,6 +19995,7 @@ async function init() {
   await loadPositions();
   loadBookExclude();
   loadBookAiReview();
+  loadDiscoveryCache();
   let changed = false;
 
   // ─────────────────────────────────────────────
