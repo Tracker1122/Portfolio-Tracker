@@ -3806,6 +3806,13 @@ function renderBookExcludePanel(openArr) {
       <span style="color:var(--color-text-secondary)">These %s won't match "How your holdings move together"</span> — that graph uses <em>true exposure</em> (your look-through share of names inside funds too), so mega-cap-heavy themes like Big Tech read much larger there. This is the direct book only, because direct positions are the only names with a real return to turn off.
     </div>
     ${bar}
+    <div style="display:flex;align-items:center;gap:8px;padding:2px 6px 4px;font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;border-bottom:0.5px solid var(--color-border-tertiary);margin-bottom:2px">
+      <span style="width:10px;flex-shrink:0"></span>
+      <span style="flex:1">Theme</span>
+      <span style="white-space:nowrap;margin-right:6px" title="This theme's own return (its positions only)">Return</span>
+      <span style="white-space:nowrap;text-align:right">Share · Value</span>
+      <span style="width:14px"></span>
+    </div>
     ${legend}
     <details open style="font-size:12px;margin-top:10px;border-top:1px solid var(--color-border-tertiary);padding-top:8px">
       <summary style="cursor:pointer;color:var(--color-text-tertiary);font-size:11px;padding:2px 0">
@@ -14590,7 +14597,13 @@ function renderThemeClusters() {
             ${isOpen ? `<div style="padding:4px 6px 8px 24px;border-left:2px solid ${palette[i % palette.length]};margin:0 0 4px 10px">${c.names.map(nameLine).join('')}</div>` : ''}
           </div>`;
         }).join('');
-        return bar + legend;
+        const legendHeader = `<div style="display:flex;align-items:center;gap:8px;padding:2px 6px 4px;font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;border-bottom:0.5px solid var(--color-border-tertiary);margin-bottom:2px">
+          <span style="width:10px;flex-shrink:0"></span>
+          <span style="flex:1">Block</span>
+          <span style="white-space:nowrap;text-align:right">Share · Value</span>
+          <span style="width:10px"></span>
+        </div>`;
+        return bar + legendHeader + legend;
       })()}
 
       ${data.base.total > 0 ? `
