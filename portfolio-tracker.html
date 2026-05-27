@@ -1063,9 +1063,6 @@
     <div class="section-heading">Managed Positions</div>
     <div class="summary-grid" id="open-summary"></div>
 
-    <!-- AUM — total assets under management, broken out by component (filled by renderAumCard) -->
-    <div id="aum-card" class="analytics-card" style="margin:4px 0 8px"></div>
-
     <!-- Auto-Tag Card — actionable when positions need theme/sleeve -->
     <div id="autotag-card" class="autotag-card" onclick="autoTagUntaggedPositions()" style="display:none">
       <div class="autotag-icon" id="autotag-icon">🏷️</div>
@@ -3822,6 +3819,7 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
   const glLabel = isOpen ? 'Gain / Loss' : 'Realised G/L';
 
   el.innerHTML = `
+    ${isOpen && typeof aumCardHtml === 'function' ? aumCardHtml() : ''}
     <div class="summary-card">
       <div class="summary-card-label">Total Invested</div>
       <div class="summary-card-value">${fmtDollar(s.totalInvested)}</div>
@@ -3850,11 +3848,11 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
       <div class="summary-card-label">Dollar Alpha</div>
       <div class="summary-card-value ${s.dollarAlpha >= 0 ? 'success' : 'danger'}">${fmtDollarWhole(s.dollarAlpha)}${fmtAlphaPct(s.dollarAlpha, s.totalInvested)}</div>
     </div>` : ''}
-    <div class="summary-card">
+    <div class="summary-card" ${isOpen ? `onclick="showCardOverlay('beating')" style="cursor:pointer" title="Click to see which positions are beating the S&P"` : ''}>
       <div class="summary-card-label">Beating S&P</div>
       <div class="summary-card-value info">${posArr.length > 0 ? s.countBeat : '—'}</div>
     </div>
-    <div class="summary-card">
+    <div class="summary-card" ${isOpen ? `onclick="showCardOverlay('trailing')" style="cursor:pointer" title="Click to see which positions are trailing the S&P"` : ''}>
       <div class="summary-card-label">Trailing S&P</div>
       <div class="summary-card-value ${s.countTrail > 0 ? 'danger' : ''}">${posArr.length > 0 ? s.countTrail : '—'}</div>
     </div>
@@ -10919,10 +10917,7 @@ function importSpCsv(input) {
 // (getSpTotals), and direct private deals (calcPeDeal). Shows two subtotals the user asked for,
 // broken out rather than conflated: a LIQUID public total (managed + VOO) and an ALL-IN total
 // (+ private). Cash was removed from the tracker, so it is not a component.
-function renderAumCard() {
-  const host = document.getElementById('aum-card');
-  if (!host) return;
-
+function aumCardHtml() {
   // Managed open positions — current market value.
   const managed = positions.filter(p => !p.closed && p.ticker)
     .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
@@ -10950,26 +10945,37 @@ function renderAumCard() {
 
   // Component row helper.
   const row = (label, val, sub) => `
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:2px 0">
       <span style="color:var(--color-text-tertiary);font-size:11px">${label}${sub ? ` <span style="font-size:9px;color:var(--color-text-tertiary)">${sub}</span>` : ''}</span>
       <span style="color:var(--color-text-secondary);font-size:12px;font-weight:600;white-space:nowrap">${fmt(val)} <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400">${pct(val)}</span></span>
     </div>`;
 
-  host.innerHTML = `
-    <div class="analytics-card-title">Assets Under Management</div>
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:2px 0 8px">
-      <span style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em">All-in total</span>
-      <span style="font-size:22px;font-weight:700;color:var(--color-text-primary);white-space:nowrap">${fmt(allIn)}</span>
-    </div>
-    ${row('Managed positions', managed)}
-    ${row('Passive core — VOO', voo)}
-    ${peCount ? row('Private deals', pe, `${peCount} deal${peCount > 1 ? 's' : ''} · at cost`) : ''}
-    <div style="border-top:1px solid var(--color-border-tertiary);margin-top:6px;padding-top:6px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
-        <span style="font-size:10px;color:var(--color-text-tertiary)">Liquid public book <span style="font-size:9px">(managed + VOO)</span></span>
-        <span style="font-size:13px;font-weight:700;color:var(--color-text-secondary);white-space:nowrap">${fmt(liquid)}</span>
+  // Rendered as the FIRST item in the managed-positions grid, spanning ~2 columns so the breakdown
+  // fits. grid-column:span 2 with a min-width keeps it wide enough without breaking the auto-fit flow.
+  return `
+    <div class="summary-card" style="grid-column:span 2;min-width:240px">
+      <div class="summary-card-label">Assets Under Management</div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:2px 0 6px">
+        <span style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em">All-in total</span>
+        <span style="font-size:20px;font-weight:700;color:var(--color-text-primary);white-space:nowrap">${fmt(allIn)}</span>
+      </div>
+      ${row('Managed positions', managed)}
+      ${row('Passive core — VOO', voo)}
+      ${peCount ? row('Private deals', pe, `${peCount} deal${peCount > 1 ? 's' : ''} · at cost`) : ''}
+      <div style="border-top:1px solid var(--color-border-tertiary);margin-top:5px;padding-top:5px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
+          <span style="font-size:10px;color:var(--color-text-tertiary)">Liquid public book <span style="font-size:9px">(managed + VOO)</span></span>
+          <span style="font-size:13px;font-weight:700;color:var(--color-text-secondary);white-space:nowrap">${fmt(liquid)}</span>
+        </div>
       </div>
     </div>`;
+}
+
+// Back-compat shim: the old standalone #aum-card slot is no longer used (AUM is now the first card
+// in the managed-positions grid). If the slot still exists, clear it so nothing renders twice.
+function renderAumCard() {
+  const host = document.getElementById('aum-card');
+  if (host) host.innerHTML = '';
 }
 
 function getSpTotals() {
@@ -12854,6 +12860,39 @@ function _renderCardOverlay(type) {
         html += '</div>';
       });
       html += '</div>';
+    }
+  }
+
+  if (type === 'beating' || type === 'trailing') {
+    const wantResult = type === 'beating' ? 'Beat' : 'Trail';
+    const heading = type === 'beating' ? 'Beating the S&P' : 'Trailing the S&P';
+    const accent = type === 'beating' ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    // EXACT same criterion as the card count: calcPos(p).result === 'Beat' | 'Trail'.
+    const rows = open
+      .map(p => ({ p, c: calcPos(p) }))
+      .filter(x => x.c.result === wantResult)
+      .sort((a, b) => (b.c.vsSpx ?? -Infinity) - (a.c.vsSpx ?? -Infinity)); // best margin first
+    html = `<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">${heading}</div>`;
+    html += `<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:14px">${rows.length} open position${rows.length === 1 ? '' : 's'} ${type === 'beating' ? 'ahead of' : 'behind'} the S&P since you bought ${type === 'beating' ? 'them' : 'them'} (by gross return vs the index over the same period). Sorted by margin.</div>`;
+    if (rows.length === 0) {
+      html += `<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic">None — no open positions currently ${type === 'beating' ? 'beat' : 'trail'} the S&P.</div>`;
+    } else {
+      html += '<div style="display:flex;flex-direction:column;gap:6px">';
+      rows.forEach(({ p, c }) => {
+        const vs = (c.vsSpx != null) ? ((c.vsSpx >= 0 ? '+' : '') + c.vsSpx.toFixed(1) + ' pp') : '—';
+        const yourR = (c.yourReturn != null) ? ((c.yourReturn >= 0 ? '+' : '') + c.yourReturn.toFixed(1) + '%') : '—';
+        const spxR = (c.spxReturn != null) ? ((c.spxReturn >= 0 ? '+' : '') + c.spxReturn.toFixed(1) + '%') : '—';
+        const tag = (typeof acctTag === 'function') ? acctTag(qrNormTicker(p.ticker)) : '';
+        html += `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 11px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);border-left:3px solid ${accent}">
+          <div style="min-width:0">
+            <div style="font-size:12px;font-weight:700;color:var(--color-text-primary)">${esc(p.ticker)}<span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400"> · ${esc(p.account || '—')}${p.theme ? ' · ' + esc(p.theme) : ''}</span></div>
+            <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">you ${yourR} vs S&P ${spxR}</div>
+          </div>
+          <div style="font-size:14px;font-weight:700;color:${accent};white-space:nowrap">${vs}</div>
+        </div>`;
+      });
+      html += '</div>';
+      html += `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic">Margin is gross return vs the S&P over each position's hold period — the same basis as the Beating/Trailing count on the dashboard.</div>`;
     }
   }
 
