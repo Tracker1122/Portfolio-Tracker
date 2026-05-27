@@ -1351,6 +1351,8 @@
   <div class="tab-panel" id="tab-analysis">
     <div class="section-heading">Sleeve Performance &amp; Value-Add — Is the Active Work Justified?</div>
     <div id="sleeve-valueadd-wrap" style="margin-bottom:24px"></div>
+    <div class="section-heading">Price moves since you refreshed</div>
+    <div id="price-moves-wrap" style="margin-bottom:24px"></div>
     <div class="section-heading">Industry Intelligence</div>
     <div id="theme-intel-wrap" style="margin-bottom:20px"></div>
 
@@ -2501,6 +2503,13 @@ let cashLedger = [];
 let spLots = []; // { date, shares, pricePaid, account } — S&P passive core positions
 let spCurrentPrice = 0; // current VOO/SPY price, updated manually
 let snapshots = []; // forward-only history captured by Take Snapshot
+// Auto-captured on every successful refreshAllPrices() call. Lightweight per-refresh diary —
+// one entry per "Refresh Prices" click that produced at least one successful price. Each entry
+// stores prices and shares-at-that-moment so a later read can compute price-only deltas without
+// confusing them with intervening buys/sells. Rolling cap = MAX_PRICE_HISTORY entries, FIFO.
+// Persisted alongside `snapshots` in localStorage key portfolio-snapshots-v1.
+let priceHistory = [];
+const MAX_PRICE_HISTORY = 500;
 let peDeals = []; // private equity / direct private investments — kept fully separate from public book
 let realizedPeDeals = []; // PE deals that have exited (IPO'd / acquired) — kept for the realized private track record
 let qualityReviews = []; // saved pre-purchase quality checklists for stock/ETF candidates
@@ -2626,7 +2635,7 @@ async function savePositions() {
     localStorage.setItem('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
     localStorage.setItem('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
     localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
-    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory }));
+    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
     localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
     localStorage.setItem('portfolio-ticker-info-v1', JSON.stringify({ tickerInfo }));
@@ -2707,6 +2716,7 @@ async function loadPositions() {
       if (typeof snapParsed.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = snapParsed.trackRecordMatureOnly;
       if (typeof snapParsed.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = snapParsed.industryAlphaMatureOnly;
       if (snapParsed.themeUniverseHistory && typeof snapParsed.themeUniverseHistory === 'object') themeUniverseHistory = snapParsed.themeUniverseHistory;
+      if (Array.isArray(snapParsed.priceHistory)) priceHistory = snapParsed.priceHistory;
     }
   } catch(e) { /* no snapshots yet */ }
 
@@ -4745,6 +4755,7 @@ function toggleThemeDrill(themeKey) {
 let intelSortKey = 'truePct';  // default sort: true exposure descending (biggest real risk on top)
 let intelSortDir = 'desc';
 let intelOpenKey = null;        // which theme row is currently expanded (one at a time)
+let priceMovesView = 'sinceLast'; // 'sinceLast' or 'allTime' — view toggle for the price-moves panel
 
 function fmtDollarCompact(v) {
   const a = Math.abs(v);
@@ -5133,7 +5144,7 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
-  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); }
+  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); }
   if (name === 'rebalance') { safeRender('renderRebalance', renderRebalance); if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'quality') safeRender('renderQualityTab', renderQualityTab);
@@ -10223,6 +10234,377 @@ function sleeveVerdict(sleeve, o) {
     detail: `Within \u00b12pp of the sector ETFs (${themePp >= 0 ? '+' : ''}${themePp.toFixed(1)}pp). Not clearly adding or destroying value vs indexing the theme.` };
 }
 
+// ─────────────────────────────────────────────
+// Price moves panel — auto-captured per-refresh diary, two views:
+//   "Since last refresh"   = last entry vs the one before it (book-level move
+//                            you just made on the click). Uses sharesThen to
+//                            avoid attributing intervening buys to price drift.
+//   "Across all refreshes" = first observed price vs current, with
+//                            currentShares × priceDelta to size the drift.
+//                            EXPLICITLY price-only — not P&L, not realized gain.
+// All dollar/percent figures are labeled to make the framing clear: "per share",
+// "your position", "move on current shares", "book % (price-only)".
+// ─────────────────────────────────────────────
+function computePriceMoves(history, posList) {
+  if (!Array.isArray(history) || history.length < 2) {
+    return { hasEnough: false, count: history ? history.length : 0 };
+  }
+  const sorted = [...history].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+  const first = sorted[0];
+  const prev = sorted[sorted.length - 2];
+  const now = sorted[sorted.length - 1];
+
+  // Current shares by ticker, aggregated across accounts, open only.
+  const currShares = {};
+  posList.filter(p => !p.closed && p.ticker).forEach(p => {
+    const t = (p.ticker || '').toUpperCase().trim();
+    const sh = parseFloat(p.shares) || 0;
+    if (!t || sh <= 0) return;
+    currShares[t] = (currShares[t] || 0) + sh;
+  });
+
+  // ─── Since last refresh ───
+  const sinceLastRows = [];
+  const allTickers = new Set([
+    ...Object.keys(prev.prices || {}),
+    ...Object.keys(now.prices || {})
+  ]);
+  for (const t of allTickers) {
+    const pPrev = prev.prices ? prev.prices[t] : undefined;
+    const pNow = now.prices ? now.prices[t] : undefined;
+    const sThen = (prev.shares ? prev.shares[t] : undefined) || 0;
+    const sNow = currShares[t] || 0;
+    if (pPrev === undefined && pNow !== undefined) {
+      sinceLastRows.push({ ticker: t, isNew: true, priceNow: pNow, sharesNow: sNow });
+      continue;
+    }
+    if (pNow === undefined) {
+      sinceLastRows.push({ ticker: t, isMissing: true, pricePrev: pPrev, sharesThen: sThen });
+      continue;
+    }
+    const perShare = pNow - pPrev;
+    const pctChange = pPrev > 0 ? (perShare / pPrev) * 100 : null;
+    const moveOnPosition = sThen * perShare;
+    sinceLastRows.push({
+      ticker: t, pricePrev: pPrev, priceNow: pNow,
+      perShare, pctChange,
+      sharesThen: sThen, sharesNow: sNow,
+      moveOnPosition,
+      sharesChanged: sThen !== sNow
+    });
+  }
+  let bookThen = 0, bookNow = 0;
+  sinceLastRows.forEach(r => {
+    if (r.isNew || r.isMissing) return;
+    bookThen += (r.sharesThen || 0) * r.pricePrev;
+    bookNow += (r.sharesThen || 0) * r.priceNow;
+  });
+  const bookMove = bookNow - bookThen;
+  const bookPct = bookThen > 0 ? (bookMove / bookThen) * 100 : null;
+  let vooPct = null;
+  if (typeof prev.vooPrice === 'number' && prev.vooPrice > 0 &&
+      typeof now.vooPrice === 'number' && now.vooPrice > 0) {
+    vooPct = ((now.vooPrice - prev.vooPrice) / prev.vooPrice) * 100;
+  } else if (typeof prev.spxLive === 'number' && prev.spxLive > 0 &&
+             typeof now.spxLive === 'number' && now.spxLive > 0) {
+    vooPct = ((now.spxLive - prev.spxLive) / prev.spxLive) * 100;
+  }
+  const vsVoo = (bookPct !== null && vooPct !== null) ? bookPct - vooPct : null;
+
+  // ─── Across all refreshes ───
+  const firstSeen = {};
+  for (const entry of sorted) {
+    if (!entry.prices) continue;
+    for (const t of Object.keys(entry.prices)) {
+      if (firstSeen[t] === undefined) firstSeen[t] = { price: entry.prices[t], ts: entry.ts };
+    }
+  }
+  const nowPrices = now.prices || {};
+  const allTimeRows = [];
+  for (const t of Object.keys(firstSeen)) {
+    const pFirst = firstSeen[t].price;
+    const tsFirst = firstSeen[t].ts;
+    const pNow = nowPrices[t];
+    const sNow = currShares[t] || 0;
+    if (pNow === undefined) continue;
+    const perShare = pNow - pFirst;
+    const pctChange = pFirst > 0 ? (perShare / pFirst) * 100 : null;
+    const moveOnCurrent = sNow * perShare;
+    const spark = [];
+    for (const entry of sorted) {
+      if (entry.prices && entry.prices[t] !== undefined) {
+        spark.push({ ts: entry.ts, price: entry.prices[t] });
+      }
+    }
+    allTimeRows.push({
+      ticker: t, priceFirst: pFirst, tsFirst,
+      priceNow: pNow, perShare, pctChange,
+      sharesNow: sNow, moveOnCurrent, spark
+    });
+  }
+  let allMoveDollar = 0;
+  let allBookFirstHypo = 0;
+  allTimeRows.forEach(r => {
+    allMoveDollar += (r.sharesNow || 0) * (r.priceNow - r.priceFirst);
+    allBookFirstHypo += (r.sharesNow || 0) * r.priceFirst;
+  });
+  const allBookPct = allBookFirstHypo > 0 ? (allMoveDollar / allBookFirstHypo) * 100 : null;
+  let allVooPct = null;
+  if (typeof first.vooPrice === 'number' && first.vooPrice > 0 &&
+      typeof now.vooPrice === 'number' && now.vooPrice > 0) {
+    allVooPct = ((now.vooPrice - first.vooPrice) / first.vooPrice) * 100;
+  } else if (typeof first.spxLive === 'number' && first.spxLive > 0 &&
+             typeof now.spxLive === 'number' && now.spxLive > 0) {
+    allVooPct = ((now.spxLive - first.spxLive) / first.spxLive) * 100;
+  }
+  const allVsVoo = (allBookPct !== null && allVooPct !== null) ? allBookPct - allVooPct : null;
+
+  return {
+    hasEnough: true,
+    refreshCount: sorted.length,
+    sinceLast: {
+      tsPrev: prev.ts, tsNow: now.ts, rows: sinceLastRows,
+      book: { bookThen, bookNow, bookMove, bookPct, vooPct, vsVoo }
+    },
+    allTime: {
+      tsFirst: first.ts, tsNow: now.ts, refreshCount: sorted.length,
+      rows: allTimeRows,
+      book: { moveDollar: allMoveDollar, bookPct: allBookPct, vooPct: allVooPct, vsVoo: allVsVoo }
+    }
+  };
+}
+
+function setPriceMovesView(view) {
+  priceMovesView = (view === 'allTime') ? 'allTime' : 'sinceLast';
+  renderPriceMoves();
+}
+
+// Format a short timestamp for header strip — keeps user-facing labels concise.
+function fmtPmTs(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    const month = d.toLocaleString('en-US', { month: 'short' });
+    const day = d.getDate();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return month + ' ' + day + ' ' + hh + ':' + mm;
+  } catch (e) { return iso; }
+}
+
+// Tiny inline sparkline. Returns an SVG string. Renders flat-line if all same value.
+function pmSparkline(points, w, h) {
+  if (!Array.isArray(points) || points.length < 2) return '';
+  const width = w || 60;
+  const height = h || 18;
+  const ys = points.map(p => p.price);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const range = maxY - minY;
+  const last = ys[ys.length - 1];
+  const firstP = ys[0];
+  const up = last >= firstP;
+  const stroke = up ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const coords = ys.map((y, i) => {
+    const x = (i / (ys.length - 1)) * (width - 2) + 1;
+    const yPos = range > 0 ? height - 1 - ((y - minY) / range) * (height - 2) : height / 2;
+    return x.toFixed(1) + ',' + yPos.toFixed(1);
+  }).join(' ');
+  return '<svg width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height +
+    '" style="vertical-align:middle"><polyline fill="none" stroke="' + stroke +
+    '" stroke-width="1.2" points="' + coords + '"/></svg>';
+}
+
+function renderPriceMoves() {
+  const el = document.getElementById('price-moves-wrap');
+  if (!el) return;
+
+  // Empty / not-enough-yet states
+  if (!Array.isArray(priceHistory) || priceHistory.length === 0) {
+    el.innerHTML = '<div style="padding:14px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:11px;color:var(--color-text-tertiary);line-height:1.5">' +
+      'No price history yet. Hit <b>Refresh Prices</b> on the home tab — each refresh captures a snapshot of prices. After your second refresh, this panel will show what moved between them.' +
+      '</div>';
+    return;
+  }
+  if (priceHistory.length === 1) {
+    el.innerHTML = '<div style="padding:14px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:11px;color:var(--color-text-tertiary);line-height:1.5">' +
+      'First snapshot captured ' + fmtPmTs(priceHistory[0].ts) + '. Hit <b>Refresh Prices</b> again to see what moved.' +
+      '</div>';
+    return;
+  }
+
+  const result = computePriceMoves(priceHistory, positions);
+  if (!result.hasEnough) {
+    el.innerHTML = '<div style="padding:14px;font-size:11px;color:var(--color-text-tertiary)">Not enough data yet.</div>';
+    return;
+  }
+
+  // ── Build view-switcher buttons ──
+  const isSince = priceMovesView !== 'allTime';
+  const tabBtn = (label, active, onclick) => {
+    const bg = active ? 'var(--color-accent-blue)' : 'var(--color-background-tertiary)';
+    const fg = active ? '#fff' : 'var(--color-text-secondary)';
+    return '<button onclick="' + onclick + '" style="background:' + bg + ';color:' + fg +
+      ';border:1px solid var(--color-border-tertiary);padding:4px 12px;font-size:11px;border-radius:var(--border-radius-sm);cursor:pointer;font-weight:' +
+      (active ? '600' : '400') + '">' + label + '</button>';
+  };
+
+  // ── Header strip (always shown) ──
+  const histCount = priceHistory.length;
+  const capNote = histCount >= MAX_PRICE_HISTORY
+    ? ' · <span style="color:#fbbf24" title="At cap; oldest entries are being dropped">at cap</span>'
+    : '';
+  const headerStrip = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">' +
+    '<div style="display:flex;gap:6px">' +
+      tabBtn('Since last refresh', isSince, "setPriceMovesView('sinceLast')") +
+      tabBtn('Across all refreshes', !isSince, "setPriceMovesView('allTime')") +
+    '</div>' +
+    '<div style="font-size:10px;color:var(--color-text-tertiary)">' +
+      histCount + ' / ' + MAX_PRICE_HISTORY + ' refreshes captured' + capNote +
+    '</div>' +
+  '</div>';
+
+  // Helper for colored signed dollar
+  const dColor = (v) => v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
+  const pColor = dColor;
+
+  let body = '';
+
+  if (isSince) {
+    // ── SINCE LAST REFRESH ──
+    const sl = result.sinceLast;
+    const rows = [...sl.rows].sort((a, b) => {
+      // Sort by abs $ move (excluding NEW/MISSING rows first, then those after)
+      const aMove = (a.isNew || a.isMissing) ? -Infinity : Math.abs(a.moveOnPosition || 0);
+      const bMove = (b.isNew || b.isMissing) ? -Infinity : Math.abs(b.moveOnPosition || 0);
+      return bMove - aMove;
+    });
+
+    // Build per-ticker rows
+    const rowHtml = rows.map(r => {
+      if (r.isNew) {
+        return '<tr><td style="padding:5px 8px;font-weight:600">' + r.ticker + '</td>' +
+          '<td colspan="5" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">new this refresh — no prior price to compare</td></tr>';
+      }
+      if (r.isMissing) {
+        return '<tr><td style="padding:5px 8px;font-weight:600">' + r.ticker + '</td>' +
+          '<td colspan="5" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">price not fetched this refresh</td></tr>';
+      }
+      const shTag = r.sharesChanged
+        ? ' <span style="color:var(--color-text-tertiary);font-size:9px">(' + (Math.round(r.sharesThen * 100) / 100) + ' sh then)</span>'
+        : '';
+      return '<tr>' +
+        '<td style="padding:5px 8px;font-weight:600">' + r.ticker + shTag + '</td>' +
+        '<td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">$' + r.pricePrev.toFixed(2) + '</td>' +
+        '<td style="padding:5px 8px;text-align:right">$' + r.priceNow.toFixed(2) + '</td>' +
+        '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.perShare) + '">' + (r.perShare >= 0 ? '+' : '') + '$' + Math.abs(r.perShare).toFixed(2) + '</td>' +
+        '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.moveOnPosition) + ';font-weight:600">' + (r.moveOnPosition >= 0 ? '+' : '−') + '$' + Math.abs(r.moveOnPosition).toFixed(2) + '</td>' +
+        '<td style="padding:5px 8px;text-align:right;color:' + pColor(r.pctChange) + '">' + (r.pctChange >= 0 ? '+' : '') + r.pctChange.toFixed(2) + '%</td>' +
+      '</tr>';
+    }).join('');
+
+    const b = sl.book;
+    const bookRow = '<tr style="background:var(--color-background-secondary);border-top:1px solid var(--color-border-secondary)">' +
+      '<td style="padding:7px 8px;font-weight:700">Book total</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-secondary)">$' + b.bookThen.toFixed(2) + '</td>' +
+      '<td style="padding:7px 8px;text-align:right;font-weight:600">$' + b.bookNow.toFixed(2) + '</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(2) + '</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:' + pColor(b.bookPct) + ';font-weight:600">' + (b.bookPct !== null ? (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%' : '—') + '</td>' +
+    '</tr>';
+
+    const vooLine = (b.vooPct !== null)
+      ? '<span style="color:var(--color-text-tertiary)">VOO over the same window:</span> <span style="color:' + pColor(b.vooPct) + '">' + (b.vooPct >= 0 ? '+' : '') + b.vooPct.toFixed(2) + '%</span>'
+      : '<span style="color:var(--color-text-tertiary)">VOO % unavailable (need VOO price in both refreshes)</span>';
+    const vsVooLine = (b.vsVoo !== null)
+      ? '&nbsp;&nbsp;·&nbsp;&nbsp;<span style="color:var(--color-text-tertiary)">Book vs VOO:</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>'
+      : '';
+
+    const tsLine = '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:6px">' +
+      fmtPmTs(sl.tsPrev) + ' &nbsp;→&nbsp; ' + fmtPmTs(sl.tsNow) +
+    '</div>';
+
+    body = tsLine +
+      '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
+        '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
+          '<th style="padding:4px 8px;text-align:left">Ticker</th>' +
+          '<th style="padding:4px 8px;text-align:right">Price then</th>' +
+          '<th style="padding:4px 8px;text-align:right">Price now</th>' +
+          '<th style="padding:4px 8px;text-align:right">Per share</th>' +
+          '<th style="padding:4px 8px;text-align:right">Your position</th>' +
+          '<th style="padding:4px 8px;text-align:right">%</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rowHtml + bookRow + '</tbody>' +
+      '</table>' +
+      '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>';
+  } else {
+    // ── ACROSS ALL REFRESHES ──
+    const at = result.allTime;
+    const rows = [...at.rows].sort((a, b) => Math.abs(b.moveOnCurrent || 0) - Math.abs(a.moveOnCurrent || 0));
+
+    const disclosure = '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px;font-style:italic;line-height:1.5">' +
+      'Uses your <b>current share counts</b> against price history. Strips out buys, sells, and cash flows — this is price drift only, <b>not</b> realized gain or loss. ' +
+      'A "(N sh now)" tag appears when your current share count differs from when the ticker first showed up in this history.' +
+    '</div>';
+
+    const rowHtml = rows.map(r => {
+      const dateStr = fmtPmTs(r.tsFirst);
+      const spark = pmSparkline(r.spark, 60, 18);
+      return '<tr>' +
+        '<td style="padding:5px 8px;font-weight:600">' + r.ticker + '</td>' +
+        '<td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">$' + r.priceFirst.toFixed(2) +
+          '<div style="font-size:9px;color:var(--color-text-tertiary)">' + dateStr + '</div></td>' +
+        '<td style="padding:5px 8px;text-align:right">$' + r.priceNow.toFixed(2) +
+          '<div style="font-size:9px;color:var(--color-text-tertiary)">' + (Math.round(r.sharesNow * 100) / 100) + ' sh now</div></td>' +
+        '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.perShare) + '">' + (r.perShare >= 0 ? '+' : '') + '$' + Math.abs(r.perShare).toFixed(2) + '</td>' +
+        '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.moveOnCurrent) + ';font-weight:600">' + (r.moveOnCurrent >= 0 ? '+' : '−') + '$' + Math.abs(r.moveOnCurrent).toFixed(2) + '</td>' +
+        '<td style="padding:5px 8px;text-align:right;color:' + pColor(r.pctChange) + '">' + (r.pctChange >= 0 ? '+' : '') + r.pctChange.toFixed(2) + '%</td>' +
+        '<td style="padding:5px 8px;text-align:right">' + spark + '</td>' +
+      '</tr>';
+    }).join('');
+
+    const b = at.book;
+    const bookRow = '<tr style="background:var(--color-background-secondary);border-top:1px solid var(--color-border-secondary)">' +
+      '<td style="padding:7px 8px;font-weight:700">Book total</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:' + dColor(b.moveDollar) + ';font-weight:700">' + (b.moveDollar >= 0 ? '+' : '−') + '$' + Math.abs(b.moveDollar).toFixed(2) + '</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:' + pColor(b.bookPct) + ';font-weight:600">' + (b.bookPct !== null ? (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%' : '—') + '</td>' +
+      '<td style="padding:7px 8px"></td>' +
+    '</tr>';
+
+    const vooLine = (b.vooPct !== null)
+      ? '<span style="color:var(--color-text-tertiary)">VOO over window:</span> <span style="color:' + pColor(b.vooPct) + '">' + (b.vooPct >= 0 ? '+' : '') + b.vooPct.toFixed(2) + '%</span>'
+      : '<span style="color:var(--color-text-tertiary)">VOO % unavailable</span>';
+    const vsVooLine = (b.vsVoo !== null)
+      ? '&nbsp;&nbsp;·&nbsp;&nbsp;<span style="color:var(--color-text-tertiary)">Book vs VOO:</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>'
+      : '';
+
+    const tsLine = '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:6px">' +
+      'First refresh ' + fmtPmTs(at.tsFirst) + ' &nbsp;→&nbsp; latest ' + fmtPmTs(at.tsNow) +
+      ' &nbsp;·&nbsp; ' + at.refreshCount + ' refreshes' +
+    '</div>';
+
+    body = tsLine + disclosure +
+      '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
+        '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
+          '<th style="padding:4px 8px;text-align:left">Ticker</th>' +
+          '<th style="padding:4px 8px;text-align:right">First seen</th>' +
+          '<th style="padding:4px 8px;text-align:right">Now</th>' +
+          '<th style="padding:4px 8px;text-align:right">Per share</th>' +
+          '<th style="padding:4px 8px;text-align:right" title="Current shares × price change since first seen. Price drift only — not realized gain.">Move on current shares</th>' +
+          '<th style="padding:4px 8px;text-align:right">% (price)</th>' +
+          '<th style="padding:4px 8px;text-align:right">Trend</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rowHtml + bookRow + '</tbody>' +
+      '</table>' +
+      '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>';
+  }
+
+  el.innerHTML = headerStrip + body;
+}
+
 function renderSleeveValueAdd() {
   const el = document.getElementById('sleeve-valueadd-wrap');
   if (!el) return;
@@ -10584,6 +10966,51 @@ function loadPolygonKey() {
   try { const k = localStorage.getItem('polygon_api_key'); if (k) polygonKey = k; } catch(e) {}
 }
 
+// ─────────────────────────────────────────────
+// Price history capture — called at the end of refreshAllPrices() after prices
+// have been applied. Lightweight per-refresh diary. Skips if zero prices were
+// captured (don't pollute history with empty rows from a failed fetch). Enforces
+// MAX_PRICE_HISTORY rolling cap via FIFO eviction.
+// ─────────────────────────────────────────────
+function capturePriceHistoryPoint() {
+  try {
+    const open = positions.filter(p => !p.closed && p.ticker);
+    if (open.length === 0) return; // nothing to snapshot
+    const pricesByTicker = {};
+    const sharesByTicker = {};
+    open.forEach(p => {
+      const px = parseFloat(p.exitPrice);
+      const sh = parseFloat(p.shares);
+      if (!isFinite(px) || px <= 0 || !isFinite(sh) || sh <= 0) return;
+      const t = (p.ticker || '').toUpperCase().trim();
+      if (!t) return;
+      // Aggregate shares across accounts (we hold the same ticker in multiple
+      // accounts; the price-history view is portfolio-wide, not per-account).
+      sharesByTicker[t] = (sharesByTicker[t] || 0) + sh;
+      // Price is per-ticker, not per-account — last write wins (they should be
+      // equal anyway since exitPrice is set from the same fetch).
+      pricesByTicker[t] = px;
+    });
+    // If zero successful prices, don't write a row.
+    if (Object.keys(pricesByTicker).length === 0) return;
+    const entry = {
+      ts: new Date().toISOString(),
+      prices: pricesByTicker,
+      shares: sharesByTicker,
+      spxLive: (typeof spxLive === 'number' && isFinite(spxLive) && spxLive > 0) ? spxLive : null,
+      vooPrice: (typeof spCurrentPrice === 'number' && isFinite(spCurrentPrice) && spCurrentPrice > 0) ? spCurrentPrice : null
+    };
+    priceHistory.push(entry);
+    // FIFO cap
+    if (priceHistory.length > MAX_PRICE_HISTORY) {
+      priceHistory.splice(0, priceHistory.length - MAX_PRICE_HISTORY);
+    }
+  } catch (e) {
+    // Capture is best-effort — never let it break the refresh flow.
+    console.warn('capturePriceHistoryPoint failed:', e);
+  }
+}
+
 async function refreshAllPrices() {
   const keyInput = document.getElementById('polygon-key-input');
   if (keyInput && keyInput.value.trim()) polygonKey = keyInput.value.trim();
@@ -10724,6 +11151,7 @@ async function refreshAllPrices() {
     status.textContent = 'Failed \u2014 check API key, network, or try again';
     status.style.color = 'var(--color-text-danger)';
   }
+  capturePriceHistoryPoint();
   renderAll(); scheduleSave();
   setTimeout(() => { if (status) { status.textContent = ''; status.style.color = ''; } }, 20000);
 }
@@ -18482,6 +18910,7 @@ function exportData() {
     positions, nextId, spxLive, spxLiveDate, cashBuckets, cashLedger,
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
+    priceHistory,
     peDeals,
     realizedPeDeals,
     tickerInfo,
@@ -18525,6 +18954,7 @@ function importData(input) {
       if (data.spLots) spLots = data.spLots;
       if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
       if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
+      if (Array.isArray(data.priceHistory)) priceHistory = data.priceHistory;
       if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
       if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
       if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
@@ -19672,6 +20102,7 @@ function driveBuildBackupPayload() {
     positions, nextId, spxLive, spxLiveDate, cashBuckets, cashLedger,
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
+    priceHistory,
     peDeals,
     realizedPeDeals,
     tickerInfo,
@@ -20047,6 +20478,7 @@ async function executeRestore() {
     if (data.spLots) spLots = data.spLots;
     if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
     if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
+    if (Array.isArray(data.priceHistory)) priceHistory = data.priceHistory;
     if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
     if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
     if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
