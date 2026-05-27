@@ -1392,7 +1392,7 @@
             <th class="r" title="Soak status — whether this position has been held long enough that its alpha numbers are meaningful signal vs noise. Per-sleeve thresholds: Thesis Plays 180d, Quality 365d, PBP 1095d. Informational only — does not change signal logic.">Soak</th>
             <th>Strategy</th>
             <th onclick="sortRebal('portfolioPct')" class="sortable r" title="This position's value as a percent of your entire managed book (all open positions at current value, including VOO held as a position). NOT % of a sleeve.">% of book <span id="sort-portfolioPct"></span></th>
-            <th class="r" title="This ticker's share of its theme's TRUE exposure — your direct holdings in the theme PLUS pass-through from names inside funds you hold (e.g. VOO). Shown as ≥ when pass-through is involved, because VOO's pasted holdings are partial (top-N), so the theme total is a floor, not an exact figure.">Theme %</th>
+            <th class="r" title="This position as a share of ALL you hold of this ticker — every direct lot across accounts PLUS its pass-through inside funds you hold (e.g. VOO). Reads as: selling this position cuts your total exposure to this name by about this much. Shown as ≥ when pass-through is in the denominator (VOO's pasted holdings are partial, so your true total is at least this — meaning the fraction you'd cut is at most this).">% of total</th>
             <th onclick="sortRebal('dollarAlpha')" class="sortable r">Dollar Alpha <span id="sort-dollarAlpha"></span></th>
             <th onclick="sortRebal('themeAlpha')" class="sortable r" title="Theme-relative alpha — your dollar gain vs theme benchmark over the same period. More honest comparison for sleeves with assigned theme benchmarks.">Theme α <span id="sort-themeAlpha"></span></th>
             <th onclick="sortRebal('gl')" class="sortable r">Unreal. G/L <span id="sort-gl"></span></th>
@@ -16430,22 +16430,19 @@ function renderRebalance() {
     .filter(p => !p.closed && p.ticker)
     .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
 
-  // --- Per-theme TRUE-exposure totals: direct positions in the theme PLUS pass-through from inside
-  // funds you hold (VOO etc.), so each ticker's "Theme %" reflects its share of the theme's true risk,
-  // not just the direct slice. Mirrors the attribution used in Industry Intelligence (renderThemeIntel):
-  // an embedded ticker is assigned to a theme only if you ALSO hold that ticker directly (so it carries
-  // a p.theme tag); embedded names with no theme tag are an untracked tail and are excluded, same as
-  // there. Because VOO's pasted holdings are partial (top-N) and that tail is dropped, these totals are
-  // a FLOOR — callers flag shares that lean on pass-through with a "≥" prefix, never present them exact.
-  const _openForTheme = positions.filter(p => !p.closed && p.ticker);
-  const _tickerTheme = {};               // norm(ticker) -> theme (from your direct holdings)
-  _openForTheme.forEach(p => { const k = qrNormTicker(p.ticker); if (p.theme && !_tickerTheme[k]) _tickerTheme[k] = p.theme; });
-  const themeDirectTotal = {};           // theme -> $ direct
-  const themeEmbeddedTotal = {};         // theme -> $ classifiable pass-through
-  const tickerEmbedded = {};             // norm(ticker) -> $ this ticker's own pass-through (all funds)
-  _openForTheme.forEach(p => {
-    if (!p.theme) return;
-    themeDirectTotal[p.theme] = (themeDirectTotal[p.theme] || 0) + (calcPos(p).exitValue || 0);
+  // --- Per-TICKER total holdings: all your direct lots of a ticker (across every account) PLUS that
+  // ticker's pass-through from inside funds you hold (VOO etc.). Used by the "% of total X" column so
+  // each row shows what fraction of your ENTIRE exposure to that name this lot is — i.e. how much of
+  // your total holding of X you'd be cutting by selling this position. Pass-through comes from the
+  // look-through tables; because VOO's paste is partial (top-N), the denominator is a FLOOR, so the
+  // resulting share is an UPPER BOUND (your real total X is ≥ this, so the % you'd cut is ≤ this) —
+  // flagged with "≥" wherever pass-through is in the denominator.
+  const _openForTicker = positions.filter(p => !p.closed && p.ticker);
+  const tickerDirectTotal = {};          // norm(ticker) -> $ direct, summed across all accounts/lots
+  const tickerEmbedded = {};             // norm(ticker) -> $ this ticker's pass-through (all funds)
+  _openForTicker.forEach(p => {
+    const k = qrNormTicker(p.ticker);
+    tickerDirectTotal[k] = (tickerDirectTotal[k] || 0) + (calcPos(p).exitValue || 0);
   });
   if (typeof getIndexLookthrough === 'function' && typeof indexFundHeldValue === 'function') {
     const _tables = getIndexLookthrough();
@@ -16454,18 +16451,14 @@ function renderRebalance() {
       if (held <= 0 || !tbl.weights) continue;
       for (const [tk, w] of Object.entries(tbl.weights)) {
         if (w == null) continue;
-        const val = held * (w / 100);
         const nk = qrNormTicker(tk);
-        tickerEmbedded[nk] = (tickerEmbedded[nk] || 0) + val; // track per-ticker pass-through regardless of theme
-        const embTheme = _tickerTheme[nk];
-        if (!embTheme) continue;           // unclassifiable -> untracked tail (excluded, same as Industry Intel)
-        themeEmbeddedTotal[embTheme] = (themeEmbeddedTotal[embTheme] || 0) + val;
+        tickerEmbedded[nk] = (tickerEmbedded[nk] || 0) + held * (w / 100);
       }
     }
   }
-  const themeTrueTotal = (theme) => (themeDirectTotal[theme] || 0) + (themeEmbeddedTotal[theme] || 0);
-  // Does this theme's total rely on any pass-through? (then its shares are a "≥" floor)
-  const themeHasEmbedded = (theme) => (themeEmbeddedTotal[theme] || 0) > 0;
+  // Total holding of a ticker, however held; and whether any of it is pass-through (then share is ≥-floor).
+  const tickerTotalHeld = (tk) => { const k = qrNormTicker(tk); return (tickerDirectTotal[k] || 0) + (tickerEmbedded[k] || 0); };
+  const tickerHasEmbedded = (tk) => (tickerEmbedded[qrNormTicker(tk)] || 0) > 0;
 
   // Group by ticker + account
   const grouped = {};
@@ -16491,15 +16484,13 @@ function renderRebalance() {
     const industryName = tranches[0]?.p?.theme || '';
     const strategyName = tranches[0]?.p?.sleeve || '';
     const strategyTotal = positions.filter(p => !p.closed && p.sleeve === strategyName).reduce((s,p) => s+(calcPos(p).exitValue||0), 0);
-    // THEME %: this ticker's share of its theme's TRUE exposure (direct + pass-through from VOO/funds).
-    // Numerator = this ticker's direct value here + its own embedded slice; denominator = the theme's
-    // true total (precomputed above). "≥" when either side leans on pass-through, since VOO's paste is
-    // partial — the share is a floor, not exact. Falls back to direct-only share if no theme tag.
-    const _thisEmbedded = tickerEmbedded[qrNormTicker(ticker)] || 0;
-    const themeTrue = themeTrueTotal(industryName);
-    const themeNumerator = totalExit + _thisEmbedded;
-    const industryPct = themeTrue > 0 ? (themeNumerator / themeTrue) * 100 : null;
-    const themeApprox = themeHasEmbedded(industryName) || _thisEmbedded > 0; // show ≥ when pass-through involved
+    // % OF TOTAL X: this lot's value as a share of ALL you hold of this ticker — every direct lot
+    // across accounts PLUS its pass-through inside funds. Answers "if I sell this position, what
+    // fraction of my total exposure to this name am I cutting?" Denominator floor (partial VOO paste)
+    // → the share is an upper bound, flagged "≥" when pass-through is in the denominator.
+    const _tickerTotal = tickerTotalHeld(ticker);
+    const industryPct = _tickerTotal > 0 ? (totalExit / _tickerTotal) * 100 : null;
+    const themeApprox = tickerHasEmbedded(ticker); // ≥ when any of the denominator is pass-through
     const strategyPct = strategyTotal > 0 ? (totalExit / strategyTotal) * 100 : null;
     const totalGl = tranches.reduce((s, d) => s + (d.gl || 0), 0);
     const totalAlpha = tranches.every(d => d.dollarAlpha !== null)
@@ -16669,7 +16660,7 @@ function renderRebalance() {
       <td class="r" style="font-size:10px;color:${soakColor};font-weight:600" title="${soakTooltip}">${soakLabel}</td>
       <td style="white-space:nowrap"><span style="font-size:10px;font-weight:600;color:${sleeveColor};border-left:3px solid ${sleeveColor};padding-left:5px">${sleeve || '—'}</span></td>
       <td class="r" style="font-weight:600;color:var(--color-text-secondary)">${r.portfolioPct !== null ? r.portfolioPct.toFixed(1) + '%' : '—'}</td>
-      <td class="r" style="font-size:10px;color:var(--color-text-tertiary)">${r.industryPct !== null ? (r.themeApprox ? '≥' : '') + r.industryPct.toFixed(1) + '%' : '—'}</td>
+      <td class="r" style="font-size:10px;color:var(--color-text-tertiary)">${r.industryPct !== null ? (r.themeApprox ? '≤' : '') + r.industryPct.toFixed(1) + '%' : '—'}</td>
       <td class="r" style="font-weight:700;font-size:13px;background:${alphaBg};color:${alphaColor}">${r.totalAlpha !== null ? fmtDollar(r.totalAlpha) : '—'}</td>
       <td class="r" style="font-weight:600;font-size:12px;background:${(() => {
           if (r.totalThemeAlpha === null) return 'transparent';
