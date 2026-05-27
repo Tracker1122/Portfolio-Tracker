@@ -10429,6 +10429,7 @@ function renderPriceMoves() {
   if (priceHistory.length === 1) {
     el.innerHTML = '<div style="padding:14px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:11px;color:var(--color-text-tertiary);line-height:1.5">' +
       'First snapshot captured ' + fmtPmTs(priceHistory[0].ts) + '. Hit <b>Refresh Prices</b> again to see what moved.' +
+      ' &nbsp;·&nbsp; <a href="javascript:void(0)" onclick="resetPriceHistory()" style="color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer">Reset</a>' +
       '</div>';
     return;
   }
@@ -10461,6 +10462,7 @@ function renderPriceMoves() {
     '</div>' +
     '<div style="font-size:10px;color:var(--color-text-tertiary)">' +
       histCount + ' / ' + MAX_PRICE_HISTORY + ' refreshes captured' + capNote +
+      ' &nbsp;·&nbsp; <a href="javascript:void(0)" onclick="resetPriceHistory()" style="color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="Wipe history and re-seed from current prices">Reset</a>' +
     '</div>' +
   '</div>';
 
@@ -10964,6 +10966,56 @@ function savePolygonKey(val) {
 
 function loadPolygonKey() {
   try { const k = localStorage.getItem('polygon_api_key'); if (k) polygonKey = k; } catch(e) {}
+}
+
+// ─────────────────────────────────────────────
+// Seed priceHistory from the prices currently in `positions`. Used by init()
+// on first-run (empty history) AND by the Reset button in the price-moves panel
+// to re-baseline after a manual clear. Returns true if an entry was written.
+// ─────────────────────────────────────────────
+function seedPriceHistoryFromCurrent() {
+  try {
+    const openSeed = positions.filter(p => !p.closed && p.ticker);
+    const seedPrices = {};
+    const seedShares = {};
+    openSeed.forEach(p => {
+      const px = parseFloat(p.exitPrice);
+      const sh = parseFloat(p.shares);
+      if (!isFinite(px) || px <= 0 || !isFinite(sh) || sh <= 0) return;
+      const t = (p.ticker || '').toUpperCase().trim();
+      if (!t) return;
+      seedShares[t] = (seedShares[t] || 0) + sh;
+      seedPrices[t] = px;
+    });
+    if (Object.keys(seedPrices).length === 0) return false;
+    priceHistory.push({
+      ts: new Date().toISOString(),
+      prices: seedPrices,
+      shares: seedShares,
+      spxLive: (typeof spxLive === 'number' && isFinite(spxLive) && spxLive > 0) ? spxLive : null,
+      vooPrice: (typeof spCurrentPrice === 'number' && isFinite(spCurrentPrice) && spCurrentPrice > 0) ? spCurrentPrice : null,
+      _seeded: true
+    });
+    return true;
+  } catch (e) {
+    console.warn('seedPriceHistoryFromCurrent failed:', e);
+    return false;
+  }
+}
+
+// User-facing reset triggered from the price-moves panel header. Wipes all
+// price history and re-seeds from current prices so the next Refresh gives a
+// clean two-point comparison. Confirms first.
+function resetPriceHistory() {
+  const n = Array.isArray(priceHistory) ? priceHistory.length : 0;
+  const msg = n === 0
+    ? 'Price history is already empty. Re-seed from current prices?'
+    : 'Delete all ' + n + ' price-history entries and re-seed from current prices? This cannot be undone.';
+  if (!confirm(msg)) return;
+  priceHistory = [];
+  seedPriceHistoryFromCurrent();
+  if (typeof scheduleSave === 'function') scheduleSave();
+  if (typeof renderPriceMoves === 'function') renderPriceMoves();
 }
 
 // ─────────────────────────────────────────────
@@ -20587,6 +20639,25 @@ async function init() {
   loadBookExclude();
   loadBookAiReview();
   loadDiscoveryCache();
+
+  // ─────────────────────────────────────────────
+  // First-run seed for priceHistory
+  //
+  // If priceHistory is empty after load (either brand-new install or first deploy
+  // of this feature on top of an existing data file), seed ONE entry from the
+  // prices already in `positions`. This way, the next Refresh Prices click gives
+  // an immediate two-point comparison instead of an empty "first snapshot
+  // captured" state. Marked _seeded so it can be identified later.
+  //
+  // Empty-only: never injects a fake entry into existing real history. If the
+  // user has even one prior capture, we leave the history alone.
+  // ─────────────────────────────────────────────
+  if (Array.isArray(priceHistory) && priceHistory.length === 0) {
+    if (seedPriceHistoryFromCurrent()) {
+      if (typeof scheduleSave === 'function') scheduleSave();
+    }
+  }
+
   let changed = false;
 
   // ─────────────────────────────────────────────
