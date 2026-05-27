@@ -2510,6 +2510,12 @@ let snapshots = []; // forward-only history captured by Take Snapshot
 // Persisted alongside `snapshots` in localStorage key portfolio-snapshots-v1.
 let priceHistory = [];
 const MAX_PRICE_HISTORY = 500;
+
+// Benchmark alpha cache — populated on-demand when user clicks the "vs theme bench"
+// button on a price-moves row. Keyed by position_ticker|bench_ticker|tsPrev|tsNow.
+// Pruned on save: any entry whose tsNow doesn't match the latest priceHistory entry's
+// ts is stale by definition (a new Refresh has happened) and gets dropped.
+let benchAlphaCache = {};
 let peDeals = []; // private equity / direct private investments — kept fully separate from public book
 let realizedPeDeals = []; // PE deals that have exited (IPO'd / acquired) — kept for the realized private track record
 let qualityReviews = []; // saved pre-purchase quality checklists for stock/ETF candidates
@@ -2635,7 +2641,21 @@ async function savePositions() {
     localStorage.setItem('portfolio-positions-closed', JSON.stringify({ positions: closedPos }));
     localStorage.setItem('portfolio-sp-data', JSON.stringify({ spLots, spCurrentPrice }));
     localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
-    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory }));
+    // Prune stale benchAlphaCache entries — anything whose tsNow doesn't match
+    // the current latest priceHistory entry is from a previous refresh and useless.
+    try {
+      if (Array.isArray(priceHistory) && priceHistory.length > 0) {
+        const latestTs = priceHistory[priceHistory.length - 1].ts;
+        Object.keys(benchAlphaCache).forEach(k => {
+          // key format: positionTicker|benchTicker|tsPrev|tsNow
+          const parts = k.split('|');
+          if (parts.length === 4 && parts[3] !== latestTs) delete benchAlphaCache[k];
+        });
+      } else {
+        benchAlphaCache = {};
+      }
+    } catch (e) { /* best effort */ }
+    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
     localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
     localStorage.setItem('portfolio-ticker-info-v1', JSON.stringify({ tickerInfo }));
@@ -2717,6 +2737,7 @@ async function loadPositions() {
       if (typeof snapParsed.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = snapParsed.industryAlphaMatureOnly;
       if (snapParsed.themeUniverseHistory && typeof snapParsed.themeUniverseHistory === 'object') themeUniverseHistory = snapParsed.themeUniverseHistory;
       if (Array.isArray(snapParsed.priceHistory)) priceHistory = snapParsed.priceHistory;
+      if (snapParsed.benchAlphaCache && typeof snapParsed.benchAlphaCache === 'object') benchAlphaCache = snapParsed.benchAlphaCache;
     }
   } catch(e) { /* no snapshots yet */ }
 
@@ -10544,19 +10565,72 @@ function renderPriceMoves() {
       return bMove - aMove;
     });
 
+    // Short date labels for the "Price [date]" column headers. Full timestamp
+    // appears in the title tooltip on the th itself.
+    const _shortDate = (iso) => {
+      try {
+        const d = new Date(iso);
+        return d.toLocaleString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+          String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+      } catch (e) { return iso; }
+    };
+    const prevDateLbl = _shortDate(sl.tsPrev);
+    const nowDateLbl  = _shortDate(sl.tsNow);
+
     // Build per-ticker rows
     const rowHtml = rows.map(r => {
       if (r.isNew) {
         return '<tr><td style="padding:5px 8px;font-weight:600">' + r.ticker + '</td>' +
-          '<td colspan="5" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">new this refresh — no prior price to compare</td></tr>';
+          '<td colspan="6" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">new this refresh — no prior price to compare</td></tr>';
       }
       if (r.isMissing) {
         return '<tr><td style="padding:5px 8px;font-weight:600">' + r.ticker + '</td>' +
-          '<td colspan="5" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">price not fetched this refresh</td></tr>';
+          '<td colspan="6" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">price not fetched this refresh</td></tr>';
       }
       const shTag = r.sharesChanged
         ? ' <span style="color:var(--color-text-tertiary);font-size:9px">(' + (Math.round(r.sharesThen * 100) / 100) + ' sh then)</span>'
         : '';
+
+      // Bench-alpha cell content
+      const benchInfo = _resolveBenchForRow(r.ticker);
+      let benchCell = '';
+      if (!benchInfo) {
+        benchCell = '<td style="padding:5px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px" title="No theme benchmark configured for this position">—</td>';
+      } else if (benchInfo.isSelf) {
+        benchCell = '<td style="padding:5px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px" title="This position IS its own theme benchmark, so α = 0 by construction">self (' + esc(benchInfo.benchTicker) + ')<br><span style="font-size:9px">α = 0</span></td>';
+      } else {
+        const ckey = _benchCacheKey(r.ticker, benchInfo.benchTicker, sl.tsPrev, sl.tsNow);
+        const cached = benchAlphaCache[ckey];
+        if (!cached) {
+          benchCell = '<td style="padding:5px 8px;text-align:right">' +
+            '<button onclick="triggerBenchAlphaFetch(\'' + r.ticker + '\',\'' + benchInfo.benchTicker + '\',\'' + sl.tsPrev + '\',\'' + sl.tsNow + '\')" style="background:transparent;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);padding:2px 8px;font-size:10px;border-radius:3px;cursor:pointer" title="Fetch ' + esc(benchInfo.benchTicker) + ' close for the window — one API call">fetch vs ' + esc(benchInfo.benchTicker) + '</button>' +
+          '</td>';
+        } else if (cached.pending) {
+          benchCell = '<td style="padding:5px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px;font-style:italic">fetching ' + esc(cached.benchTicker) + '…</td>';
+        } else if (cached.error) {
+          benchCell = '<td style="padding:5px 8px;text-align:right;font-size:10px">' +
+            '<span style="color:var(--color-text-danger)">' + esc(cached.benchTicker) + ' — ' + esc(cached.error) + '</span><br>' +
+            '<a href="javascript:void(0)" onclick="retryBenchAlphaFetch(\'' + r.ticker + '\',\'' + benchInfo.benchTicker + '\',\'' + sl.tsPrev + '\',\'' + sl.tsNow + '\')" style="font-size:9px;color:var(--color-text-info);text-decoration:underline">retry</a>' +
+          '</td>';
+        } else {
+          // Success: bench %, alpha pp, bar dates
+          const alphaPp = r.pctChange - cached.benchPct;
+          const benchSign = cached.benchPct >= 0 ? '+' : '';
+          const alphaSign = alphaPp >= 0 ? '+' : '';
+          const aColor = alphaPp >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+          const benchColor = cached.benchPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+          const bPrevD = cached.barPrevDate ? new Date(cached.barPrevDate).toLocaleDateString('en-US', {month:'numeric',day:'numeric'}) : '?';
+          const bNowD  = cached.barNowDate  ? new Date(cached.barNowDate).toLocaleDateString('en-US', {month:'numeric',day:'numeric'})  : '?';
+          const sourceTag = cached.fromHistory ? 'from your refresh history' : ('from Polygon daily close · bars ' + bPrevD + ' → ' + bNowD);
+          const tipText = esc(cached.benchTicker) + ': $' + cached.benchPrev.toFixed(2) + ' → $' + cached.benchNow.toFixed(2) + '\nyour window: ' + prevDateLbl + ' → ' + nowDateLbl + '\n' + sourceTag;
+          benchCell = '<td style="padding:5px 8px;text-align:right;font-size:10px" title="' + tipText + '">' +
+            '<div style="color:var(--color-text-secondary)">' + esc(cached.benchTicker) + ' <span style="color:' + benchColor + '">' + benchSign + cached.benchPct.toFixed(2) + '%</span></div>' +
+            '<div style="color:' + aColor + ';font-weight:600">α ' + alphaSign + alphaPp.toFixed(2) + 'pp</div>' +
+            '<div style="color:var(--color-text-tertiary);font-size:9px">bars ' + bPrevD + ' → ' + bNowD + '</div>' +
+          '</td>';
+        }
+      }
+
       return '<tr>' +
         '<td style="padding:5px 8px;font-weight:600">' + r.ticker + shTag + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">$' + r.pricePrev.toFixed(2) + '</td>' +
@@ -10564,6 +10638,7 @@ function renderPriceMoves() {
         '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.perShare) + '">' + (r.perShare >= 0 ? '+' : '') + '$' + Math.abs(r.perShare).toFixed(2) + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.moveOnPosition) + ';font-weight:600">' + (r.moveOnPosition >= 0 ? '+' : '−') + '$' + Math.abs(r.moveOnPosition).toFixed(2) + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:' + pColor(r.pctChange) + '">' + (r.pctChange >= 0 ? '+' : '') + r.pctChange.toFixed(2) + '%</td>' +
+        benchCell +
       '</tr>';
     }).join('');
 
@@ -10575,6 +10650,7 @@ function renderPriceMoves() {
       '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
       '<td style="padding:7px 8px;text-align:right;color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(2) + '</td>' +
       '<td style="padding:7px 8px;text-align:right;color:' + pColor(b.bookPct) + ';font-weight:600">' + (b.bookPct !== null ? (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%' : '—') + '</td>' +
+      '<td style="padding:7px 8px"></td>' +
     '</tr>';
 
     const vooLine = (b.vooPct !== null)
@@ -10584,19 +10660,16 @@ function renderPriceMoves() {
       ? '&nbsp;&nbsp;·&nbsp;&nbsp;<span style="color:var(--color-text-tertiary)">Book vs VOO:</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>'
       : '';
 
-    const tsLine = '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:6px">' +
-      fmtPmTs(sl.tsPrev) + ' &nbsp;→&nbsp; ' + fmtPmTs(sl.tsNow) +
-    '</div>';
-
-    body = tsLine +
+    body =
       '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
         '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
           '<th style="padding:4px 8px;text-align:left">Ticker</th>' +
-          '<th style="padding:4px 8px;text-align:right">Price then</th>' +
-          '<th style="padding:4px 8px;text-align:right">Price now</th>' +
-          '<th style="padding:4px 8px;text-align:right">Per share</th>' +
-          '<th style="padding:4px 8px;text-align:right">Your position</th>' +
-          '<th style="padding:4px 8px;text-align:right">%</th>' +
+          '<th style="padding:4px 8px;text-align:right" title="' + sl.tsPrev + '">Price ' + prevDateLbl + '</th>' +
+          '<th style="padding:4px 8px;text-align:right" title="' + sl.tsNow + '">Price ' + nowDateLbl + '</th>' +
+          '<th style="padding:4px 8px;text-align:right">Per-share Δ</th>' +
+          '<th style="padding:4px 8px;text-align:right">$ on your position</th>' +
+          '<th style="padding:4px 8px;text-align:right" title="Per-share price change as a percent">Price % change</th>' +
+          '<th style="padding:4px 8px;text-align:right" title="Theme benchmark over the same window. Click fetch on a row to compute. α = your row\'s Price % change minus the benchmark\'s % change, in percentage points (pp). Polygon daily-aggregate bars used for the benchmark — the bar dates appear under each result.">vs theme bench</th>' +
         '</tr></thead>' +
         '<tbody>' + rowHtml + bookRow + '</tbody>' +
       '</table>' +
@@ -10654,11 +10727,11 @@ function renderPriceMoves() {
       '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
         '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
           '<th style="padding:4px 8px;text-align:left">Ticker</th>' +
-          '<th style="padding:4px 8px;text-align:right">First seen</th>' +
-          '<th style="padding:4px 8px;text-align:right">Now</th>' +
-          '<th style="padding:4px 8px;text-align:right">Per share</th>' +
-          '<th style="padding:4px 8px;text-align:right" title="Current shares × price change since first seen. Price drift only — not realized gain.">Move on current shares</th>' +
-          '<th style="padding:4px 8px;text-align:right">% (price)</th>' +
+          '<th style="padding:4px 8px;text-align:right">First-seen price</th>' +
+          '<th style="padding:4px 8px;text-align:right">Latest price</th>' +
+          '<th style="padding:4px 8px;text-align:right">Per-share Δ</th>' +
+          '<th style="padding:4px 8px;text-align:right" title="Current shares × price change since first seen. Price drift only — not realized gain.">$ on current position</th>' +
+          '<th style="padding:4px 8px;text-align:right" title="Per-share price change as a percent">Price % change</th>' +
           '<th style="padding:4px 8px;text-align:right">Trend</th>' +
         '</tr></thead>' +
         '<tbody>' + rowHtml + bookRow + '</tbody>' +
@@ -11132,7 +11205,158 @@ function resetPriceHistory() {
 }
 
 // ─────────────────────────────────────────────
-// Price history capture — called at the end of refreshAllPrices() after prices
+// Benchmark alpha fetch — on-demand per-row "vs theme bench" computation.
+// One Polygon API call per click (wide-window daily-aggregates), pick bars
+// locally for tsPrev / tsNow. If the bench ticker is already in priceHistory
+// (you hold it directly), short-circuit and use that — no API call.
+// Result cached in benchAlphaCache, persisted via the save bundle.
+//
+// Cache key format: positionTicker|benchTicker|tsPrev|tsNow
+// Cache value: { benchTicker, benchPrev, benchNow, benchPct, barPrevDate,
+//                barNowDate, fetchedAt, fromHistory, error? }
+//
+// On 429: wait 15s, retry once. On final failure: cache an error entry so we
+// don't hammer Polygon. Cell shows a "retry" link the user can click.
+// ─────────────────────────────────────────────
+function _benchCacheKey(posTicker, benchTicker, tsPrev, tsNow) {
+  return (posTicker || '') + '|' + (benchTicker || '') + '|' + (tsPrev || '') + '|' + (tsNow || '');
+}
+
+// Pick most recent bar whose t (ms) is <= cutoff. Bars must be ascending by t.
+function _pickBarLE(bars, cutoffMs) {
+  let chosen = null;
+  for (const b of bars) {
+    if (b.t <= cutoffMs) chosen = b; else break;
+  }
+  return chosen;
+}
+
+async function fetchBenchAlphaForRow(posTicker, benchTicker, tsPrev, tsNow, pctChangeOfPos) {
+  const key = _benchCacheKey(posTicker, benchTicker, tsPrev, tsNow);
+  // Already cached (success or error) — nothing to do.
+  if (benchAlphaCache[key] && !benchAlphaCache[key].pending) return benchAlphaCache[key];
+  benchAlphaCache[key] = { pending: true, benchTicker };
+  if (typeof renderPriceMoves === 'function') renderPriceMoves();
+
+  let entry;
+  try {
+    // Path 1: bench ticker is already captured in priceHistory — use it.
+    const phSorted = [...priceHistory].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    const prev = phSorted[phSorted.length - 2];
+    const now  = phSorted[phSorted.length - 1];
+    const benchInPrev = prev && prev.prices && prev.prices[benchTicker];
+    const benchInNow  = now  && now.prices  && now.prices[benchTicker];
+    if (benchInPrev > 0 && benchInNow > 0) {
+      const benchPct = ((benchInNow - benchInPrev) / benchInPrev) * 100;
+      entry = {
+        benchTicker, benchPrev: benchInPrev, benchNow: benchInNow,
+        benchPct, fromHistory: true,
+        barPrevDate: prev.ts, barNowDate: now.ts,
+        fetchedAt: new Date().toISOString()
+      };
+      benchAlphaCache[key] = entry;
+      if (typeof scheduleSave === 'function') scheduleSave();
+      if (typeof renderPriceMoves === 'function') renderPriceMoves();
+      return entry;
+    }
+
+    // Path 2: Polygon fetch.
+    if (!polygonKey) {
+      entry = { benchTicker, error: 'No Polygon API key', fetchedAt: new Date().toISOString() };
+      benchAlphaCache[key] = entry;
+      if (typeof renderPriceMoves === 'function') renderPriceMoves();
+      return entry;
+    }
+    const tsPrevMs = new Date(tsPrev).getTime();
+    const tsNowMs  = new Date(tsNow).getTime();
+    function _toDateStr(ms) {
+      const d = new Date(ms);
+      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    }
+    const from = _toDateStr(tsPrevMs - 14 * 24 * 3600 * 1000);
+    const to   = _toDateStr(tsNowMs  + 1  * 24 * 3600 * 1000);
+    const url  = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(benchTicker)}/range/1/day/${from}/${to}?adjusted=true&sort=asc&limit=50&apiKey=${polygonKey}`;
+
+    let resp, data;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      resp = await fetch(url);
+      if (resp.status === 429 && attempt === 0) {
+        await new Promise(r => setTimeout(r, 15000));
+        continue;
+      }
+      break;
+    }
+    if (!resp.ok) {
+      entry = { benchTicker, error: 'HTTP ' + resp.status, fetchedAt: new Date().toISOString() };
+      benchAlphaCache[key] = entry;
+      if (typeof renderPriceMoves === 'function') renderPriceMoves();
+      return entry;
+    }
+    data = await resp.json();
+    const bars = data.results || [];
+    if (bars.length === 0) {
+      entry = { benchTicker, error: 'No bars returned', fetchedAt: new Date().toISOString() };
+      benchAlphaCache[key] = entry;
+      if (typeof renderPriceMoves === 'function') renderPriceMoves();
+      return entry;
+    }
+    const barPrev = _pickBarLE(bars, tsPrevMs);
+    const barNow  = _pickBarLE(bars, tsNowMs);
+    if (!barPrev || !barNow || !barPrev.c || !barNow.c) {
+      entry = { benchTicker, error: 'Could not resolve bars for window', fetchedAt: new Date().toISOString() };
+      benchAlphaCache[key] = entry;
+      if (typeof renderPriceMoves === 'function') renderPriceMoves();
+      return entry;
+    }
+    const benchPct = ((barNow.c - barPrev.c) / barPrev.c) * 100;
+    entry = {
+      benchTicker,
+      benchPrev: barPrev.c,
+      benchNow: barNow.c,
+      benchPct,
+      barPrevDate: new Date(barPrev.t).toISOString(),
+      barNowDate: new Date(barNow.t).toISOString(),
+      fromHistory: false,
+      fetchedAt: new Date().toISOString()
+    };
+    console.log('[benchAlpha] ' + posTicker + ' vs ' + benchTicker + ': bars ' +
+      new Date(barPrev.t).toLocaleDateString() + ' ($' + barPrev.c + ') → ' +
+      new Date(barNow.t).toLocaleDateString()  + ' ($' + barNow.c  + ')' +
+      ' = ' + benchPct.toFixed(2) + '%');
+  } catch (e) {
+    entry = { benchTicker, error: e.message || 'fetch failed', fetchedAt: new Date().toISOString() };
+  }
+  benchAlphaCache[key] = entry;
+  if (typeof scheduleSave === 'function') scheduleSave();
+  if (typeof renderPriceMoves === 'function') renderPriceMoves();
+  return entry;
+}
+
+// Public click handler invoked from inline onclick. We don't await — fire and
+// let the result trigger a re-render via fetchBenchAlphaForRow's renderPriceMoves call.
+function triggerBenchAlphaFetch(posTicker, benchTicker, tsPrev, tsNow) {
+  fetchBenchAlphaForRow(posTicker, benchTicker, tsPrev, tsNow);
+}
+function retryBenchAlphaFetch(posTicker, benchTicker, tsPrev, tsNow) {
+  const key = _benchCacheKey(posTicker, benchTicker, tsPrev, tsNow);
+  delete benchAlphaCache[key];
+  triggerBenchAlphaFetch(posTicker, benchTicker, tsPrev, tsNow);
+}
+
+// Resolve per-row bench info: returns { benchTicker, isSelf } or null if no bench available.
+// `position` is needed to read .theme. If multiple open positions exist for the same ticker
+// (different accounts) we use the first one's theme — these should agree.
+function _resolveBenchForRow(rowTicker) {
+  if (!rowTicker) return null;
+  const pos = positions.find(p => !p.closed && p.ticker && p.ticker.toUpperCase().trim() === rowTicker);
+  if (!pos || !pos.theme) return null;
+  const bench = (typeof getThemeBenchmark === 'function') ? getThemeBenchmark(pos.theme) : null;
+  if (!bench) return null;
+  const isSelf = bench.toUpperCase().trim() === rowTicker;
+  return { benchTicker: bench, isSelf, theme: pos.theme };
+}
+
+
 // have been applied. Lightweight per-refresh diary. Skips if zero prices were
 // captured (don't pollute history with empty rows from a failed fetch). Enforces
 // MAX_PRICE_HISTORY rolling cap via FIFO eviction.
