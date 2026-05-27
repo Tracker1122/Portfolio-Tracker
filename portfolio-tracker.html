@@ -4755,6 +4755,7 @@ function toggleThemeDrill(themeKey) {
 let intelSortKey = 'truePct';  // default sort: true exposure descending (biggest real risk on top)
 let intelSortDir = 'desc';
 let intelOpenKey = null;        // which theme row is currently expanded (one at a time)
+let distOpenKey = null;         // which Top Holdings full-table row is currently expanded
 let priceMovesView = 'sinceLast'; // 'sinceLast' or 'allTime' — view toggle for the price-moves panel
 
 function fmtDollarCompact(v) {
@@ -7153,6 +7154,62 @@ function computePortfolioDistribution(stocksOnly) {
 let distributionMode = 'stocks'; // 'stocks' (single tickers only) or 'funds' (show fund blocks)
 function setDistributionMode(m) { distributionMode = m; renderDistributionTab(); }
 
+// Toggle the per-row drill-down in the "Show all N rows" full table. Pass the
+// row id derived from the row's display name. One row open at a time — clicking
+// a new row collapses the previous. Clicking the same row again collapses it.
+function toggleDistRowDrill(rowId) {
+  distOpenKey = (distOpenKey === rowId) ? null : rowId;
+  renderDistributionTab();
+}
+
+// Build the expansion HTML for one row's source breakdown: a stacked bar
+// (Direct in blue, each "via fund" segment in green tints) + text rows
+// listing each source with $ and % of the name. Keeps "Direct = exact",
+// "via fund = approx" honesty in the labels.
+function buildDistRowDrill(row) {
+  const sources = row.sources || {};
+  const entries = Object.entries(sources)
+    .filter(([k, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return '';
+  const total = entries.reduce((s, [, v]) => s + v, 0);
+  // Direct gets the canonical blue; "via X" segments get green family.
+  // Multiple "via" funds need distinguishable shades — cycle through a green palette.
+  const greenShades = ['#34d399', '#10b981', '#059669', '#047857', '#065f46'];
+  let viaIdx = 0;
+  const segments = entries.map(([label, val]) => {
+    const isDirect = label === 'Direct';
+    const isVia = label.startsWith('via ');
+    const isCash = label === 'Cash';
+    const color = isDirect ? '#60a5fa'
+      : isCash ? 'var(--color-text-tertiary)'
+      : isVia ? greenShades[(viaIdx++) % greenShades.length]
+      : 'var(--color-text-secondary)';
+    const pct = (val / total) * 100;
+    const approxTag = isDirect ? 'exact' : (isVia ? 'approx' : '');
+    return { label, val, pct, color, approxTag };
+  });
+  // Stacked bar
+  const barH = 14;
+  const barSegs = segments.map(s =>
+    `<div title="${esc(s.label)}: ${fmtDollarWhole(s.val)} (${s.pct.toFixed(1)}%)" style="flex:${s.val};height:${barH}px;background:${s.color}"></div>`
+  ).join('');
+  // Text rows
+  const textRows = segments.map(s =>
+    `<div style="display:flex;align-items:center;gap:8px;font-size:10px;padding:2px 0">
+      <div style="width:10px;height:10px;background:${s.color};border-radius:2px;flex-shrink:0"></div>
+      <div style="flex:1;color:var(--color-text-secondary)">${esc(s.label)}${s.approxTag ? ` <span style="color:var(--color-text-tertiary);font-size:9px">· ${s.approxTag}</span>` : ''}</div>
+      <div style="color:var(--color-text-primary);font-weight:600;min-width:80px;text-align:right">${fmtDollarWhole(s.val)}</div>
+      <div style="color:var(--color-text-tertiary);min-width:50px;text-align:right">${s.pct.toFixed(1)}%</div>
+    </div>`
+  ).join('');
+  return `<tr style="background:var(--color-background-secondary)"><td colspan="4" style="padding:10px 16px;border-bottom:1px solid var(--color-border-tertiary)">
+    <div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:6px">How your <b style="color:var(--color-text-primary)">${esc(row.display)}</b> exposure breaks down — total ${fmtDollarWhole(total)}</div>
+    <div style="display:flex;width:100%;border-radius:3px;overflow:hidden;margin-bottom:8px">${barSegs}</div>
+    ${textRows}
+  </td></tr>`;
+}
+
 // SHARED split-bar renderer — used by BOTH the Distribution tab and the condensed dashboard
 // panel, so the two can't drift. Takes already-computed distribution rows (sorted desc by value),
 // the stocksOnly flag, and a pctOf(value)->% function. opts: { topN, labelWidth, barHeight,
@@ -7269,12 +7326,17 @@ function renderDistributionTab() {
   const distBody = rows.slice(0, 45).map(r => {
     const pct = (r.value / total) * 100;
     const src = stocksOnly ? srcLabel(r.sources) : Object.keys(r.sources).join(', ');
-    return `<tr>
-      <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
+    const rowId = qrNormTicker(r.display) || ('row' + Math.abs(r.display.length));
+    const isOpen = (distOpenKey === rowId);
+    const caret = isOpen ? '⌄' : '›';
+    const rowBg = isOpen ? 'background:var(--color-background-secondary);' : '';
+    const drill = isOpen ? buildDistRowDrill(r) : '';
+    return `<tr style="cursor:pointer;${rowBg}" onmouseover="this.style.background='var(--color-background-tertiary)'" onmouseout="this.style.background='${isOpen ? 'var(--color-background-secondary)' : ''}'" onclick="toggleDistRowDrill('${rowId}')" title="Click to see the source breakdown">
+      <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)"><span style="color:var(--color-text-tertiary);margin-right:4px;font-size:9px">${caret}</span>${esc(r.display)}</td>
       <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.value)}</td>
       <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${pct.toFixed(1)}%</td>
       <td style="padding:3px 8px;font-size:10px;color:var(--color-text-tertiary)">${esc(src)}</td>
-    </tr>`;
+    </tr>${drill}`;
   }).join('');
 
   // Remainder lines (stocks-only): permanent VOO tail + temporary un-pasted-ETF to-do.
@@ -7357,7 +7419,7 @@ function renderDistributionTab() {
     <div class="section-heading">${stocksOnly ? 'Top holdings — by company' : 'Top holdings — look-through'}</div>
     ${barLegend}
     <div style="margin:8px 0 18px">${barRows || '<div style="font-size:11px;color:var(--color-text-tertiary)">No holdings to chart.</div>'}</div>
-    <details style="margin-bottom:20px">
+    <details style="margin-bottom:20px"${distOpenKey ? ' open' : ''}>
       <summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;padding:4px 0">Show all ${rows.length} rows (full table with values + source) ▾</summary>
       <div style="overflow-x:auto;margin-top:8px">
         <table style="width:100%;border-collapse:collapse;font-size:11px">
