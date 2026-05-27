@@ -1043,7 +1043,7 @@
     <button class="tab-btn active" onclick="switchTab('dashboard')">Home</button>
     <button class="tab-btn" onclick="switchTab('distribution')">True Exposure</button>
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
-    <button class="tab-btn" onclick="switchTab('themes')">Industry Overview</button>
+    <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
     <button class="tab-btn" onclick="switchTab('quality')">New Position Evaluation</button>
     <button class="tab-btn" onclick="switchTab('rebalance')">Tax and Balance Impact</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
@@ -14290,8 +14290,8 @@ function renderThemeUniverse() {
   }).join('');
 
   el.innerHTML = `
-    <details>
-      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:8px;list-style:none">▸ Theme universe — benchmark performance &amp; your exposure <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(click to expand)</span></summary>
+    <details open>
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:8px;list-style:none">▾ Theme universe — benchmark performance &amp; your exposure <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(click to collapse)</span></summary>
     <div style="margin-bottom:14px;padding:10px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
       <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span>
       <strong style="color:var(--color-text-primary)">Awareness surface, not recommendation.</strong>
@@ -15294,7 +15294,7 @@ function renderThemeDiscovery() {
 }
 
 // ─────────────────────────────────────────────
-// BOOK-LEVEL AI REVIEW (Industry Overview tab)
+// BOOK-LEVEL AI REVIEW (Theme Level Review tab)
 // A one-shot AI read of the WHOLE book, reusing the quality-tab transport/error/cost machinery. Two
 // jobs: (1) verbalize what's already visible in the structure, (2) surface gaps/blind spots — and
 // judge the user's ≤5 SELECTED discovery tickers AS HYPOTHESES against those gaps (they may fit a thin
@@ -15836,7 +15836,7 @@ function renderThemeUniverseDashTile() {
   // Check if we have any returns data; if not, prompt to backfill
   const hasAnyData = top.some(t => t.returns['1y'] !== null);
   if (!hasAnyData) {
-    el.innerHTML = `<div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0;line-height:1.5">No benchmark data yet. Click <strong>Backfill Theme Universe</strong> in the Industry Overview tab to populate.</div>`;
+    el.innerHTML = `<div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0;line-height:1.5">No benchmark data yet. Click <strong>Backfill Theme Universe</strong> in the Theme Level Review tab to populate.</div>`;
     return;
   }
 
