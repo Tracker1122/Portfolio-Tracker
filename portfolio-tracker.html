@@ -4918,12 +4918,27 @@ function renderThemeIntel() {
     const color = THEME_COLORS[r.theme] || '#94a3b8';
     const wtActive = concTag(r.allocPct, avgAllocPct);   // your picks (active allocation)
     const wtTrue = concTag(r.truePct, avgTruePct);        // real <theme> risk (true exposure)
-    const pk = picksTag(r.verdictAlpha, r.verdictN);
     const tickersLine = r.d.tickers.slice(0, 6).join(' · ') + (r.d.tickers.length > 6 ? ' +' + (r.d.tickers.length - 6) : '');
     const truePrefix = r.hasEmbedded ? '≥' : '';
     const incidPrefix = r.incidentalFloor ? '≥' : '';
     const alphaStr = r.verdictAlpha === null ? '—' : (r.verdictAlpha >= 0 ? '+' : '') + fmtDollarCompact(r.verdictAlpha);
     const alphaColor = r.verdictAlpha === null ? 'var(--color-text-tertiary)' : r.verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    // Theme-α ($ vs the theme benchmark) + beat-count, matured-aware — same set as the deep-dive card,
+    // surfaced on the collapsed row so the stock-picking result is visible pre-click.
+    const _nowIntel = Date.now();
+    const rowThemeAlphaSet = positions.filter(p => {
+      if (p.closed || p.theme !== r.theme) return false;
+      if (!industryAlphaMatureOnly) return true;
+      if (!p.dateBought) return false;
+      const b = new Date(p.dateBought); if (isNaN(b)) return false;
+      return Math.floor((_nowIntel - b.getTime()) / 86400000) >= MATURITY_DAYS;
+    }).map(p => calcThemeAlpha(p)).filter(ta => ta !== null);
+    const rowThemeAlpha = rowThemeAlphaSet.length > 0 ? rowThemeAlphaSet.reduce((s, ta) => s + ta.themeAlphaDollar, 0) : null;
+    const rowBeating = rowThemeAlphaSet.filter(ta => ta.themeAlphaDollar > 0).length;
+    const rowBeatTotal = rowThemeAlphaSet.length;
+    const rowThemeAlphaStr = rowThemeAlpha === null ? '—' : (rowThemeAlpha >= 0 ? '+' : '') + fmtDollarCompact(rowThemeAlpha);
+    const rowThemeAlphaColor = rowThemeAlpha === null ? 'var(--color-text-tertiary)' : rowThemeAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const rowBeatColor = rowBeatTotal === 0 ? 'var(--color-text-tertiary)' : rowBeating === rowBeatTotal ? 'var(--color-text-success)' : rowBeating === 0 ? 'var(--color-text-danger)' : '#fbbf24';
     return `<div class="intel-row" data-key="${themeKey}" onclick="toggleIntelRow('${themeKey}')" style="display:grid;grid-template-columns:1.6fr 0.6fr 0.6fr 0.6fr 0.6fr 3.6fr 0.8fr;gap:0;align-items:center;padding:8px 10px;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer">
       <div>
         <div style="display:flex;align-items:center;gap:7px"><span style="width:9px;height:9px;border-radius:2px;background:${color};flex-shrink:0"></span><span style="font-weight:500">${esc(r.theme)}</span><span class="intel-caret" id="caret-${themeKey}" style="color:var(--color-text-tertiary);font-size:13px">›</span></div>
@@ -4937,7 +4952,7 @@ function renderThemeIntel() {
         <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">your picks</span><span style="font-size:9px;color:${wtActive.fg};font-weight:500;white-space:nowrap">${r.allocPct.toFixed(1)}% of sleeve</span></div>
         <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};font-weight:500;white-space:nowrap">${truePrefix}${r.truePct.toFixed(1)}% of portfolio <span style="color:var(--color-text-tertiary);font-weight:400">incl. pass-through</span></span></div>
       </div>
-      <div style="text-align:center"><span style="font-size:9px;color:${pk.fg};font-weight:500">${pk.label}</span></div>
+      <div style="text-align:center;display:flex;flex-direction:column;gap:1px;align-items:center"><span style="font-size:11px;font-weight:600;color:${rowThemeAlphaColor}">${rowThemeAlphaStr}</span><span style="font-size:8px;font-weight:500;color:${rowBeatColor}">${rowBeatTotal === 0 ? 'no matured' : rowBeating + '/' + rowBeatTotal + ' beating'}</span></div>
     </div>
     <div class="intel-drill" id="intel-drill-${themeKey}" style="display:none">${renderIntelDeepDive(r, totalValue, grandTotal)}</div>`;
   }).join('');
@@ -4962,7 +4977,7 @@ function renderThemeIntel() {
       ${hdr('incidental', 'Incidental', '% via funds only · pass-through', 'right')}
       ${hdr('alpha', 'Dollar alpha', 'vs SPX', 'right')}
       <div style="text-align:center">Concentration<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">your picks vs real (pass-through) risk</div></div>
-      <div style="text-align:center">Stock-picking<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">your names vs SPX</div></div>
+      <div style="text-align:center">Stock-picking<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">$ vs theme · how many beating</div></div>
     </div>
     ${tableRows}
     ${footnote}`;
@@ -5039,19 +5054,19 @@ function renderIntelDeepDive(r, totalValue, grandTotal) {
 
   const dollarAlphaColor = r.verdictAlpha === null ? 'var(--color-text-tertiary)' : r.verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
   const glColor = r.d.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-  const stats = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px" title="Your ${esc(r.theme)} picks' return minus what the S&P 500 would have returned on the same capital. Measures these picks vs the broad market."><div style="font-size:9px;color:var(--color-text-tertiary)">Your ${esc(r.theme)} picks vs S&amp;P${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${dollarAlphaColor}">${r.verdictAlpha !== null ? fmtDollarWhole(r.verdictAlpha) : '—'}</div></div>
-      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px"><div style="font-size:9px;color:var(--color-text-tertiary)">G/L · ${r.d.positions} pos</div><div style="font-size:13px;font-weight:500;color:${glColor}">${fmtDollarWhole(r.d.gl)}</div></div>
-    </div>`;
 
   const divergeNote = lensDiverge ? `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-top:10px;line-height:1.45">Two lenses disagree: ${r.verdictAlpha >= 0 ? 'ahead of the S&P' : 'behind the S&P'} but ${themeAlphaTotal >= 0 ? 'ahead of' : 'behind'} ${bench || 'the sector'}. ${r.verdictAlpha >= 0 && themeAlphaTotal < 0 ? 'The broad market lifted it; your pick still trails its hotter sector.' : 'Your pick beat its sector but the broad market did better.'}</div>` : '';
 
   return `<div style="background:var(--color-background-secondary);border-radius:0 0 var(--border-radius-md) var(--border-radius-md);border-left:3px solid ${color};padding:12px 14px 14px">
-    <div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 12px">${fmtBenchmarkLine(r.theme)}</div>
+    <div style="display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;margin:2px 0 12px">
+      <div style="font-size:11px;color:var(--color-text-secondary)">${fmtBenchmarkLine(r.theme)}</div>
+      <div style="display:flex;gap:18px;align-items:baseline;margin-left:auto">
+        <div title="Your ${esc(r.theme)} picks' return minus what the S&P 500 would have returned on the same capital. Measures these picks vs the broad market."><span style="font-size:9px;color:var(--color-text-tertiary)">vs S&amp;P${matSuffix}: </span><span style="font-size:12px;font-weight:600;color:${dollarAlphaColor}">${r.verdictAlpha !== null ? fmtDollarWhole(r.verdictAlpha) : '—'}</span></div>
+        <div><span style="font-size:9px;color:var(--color-text-tertiary)">G/L · ${r.d.positions} pos: </span><span style="font-size:12px;font-weight:600;color:${glColor}">${fmtDollarWhole(r.d.gl)}</span></div>
+      </div>
+    </div>
     ${lenses}
     ${buildup}
-    ${stats}
     ${divergeNote}
   </div>`;
 }
