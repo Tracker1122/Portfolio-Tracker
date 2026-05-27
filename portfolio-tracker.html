@@ -2677,6 +2677,8 @@ async function loadPositions() {
     }
   } catch(e) { /* no closed positions yet */ }
 
+  // (Theme rename migration runs below via migrateThemeTags, after all stores load.)
+
   try {
     const ledgerRes = localStorage.getItem('portfolio-ledger');
     if (ledgerRes) {
@@ -13622,7 +13624,7 @@ const SLEEVE_COLORS = {
 const THEME_COLORS = {
   'AI Infrastructure': '#a78bfa',
   'Semiconductors':    '#60a5fa',
-  'Big Tech':          '#38bdf8',
+  'Mag 7-ish':         '#38bdf8',
   'Cybersecurity':     '#f472b6',
   'Financials':        '#4ade80',
   'Energy & Grid':     '#facc15',
@@ -13659,7 +13661,7 @@ const THEME_COLORS = {
 // all derive from this config.
 const THEMES = {
   // ─── existing themes (you typically have positions here) ───
-  'Big Tech':          { benchmark: 'QQQ',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
+  'Mag 7-ish':         { benchmark: 'QQQ',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
   'Semiconductors':    { benchmark: 'SMH',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
   'AI Infrastructure': { benchmark: 'SMH',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
   'Cybersecurity':     { benchmark: 'CIBR', inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
@@ -13689,7 +13691,8 @@ const THEME_RENAMES = {
   'Biotech & Health':      'Healthcare',
   'Real Estate / REITs':   'Real Estate',
   'Bonds / Treasuries':    'Bonds',
-  'Fixed Income':          'Bonds'
+  'Fixed Income':          'Bonds',
+  'Big Tech':              'Mag 7-ish'
 };
 
 // Apply theme renames to a theme string. Returns canonical name or original if no rename.
@@ -18007,6 +18010,7 @@ function importData(input) {
       const data = JSON.parse(e.target.result);
       if (!data.positions) { alert('Invalid data file.'); return; }
       positions = data.positions;
+      migrateThemeTags();
       nextId = data.nextId || positions.length + 1;
       if (data.spxLive) spxLive = data.spxLive;
       if (data.spxLiveDate) spxLiveDate = data.spxLiveDate;
@@ -18069,9 +18073,9 @@ function importData(input) {
 // Baked-in defaults for tickers seen in user's portfolio.
 // Values MUST match the THEMES dropdown keys and SLEEVES array exactly.
 const TICKER_DEFAULT_TAGS = {
-  // Big Tech
-  'AAPL': { theme: 'Big Tech',          sleeve: 'Quality' },
-  'MSFT': { theme: 'Big Tech',          sleeve: 'Quality' },
+  // Mag 7-ish
+  'AAPL': { theme: 'Mag 7-ish',          sleeve: 'Quality' },
+  'MSFT': { theme: 'Mag 7-ish',          sleeve: 'Quality' },
   // AI / Semiconductors
   'NVDA': { theme: 'AI Infrastructure', sleeve: 'Thesis Plays' },
   // Financials
@@ -19528,6 +19532,7 @@ async function executeRestore() {
 
     // Apply data — mirrors importData()
     positions = data.positions || [];
+    migrateThemeTags();
     nextId = data.nextId || positions.length + 1;
     if (data.spxLive) spxLive = data.spxLive;
     if (data.spxLiveDate) spxLiveDate = data.spxLiveDate;
@@ -19657,11 +19662,11 @@ async function init() {
   // reverting on next load.
   // ─────────────────────────────────────────────
   const tickerThemeMap = {
-    'AAPL': 'Big Tech', 'MS': 'Financials', 'NVDA': 'Semiconductors',
+    'AAPL': 'Mag 7-ish', 'MS': 'Financials', 'NVDA': 'Semiconductors',
     'WMB': 'Energy & Grid', 'BRK-B': 'Financials',
-    'AMZN': 'Big Tech', 'CRWV': 'AI Infrastructure', 'GLD': 'Commodities',
-    'GRID': 'Energy & Grid', 'MSFT': 'Big Tech', 'NFLX': 'Consumer Discretionary',
-    'ORCL': 'Big Tech', 'RKLB': 'Space & Defense', 'SMH': 'Semiconductors',
+    'AMZN': 'Mag 7-ish', 'CRWV': 'AI Infrastructure', 'GLD': 'Commodities',
+    'GRID': 'Energy & Grid', 'MSFT': 'Mag 7-ish', 'NFLX': 'Consumer Discretionary',
+    'ORCL': 'Mag 7-ish', 'RKLB': 'Space & Defense', 'SMH': 'Semiconductors',
     'SOFI': 'Financials', 'V': 'Financials', 'PANW': 'Cybersecurity',
     'CRWD': 'Cybersecurity', 'AXP': 'Financials', 'NASA': 'Space & Defense',
     'DRAM': 'AI Infrastructure'
