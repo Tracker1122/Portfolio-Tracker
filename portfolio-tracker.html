@@ -10268,12 +10268,23 @@ function renderSleeveValueAdd() {
       const gColor = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
       return `<div class="tip-row"><span class="tip-ticker">${esc(t.ticker)}</span><span class="tip-val" style="color:var(--color-text-primary)">${fmtDollarWhole(t.value)}</span><span class="tip-val" style="color:${gColor}">G/L ${fmtDollarWhole(t.gl)}</span><span class="tip-val" style="color:${aColor}">α ${t.alpha !== null ? fmtDollarWhole(t.alpha) : '—'}</span></div>`;
     }).join('');
+    // Inline Top-5 list shown permanently at the bottom of the card (the hover tooltip was unreliable
+    // and floated over other sections, so the same info lives here instead).
+    const inlineHoldings = top5.length === 0
+      ? '<div style="font-size:9px;color:var(--color-text-tertiary)">No positions</div>'
+      : top5.map(t => {
+          const aColor = t.alpha === null ? 'var(--color-text-tertiary)' : t.alpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+          const gColor = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+          return `<div style="display:flex;align-items:baseline;gap:10px;font-size:10px;padding:1px 0">
+            <span style="font-weight:700;min-width:48px">${esc(t.ticker)}</span>
+            <span style="color:var(--color-text-primary);min-width:78px;text-align:right">${fmtDollarWhole(t.value)}</span>
+            <span style="color:${gColor};min-width:84px;text-align:right">G/L ${fmtDollarWhole(t.gl)}</span>
+            <span style="color:${aColor};text-align:right">α ${t.alpha !== null ? fmtDollarWhole(t.alpha) : '—'}</span>
+          </div>`;
+        }).join('');
 
     return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${color};border-radius:var(--border-radius-lg);padding:12px;cursor:default"
-      data-sleeve="${sleeveKey}"
-      onmouseenter="showSleeveTooltip(event,'${sleeveKey}')"
-      onmousemove="positionTooltip(event)"
-      onmouseleave="document.getElementById('bar-tooltip').classList.remove('visible')">
+      data-sleeve="${sleeveKey}">
       <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">${sleeve}</div>
       <div style="font-size:12px;font-weight:700;color:${v.color};margin-bottom:6px">${v.text}</div>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.45;margin-bottom:10px">${v.detail}</div>
@@ -10309,6 +10320,10 @@ function renderSleeveValueAdd() {
       </div>
 
       ${soakPct > 0 && sleeve !== 'Portfolio Balance Plays' ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;font-style:italic">${soakPct.toFixed(0)}% of capital still in ${SLEEVE_SOAK[sleeve]}-day soak</div>` : ''}
+      <div style="border-top:1px solid var(--color-border-tertiary);padding-top:8px;margin-top:8px">
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Top 5 by value</div>
+        ${inlineHoldings}
+      </div>
       <div id="sleeve-tip-${sleeveKey}" style="display:none" data-title="${sleeve}" data-color="${color}" data-rows="${esc(tooltipRows)}"></div>
     </div>`;
   }).join('');
