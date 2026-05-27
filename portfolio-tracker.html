@@ -5060,7 +5060,7 @@ function renderIntelDeepDive(r, totalValue, grandTotal) {
   return `<div style="background:var(--color-background-secondary);border-radius:0 0 var(--border-radius-md) var(--border-radius-md);border-left:3px solid ${color};padding:12px 14px 14px">
     <div style="display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;margin:2px 0 12px">
       <div style="font-size:11px;color:var(--color-text-secondary)">${fmtBenchmarkLine(r.theme)}</div>
-      <div style="display:flex;gap:18px;align-items:baseline;margin-left:auto">
+      <div style="display:flex;gap:18px;align-items:baseline">
         <div title="Your ${esc(r.theme)} picks' return minus what the S&P 500 would have returned on the same capital. Measures these picks vs the broad market."><span style="font-size:9px;color:var(--color-text-tertiary)">vs S&amp;P${matSuffix}: </span><span style="font-size:12px;font-weight:600;color:${dollarAlphaColor}">${r.verdictAlpha !== null ? fmtDollarWhole(r.verdictAlpha) : '—'}</span></div>
         <div><span style="font-size:9px;color:var(--color-text-tertiary)">G/L · ${r.d.positions} pos: </span><span style="font-size:12px;font-weight:600;color:${glColor}">${fmtDollarWhole(r.d.gl)}</span></div>
       </div>
