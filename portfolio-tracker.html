@@ -5006,12 +5006,17 @@ function renderIntelDeepDive(r, totalValue, grandTotal) {
     return Math.floor((_now - b.getTime()) / 86400000) >= MATURITY_DAYS;
   }).map(p => calcThemeAlpha(p)).filter(ta => ta !== null);
   const themeAlphaTotal = themeAlphaSet.length > 0 ? themeAlphaSet.reduce((s, ta) => s + ta.themeAlphaDollar, 0) : null;
+  const themeBeating = themeAlphaSet.filter(ta => ta.themeAlphaDollar > 0).length;
+  const themeBeatTotal = themeAlphaSet.length;
   const lensDiverge = r.verdictAlpha !== null && themeAlphaTotal !== null
     && Math.sign(r.verdictAlpha) !== Math.sign(themeAlphaTotal)
     && Math.abs(r.verdictAlpha) > 100 && Math.abs(themeAlphaTotal) > 100;
 
+  const themeAlphaCardColor = themeAlphaTotal === null ? 'var(--color-text-tertiary)' : themeAlphaTotal >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+  const beatColor = themeBeatTotal === 0 ? 'var(--color-text-tertiary)' : themeBeating === themeBeatTotal ? 'var(--color-text-success)' : themeBeating === 0 ? 'var(--color-text-danger)' : '#fbbf24';
+  const matSuffix = industryAlphaMatureOnly ? ' (≥' + MATURITY_DAYS + 'd)' : '';
   const lenses = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
       <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px">
         <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Allocation <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--color-text-tertiary)">· direct picks only</span></div>
         <div style="font-size:22px;font-weight:500;line-height:1.1">${r.allocPct.toFixed(1)}<span style="font-size:14px">%</span></div>
@@ -5024,16 +5029,19 @@ function renderIntelDeepDive(r, totalValue, grandTotal) {
         <div style="font-size:10px;color:var(--color-text-secondary);margin-top:2px">of your whole portfolio <span style="color:var(--color-text-tertiary)">· incl. pass-through</span></div>
         <div style="font-size:10px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.4">How much ${esc(r.theme.toLowerCase())} you actually own across your ENTIRE portfolio — your direct picks PLUS your share of ${esc(r.theme.toLowerCase())} names sitting inside funds you hold (e.g. VOO). The real risk you carry, however it got there.${truePrefix ? ' Shown as ≥ because VOO\'s pasted holdings are partial — your true total is at least this.' : ''}</div>
       </div>
+      <div style="background:var(--color-background-primary);border:0.5px solid #60a5fa;border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);padding:10px 12px">
+        <div style="font-size:10px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Stock-picking · vs ${bench ? esc(bench) : 'theme'} <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--color-text-tertiary)">· $ alpha${matSuffix}</span></div>
+        <div style="font-size:22px;font-weight:500;line-height:1.1;color:${themeAlphaCardColor}">${themeAlphaTotal === null ? '—' : (themeAlphaTotal >= 0 ? '+' : '') + fmtDollarWhole(themeAlphaTotal)}</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);margin-top:2px"><span style="color:${beatColor};font-weight:600">${themeBeatTotal === 0 ? 'no matured names' : themeBeating + '/' + themeBeatTotal + ' beating'}</span></div>
+        <div style="font-size:10px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.4">Whether your ${esc(r.theme.toLowerCase())} picks beat just owning ${bench ? esc(bench) : 'the sector ETF'} over the same period — the test of the stock-picking itself, separate from how big the bet is.</div>
+      </div>
     </div>`;
 
   const dollarAlphaColor = r.verdictAlpha === null ? 'var(--color-text-tertiary)' : r.verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-  const themeAlphaColor = themeAlphaTotal === null ? 'var(--color-text-tertiary)' : themeAlphaTotal >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
   const glColor = r.d.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-  const matSuffix = industryAlphaMatureOnly ? ' (≥' + MATURITY_DAYS + 'd)' : '';
   const stats = `
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px" title="Your ${esc(r.theme)} picks' return minus what the S&P 500 would have returned on the same capital. Measures these picks vs the broad market."><div style="font-size:9px;color:var(--color-text-tertiary)">Your ${esc(r.theme)} picks vs S&amp;P${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${dollarAlphaColor}">${r.verdictAlpha !== null ? fmtDollarWhole(r.verdictAlpha) : '—'}</div></div>
-      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px" title="Your ${esc(r.theme)} picks' return minus the ${bench ? esc(bench) + ' sector benchmark' : 'sector benchmark'} over the same window. Measures whether picking individual ${esc(r.theme.toLowerCase())} names beat just buying the sector ETF."><div style="font-size:9px;color:var(--color-text-tertiary)">Your ${esc(r.theme)} picks vs ${bench ? esc(bench) : 'sector'}${matSuffix}</div><div style="font-size:13px;font-weight:500;color:${themeAlphaColor}">${themeAlphaTotal === null ? '—' : (themeAlphaTotal >= 0 ? '+' : '') + fmtDollarWhole(themeAlphaTotal)}</div></div>
       <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px"><div style="font-size:9px;color:var(--color-text-tertiary)">G/L · ${r.d.positions} pos</div><div style="font-size:13px;font-weight:500;color:${glColor}">${fmtDollarWhole(r.d.gl)}</div></div>
     </div>`;
 
