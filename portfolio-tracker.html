@@ -15063,7 +15063,7 @@ async function deepFetchSelected() {
   const names = [...discoverySelected];
   if (!names.length) return;
   const btn = document.getElementById('disc-deep-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Diving…'; }
 
   const funds = [...new Set(names.map(n => discoverySourceFund[n]).filter(Boolean).map(f => f.toUpperCase()))];
 
@@ -15095,8 +15095,18 @@ async function deepFetchSelected() {
       }
     });
   }
-  if (btn) { btn.disabled = false; btn.textContent = `🔄 Refresh ${names.length} selected (latest + deeper windows)`; }
+  if (btn) { btn.disabled = false; btn.textContent = `🔄 Deeper dive ${names.length} (latest + 3M/6M/YTD)`; }
   renderDiscoveryFetchStatus({ names: names.length, funds: funds.length, nameMiss, benchMiss, rateMiss, noKey, deep: true });
+  // Auto-expand the detail panel for each name we just dove into, so the deeper data is visible
+  // without hunting for the 📊 on each chip. "Ensure open" (not toggle) so a panel already open
+  // stays open rather than flipping shut. Only names with real data expand; misses are left collapsed
+  // (their panel would just say "not fetched", which adds noise after a run that tried to fetch them).
+  names.forEach(key => {
+    const p = discoveryPerf[key];
+    if (!p || p === 'loading' || (p && p.err) || typeof p !== 'object') return; // skip misses/thin names
+    const slot = document.querySelector(`[data-detail-slot="${CSS.escape(key)}"]`);
+    if (slot && slot.style.display === 'none') toggleDiscoveryDetail(key); // open only if currently hidden
+  });
 }
 
 // Explicit post-batch status. Loud about rate failures (the user asked for no silent rate misses) and
@@ -15633,7 +15643,7 @@ function renderThemeDiscovery() {
         <span style="font-size:10px;color:var(--color-text-primary);font-weight:600">${discoverySelected.size} of ${DISCOVERY_MAX_SELECT} selected:</span>
         <span style="font-size:9px;color:var(--color-text-tertiary)">${[...discoverySelected].map(esc).join(', ')}</span>
         <button id="disc-fetch-btn" class="btn btn-sm btn-primary" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:auto">↡ Fetch ${discoverySelected.size} selected (1M + 1Y)</button>
-        <button id="disc-deep-btn" class="btn btn-sm" onclick="deepFetchSelected()" title="Force-refresh these names: re-pulls current prices (even if already cached) and the deeper windows (3M / 6M / YTD), all shown in each name's 📊 detail. Free extra windows from the same call — no added API cost. ~5 names + funds fit under the rate limit." style="font-size:9px">🔄 Refresh ${discoverySelected.size} (latest + deeper windows)</button>
+        <button id="disc-deep-btn" class="btn btn-sm" onclick="deepFetchSelected()" title="Force-refresh these names: re-pulls current prices (even if already cached) and the deeper windows (3M / 6M / YTD), all shown in each name's 📊 detail. Free extra windows from the same call — no added API cost. ~5 names + funds fit under the rate limit." style="font-size:9px">🔄 Deeper dive ${discoverySelected.size} (latest + 3M/6M/YTD)</button>
         <button class="btn btn-sm" onclick="discoverySelected.clear();saveDiscoveryCache();renderThemeDiscovery();renderThemeAiReview()" style="font-size:9px">Clear</button>
         <div style="flex-basis:100%;font-size:8px;color:var(--color-text-tertiary);line-height:1.45">These ${discoverySelected.size} selected name${discoverySelected.size === 1 ? '' : 's'} ${discoverySelected.size === 1 ? 'is' : 'are'} the candidate set the <strong>AI book review</strong> (below) screens against your gaps. 📊 on any fetched chip shows its full window set — no new API call. Selection survives refresh.</div>
         <div id="disc-fetch-status" style="flex-basis:100%;margin-top:2px"></div>
