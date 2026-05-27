@@ -4935,7 +4935,7 @@ function renderThemeIntel() {
       <div style="text-align:right;color:${alphaColor}">${alphaStr}</div>
       <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-end">
         <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">your picks</span><span style="font-size:9px;color:${wtActive.fg};font-weight:500;white-space:nowrap">${r.allocPct.toFixed(1)}% of sleeve</span></div>
-        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};font-weight:500;white-space:nowrap">${truePrefix}${r.truePct.toFixed(1)}% of portfolio</span></div>
+        <div style="display:flex;gap:5px;align-items:center"><span style="font-size:8px;color:var(--color-text-tertiary)">real ${esc(themeShort(r.theme))} risk</span><span style="font-size:9px;color:${wtTrue.fg};font-weight:500;white-space:nowrap">${truePrefix}${r.truePct.toFixed(1)}% of portfolio <span style="color:var(--color-text-tertiary);font-weight:400">incl. pass-through</span></span></div>
       </div>
       <div style="text-align:center"><span style="font-size:9px;color:${pk.fg};font-weight:500">${pk.label}</span></div>
     </div>
@@ -4957,12 +4957,12 @@ function renderThemeIntel() {
     </div>
     <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:1.8fr 0.7fr 0.7fr 0.7fr 0.7fr 2.7fr 0.8fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
       ${hdr('theme', 'Theme &amp; positions', '', 'left')}
-      ${hdr('alloc', 'Alloc', '% sleeve', 'right')}
-      ${hdr('truePct', 'True exp', '% port', 'right')}
-      ${hdr('incidental', 'Incid.', '% port', 'right')}
-      ${hdr('alpha', 'Alpha', 'vs SPX', 'right')}
-      <div style="text-align:center">Concentration<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">picks vs real risk</div></div>
-      <div style="text-align:center">Stock-picking<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">vs SPX</div></div>
+      ${hdr('alloc', 'Allocation', '% of active sleeve', 'right')}
+      ${hdr('truePct', 'True exposure', '% of portfolio · incl. pass-through', 'right')}
+      ${hdr('incidental', 'Incidental', '% via funds only · pass-through', 'right')}
+      ${hdr('alpha', 'Dollar alpha', 'vs SPX', 'right')}
+      <div style="text-align:center">Concentration<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">your picks vs real (pass-through) risk</div></div>
+      <div style="text-align:center">Stock-picking<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">your names vs SPX</div></div>
     </div>
     ${tableRows}
     ${footnote}`;
@@ -7145,7 +7145,7 @@ function renderDistributionBars(rows, stocksOnly, pctOf, opts) {
       segments = `<div style="width:${dPct.toFixed(1)}%;background:${COL_DIRECT};height:100%"></div><div style="width:${vPct.toFixed(1)}%;background:${COL_VIA};height:100%"></div>`;
       const directLine = `<span style="color:${COL_DIRECT}">■</span> Direct: ${fmtDollarWhole(direct)} (${Math.round(dPct)}%) <span style="color:var(--color-text-tertiary)">· exact</span>`;
       const viaLine = `<span style="color:${COL_VIA}">■</span> Inside funds: ${fmtDollarWhole(via)} (${Math.round(vPct)}%) <span style="color:var(--color-text-tertiary)">· approx</span>`;
-      tip = `<div class="dist-bar-tip"><div style="font-weight:700;margin-bottom:3px;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio)</div><div>${directLine}</div><div>${viaLine}</div></div>`;
+      tip = `<div class="dist-bar-tip"><div style="font-weight:700;margin-bottom:3px;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio · incl. pass-through)</div><div>${directLine}</div><div>${viaLine}</div></div>`;
     } else {
       segments = `<div style="width:100%;background:${COL_DIRECT};height:100%"></div>`;
       tip = `<div class="dist-bar-tip"><div style="font-weight:700;color:var(--color-text-primary)">${esc(r.display)} — ${fmtDollarWhole(r.value)} (${p.toFixed(1)}% of portfolio)</div></div>`;
