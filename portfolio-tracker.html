@@ -4924,7 +4924,7 @@ function renderThemeIntel() {
     const incidPrefix = r.incidentalFloor ? '≥' : '';
     const alphaStr = r.verdictAlpha === null ? '—' : (r.verdictAlpha >= 0 ? '+' : '') + fmtDollarCompact(r.verdictAlpha);
     const alphaColor = r.verdictAlpha === null ? 'var(--color-text-tertiary)' : r.verdictAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-    return `<div class="intel-row" data-key="${themeKey}" onclick="toggleIntelRow('${themeKey}')" style="display:grid;grid-template-columns:1.8fr 0.7fr 0.7fr 0.7fr 0.7fr 2.7fr 0.8fr;gap:0;align-items:center;padding:8px 10px;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer">
+    return `<div class="intel-row" data-key="${themeKey}" onclick="toggleIntelRow('${themeKey}')" style="display:grid;grid-template-columns:1.6fr 0.6fr 0.6fr 0.6fr 0.6fr 3.6fr 0.8fr;gap:0;align-items:center;padding:8px 10px;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer">
       <div>
         <div style="display:flex;align-items:center;gap:7px"><span style="width:9px;height:9px;border-radius:2px;background:${color};flex-shrink:0"></span><span style="font-weight:500">${esc(r.theme)}</span><span class="intel-caret" id="caret-${themeKey}" style="color:var(--color-text-tertiary);font-size:13px">›</span></div>
         <div style="font-size:10px;color:var(--color-text-tertiary);margin:3px 0 0 16px;letter-spacing:0.02em">${esc(tickersLine)}</div>
@@ -4955,7 +4955,7 @@ function renderThemeIntel() {
       <div style="font-size:11px;color:var(--color-text-tertiary)">Click a row to expand · sorted by ${sortKey === 'truePct' ? 'true exposure' : sortKey}</div>
       ${matToggle}
     </div>
-    <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:1.8fr 0.7fr 0.7fr 0.7fr 0.7fr 2.7fr 0.8fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
+    <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:1.6fr 0.6fr 0.6fr 0.6fr 0.6fr 3.6fr 0.8fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
       ${hdr('theme', 'Theme &amp; positions', '', 'left')}
       ${hdr('alloc', 'Allocation', '% of active sleeve', 'right')}
       ${hdr('truePct', 'True exposure', '% of portfolio · incl. pass-through', 'right')}
