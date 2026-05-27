@@ -15626,12 +15626,12 @@ function renderThemeDiscovery() {
           ${ranked ? '<span style="font-size:8px;color:var(--color-text-tertiary)">ordered best→worst by 1Y; #N badge shows rank</span>' : ''}
           <span id="${rankBtnId}-status" style="flex-basis:100%;font-size:9px"></span>
         </div>
-        <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(c => tickerLine(c, theme)).join('')}</div>
         ${(() => {
-          // Per-card action strip: shows only when this theme contains selected names, and sits right
-          // under the chips so the controls are next to what you're clicking. The buttons act on your
-          // FULL selection (Deeper dive can't be per-card — it operates on everything selected), so the
-          // wording is honest about being a per-card slice when your picks span themes.
+          // Per-card action strip: shows only when this theme contains selected names, and sits at the
+          // TOP of the card (above the chips) so the controls are immediately visible without scrolling
+          // past the whole list. The buttons act on your FULL selection (Deeper dive can't be per-card —
+          // it operates on everything selected), so the wording is honest about being a per-card slice
+          // when your picks span themes.
           const here = names
             .map(c => (c.display || '').toUpperCase())
             .filter(k => discoverySelected.has(k));
@@ -15646,6 +15646,7 @@ function renderThemeDiscovery() {
             <button class="btn btn-sm" onclick="event.preventDefault();event.stopPropagation();deepFetchSelected()" title="Re-pulls current prices + the 3M/6M/YTD windows for ALL your selected names, shown in each 📊 detail. No added API cost beyond the names." style="font-size:9px">🔄 Deeper dive ${total} (latest + 3M/6M/YTD)</button>
           </div>`;
         })()}
+        <div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);display:flex;flex-wrap:wrap;gap:1px">${names.map(c => tickerLine(c, theme)).join('')}</div>
         <div data-info-slot="${esc(theme)}"></div>
       </details>`;
   };
