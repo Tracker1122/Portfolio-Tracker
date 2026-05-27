@@ -12867,32 +12867,39 @@ function _renderCardOverlay(type) {
     const wantResult = type === 'beating' ? 'Beat' : 'Trail';
     const heading = type === 'beating' ? 'Beating the S&P' : 'Trailing the S&P';
     const accent = type === 'beating' ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const word = type === 'beating' ? 'ahead' : 'behind';
     // EXACT same criterion as the card count: calcPos(p).result === 'Beat' | 'Trail'.
     const rows = open
       .map(p => ({ p, c: calcPos(p) }))
       .filter(x => x.c.result === wantResult)
       .sort((a, b) => (b.c.vsSpx ?? -Infinity) - (a.c.vsSpx ?? -Infinity)); // best margin first
     html = `<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">${heading}</div>`;
-    html += `<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:14px">${rows.length} open position${rows.length === 1 ? '' : 's'} ${type === 'beating' ? 'ahead of' : 'behind'} the S&P since you bought ${type === 'beating' ? 'them' : 'them'} (by gross return vs the index over the same period). Sorted by margin.</div>`;
+    html += `<div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:4px;line-height:1.5">${rows.length} open position${rows.length === 1 ? '' : 's'} whose return <strong>since you bought it</strong> is ${word} what the S&P did over the <strong>same dates</strong>.</div>`;
+    html += `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Each row: your return on the position vs the S&P's return measured from your buy date to today. The figure on the right is the gap between the two (your return minus the S&P's), in percentage points — how far ${word} the index this position is.</div>`;
     if (rows.length === 0) {
       html += `<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic">None — no open positions currently ${type === 'beating' ? 'beat' : 'trail'} the S&P.</div>`;
     } else {
+      // Column headers so the two inline returns and the margin are unambiguous.
+      html += `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:0 11px 4px;font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">
+        <span>Position · your return vs S&P (since buy)</span>
+        <span style="white-space:nowrap">Gap (${word})</span>
+      </div>`;
       html += '<div style="display:flex;flex-direction:column;gap:6px">';
       rows.forEach(({ p, c }) => {
-        const vs = (c.vsSpx != null) ? ((c.vsSpx >= 0 ? '+' : '') + c.vsSpx.toFixed(1) + ' pp') : '—';
         const yourR = (c.yourReturn != null) ? ((c.yourReturn >= 0 ? '+' : '') + c.yourReturn.toFixed(1) + '%') : '—';
         const spxR = (c.spxReturn != null) ? ((c.spxReturn >= 0 ? '+' : '') + c.spxReturn.toFixed(1) + '%') : '—';
-        const tag = (typeof acctTag === 'function') ? acctTag(qrNormTicker(p.ticker)) : '';
+        // Worded, sign-free margin: "8.4 pp behind" / "2.0 pp ahead" — the word carries the direction.
+        const gapVal = (c.vsSpx != null) ? Math.abs(c.vsSpx).toFixed(1) + ' pp ' + word : '—';
         html += `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 11px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);border-left:3px solid ${accent}">
           <div style="min-width:0">
             <div style="font-size:12px;font-weight:700;color:var(--color-text-primary)">${esc(p.ticker)}<span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400"> · ${esc(p.account || '—')}${p.theme ? ' · ' + esc(p.theme) : ''}</span></div>
-            <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">you ${yourR} vs S&P ${spxR}</div>
+            <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">Your return <span style="color:var(--color-text-secondary)">${yourR}</span> · S&P over same dates <span style="color:var(--color-text-secondary)">${spxR}</span></div>
           </div>
-          <div style="font-size:14px;font-weight:700;color:${accent};white-space:nowrap">${vs}</div>
+          <div style="font-size:13px;font-weight:700;color:${accent};white-space:nowrap">${gapVal}</div>
         </div>`;
       });
       html += '</div>';
-      html += `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic">Margin is gross return vs the S&P over each position's hold period — the same basis as the Beating/Trailing count on the dashboard.</div>`;
+      html += `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic">Returns are gross (before fees) vs the index over each position's hold period — the same basis as the Beating/Trailing count on the dashboard.</div>`;
     }
   }
 
