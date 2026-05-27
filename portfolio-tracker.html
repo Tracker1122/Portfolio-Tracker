@@ -198,6 +198,11 @@
   .cell-input:focus { border-bottom-color: var(--color-border-secondary); }
   .cell-input[type="number"] { text-align: right; }
   .cell-input:disabled { color: var(--color-text-tertiary); cursor: not-allowed; }
+  .locked-cell {
+    font-size: 11px; color: var(--color-text-primary);
+    font-family: var(--font-sans); line-height: 1.3;
+  }
+  .locked-cell .dash { color: var(--color-text-tertiary); }
   .cell-input.ticker-input { text-transform: uppercase; width: 70px; }
   .cell-input.date-input { width: 100px; }
   .cell-input.date-input.invalid { border-bottom-color: var(--color-text-danger) !important; color: var(--color-text-danger); }
@@ -1660,10 +1665,43 @@
 </div>
 
 <!-- Edit Position (advanced fields) Modal -->
-<div class="modal-overlay hidden" id="edit-position-modal">
-  <div class="modal">
+<div class="modal-overlay hidden" id="edit-position-modal" style="overflow-y:auto;align-items:flex-start;padding-top:20px;padding-bottom:20px;z-index:9000">
+  <div class="modal" style="max-height:none;overscroll-behavior:contain">
     <div class="modal-title">Edit Position</div>
-    <div class="modal-subtitle" id="edit-position-subtitle">Advanced fields not visible in the row.</div>
+    <div class="modal-subtitle" id="edit-position-subtitle">Edit any field of this open position.</div>
+    <div class="modal-field">
+      <label class="modal-label">Ticker</label>
+      <input class="modal-input" id="edit-pos-ticker" type="text" placeholder="AAPL" style="width:140px;text-transform:uppercase">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Account</label>
+      <input class="modal-input" id="edit-pos-account" type="text" placeholder="Taxable / IRA / Brokerage" style="width:200px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Date bought</label>
+      <input class="modal-input" id="edit-pos-date" type="date" style="width:180px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Shares</label>
+      <input class="modal-input" id="edit-pos-shares" type="number" min="0" step="any" placeholder="0" style="width:160px">
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Price paid ($/share)</label>
+      <input class="modal-input" id="edit-pos-price" type="number" min="0" step="any" placeholder="0.00" style="width:160px">
+      <div id="edit-pos-cost-hint" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Industry / theme</label>
+      <select class="modal-input" id="edit-pos-theme" style="width:200px;cursor:pointer"></select>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Strategy / sleeve</label>
+      <select class="modal-input" id="edit-pos-sleeve" style="width:200px;cursor:pointer"></select>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label">Notes</label>
+      <textarea class="modal-input" id="edit-pos-notes" rows="2" placeholder="Thesis, target…" style="width:300px;font-family:inherit;resize:vertical"></textarea>
+    </div>
     <div class="modal-field">
       <label class="modal-label" title="Dollar amount of this buy that came from recent sale proceeds rather than new outside capital.">Redeployed from sale proceeds ($)</label>
       <input class="modal-input" id="edit-pos-redeployed" type="number" min="0" step="0.01" placeholder="0 (all new capital)" style="width:180px">
@@ -4266,9 +4304,9 @@ function renderRow(pos) {
 
   return `
   <tr class="${isClosed ? 'closed-row' : ''}" data-id="${pos.id}">
-    <td style="white-space:nowrap"><input class="cell-input ticker-input" type="text" placeholder="AAPL" value="${esc(pos.ticker)}" onblur="setField(${pos.id},'ticker',this.value.toUpperCase())" oninput="this.value=this.value.toUpperCase()" ${isClosed?'disabled':''}>${benchmarkDivergenceBadge(pos)}${peConvertedBadge(pos)}</td>
-    <td><input class="cell-input account-input" type="text" placeholder="Brokerage" value="${esc(pos.account)}" onblur="setField(${pos.id},'account',this.value)" ${isClosed?'disabled':''}></td>
-    <td><input class="cell-input date-input" type="text" placeholder="YYYY-MM-DD" value="${esc(pos.dateBought)}" onblur="handleDateBlur(${pos.id},'dateBought',this)" ${isClosed?'disabled':''}></td>
+    <td style="white-space:nowrap"><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.ticker) || '<span class="dash">—</span>'}</span>${benchmarkDivergenceBadge(pos)}${peConvertedBadge(pos)}</td>
+    <td><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.account) || '<span class="dash">—</span>'}</span></td>
+    <td><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.dateBought) || '<span class="dash">—</span>'}</span></td>
     <td class="calc-cell held-cell" style="text-align:center;white-space:nowrap">${(() => {
       if (!pos.dateBought) return '<span class="dash">—</span>';
       const days = Math.floor((new Date() - new Date(pos.dateBought)) / 86400000);
@@ -4276,8 +4314,8 @@ function renderRow(pos) {
       const color = days < 90 ? 'var(--color-text-danger)' : days < 365 ? '#fbbf24' : 'var(--color-text-success)';
       return `<span style="font-size:10px;font-weight:600;color:${color}">${label}</span>`;
     })()}</td>
-    <td><input class="cell-input num-input" type="number" step="any" min="0" placeholder="0" value="${esc(pos.shares)}" onblur="setField(${pos.id},'shares',this.value)"></td>
-    <td><input class="cell-input price-input" type="number" step="any" min="0" placeholder="0.00" value="${esc(pos.pricePaid)}" onblur="setField(${pos.id},'pricePaid',this.value)" ${isClosed?'disabled':''}></td>
+    <td><span class="locked-cell" title="Edit via the ✎ button">${(pos.shares===''||pos.shares==null)?'<span class="dash">—</span>':esc(pos.shares)}</span></td>
+    <td><span class="locked-cell" title="Edit via the ✎ button">${(pos.pricePaid===''||pos.pricePaid==null)?'<span class="dash">—</span>':fmtDollar(parseFloat(pos.pricePaid))}</span></td>
     <td><input class="cell-input price-input" type="number" step="any" min="0" placeholder="0.00" value="${esc(pos.exitPrice)}" onblur="setField(${pos.id},'exitPrice',this.value)"></td>
     <td><input class="cell-input date-input" type="text" placeholder="YYYY-MM-DD" value="${esc(pos.sellDate)}" onblur="handleDateBlur(${pos.id},'sellDate',this)" ${!isClosed?'disabled':''}></td>
     <td><input class="cell-input spx-input" type="number" step="any" min="0" placeholder="0.00" value="${esc(pos.spxBuy)}" onblur="setField(${pos.id},'spxBuy',this.value)"></td>
@@ -4297,19 +4335,13 @@ function renderRow(pos) {
     <td class="result-cell">${resultHtml}</td>
     <td>${statusHtml}</td>
     <td>
-      <select class="cell-input theme-select" onchange="setField(${pos.id},'theme',this.value)" style="width:130px;cursor:pointer">
-        <option value="">— Industry —</option>
-        ${Object.entries(THEMES).filter(([_, cfg]) => cfg.dropdown).map(([t]) => `<option value="${t}" ${pos.theme===t?'selected':''}>${t}</option>`).join('')}
-      </select>
+      <span class="locked-cell" title="Edit via the ✎ button">${esc(pos.theme) || '<span class="dash">— Industry —</span>'}</span>
     </td>
     <td>
-      <select class="cell-input" onchange="setField(${pos.id},'sleeve',this.value)" style="width:130px;cursor:pointer;border-left:3px solid ${SLEEVE_COLORS[pos.sleeve]||'var(--color-border-tertiary)'}">
-        <option value="">— Strategy —</option>
-        ${SLEEVES.map(s => `<option value="${s}" ${pos.sleeve===s?'selected':''}>${s}</option>`).join('')}
-      </select>
+      <span class="locked-cell" title="Edit via the ✎ button" style="border-left:3px solid ${SLEEVE_COLORS[pos.sleeve]||'var(--color-border-tertiary)'};padding-left:6px">${esc(pos.sleeve) || '<span class="dash">— Strategy —</span>'}</span>
     </td>
-    <td><input class="cell-input notes-input" type="text" placeholder="Thesis, target…" value="${esc(pos.notes||'')}" onblur="setField(${pos.id},'notes',this.value)"></td>
-    <td style="white-space:nowrap"><button class="btn btn-sm" onclick="openEditPositionModal(${pos.id})" title="Edit advanced fields" style="margin-right:4px">✎</button><button class="btn btn-sm btn-danger" onclick="deletePosition(${pos.id})" title="Delete">✕</button></td>
+    <td><span class="locked-cell" title="Edit via the ✎ button" style="display:inline-block;max-width:160px;white-space:normal">${esc(pos.notes||'') || '<span class="dash">—</span>'}</span></td>
+    <td style="white-space:nowrap"><button class="btn btn-sm" onclick="openEditPositionModal(${pos.id})" title="Edit this position" style="margin-right:4px">✎</button><button class="btn btn-sm btn-danger" onclick="deletePosition(${pos.id})" title="Delete">✕</button></td>
   </tr>`;
 }
 
@@ -6463,7 +6495,7 @@ const QR_FIELDS = {
     { key: 'navReturn1y',   label: 'NAV return %, 1-Yr',                          kind: 'number',   hint: 'Schwab: Quarterly/Monthly Total Returns \u2192 the "SMH NAV" row, 1-Yr column. Use the SAME period as the price return below.' },
     { key: 'priceReturn1y', label: 'Market Price return %, 1-Yr',                 kind: 'number',   hint: 'Schwab: same returns panel \u2192 the "SMH Market Price" row, 1-Yr column. The tracker subtracts the two to show the tracking gap.' },
     { key: 'tracksWhat',  label: 'Index / strategy it tracks',                   kind: 'text' },
-    { key: 'overlapNote', label: 'Does the overlap change the buy?',              kind: 'textarea', hint: 'The overlap panel below already lists which of this fund\u2019s holdings you hold and your dollar exposure \u2014 don\u2019t re-type that. This is for your verdict: does the computed overlap defeat the reason you\u2019re buying (mostly repackages what you own) or is it acceptable? Leave blank if the panel shows no meaningful overlap.' },
+    { key: 'overlapNote', label: 'Does the overlap change the buy?',              kind: 'textarea', hint: 'The computed overlap above shows which of this fund\u2019s holdings you already hold and your dollar exposure \u2014 don\u2019t re-type it. This is for your verdict: does that overlap defeat the reason you\u2019re buying (mostly repackages what you own), or is it acceptable? Leave blank if there\u2019s no meaningful overlap.' },
     { key: 'exitIf',      label: 'Exit if\u2026',                                kind: 'textarea' },
   ]
 };
@@ -6495,6 +6527,7 @@ function qrCheckStage1() {
     btn.style.opacity = ready ? '1' : '0.4';
     btn.style.cursor = ready ? 'pointer' : 'not-allowed';
   }
+  if (typeof renderQrOverlapInline === 'function') renderQrOverlapInline();
 }
 // Commit stage 1: save the candidate (so it's recorded even if you stop here) and reveal stage 2.
 function qrUnlockStage2() {
@@ -7646,10 +7679,24 @@ function renderQrForm() {
     return `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${input}${hint}</div>`;
   };
 
+  // The overlap field special-cases: above the judgment textarea we surface the COMPUTED book-level
+  // overlap (direct + via-funds) — the same plumbing as the true-exposure tab — so the user judges
+  // real numbers instead of free-forming. The textarea below captures only the verdict.
+  const renderOverlapField = (f) => {
+    const val = v[f.key] != null ? v[f.key] : '';
+    const hint = f.hint ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:2px;font-style:italic">${f.hint}</div>` : '';
+    const helpBtn = QR_EXPLAINERS[f.key] ? `<button type="button" onclick="showQrExplainer('${f.key}')" title="What is this & how to read it" style="margin-left:6px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;color:var(--color-text-info);font-size:9px;font-weight:700;cursor:pointer;vertical-align:middle">?</button>` : '';
+    const input = `<textarea id="qr-f-${f.key}" rows="2" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
+    return `<div style="margin-bottom:10px">
+      <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}</label>
+      <div data-qr-overlap-inline style="margin-bottom:6px"></div>
+      ${input}${hint}</div>`;
+  };
+
   const stage1ExtraHtml = (qrType === 'etf')
     ? fields.filter(isEtfHoldingsField).map(renderField).join('')
     : '';
-  const stage2FieldsHtml = fields.filter(f => !isEtfHoldingsField(f)).map(renderField).join('');
+  const stage2FieldsHtml = fields.filter(f => !isEtfHoldingsField(f)).map(f => f.key === 'overlapNote' ? renderOverlapField(f) : renderField(f)).join('');
 
   const stage2Html = stage2 ? `
       <div style="margin-top:12px">${stage2FieldsHtml}</div>
@@ -7690,6 +7737,80 @@ function renderQrForm() {
     if ((document.getElementById('qr-f-holdingsTop').value || '').trim()) runQrHoldingsOverlap();
   }
   qrCheckStage1();
+  if (typeof renderQrOverlapInline === 'function') renderQrOverlapInline();
+}
+
+// Fill the inline computed-overlap block that sits above the overlap-judgment textarea. Surfaces the
+// SAME book-level plumbing as the true-exposure tab (direct + via-funds), so the user judges real
+// numbers rather than free-forming. Two shapes by candidate type:
+//   ETF  → which of the FUND'S holdings you already own (qrEtfOverlapSummary: direct + via-funds).
+//   stock→ your TRUE exposure to this single name (direct + embedded inside index funds).
+// Called on form render, on ticker change (qrCheckStage1), and on holdings change (runQrHoldingsOverlap).
+function renderQrOverlapInline() {
+  const slots = document.querySelectorAll('[data-qr-overlap-inline]');
+  if (!slots.length) return;
+  const tkEl = document.getElementById('qr-ticker');
+  const cand = tkEl ? (tkEl.value || '').trim().toUpperCase() : '';
+  let html = '';
+
+  if (qrType === 'etf') {
+    const fEl = document.getElementById('qr-f-holdingsTop');
+    const raw = fEl ? (fEl.value || '') : '';
+    if (!raw.trim()) {
+      html = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Paste the fund's top holdings above — the computed overlap with your book will appear here.</div>`;
+    } else {
+      const { parsed } = parseHoldings(raw);
+      const sum = (typeof qrEtfOverlapSummary === 'function') ? qrEtfOverlapSummary(parsed) : null;
+      if (!sum || sum.names.length === 0) {
+        html = `<div style="font-size:9px;color:var(--color-text-success);padding:6px 9px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No overlap: none of the ${parsed.length} holding${parsed.length===1?'':'s'} you pasted are names you already hold (directly or via your funds). Nothing to weigh here.</div>`;
+      } else {
+        const lvl = sum.overlapPct >= 40 ? '#ef4444' : sum.overlapPct >= 20 ? '#fbbf24' : 'var(--color-text-secondary)';
+        const rows = sum.names.slice(0, 6).map(n => {
+          const where = n.direct > 0 && n.viaFunds > 0 ? 'direct + funds' : n.direct > 0 ? 'direct' : 'via funds';
+          return `<div style="margin-bottom:2px">• <strong style="color:var(--color-text-primary)">${esc(n.ticker)}</strong> <span style="color:var(--color-text-tertiary)">(${n.etfWeight}% of fund)</span> — you hold ~<strong>${fmtDollarWhole(n.total)}</strong> <span style="color:var(--color-text-tertiary)">${where}</span></div>`;
+        }).join('');
+        const more = sum.names.length > 6 ? `<div style="color:var(--color-text-tertiary);font-size:8px;margin-top:2px">+${sum.names.length - 6} more</div>` : '';
+        html = `<div style="font-size:9px;line-height:1.5;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${lvl};border-radius:var(--border-radius-md)">
+          <div style="font-weight:700;color:var(--color-text-primary);margin-bottom:4px">~${sum.overlapPct}% of this fund overlaps names you already hold <span style="font-weight:400;color:var(--color-text-tertiary)">(of the ${sum.parsedWeight}% you pasted)</span></div>
+          ${rows}${more}
+          <div style="color:var(--color-text-tertiary);font-size:8px;margin-top:4px">Computed from your book — direct positions + look-through into your index funds. Same engine as the True Exposure tab. Approximate (fund weights drift).</div>
+        </div>`;
+      }
+    }
+  } else {
+    // STOCK candidate — true exposure to this one name.
+    if (!cand) {
+      html = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Enter the ticker above — your existing exposure to it (direct + inside your funds) will appear here.</div>`;
+    } else {
+      const candNorm = qrNormTicker(cand);
+      const directVal = positions.filter(p => !p.closed && p.ticker && qrNormTicker(p.ticker) === candNorm)
+        .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+      const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(cand) : [];
+      const embedded = lts.reduce((s, l) => s + l.indirectValue, 0);
+      const trueTotal = directVal + embedded;
+      if (trueTotal <= 0) {
+        html = `<div style="font-size:9px;color:var(--color-text-success);padding:6px 9px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">No existing exposure: you don't hold ${esc(cand)} directly, and it isn't a tracked holding inside your index funds. This would be genuinely new exposure.</div>`;
+      } else {
+        const activeBook = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+        const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+        const spVal = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
+        let cash = 0;
+        try { if (typeof cashBuckets !== 'undefined' && cashBuckets && typeof cashBuckets === 'object') cash = Object.values(cashBuckets).reduce((s,v)=>s+(parseFloat(v)||0),0); } catch(e){}
+        const grandTotal = activeBook + spVal + cash;
+        const pctTotal = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
+        const parts = [];
+        if (directVal > 0) parts.push(`${fmtDollarWhole(directVal)} direct`);
+        if (embedded > 0) parts.push(`${fmtDollarWhole(embedded)} via ${lts.map(l => esc(l.fund)).join('/')}`);
+        html = `<div style="font-size:9px;line-height:1.5;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-left:3px solid #fbbf24;border-radius:var(--border-radius-md)">
+          <div style="font-weight:700;color:var(--color-text-primary);margin-bottom:2px">You already hold ~${fmtDollarWhole(trueTotal)} of ${esc(cand)} — ${pctTotal.toFixed(1)}% of your portfolio</div>
+          <div style="color:var(--color-text-secondary)">${parts.join(' + ')}. Buying more adds to existing exposure, not a brand-new name.</div>
+          <div style="color:var(--color-text-tertiary);font-size:8px;margin-top:4px">Computed from your book — same engine as the True Exposure tab. Embedded portion approximate (fund weights drift).</div>
+        </div>`;
+      }
+    }
+  }
+
+  slots.forEach(s => { s.innerHTML = html; });
 }
 
 function renderQrOverlap(theme, tickerArg, sleeveArg) {
@@ -8447,6 +8568,7 @@ function runQrHoldingsOverlap() {
   }
   out.innerHTML = html;
   qrRenderRotation(); // populate the rotation panel now that its container is in the DOM
+  if (typeof renderQrOverlapInline === 'function') renderQrOverlapInline();
 }
 
 // Fetch holdings from the worker, fill the holdings field + bonus fields, then run
@@ -16748,12 +16870,40 @@ function openEditPositionModal(posId) {
   const hint = document.getElementById('edit-pos-redeployed-hint');
   const err = document.getElementById('edit-pos-error');
 
+  // Core fields
+  document.getElementById('edit-pos-ticker').value = p.ticker || '';
+  document.getElementById('edit-pos-account').value = p.account || '';
+  document.getElementById('edit-pos-date').value = p.dateBought || '';
+  document.getElementById('edit-pos-shares').value = (p.shares === '' || p.shares == null) ? '' : p.shares;
+  document.getElementById('edit-pos-price').value = (p.pricePaid === '' || p.pricePaid == null) ? '' : p.pricePaid;
+  document.getElementById('edit-pos-notes').value = p.notes || '';
+
+  // Theme select — same option set as the inline row (THEMES with dropdown:true)
+  const themeSel = document.getElementById('edit-pos-theme');
+  themeSel.innerHTML = '<option value="">— Industry —</option>' +
+    Object.entries(THEMES).filter(([_, cfg]) => cfg.dropdown).map(([t]) => `<option value="${esc(t)}" ${p.theme === t ? 'selected' : ''}>${esc(t)}</option>`).join('');
+  // Sleeve select — same option set as the inline row (SLEEVES)
+  const sleeveSel = document.getElementById('edit-pos-sleeve');
+  sleeveSel.innerHTML = '<option value="">— Strategy —</option>' +
+    SLEEVES.map(s => `<option value="${esc(s)}" ${p.sleeve === s ? 'selected' : ''}>${esc(s)}</option>`).join('');
+
+  // Cost hint updates live as shares/price change
+  const costHint = document.getElementById('edit-pos-cost-hint');
+  const updateCostHint = () => {
+    const sh = parseFloat(document.getElementById('edit-pos-shares').value);
+    const pr = parseFloat(document.getElementById('edit-pos-price').value);
+    costHint.textContent = (sh > 0 && pr > 0) ? `Total cost: ${fmtDollar(sh * pr)}` : '';
+  };
+  document.getElementById('edit-pos-shares').oninput = updateCostHint;
+  document.getElementById('edit-pos-price').oninput = updateCostHint;
+  updateCostHint();
+
   // Compute total cost to show as a hint and enforce the upper bound at validation time
   const shares = parseFloat(p.shares);
   const price = parseFloat(p.pricePaid);
   const total = (shares > 0 && price > 0) ? shares * price : null;
 
-  subtitle.textContent = `${p.ticker || '(no ticker)'} · ${p.account || '(no account)'} · bought ${p.dateBought || '—'}`;
+  subtitle.textContent = `Editing ${p.ticker || '(no ticker)'} · ${p.account || '(no account)'}`;
   redeployInput.value = p.redeployedAmount || '';
   hint.textContent = total !== null
     ? `Total cost: ${fmtDollar(total)} — redeployment cannot exceed this.`
@@ -16776,25 +16926,73 @@ function confirmEditPosition() {
   const err = document.getElementById('edit-pos-error');
   const showErr = (msg) => { err.textContent = msg; err.style.display = 'block'; };
 
+  // ── Gather + validate core fields ──
+  const ticker = (document.getElementById('edit-pos-ticker').value || '').trim().toUpperCase();
+  const account = (document.getElementById('edit-pos-account').value || '').trim();
+  const dateBought = (document.getElementById('edit-pos-date').value || '').trim();
+  const sharesStr = document.getElementById('edit-pos-shares').value;
+  const priceStr = document.getElementById('edit-pos-price').value;
+  const theme = document.getElementById('edit-pos-theme').value;
+  const sleeve = document.getElementById('edit-pos-sleeve').value;
+  const notes = document.getElementById('edit-pos-notes').value;
+
+  if (!ticker) return showErr('Ticker is required.');
+
+  // Date: optional but if present must be valid and not future
+  if (dateBought) {
+    const d = new Date(dateBought + 'T00:00:00');
+    const today = new Date(); today.setHours(0,0,0,0);
+    if (isNaN(d.getTime())) return showErr('Invalid buy date.');
+    if (d > today) return showErr('Buy date cannot be in the future.');
+  }
+
+  // Shares / price: optional (a position may be a stub), but if present must be >= 0
+  let shares = '';
+  if (sharesStr !== '' && sharesStr != null) {
+    shares = parseFloat(sharesStr);
+    if (isNaN(shares) || shares < 0) return showErr('Shares must be 0 or greater (or blank).');
+  }
+  let price = '';
+  if (priceStr !== '' && priceStr != null) {
+    price = parseFloat(priceStr);
+    if (isNaN(price) || price < 0) return showErr('Price must be 0 or greater (or blank).');
+  }
+
+  // Redeployment (existing advanced field) — validate against the NEW shares/price total
   const redeployStr = document.getElementById('edit-pos-redeployed').value;
   let redeployed = 0;
   if (redeployStr !== '' && redeployStr != null) {
     redeployed = parseFloat(redeployStr);
     if (isNaN(redeployed) || redeployed < 0) return showErr('Redeployed amount must be 0 or greater.');
-    // If we know total cost, enforce that redeployment doesn't exceed it
-    const shares = parseFloat(p.shares);
-    const price = parseFloat(p.pricePaid);
     if (shares > 0 && price > 0) {
       const total = shares * price;
-      if (redeployed > total) return showErr(`Cannot exceed total cost (${fmtDollar(total)}).`);
+      if (redeployed > total) return showErr(`Redeployment cannot exceed total cost (${fmtDollar(total)}).`);
     }
   }
 
+  // ── Apply ──
+  const tickerChanged = (p.ticker || '').toUpperCase() !== ticker;
+  const dateChanged = (p.dateBought || '') !== dateBought;
+  p.ticker = ticker;
+  p.account = account;
+  p.dateBought = dateBought;
+  p.shares = shares;
+  p.pricePaid = price;
+  p.theme = theme;
+  p.sleeve = sleeve;
+  p.notes = notes;
   p.redeployedAmount = redeployed;
+  if (typeof coercePositionNumerics === 'function') coercePositionNumerics(p);
+
+  // If ticker or buy date changed, the frozen benchmark anchor (benchmarkAtBuy/benchmarkPriceAtBuy)
+  // may no longer match — the divergence detector will flag it on render so the user can re-measure.
+  // We deliberately do NOT silently rewrite those frozen measurements here.
+
   closeEditPositionModal();
-  renderAll();           // re-render the row (in case anything visible depends on it later)
-  renderCapitalDeployed(); // refresh the dashboard card immediately
+  if (typeof renderAll === 'function') renderAll();
+  if (typeof renderCapitalDeployed === 'function') renderCapitalDeployed();
   scheduleSave();
+  if (typeof runSelfChecks === 'function') { try { runSelfChecks(); } catch (e) {} }
 
   // If the Capital Deployed overlay is open, refresh it
   if (cardOverlayActive) {
