@@ -14719,6 +14719,7 @@ const discoveryBenchPerf = {};
 // fetch as each name's benchmark. The honest comparand is the fund the name was discovered in.
 const discoverySourceFund = {};
 const discoverySelected = new Set(); // tickers the user has picked (max 5) to fetch richer data for
+const discoveryExpanded = new Set(); // tickers whose 📊 detail panel is currently expanded (persisted)
 let _lastPolyFetch = 0; // timestamp guard so rapid calls self-space a little
 const DISCOVERY_MAX_SELECT = 5;
 
@@ -14744,6 +14745,7 @@ function saveDiscoveryCache() {
       sourceFund: discoverySourceFund,
       themeRank: discoveryThemeRank,
       selected: [...discoverySelected],
+      expanded: [...discoveryExpanded],
     }));
   } catch (e) { /* localStorage full or unavailable — fetched data just won't persist this session */ }
 }
@@ -14757,6 +14759,7 @@ function loadDiscoveryCache() {
     if (d.sourceFund && typeof d.sourceFund === 'object') Object.assign(discoverySourceFund, d.sourceFund);
     if (d.themeRank && typeof d.themeRank === 'object') Object.assign(discoveryThemeRank, d.themeRank);
     if (Array.isArray(d.selected)) d.selected.slice(0, DISCOVERY_MAX_SELECT).forEach(t => discoverySelected.add(t));
+    if (Array.isArray(d.expanded)) d.expanded.forEach(t => discoveryExpanded.add(t));
   } catch (e) { /* corrupt or absent — start clean */ }
 }
 
@@ -15231,8 +15234,9 @@ function _recomputeThemeRank(theme, tickers) {
 function toggleDiscoveryDetail(key) {
   const slot = document.querySelector(`[data-detail-slot="${CSS.escape(key)}"]`);
   if (!slot) return;
-  if (slot.style.display !== 'none') { slot.style.display = 'none'; slot.innerHTML = ''; return; }
+  if (slot.style.display !== 'none') { slot.style.display = 'none'; slot.innerHTML = ''; discoveryExpanded.delete(key); saveDiscoveryCache(); return; }
   slot.style.display = 'block';
+  discoveryExpanded.add(key); saveDiscoveryCache(); // remember this panel is open, so it survives refresh
   const p = discoveryPerf[key];
   if (!p || p === 'loading' || (p && p.err) || typeof p !== 'object') {
     const why = (p && p.err === 'rate') ? 'rate-limited — wait and re-fetch'
@@ -15244,7 +15248,10 @@ function toggleDiscoveryDetail(key) {
   }
   const fund = (discoverySourceFund[key] || '').toUpperCase();
   const b = fund ? discoveryBenchPerf[fund] : null;
-  const row = (label, html) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:1px 0"><span style="color:var(--color-text-tertiary)">${label}</span><span>${html}</span></div>`;
+  // Tight label→value pairing: fixed-width label, value sits immediately after it. Avoids the
+  // justify-content:space-between gulf that flung the % to the far edge of a very wide card, which
+  // made it hard to tell which number belonged to which label.
+  const row = (label, html) => `<div style="display:flex;gap:10px;padding:1px 0"><span style="color:var(--color-text-tertiary);flex:0 0 210px">${label}</span><span style="font-weight:600">${html}</span></div>`;
   const pct = (v) => v === null || v === undefined || typeof v !== 'number' ? '<span style="color:var(--color-text-tertiary)">—</span>'
     : `<span style="color:${v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'};font-weight:600">${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
   const rows = [];
@@ -15267,7 +15274,7 @@ function toggleDiscoveryDetail(key) {
   // Reuse the plain-language risk caption.
   const caption = (typeof fmtRiskCaption === 'function') ? fmtRiskCaption(p) : '';
   const fr = discoveryFreshness(p);
-  slot.innerHTML = `<div style="margin:3px 2px 6px;padding:8px 11px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:9px;line-height:1.6">
+  slot.innerHTML = `<div style="margin:3px 2px 6px;padding:9px 13px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:11px;line-height:1.7;max-width:540px">
     <div style="font-weight:700;color:var(--color-text-primary);margin-bottom:3px">${esc(key)} — performance detail <span style="font-weight:400;color:var(--color-text-tertiary)">(from data already fetched; no new API call)</span></div>
     <div style="margin-bottom:3px;color:${fr.color}">${fr.dot} data ${esc(fr.label)}</div>
     ${rows.join('')}
@@ -15651,6 +15658,17 @@ function renderThemeDiscovery() {
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
+
+  // Re-open any detail panels that were expanded before (persisted across refresh / re-render). The
+  // panel rebuilds from the cached perf value, so its freshness dot recomputes from fetchedAt — a
+  // panel that was 🟢 when you opened it shows 🟡/🔴 if it's since aged. toggleDiscoveryDetail opens a
+  // hidden slot and (re)adds the key — already in the set, so no churn. Skip keys whose chip isn't on
+  // screen (e.g. a name no longer in any theme) so we don't carry dead entries; prune them from the set.
+  discoveryExpanded.forEach(key => {
+    const slot = document.querySelector(`[data-detail-slot="${CSS.escape(key)}"]`);
+    if (!slot) { discoveryExpanded.delete(key); return; }
+    if (slot.style.display === 'none') toggleDiscoveryDetail(key);
+  });
 }
 
 // ─────────────────────────────────────────────
