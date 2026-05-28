@@ -14731,11 +14731,13 @@ async function fetchHistoricalNearby(ticker, targetDate) {
   return { price: null, dateUsed: null, error: 'walk-back exhausted' };
 }
 
-// Backfill historical prices for theme universe tickers we don't already have positions in.
-// Existing-theme tickers (QQQ, SMH, etc.) get their today's price from the regular benchmark refresh
-// and don't need historical anchors here — theme alpha math uses different price points.
-// Polygon free tier: 5 calls/min, so 32 calls for 8 missing tickers × 4 windows = ~6.5 minutes total.
-// Walks back from target date if a non-trading day is hit. 12s pause stays safely under rate limit.
+// Backfill historical anchors (YTD/1Y) for theme universe benchmark tickers.
+// Covers BOTH owned and unowned theme benchmarks — themeUniverseTickers() dedupes and
+// returns every benchmark in the universe. Owned-theme rows show benchmark window returns
+// for side-by-side comparison (clearly labeled as benchmark-level, not entry-timed alpha).
+// (See also fetchOwnedThemeReturns() for a scoped version that fetches only owned benchmarks.)
+// Polygon free tier: 5 calls/min, 12s pause stays safely under the limit. Walks back from
+// the target date if a non-trading day is hit.
 async function backfillThemeUniverse() {
   const status = document.getElementById('theme-universe-backfill-status');
   if (!polygonKey) {
@@ -14822,8 +14824,95 @@ async function backfillThemeUniverse() {
   renderThemeUniverseDashTile();
 }
 
-// Compute returns for a theme. Returns object { ytd, '1y', '5y', '10y' } where each is
-// a percentage number or null (if missing data). Uses today's price from benchmarkPrices
+// Scoped backfill: fetch YTD/1Y historical anchors for ONLY the benchmarks of themes the
+// user currently owns. Self-contained alternative to the full backfillThemeUniverse() —
+// useful because owned-theme rows are the ones the user most wants comparable, and this is a
+// shorter, watchable run. Reuses fetchHistoricalNearby() (same walk-back + rate-limit handling).
+// Respects the 7-day cache like the main backfill. Writes to themeUniverseHistory[ticker][win],
+// exactly where computeThemeReturns() reads.
+async function fetchOwnedThemeReturns() {
+  const status = document.getElementById('owned-theme-returns-status');
+  if (!polygonKey) {
+    if (status) { status.textContent = 'Need Polygon API key first'; status.style.color = '#fbbf24'; }
+    return;
+  }
+
+  // Benchmarks of currently-owned themes, deduped (e.g. SMH serves two themes → fetched once).
+  const ownedThemes = [...new Set(positions.filter(p => !p.closed && p.theme).map(p => p.theme))];
+  const ownedBenchTickers = [...new Set(
+    ownedThemes
+      .map(th => getThemeBenchmark(th))
+      .filter(t => t) // drop themes with no benchmark
+  )];
+
+  if (ownedBenchTickers.length === 0) {
+    if (status) { status.textContent = 'No owned themes with benchmarks found'; status.style.color = 'var(--color-text-tertiary)'; }
+    return;
+  }
+
+  const dates = getThemeUniverseTargetDates();
+  const windows = ['ytd', '1y'];
+
+  // Pre-flight: only fetch what's missing or stale (>7 days old), same rule as main backfill.
+  const needed = [];
+  ownedBenchTickers.forEach(ticker => {
+    if (!themeUniverseHistory[ticker]) themeUniverseHistory[ticker] = {};
+    windows.forEach(win => {
+      const cached = themeUniverseHistory[ticker][win];
+      const cacheAgeOk = cached && cached.fetched && (Date.now() - new Date(cached.fetched).getTime() < 7 * 86400000);
+      if (!cacheAgeOk) needed.push({ ticker, win });
+    });
+  });
+
+  if (needed.length === 0) {
+    if (status) { status.textContent = `All owned-theme windows cached (${ownedBenchTickers.length} benchmarks) — no fetch needed`; status.style.color = 'var(--color-text-success)'; }
+    renderThemeUniverse();
+    renderThemeUniverseDashTile();
+    return;
+  }
+
+  const startTime = Date.now();
+  let attempted = 0, succeeded = 0;
+  const failures = [];
+
+  for (const { ticker, win } of needed) {
+    const elapsedMin = (Date.now() - startTime) / 60000;
+    const remaining = needed.length - attempted;
+    const etaMin = attempted > 0 ? Math.round((elapsedMin / attempted) * remaining) : Math.round(remaining * 12 / 60);
+    if (status) {
+      status.textContent = `Fetching ${ticker} ${win.toUpperCase()}... (${succeeded}/${needed.length} ok${failures.length > 0 ? `, ${failures.length} failed` : ''}) · ~${etaMin}m remaining`;
+      status.style.color = 'var(--color-text-tertiary)';
+    }
+    const result = await fetchHistoricalNearby(ticker, dates[win]);
+    attempted++;
+    if (result.price !== null) {
+      themeUniverseHistory[ticker][win] = {
+        price: result.price,
+        dateUsed: result.dateUsed,
+        fetched: new Date().toISOString()
+      };
+      succeeded++;
+    } else {
+      failures.push({ ticker, win, error: result.error || 'unknown' });
+    }
+    await new Promise(r => setTimeout(r, 12000));
+  }
+
+  await savePositions();
+  if (status) {
+    if (failures.length === 0) {
+      status.textContent = `Done — ${succeeded}/${needed.length} owned-theme anchors fetched`;
+      status.style.color = 'var(--color-text-success)';
+    } else {
+      const fs = failures.slice(0, 3).map(f => `${f.ticker} ${f.win.toUpperCase()}`).join(', ');
+      const more = failures.length > 3 ? ` (+${failures.length - 3} more)` : '';
+      status.textContent = `Done — ${succeeded}/${needed.length} ok, ${failures.length} failed: ${fs}${more}. Re-click to retry.`;
+      status.style.color = '#fbbf24';
+    }
+  }
+  renderThemeUniverse();
+  renderThemeUniverseDashTile();
+}
 // and historical prices from themeUniverseHistory.
 function computeThemeReturns(ticker) {
   const today = benchmarkPrices[ticker];
@@ -15212,6 +15301,8 @@ function renderThemeUniverse() {
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
       <button class="btn btn-sm" onclick="backfillThemeUniverse()" style="font-size:10px;padding:5px 12px">⟳ Backfill Theme Universe</button>
       <span id="theme-universe-backfill-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
+      <button class="btn btn-sm" onclick="fetchOwnedThemeReturns()" style="font-size:10px;padding:5px 12px" title="Fetch YTD/1Y benchmark returns for just the themes you currently own">⟳ Fetch owned-theme returns</button>
+      <span id="owned-theme-returns-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
       ${(() => {
         const range = themeUniverseFetchRange();
         if (!range.newest) return '';
