@@ -14906,13 +14906,21 @@ async function backfillThemeUniverse() {
   // To enable 5Y/10Y, upgrade to Polygon Stocks Starter ($30/mo) and add them back here.
   const windows = ['ytd', '1y'];
 
-  // Pre-flight: count how many fetches are actually needed (skip cached recent fetches)
+  // Pre-flight: count how many fetches are actually needed (skip cached recent fetches).
+  // Cache validity is WINDOW-SPECIFIC, because the two windows go stale differently:
+  //   - YTD anchor is a FIXED calendar point (Jan 2). It never drifts, so re-fetching it is pure
+  //     waste — cache it long (30 days; the historical close won't change).
+  //   - 1Y anchor is "today minus one year", which drifts one day per calendar day. A stale 1Y
+  //     anchor means the window is no longer a true trailing 365 days — cache it short (4 days)
+  //     so the 1Y figure stays close to an actual trailing year without burning calls on YTD.
+  const cacheMaxAgeMs = { ytd: 30 * 86400000, '1y': 4 * 86400000 };
   const needed = [];
   tickers.forEach(ticker => {
     if (!themeUniverseHistory[ticker]) themeUniverseHistory[ticker] = {};
     windows.forEach(win => {
       const cached = themeUniverseHistory[ticker][win];
-      const cacheAgeOk = cached && cached.fetched && (Date.now() - new Date(cached.fetched).getTime() < 7 * 86400000);
+      const maxAge = cacheMaxAgeMs[win] || (7 * 86400000);
+      const cacheAgeOk = cached && cached.fetched && (Date.now() - new Date(cached.fetched).getTime() < maxAge);
       if (!cacheAgeOk) needed.push({ ticker, win });
     });
   });
@@ -15457,10 +15465,16 @@ function renderThemeUniverse() {
         const oldestStr = fmtTimeAgo(range.oldest);
         const newestColor = staleColorFor(range.newest);
         const oldestColor = staleColorFor(range.oldest);
+        // These timestamps are when each HISTORICAL ANCHOR was fetched — NOT today's prices.
+        // The YTD/1Y % = (today's live price − anchor) / anchor. Today's price is refreshed by
+        // Get Benchmarks (its own clock); the anchor only updates on Backfill / Fetch-owned-returns.
+        // A stale anchor is harmless for YTD (Jan-2 is a fixed point) but means the 1Y window has
+        // drifted slightly past a true trailing year. Hence the wording below.
+        const anchorTip = 'When the historical baseline (the YTD/1Y starting price) was last fetched — NOT today\\u2019s prices, which refresh separately via Get Benchmarks. A stale baseline doesn\\u2019t affect YTD (Jan 2 is fixed) but means the 1Y window has drifted a little past a true trailing year. Re-run \\u201cFetch owned-theme returns\\u201d to refresh.';
         if (newestStr === oldestStr) {
-          return `<span style="font-size:10px;color:${newestColor}" title="All cached entries fetched at the same time">Last refresh: ${newestStr}</span>`;
+          return `<span style="font-size:10px;color:${newestColor};cursor:help" title="${anchorTip}">Baseline fetched: ${newestStr}</span>`;
         }
-        return `<span style="font-size:10px;color:${newestColor}">Last refresh: ${newestStr}</span> <span style="font-size:10px;color:${oldestColor}" title="Some entries are older than the most recent refresh — re-click backfill to update">· oldest data: ${oldestStr}</span>`;
+        return `<span style="font-size:10px;color:${newestColor};cursor:help" title="${anchorTip}">Baseline fetched: ${newestStr}</span> <span style="font-size:10px;color:${oldestColor};cursor:help" title="${anchorTip}">· oldest baseline: ${oldestStr}</span>`;
       })()}
     </div>
     <div id="benchmark-fees-editor" style="margin-bottom:14px"></div>
