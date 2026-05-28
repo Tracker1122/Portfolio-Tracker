@@ -15463,18 +15463,23 @@ function renderThemeUniverse() {
         if (!range.newest) return '';
         const newestStr = fmtTimeAgo(range.newest);
         const oldestStr = fmtTimeAgo(range.oldest);
-        const newestColor = staleColorFor(range.newest);
-        const oldestColor = staleColorFor(range.oldest);
-        // These timestamps are when each HISTORICAL ANCHOR was fetched — NOT today's prices.
-        // The YTD/1Y % = (today's live price − anchor) / anchor. Today's price is refreshed by
-        // Get Benchmarks (its own clock); the anchor only updates on Backfill / Fetch-owned-returns.
-        // A stale anchor is harmless for YTD (Jan-2 is a fixed point) but means the 1Y window has
-        // drifted slightly past a true trailing year. Hence the wording below.
-        const anchorTip = 'When the historical baseline (the YTD/1Y starting price) was last fetched — NOT today\\u2019s prices, which refresh separately via Get Benchmarks. A stale baseline doesn\\u2019t affect YTD (Jan 2 is fixed) but means the 1Y window has drifted a little past a true trailing year. Re-run \\u201cFetch owned-theme returns\\u201d to refresh.';
+        // The baseline is when the YTD/1Y STARTING price was last fetched — not today's prices,
+        // which refresh separately via Get Benchmarks. A stale baseline is fine for YTD (Jan 2 is
+        // fixed) but means the 1Y window has drifted past a true trailing year. We don't color this
+        // alarmingly: "old" here is mostly harmless, so we use muted text + a plain action hint
+        // rather than a red error. The 1Y cache (4 days) means clicking the button below refreshes
+        // the drifted 1Y baselines and skips the still-valid YTD ones.
+        const oldestMs = range.oldest ? (Date.now() - new Date(range.oldest).getTime()) : 0;
+        const oneYDrifted = oldestMs > 4 * 86400000; // beyond the 1Y cache window → 1Y has drifted
+        const anchorTip = 'When the historical baseline (YTD/1Y starting price) was last fetched \\u2014 not today\\u2019s prices, which refresh separately via Get Benchmarks. Old is fine for YTD (Jan 2 is a fixed point); for 1Y it means the window has drifted a little past a true trailing year. Click \\u201cFetch owned-theme returns\\u201d to refresh the drifted baselines (it auto-skips the ones still current).';
+        const muted = 'var(--color-text-tertiary)';
         if (newestStr === oldestStr) {
-          return `<span style="font-size:10px;color:${newestColor};cursor:help" title="${anchorTip}">Baseline fetched: ${newestStr}</span>`;
+          return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Baseline fetched: ${newestStr}</span>`;
         }
-        return `<span style="font-size:10px;color:${newestColor};cursor:help" title="${anchorTip}">Baseline fetched: ${newestStr}</span> <span style="font-size:10px;color:${oldestColor};cursor:help" title="${anchorTip}">· oldest baseline: ${oldestStr}</span>`;
+        const action = oneYDrifted
+          ? ` <span style="font-size:10px;color:#fbbf24;cursor:help" title="${anchorTip}">\\u2014 1Y baselines drifted; click \\u201cFetch owned-theme returns\\u201d to refresh</span>`
+          : '';
+        return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Baseline fetched: ${newestStr} \\u00b7 oldest: ${oldestStr}</span>${action}`;
       })()}
     </div>
     <div id="benchmark-fees-editor" style="margin-bottom:14px"></div>
