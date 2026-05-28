@@ -6248,9 +6248,15 @@ function staleColorFor(isoTimestamp) {
 
 // Theme Universe: extract oldest + newest fetch timestamps across all cached entries.
 // Returns { oldest, newest } as ISO strings, or { oldest: null, newest: null } if no data.
-function themeUniverseFetchRange() {
+// Oldest + newest baseline-fetch timestamps across cached entries.
+// Optional `tickerFilter` (array of tickers) restricts the scan — used so the owned-theme
+// button's label reflects ONLY owned benchmarks (it can't refresh unowned ones, so showing
+// unowned staleness next to it was misleading). No filter = whole universe (for the backfill label).
+function themeUniverseFetchRange(tickerFilter) {
+  const allow = tickerFilter ? new Set(tickerFilter) : null;
   let oldest = null, newest = null;
-  Object.values(themeUniverseHistory || {}).forEach(windows => {
+  Object.entries(themeUniverseHistory || {}).forEach(([ticker, windows]) => {
+    if (allow && !allow.has(ticker)) return;
     Object.values(windows || {}).forEach(entry => {
       if (!entry || !entry.fetched) return;
       const t = new Date(entry.fetched).getTime();
@@ -15459,27 +15465,28 @@ function renderThemeUniverse() {
       <button class="btn btn-sm" onclick="fetchOwnedThemeReturns()" style="font-size:10px;padding:5px 12px" title="Fetch YTD/1Y benchmark returns for just the themes you currently own">⟳ Fetch owned-theme returns</button>
       <span id="owned-theme-returns-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
       ${(() => {
-        const range = themeUniverseFetchRange();
+        // Scope this label to OWNED-theme benchmarks only — it sits next to the owned-fetch button,
+        // which can't refresh unowned baselines, so unowned staleness here was misleading. Unowned
+        // freshness (if ever surfaced) belongs next to the full Backfill button instead.
+        const ownedBench = [...new Set(
+          [...new Set(positions.filter(p => !p.closed && p.theme).map(p => p.theme))]
+            .map(th => getThemeBenchmark(th)).filter(t => t)
+        )];
+        const range = themeUniverseFetchRange(ownedBench);
         if (!range.newest) return '';
         const newestStr = fmtTimeAgo(range.newest);
         const oldestStr = fmtTimeAgo(range.oldest);
-        // The baseline is when the YTD/1Y STARTING price was last fetched — not today's prices,
-        // which refresh separately via Get Benchmarks. A stale baseline is fine for YTD (Jan 2 is
-        // fixed) but means the 1Y window has drifted past a true trailing year. We don't color this
-        // alarmingly: "old" here is mostly harmless, so we use muted text + a plain action hint
-        // rather than a red error. The 1Y cache (4 days) means clicking the button below refreshes
-        // the drifted 1Y baselines and skips the still-valid YTD ones.
         const oldestMs = range.oldest ? (Date.now() - new Date(range.oldest).getTime()) : 0;
         const oneYDrifted = oldestMs > 4 * 86400000; // beyond the 1Y cache window → 1Y has drifted
-        const anchorTip = 'When the historical baseline (YTD/1Y starting price) was last fetched \\u2014 not today\\u2019s prices, which refresh separately via Get Benchmarks. Old is fine for YTD (Jan 2 is a fixed point); for 1Y it means the window has drifted a little past a true trailing year. Click \\u201cFetch owned-theme returns\\u201d to refresh the drifted baselines (it auto-skips the ones still current).';
+        const anchorTip = 'When the historical baseline (YTD/1Y starting price) for your OWNED themes was last fetched \\u2014 not today\\u2019s prices, which refresh separately via Get Benchmarks. Old is fine for YTD (Jan 2 is a fixed point); for 1Y it means the window has drifted a little past a true trailing year. Click \\u201cFetch owned-theme returns\\u201d to refresh the drifted baselines (it auto-skips the ones still current).';
         const muted = 'var(--color-text-tertiary)';
         if (newestStr === oldestStr) {
-          return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Baseline fetched: ${newestStr}</span>`;
+          return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Owned baselines: ${newestStr}</span>`;
         }
         const action = oneYDrifted
           ? ` <span style="font-size:10px;color:#fbbf24;cursor:help" title="${anchorTip}">\\u2014 1Y baselines drifted; click \\u201cFetch owned-theme returns\\u201d to refresh</span>`
           : '';
-        return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Baseline fetched: ${newestStr} \\u00b7 oldest: ${oldestStr}</span>${action}`;
+        return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Owned baselines: ${newestStr} \\u00b7 oldest: ${oldestStr}</span>${action}`;
       })()}
     </div>
     <div id="benchmark-fees-editor" style="margin-bottom:14px"></div>
