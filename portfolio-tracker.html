@@ -2522,6 +2522,18 @@ let qualityReviews = []; // saved pre-purchase quality checklists for stock/ETF 
 // peDeal shape: { id, company, investmentDate, amountInvested, currentValue, lastValuationDate, stage, notes }
 let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Benchmarks
 let benchmarkPricesDate = null; // ISO timestamp of last benchmark fetch
+// Expense ratios (annual %, e.g. 0.18 = 0.18%/yr) for benchmark ETFs. Used to decompose
+// theme alpha into "fee tailwind" (the edge you get just from not paying the benchmark's fee,
+// pro-rated by holding period) vs "selection skill" (the residual). Editable in the Theme
+// Universe panel; prefilled with issuer-sourced defaults on first load if empty. The benchmark
+// ETF's market price already nets out its fee, so your raw alpha already INCLUDES this benefit —
+// this just makes visible how much of the alpha is fee-savings vs genuine stock-picking.
+let benchmarkFees = {};
+const DEFAULT_BENCHMARK_FEES = {
+  QQQ: 0.18, SMH: 0.35, CIBR: 0.60,
+  XLF: 0.08, XLE: 0.08, XLY: 0.08, XLV: 0.08, XLP: 0.08, XLU: 0.08,
+  GLD: 0.40, ITA: 0.40, VNQ: 0.13, AGG: 0.03, VWO: 0.07, VEA: 0.03, IWM: 0.19
+};
 let trackRecordMatureOnly = false; // toggle: filter Track Record cards to mature positions only
 let industryAlphaMatureOnly = false; // toggle: filter Industry Intelligence/Spotlight theme alpha to mature open positions only
 
@@ -2655,7 +2667,7 @@ async function savePositions() {
         benchAlphaCache = {};
       }
     } catch (e) { /* best effort */ }
-    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache }));
+    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache, benchmarkFees }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
     localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
     localStorage.setItem('portfolio-ticker-info-v1', JSON.stringify({ tickerInfo }));
@@ -2738,7 +2750,13 @@ async function loadPositions() {
       if (snapParsed.themeUniverseHistory && typeof snapParsed.themeUniverseHistory === 'object') themeUniverseHistory = snapParsed.themeUniverseHistory;
       if (Array.isArray(snapParsed.priceHistory)) priceHistory = snapParsed.priceHistory;
       if (snapParsed.benchAlphaCache && typeof snapParsed.benchAlphaCache === 'object') benchAlphaCache = snapParsed.benchAlphaCache;
+      if (snapParsed.benchmarkFees && typeof snapParsed.benchmarkFees === 'object') benchmarkFees = snapParsed.benchmarkFees;
     }
+    // Seed default expense ratios on first load (only fills tickers not already set).
+    if (!benchmarkFees || typeof benchmarkFees !== 'object') benchmarkFees = {};
+    Object.entries(DEFAULT_BENCHMARK_FEES).forEach(([tk, fee]) => {
+      if (benchmarkFees[tk] === undefined) benchmarkFees[tk] = fee;
+    });
   } catch(e) { /* no snapshots yet */ }
 
   try {
@@ -5006,7 +5024,93 @@ function renderThemeIntel() {
       <strong style="color:#BA7517">≥ means floor.</strong> True exposure adds what you hold in each theme inside your funds. Of ${fmtDollarWhole(embeddedTotal)} embedded across your funds, ~${classPct.toFixed(0)}% could be theme-classified; the rest (VOO's untracked tail) isn't shown in any theme — so true exposure and incidental are <em>at least</em> the figures shown, likely higher.</div>`;
   }
 
+  // ── Portfolio-wide fee decomposition rollup ──
+  // Sums theme-α across every owned theme and splits into fee tailwind vs selection skill, using
+  // the SAME per-position logic as each theme's deep-dive (so the rollup reconciles with the cards).
+  // Honors the maturity toggle (industryAlphaMatureOnly) for identical scope. Tracks coverage:
+  // a theme's α counts toward the total even if its fee can't be computed (no ratio set, or all-ETF
+  // positions) — those themes are flagged so the split's coverage is explicit, never silently folded.
+  const rollup = (() => {
+    let totalAlpha = 0, totalFeeTailwind = 0;
+    let themesWithAlpha = 0, themesWithFeeData = 0;
+    let excludedAlpha = 0;
+    const excludedThemes = [];
+    const ownedThemes = [...new Set(open.map(p => p.theme))];
+
+    ownedThemes.forEach(theme => {
+      const set = positions.filter(p => {
+        if (p.closed || p.theme !== theme) return false;
+        if (!industryAlphaMatureOnly) return true;
+        if (!p.dateBought) return false;
+        const b = new Date(p.dateBought); if (isNaN(b)) return false;
+        return Math.floor((_now - b.getTime()) / 86400000) >= MATURITY_DAYS;
+      });
+      let themeAlpha = 0, themeAlphaCount = 0, themeFee = 0, themeFeeData = false;
+      set.forEach(p => {
+        const ta = calcThemeAlpha(p);
+        if (!ta) return;
+        themeAlpha += ta.themeAlphaDollar; themeAlphaCount++;
+        if (p.isETF) return; // ETF-vs-ETF: fees cancel, no tailwind
+        const feePct = benchmarkFees[ta.benchTicker];
+        if (feePct === undefined || feePct === null) return;
+        const b = p.dateBought ? new Date(p.dateBought) : null;
+        if (!b || isNaN(b)) return;
+        const daysHeld = Math.max(0, Math.floor((_now - b.getTime()) / 86400000));
+        themeFee += (feePct / 100) * (daysHeld / 365) * (ta.invested || 0);
+        themeFeeData = true;
+      });
+      if (themeAlphaCount === 0) return; // no measurable α this theme
+      themesWithAlpha++;
+      totalAlpha += themeAlpha;
+      if (themeFeeData) {
+        themesWithFeeData++;
+        totalFeeTailwind += themeFee;
+      } else {
+        excludedAlpha += themeAlpha;
+        excludedThemes.push(theme);
+      }
+    });
+
+    if (themesWithAlpha === 0) return null;
+    return {
+      totalAlpha,
+      totalFeeTailwind,
+      totalSkill: totalAlpha - totalFeeTailwind,
+      themesWithAlpha,
+      themesWithFeeData,
+      excludedAlpha,
+      excludedThemes
+    };
+  })();
+
+  const rollupBanner = (() => {
+    if (!rollup) return '';
+    const matSuffix = industryAlphaMatureOnly ? ' · matured only (≥' + MATURITY_DAYS + 'd)' : '';
+    const feeColor = 'var(--color-text-secondary)';
+    const skillColor = rollup.totalSkill >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const alphaColor = rollup.totalAlpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    // Coverage callout: only shown when some themes' α couldn't be fee-decomposed, so the user
+    // never has to wonder why the split doesn't sum to the headline across every theme.
+    const coverage = rollup.excludedThemes.length > 0
+      ? `<div style="font-size:9px;color:#fbbf24;margin-top:6px;line-height:1.45">⚠ Split covers ${rollup.themesWithFeeData} of ${rollup.themesWithAlpha} themes with α. ${rollup.excludedThemes.length} theme${rollup.excludedThemes.length > 1 ? 's' : ''} (${rollup.excludedThemes.map(esc).join(', ')}, ${rollup.totalAlpha >= 0 ? '+' : ''}${fmtDollarWhole(rollup.excludedAlpha)} α) ${rollup.excludedThemes.length > 1 ? 'have' : 'has'} no expense ratio set — their α sits in the total but isn't split. Set fees in the Theme Universe panel to include them.</div>`
+      : `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:6px">Split covers all ${rollup.themesWithAlpha} themes with measurable α.</div>`;
+    return `
+    <div style="background:var(--color-background-primary);border:0.5px solid #60a5fa;border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);padding:11px 14px;margin-bottom:12px">
+      <div style="font-size:10px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:7px">Portfolio stock-picking — fee tailwind vs skill <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--color-text-tertiary)">· across all themes${matSuffix}</span></div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:baseline">
+        <div><span style="font-size:9px;color:var(--color-text-tertiary)">total theme-α</span><div style="font-size:18px;font-weight:600;color:${alphaColor};line-height:1.1">${rollup.totalAlpha >= 0 ? '+' : ''}${fmtDollarWhole(rollup.totalAlpha)}</div></div>
+        <div style="font-size:16px;color:var(--color-text-tertiary);align-self:center">=</div>
+        <div><span style="font-size:9px;color:var(--color-text-tertiary)">fee tailwind</span><div style="font-size:18px;font-weight:600;color:${feeColor};line-height:1.1">${rollup.totalFeeTailwind >= 0 ? '+' : ''}${fmtDollarWhole(rollup.totalFeeTailwind)}</div></div>
+        <div style="font-size:16px;color:var(--color-text-tertiary);align-self:center">+</div>
+        <div><span style="font-size:9px;color:var(--color-text-tertiary)">selection skill</span><div style="font-size:18px;font-weight:600;color:${skillColor};line-height:1.1">${rollup.totalSkill >= 0 ? '+' : ''}${fmtDollarWhole(rollup.totalSkill)}</div></div>
+      </div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:7px;line-height:1.45">How much of your edge over theme benchmarks is just not paying their fees (pro-rated by holding period) vs genuine picking. Fee tailwind only credits fee-free stock positions; ETF holdings are skipped (fees cancel vs an ETF benchmark).</div>
+      ${coverage}
+    </div>`;
+  })();
+
   el.innerHTML = `
+    ${rollupBanner}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
       <div style="font-size:11px;color:var(--color-text-tertiary)">Click a row to expand · sorted by ${sortKey === 'truePct' ? 'true exposure' : sortKey}</div>
       ${matToggle}
@@ -5064,6 +5168,44 @@ function renderIntelDeepDive(r, totalValue, grandTotal) {
   const themeAlphaTotal = themeAlphaSet.length > 0 ? themeAlphaSet.reduce((s, ta) => s + ta.themeAlphaDollar, 0) : null;
   const themeBeating = themeAlphaSet.filter(ta => ta.themeAlphaDollar > 0).length;
   const themeBeatTotal = themeAlphaSet.length;
+
+  // ── Fee decomposition ──
+  // The benchmark ETF's price already nets out its annual fee, so themeAlphaDollar already
+  // INCLUDES the benefit of you not paying that fee (when your side is fee-free stocks). This
+  // splits the alpha into: (a) fee tailwind = the slice that's just not paying the benchmark's
+  // fee, pro-rated by each position's holding period; (b) selection skill = the residual.
+  // Per position: feeTailwind$ = (fee% / 100) × (daysHeld / 365) × invested.
+  // We only count the fee benefit for positions whose OWN holding is fee-free (a direct stock):
+  // if you hold an ETF measured against an ETF benchmark, the fees roughly cancel, so no tailwind.
+  let feeTailwindDollar = 0;
+  let feeAnyData = false;
+  const _nowMs = Date.now();
+  // Re-derive per-position so we have daysHeld + isETF alongside each alpha.
+  const _feePositions = positions.filter(p => {
+    if (p.closed || p.theme !== r.theme) return false;
+    if (!industryAlphaMatureOnly) return true;
+    if (!p.dateBought) return false;
+    const b = new Date(p.dateBought); if (isNaN(b)) return false;
+    return Math.floor((_nowMs - b.getTime()) / 86400000) >= MATURITY_DAYS;
+  });
+  _feePositions.forEach(p => {
+    const ta = calcThemeAlpha(p);
+    if (!ta) return;
+    // Fee benefit applies when your holding is a fee-free stock compared to a fee-charging ETF
+    // benchmark. If your position is itself an ETF, fees roughly cancel — skip.
+    if (p.isETF) return;
+    const feePct = benchmarkFees[ta.benchTicker];
+    if (feePct === undefined || feePct === null) return;
+    const b = p.dateBought ? new Date(p.dateBought) : null;
+    if (!b || isNaN(b)) return;
+    const daysHeld = Math.max(0, Math.floor((_nowMs - b.getTime()) / 86400000));
+    const tailwind = (feePct / 100) * (daysHeld / 365) * (ta.invested || 0);
+    feeTailwindDollar += tailwind;
+    feeAnyData = true;
+  });
+  const skillResidualDollar = (themeAlphaTotal !== null && feeAnyData)
+    ? themeAlphaTotal - feeTailwindDollar
+    : null;
   const lensDiverge = r.verdictAlpha !== null && themeAlphaTotal !== null
     && Math.sign(r.verdictAlpha) !== Math.sign(themeAlphaTotal)
     && Math.abs(r.verdictAlpha) > 100 && Math.abs(themeAlphaTotal) > 100;
@@ -5089,6 +5231,11 @@ function renderIntelDeepDive(r, totalValue, grandTotal) {
         <div style="font-size:10px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Stock-picking · vs ${bench ? esc(bench) : 'theme'} <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--color-text-tertiary)">· $ alpha${matSuffix}</span></div>
         <div style="font-size:22px;font-weight:500;line-height:1.1;color:${themeAlphaCardColor}">${themeAlphaTotal === null ? '—' : (themeAlphaTotal >= 0 ? '+' : '') + fmtDollarWhole(themeAlphaTotal)}</div>
         <div style="font-size:10px;color:var(--color-text-secondary);margin-top:2px"><span style="color:${beatColor};font-weight:600">${themeBeatTotal === 0 ? 'no matured names' : themeBeating + '/' + themeBeatTotal + ' beating'}</span></div>
+        ${(themeAlphaTotal !== null && feeAnyData) ? `<div style="margin-top:6px;padding-top:6px;border-top:0.5px solid var(--color-border-tertiary);font-size:10px;line-height:1.5">
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--color-text-tertiary)">of which fee tailwind</span><span style="color:var(--color-text-secondary)">${feeTailwindDollar >= 0 ? '+' : ''}${fmtDollarWhole(feeTailwindDollar)}</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--color-text-tertiary)">selection skill</span><span style="color:${skillResidualDollar >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'};font-weight:600">${skillResidualDollar >= 0 ? '+' : ''}${fmtDollarWhole(skillResidualDollar)}</span></div>
+        </div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px;line-height:1.4">Fee tailwind = the edge from your fee-free stocks not paying ${bench ? esc(bench) : 'the ETF'}'s expense ratio (pro-rated by how long you've held). Selection skill is the rest — your actual picking.</div>` : ''}
         <div style="font-size:10px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.4">Whether your ${esc(r.theme.toLowerCase())} picks beat just owning ${bench ? esc(bench) : 'the sector ETF'} over the same period — the test of the stock-picking itself, separate from how big the bet is.</div>
       </div>
     </div>`;
@@ -10873,7 +11020,7 @@ function renderSleeveValueAdd() {
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--color-border-tertiary);padding-top:8px">
         <div>
-          <div style="font-size:9px;color:var(--color-text-tertiary)">vs Theme ETF <span style="opacity:0.6">(primary)</span></div>
+          <div style="font-size:9px;color:var(--color-text-tertiary)">vs Theme ETF <span style="opacity:0.6">(primary)</span> <span style="opacity:0.55;cursor:help" title="This already includes the fee benefit: the theme ETF's price is net of its expense ratio, so part of any edge here is just not paying that fee. Expand a theme in Industry Intelligence to see the fee-tailwind vs selection-skill split.">(incl. fee benefit)</span></div>
           <div style="font-size:14px;font-weight:700;color:${themeColor}">${o.themeCount > 0 ? fmtDollarWhole(o.themeDollar) : '—'}</div>
           <div style="font-size:9px;color:var(--color-text-tertiary)">${themePp !== null ? (themePp >= 0 ? '+' : '') + themePp.toFixed(1) + 'pp · ' : ''}beat ${o.beatTheme}/${o.themeCount}</div>
         </div>
@@ -15316,6 +15463,7 @@ function renderThemeUniverse() {
         return `<span style="font-size:10px;color:${newestColor}">Last refresh: ${newestStr}</span> <span style="font-size:10px;color:${oldestColor}" title="Some entries are older than the most recent refresh — re-click backfill to update">· oldest data: ${oldestStr}</span>`;
       })()}
     </div>
+    <div id="benchmark-fees-editor" style="margin-bottom:14px"></div>
     <div class="rebal-table-wrap">
       <table class="rebal-table">
         <thead>
@@ -15341,6 +15489,67 @@ function renderThemeUniverse() {
   renderThemeClusters();
   renderThemeDiscovery();
   renderThemeAiReview();
+  renderBenchmarkFeesEditor();
+}
+
+// Editor for benchmark ETF expense ratios. Lives in the Theme Universe panel because these are
+// the yardstick ETFs (QQQ, SMH, …), not funds the user holds. Each fee feeds the alpha
+// decomposition (fee tailwind vs selection skill) in the Theme Intelligence expansion.
+// Shows one row per benchmark ticker actually in use (deduped), with an editable % field and a
+// stockanalysis.com link to go verify/update the current ratio.
+function renderBenchmarkFeesEditor() {
+  const el = document.getElementById('benchmark-fees-editor');
+  if (!el) return;
+
+  // Benchmark tickers in use across all themes (owned + universe), deduped, stable order.
+  const tickers = [...new Set(Object.values(BENCHMARKS.themes).filter(t => t))];
+  if (tickers.length === 0) { el.innerHTML = ''; return; }
+
+  const rows = tickers.map(tk => {
+    const fee = (benchmarkFees[tk] !== undefined && benchmarkFees[tk] !== null) ? benchmarkFees[tk] : '';
+    const url = `https://stockanalysis.com/etf/${encodeURIComponent(tk)}/`;
+    return `<tr>
+      <td style="font-weight:700">${esc(tk)}</td>
+      <td class="r">
+        <input type="number" step="0.01" min="0" value="${fee}"
+          onchange="setBenchmarkFee('${esc(tk)}', this.value)"
+          style="width:64px;text-align:right;font-size:11px;padding:2px 5px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />
+        <span style="font-size:10px;color:var(--color-text-tertiary);margin-left:3px">%/yr</span>
+      </td>
+      <td><a href="${url}" target="_blank" rel="noopener" style="font-size:10px;color:#60a5fa;text-decoration:none">verify ↗</a></td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <details>
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:8px;list-style:none">▾ Benchmark expense ratios <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(feeds fee-tailwind decomposition · click to expand)</span></summary>
+      <div style="margin-bottom:10px;padding:9px 13px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:10px;color:var(--color-text-secondary);line-height:1.5">
+        Each benchmark ETF charges an annual fee that's already baked into its price — so when your fee-free stock picks beat one of these, part of that edge is just <em>not paying the fee</em>. These ratios let the Theme Intelligence deep-dive split your alpha into <strong>fee tailwind</strong> vs <strong>selection skill</strong>. Prefilled with known values; edit any that have drifted (the verify link opens the fund on stockanalysis.com).
+      </div>
+      <div class="rebal-table-wrap">
+        <table class="rebal-table">
+          <thead><tr><th>Benchmark</th><th class="r">Expense ratio</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </details>`;
+}
+
+// Write an edited benchmark fee. Blank clears it (decomposition then skips that benchmark).
+function setBenchmarkFee(ticker, val) {
+  const tk = (ticker || '').toUpperCase();
+  if (!tk) return;
+  const trimmed = (val || '').toString().trim();
+  if (trimmed === '') {
+    delete benchmarkFees[tk];
+  } else {
+    const n = parseFloat(trimmed);
+    if (isNaN(n) || n < 0) return; // ignore garbage; leave prior value
+    benchmarkFees[tk] = n;
+  }
+  scheduleSave();
+  // Re-render the intel deep-dive so the decomposition reflects the new fee immediately.
+  if (typeof renderThemeIntel === 'function') renderThemeIntel();
 }
 
 // ─────────────────────────────────────────────
@@ -19391,6 +19600,7 @@ function exportData() {
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
     priceHistory,
+    benchmarkFees,
     peDeals,
     realizedPeDeals,
     tickerInfo,
@@ -19435,6 +19645,7 @@ function importData(input) {
       if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
       if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
       if (Array.isArray(data.priceHistory)) priceHistory = data.priceHistory;
+      if (data.benchmarkFees && typeof data.benchmarkFees === 'object') benchmarkFees = Object.assign({}, benchmarkFees, data.benchmarkFees);
       if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
       if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
       if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
@@ -20583,6 +20794,7 @@ function driveBuildBackupPayload() {
     spLots, spCurrentPrice,
     snapshots, benchmarkPrices, benchmarkPricesDate,
     priceHistory,
+    benchmarkFees,
     peDeals,
     realizedPeDeals,
     tickerInfo,
@@ -20959,6 +21171,7 @@ async function executeRestore() {
     if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
     if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
     if (Array.isArray(data.priceHistory)) priceHistory = data.priceHistory;
+    if (data.benchmarkFees && typeof data.benchmarkFees === 'object') benchmarkFees = Object.assign({}, benchmarkFees, data.benchmarkFees);
     if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
     if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
     if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
