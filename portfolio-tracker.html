@@ -4796,6 +4796,20 @@ let intelSortDir = 'desc';
 let intelOpenKey = null;        // which theme row is currently expanded (one at a time)
 let distOpenKey = null;         // which Top Holdings full-table row is currently expanded
 let priceMovesView = 'sinceLast'; // 'sinceLast' or 'allTime' — view toggle for the price-moves panel
+// Sort state for the price-moves table. col = column key, dir = 'asc' | 'desc'.
+// Keys are deliberately stable across both tabs where possible (ticker, perShare, moveOnPosition,
+// pctChange); priceFrom / priceTo / bench / trend are tab-specific. When the user clicks a column
+// not present on the current tab, we fall back to the default unsort (null). On null, the default
+// is "biggest movers first" — absolute moveOnPosition descending, matching the prior behavior.
+let priceMovesSort = { col: null, dir: 'desc' };
+function setPriceMovesSort(col) {
+  if (priceMovesSort.col === col) {
+    priceMovesSort.dir = (priceMovesSort.dir === 'asc') ? 'desc' : 'asc';
+  } else {
+    priceMovesSort = { col, dir: 'desc' };
+  }
+  renderPriceMoves();
+}
 
 function fmtDollarCompact(v) {
   const a = Math.abs(v);
@@ -10706,16 +10720,72 @@ function renderPriceMoves() {
   const dColor = (v) => v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
   const pColor = dColor;
 
+  // Sortable header builder. Renders a <th> with click handler + arrow indicator when active.
+  // Unsorted columns show no arrow (avoids visual noise on every header) but still get the
+  // click cursor. The chevron uses ▲/▼ — small but unambiguous.
+  const sortableTh = (colKey, label, align, extraTitle) => {
+    const active = priceMovesSort.col === colKey;
+    const arrow = active ? (priceMovesSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    const activeStyle = active ? ';color:var(--color-text-primary);font-weight:600' : '';
+    const titleAttr = extraTitle ? ' title="' + esc(extraTitle) + '"' : '';
+    return '<th onclick="setPriceMovesSort(\'' + colKey + '\')" style="padding:4px 8px;text-align:' + align + ';cursor:pointer;user-select:none' + activeStyle + '"' + titleAttr + '>' + label + arrow + '</th>';
+  };
+
   let body = '';
 
   if (isSince) {
     // ── SINCE LAST REFRESH ──
     const sl = result.sinceLast;
+
+    // Resolve a row's bench ticker for sort-by-theme. "self"-benchmarked rows go to the
+    // bottom intentionally — they're a different category (no theme to group with), and the
+    // point of theme-sort is grouping rows that share a benchmark.
+    const _rowBenchTicker = (ticker) => {
+      const info = _resolveBenchForRow(ticker);
+      if (!info) return ''; // no benchmark configured
+      return info.isSelf ? '' : (info.benchTicker || '');
+    };
+
     const rows = [...sl.rows].sort((a, b) => {
-      // Sort by abs $ move (excluding NEW/MISSING rows first, then those after)
-      const aMove = (a.isNew || a.isMissing) ? -Infinity : Math.abs(a.moveOnPosition || 0);
-      const bMove = (b.isNew || b.isMissing) ? -Infinity : Math.abs(b.moveOnPosition || 0);
-      return bMove - aMove;
+      // NEW / MISSING sentinel rows always sink to the bottom regardless of sort, since their
+      // values are undefined for any column except ticker.
+      const aSentinel = (a.isNew || a.isMissing);
+      const bSentinel = (b.isNew || b.isMissing);
+      if (aSentinel !== bSentinel) return aSentinel ? 1 : -1;
+      if (aSentinel && bSentinel) return (a.ticker || '').localeCompare(b.ticker || '');
+
+      const col = priceMovesSort.col;
+      const dir = priceMovesSort.dir === 'asc' ? 1 : -1;
+      // Default (null col): biggest movers first by absolute $ move — matches prior behavior.
+      if (!col) {
+        return Math.abs(b.moveOnPosition || 0) - Math.abs(a.moveOnPosition || 0);
+      }
+      let av, bv, isStr = false;
+      switch (col) {
+        case 'ticker':   av = a.ticker || ''; bv = b.ticker || ''; isStr = true; break;
+        case 'pricePrev': av = a.pricePrev || 0; bv = b.pricePrev || 0; break;
+        case 'priceNow':  av = a.priceNow  || 0; bv = b.priceNow  || 0; break;
+        case 'perShare':  av = a.perShare  || 0; bv = b.perShare  || 0; break;
+        case 'moveOnPosition': av = a.moveOnPosition || 0; bv = b.moveOnPosition || 0; break;
+        case 'pctChange': av = a.pctChange || 0; bv = b.pctChange || 0; break;
+        case 'bench': {
+          // Sort by bench ticker (groups by theme). Empty (no-bench / self) sinks to bottom
+          // independent of direction — they're not part of any theme group.
+          const at = _rowBenchTicker(a.ticker), bt = _rowBenchTicker(b.ticker);
+          if (!at && bt) return 1;
+          if (at && !bt) return -1;
+          if (!at && !bt) return (a.ticker || '').localeCompare(b.ticker || '');
+          const cmp = at.localeCompare(bt);
+          if (cmp !== 0) return cmp * dir;
+          // Tie-break within a theme group: by abs $ move desc, so the biggest mover in each
+          // theme block is on top — readable when scanning a group.
+          return Math.abs(b.moveOnPosition || 0) - Math.abs(a.moveOnPosition || 0);
+        }
+        default:
+          return Math.abs(b.moveOnPosition || 0) - Math.abs(a.moveOnPosition || 0);
+      }
+      if (isStr) return av.localeCompare(bv) * dir;
+      return (av - bv) * dir;
     });
 
     // Short date labels for the "Price [date]" column headers. Full timestamp
@@ -10816,13 +10886,13 @@ function renderPriceMoves() {
     body =
       '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
         '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
-          '<th style="padding:4px 8px;text-align:left">Ticker</th>' +
-          '<th style="padding:4px 8px;text-align:right" title="' + sl.tsPrev + '">Price ' + prevDateLbl + '</th>' +
-          '<th style="padding:4px 8px;text-align:right" title="' + sl.tsNow + '">Price ' + nowDateLbl + '</th>' +
-          '<th style="padding:4px 8px;text-align:right">Per-share Δ</th>' +
-          '<th style="padding:4px 8px;text-align:right">$ on your position</th>' +
-          '<th style="padding:4px 8px;text-align:right" title="Per-share price change as a percent">Price % change</th>' +
-          '<th style="padding:4px 8px;text-align:right" title="Theme benchmark over the same window. Click fetch on a row to compute. α = your row\'s Price % change minus the benchmark\'s % change, in percentage points (pp). Polygon daily-aggregate bars used for the benchmark — the bar dates appear under each result.">vs theme bench</th>' +
+          sortableTh('ticker', 'Ticker', 'left') +
+          sortableTh('pricePrev', 'Price ' + prevDateLbl, 'right', sl.tsPrev) +
+          sortableTh('priceNow', 'Price ' + nowDateLbl, 'right', sl.tsNow) +
+          sortableTh('perShare', 'Per-share Δ', 'right') +
+          sortableTh('moveOnPosition', '$ on your position', 'right') +
+          sortableTh('pctChange', 'Price % change', 'right', 'Per-share price change as a percent') +
+          sortableTh('bench', 'vs theme bench', 'right', 'Click to group rows by theme benchmark. Cells show fetched α — see button on each row. self-benchmarked rows sink to bottom.') +
         '</tr></thead>' +
         '<tbody>' + rowHtml + bookRow + '</tbody>' +
       '</table>' +
@@ -10830,7 +10900,32 @@ function renderPriceMoves() {
   } else {
     // ── ACROSS ALL REFRESHES ──
     const at = result.allTime;
-    const rows = [...at.rows].sort((a, b) => Math.abs(b.moveOnCurrent || 0) - Math.abs(a.moveOnCurrent || 0));
+
+    const rows = [...at.rows].sort((a, b) => {
+      const col = priceMovesSort.col;
+      const dir = priceMovesSort.dir === 'asc' ? 1 : -1;
+      if (!col) {
+        return Math.abs(b.moveOnCurrent || 0) - Math.abs(a.moveOnCurrent || 0);
+      }
+      let av, bv, isStr = false;
+      switch (col) {
+        // Note: column keys here map to allTime's row fields. Some keys overlap with sinceLast
+        // (ticker, perShare, pctChange) so toggling tabs preserves a sensible sort when possible.
+        // 'pricePrev' / 'priceNow' map to allTime's firstSeenPrice / latestPrice — same idea.
+        // 'moveOnPosition' (sinceLast) maps to 'moveOnCurrent' (allTime) — same conceptual column.
+        case 'ticker':   av = a.ticker || ''; bv = b.ticker || ''; isStr = true; break;
+        case 'pricePrev': av = a.firstSeenPrice || 0; bv = b.firstSeenPrice || 0; break;
+        case 'priceNow':  av = a.latestPrice    || 0; bv = b.latestPrice    || 0; break;
+        case 'perShare':  av = a.perShare       || 0; bv = b.perShare       || 0; break;
+        case 'moveOnPosition': av = a.moveOnCurrent || 0; bv = b.moveOnCurrent || 0; break;
+        case 'pctChange': av = a.pctChange      || 0; bv = b.pctChange      || 0; break;
+        // 'bench' and 'trend' don't apply to allTime — fall back to default for those.
+        default:
+          return Math.abs(b.moveOnCurrent || 0) - Math.abs(a.moveOnCurrent || 0);
+      }
+      if (isStr) return av.localeCompare(bv) * dir;
+      return (av - bv) * dir;
+    });
 
     const disclosure = '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px;font-style:italic;line-height:1.5">' +
       'Uses your <b>current share counts</b> against price history. Strips out buys, sells, and cash flows — this is price drift only, <b>not</b> realized gain or loss. ' +
@@ -10879,12 +10974,13 @@ function renderPriceMoves() {
     body = tsLine + disclosure +
       '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
         '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
-          '<th style="padding:4px 8px;text-align:left">Ticker</th>' +
-          '<th style="padding:4px 8px;text-align:right">First-seen price</th>' +
-          '<th style="padding:4px 8px;text-align:right">Latest price</th>' +
-          '<th style="padding:4px 8px;text-align:right">Per-share Δ</th>' +
-          '<th style="padding:4px 8px;text-align:right" title="Current shares × price change since first seen. Price drift only — not realized gain.">$ on current position</th>' +
-          '<th style="padding:4px 8px;text-align:right" title="Per-share price change as a percent">Price % change</th>' +
+          sortableTh('ticker', 'Ticker', 'left') +
+          sortableTh('pricePrev', 'First-seen price', 'right') +
+          sortableTh('priceNow', 'Latest price', 'right') +
+          sortableTh('perShare', 'Per-share Δ', 'right') +
+          sortableTh('moveOnPosition', '$ on current position', 'right', 'Current shares × price change since first seen. Price drift only — not realized gain.') +
+          sortableTh('pctChange', 'Price % change', 'right', 'Per-share price change as a percent') +
+          // Trend (sparkline) is non-sortable — it's a per-row visualization, no scalar to sort by.
           '<th style="padding:4px 8px;text-align:right">Trend</th>' +
         '</tr></thead>' +
         '<tbody>' + rowHtml + bookRow + '</tbody>' +
@@ -15478,15 +15574,15 @@ function renderThemeUniverse() {
         const oldestStr = fmtTimeAgo(range.oldest);
         const oldestMs = range.oldest ? (Date.now() - new Date(range.oldest).getTime()) : 0;
         const oneYDrifted = oldestMs > 4 * 86400000; // beyond the 1Y cache window → 1Y has drifted
-        const anchorTip = 'When the historical baseline (YTD/1Y starting price) for your OWNED themes was last fetched \\u2014 not today\\u2019s prices, which refresh separately via Get Benchmarks. Old is fine for YTD (Jan 2 is a fixed point); for 1Y it means the window has drifted a little past a true trailing year. Click \\u201cFetch owned-theme returns\\u201d to refresh the drifted baselines (it auto-skips the ones still current).';
+        const anchorTip = 'When the historical baseline (YTD/1Y starting price) for your OWNED themes was last fetched — not today’s prices, which refresh separately via Get Benchmarks. Old is fine for YTD (Jan 2 is a fixed point); for 1Y it means the window has drifted a little past a true trailing year. Click “Fetch owned-theme returns” to refresh the drifted baselines (it auto-skips the ones still current).';
         const muted = 'var(--color-text-tertiary)';
         if (newestStr === oldestStr) {
           return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Owned baselines: ${newestStr}</span>`;
         }
         const action = oneYDrifted
-          ? ` <span style="font-size:10px;color:#fbbf24;cursor:help" title="${anchorTip}">\\u2014 1Y baselines drifted; click \\u201cFetch owned-theme returns\\u201d to refresh</span>`
+          ? ` <span style="font-size:10px;color:#fbbf24;cursor:help" title="${anchorTip}">— 1Y baselines drifted; click “Fetch owned-theme returns” to refresh</span>`
           : '';
-        return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Owned baselines: ${newestStr} \\u00b7 oldest: ${oldestStr}</span>${action}`;
+        return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Owned baselines: ${newestStr} · oldest: ${oldestStr}</span>${action}`;
       })()}
     </div>
     <div id="benchmark-fees-editor" style="margin-bottom:14px"></div>
