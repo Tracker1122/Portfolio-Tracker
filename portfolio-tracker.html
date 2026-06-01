@@ -1374,6 +1374,7 @@
 
   <!-- Rebalance & Tax Tab -->
   <div class="tab-panel" id="tab-rebalance">
+    <div id="trim-watch-block" style="margin-bottom:18px"></div>
     <div class="section-heading">Trim Candidates</div>
     <div class="rebal-controls">
       <span class="rebal-control-label">Short-term rate</span>
@@ -1390,12 +1391,13 @@
         <thead>
           <tr>
             <th onclick="sortRebal('ticker')" class="sortable">Position <span id="sort-ticker"></span></th>
-            <th class="r" title="Current market value of this position (all tranches at current price).">Value<div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">at current price</div></th>
+            <th onclick="sortRebal('value')" class="sortable r" title="Current market value of this position (all tranches at current price).">Value <span id="sort-value"></span><div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">at current price</div></th>
             <th onclick="sortRebal('daysHeld')" class="sortable r">Held <span id="sort-daysHeld"></span></th>
-            <th class="r" title="Soak status — whether this position has been held long enough that its alpha numbers are meaningful signal vs noise. Per-sleeve thresholds: Thesis Plays 180d, Quality 365d, PBP 1095d. Informational only — does not change signal logic.">Soak</th>
-            <th>Strategy</th>
-            <th onclick="sortRebal('portfolioPct')" class="sortable r" title="This position's value as a percent of your ENTIRE managed book — all open positions at current value, including VOO held as a position. This is NOT a sleeve or theme percentage.">% of book<div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">vs whole book <span id="sort-portfolioPct"></span></div></th>
-            <th class="r" title="What share of your TOTAL holdings of this name sits in this one lot. Denominator = everything you hold of this name: every direct lot across all accounts PLUS its pass-through inside funds you hold (e.g. VOO). Reads as: this lot is this percent of all the [name] you own, so selling it reduces your total exposure to the name by about this much. Shown as ≤ because VOO's pasted holdings are partial — your true total of this name is at least what's counted, so the share in this lot is at most the number shown.">% of name in this lot<div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">this lot ÷ all you hold of it · incl. funds</div></th>
+            <th onclick="sortRebal('soak')" class="sortable r" title="Soak status — whether this position has been held long enough that its alpha numbers are meaningful signal vs noise. Per-sleeve thresholds: Thesis Plays 180d, Quality 365d, PBP 1095d. Informational only — does not change signal logic. Sort: by days held (same underlying number as Held).">Soak <span id="sort-soak"></span></th>
+            <th onclick="sortRebal('strategy')" class="sortable">Strategy <span id="sort-strategy"></span></th>
+            <th onclick="sortRebal('portfolioPct')" class="sortable r" title="This position's value as a percent of your ENTIRE managed book — all open positions at current value, including VOO held as a position. This is NOT a sleeve or theme percentage.">% of book <span id="sort-portfolioPct"></span><div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">vs whole book</div></th>
+            <th onclick="sortRebal('industryPct')" class="sortable r" title="What share of your TOTAL holdings of this name sits in this one lot. Denominator = everything you hold of this name: every direct lot across all accounts PLUS its pass-through inside funds you hold (e.g. VOO). Reads as: this lot is this percent of all the [name] you own, so selling it reduces your total exposure to the name by about this much. Shown as ≤ because VOO's pasted holdings are partial — your true total of this name is at least what's counted, so the share in this lot is at most the number shown.">% of name in this lot <span id="sort-industryPct"></span><div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">this lot ÷ all you hold of it · incl. funds</div></th>
+            <th onclick="sortRebal('glPct')" class="sortable r" title="Unrealized gain or loss as a percent of cost basis. Surfaced for trim-candidate screening — see Trim Watch above.">Growth % <span id="sort-glPct"></span><div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">G/L ÷ basis</div></th>
             <th onclick="sortRebal('dollarAlpha')" class="sortable r">Dollar Alpha <span id="sort-dollarAlpha"></span></th>
             <th onclick="sortRebal('themeAlpha')" class="sortable r" title="Theme-relative alpha — your dollar gain vs theme benchmark over the same period. More honest comparison for sleeves with assigned theme benchmarks.">Theme α <span id="sort-themeAlpha"></span></th>
             <th onclick="sortRebal('gl')" class="sortable r">Unreal. G/L <span id="sort-gl"></span></th>
@@ -17702,6 +17704,47 @@ function renderConcentration() {
 let rebalSortCol = 'dollarAlpha';
 let rebalSortDir = 1;
 
+// Trim Watch thresholds — editable in the UI. Defaults per user spec: G/L ≥35%, theme α ≥20pp,
+// concentration yellow ≥5% / red ≥10% of book. Saved in localStorage like other tunables so they
+// survive reloads but don't bloat the export.
+let trimWatchThresholds = (() => {
+  try { return JSON.parse(localStorage.getItem('trim-watch-thresholds-v1')) || {}; } catch (e) { return {}; }
+})();
+function _twDefault(key, dflt) { return (trimWatchThresholds[key] !== undefined && trimWatchThresholds[key] !== null && trimWatchThresholds[key] !== '') ? +trimWatchThresholds[key] : dflt; }
+function twGain()      { return _twDefault('gainPct', 35); }
+function twAlpha()     { return _twDefault('alphaPct', 20); }
+function twConcYellow(){ return _twDefault('concYellow', 5); }
+function twConcRed()   { return _twDefault('concRed', 10); }
+function setTrimWatchThreshold(key, val) {
+  const n = parseFloat(val);
+  if (isNaN(n) || n < 0) return;
+  trimWatchThresholds[key] = n;
+  try { localStorage.setItem('trim-watch-thresholds-v1', JSON.stringify(trimWatchThresholds)); } catch (e) {}
+  renderRebalance();
+}
+// Color tier helpers: linear interpolation from yellow at threshold to red at "deeply over."
+// Returns a tier label ('none' | 'yellow' | 'orange' | 'red') so we can both pick a CSS color
+// and surface the tier in the trim-watch row.
+function trimTier(value, threshold, redAt) {
+  if (value === null || value === undefined || isNaN(value)) return 'none';
+  if (value < threshold) return 'none';
+  if (value >= redAt) return 'red';
+  const frac = (value - threshold) / (redAt - threshold);
+  if (frac < 0.34) return 'yellow';
+  if (frac < 0.67) return 'orange';
+  return 'red';
+}
+function tierColor(tier) {
+  return tier === 'red' ? '#ef4444' : tier === 'orange' ? '#f97316' : tier === 'yellow' ? '#fbbf24' : 'var(--color-text-tertiary)';
+}
+function tierWorst(tiers) {
+  // Pick the most severe tier across all triggers for a row's left-border highlight.
+  const order = { none: 0, yellow: 1, orange: 2, red: 3 };
+  let worst = 'none';
+  tiers.forEach(t => { if ((order[t] || 0) > (order[worst] || 0)) worst = t; });
+  return worst;
+}
+
 function sortRebal(col) {
   if (rebalSortCol === col) rebalSortDir *= -1;
   else { rebalSortCol = col; rebalSortDir = 1; }
@@ -17866,6 +17909,10 @@ function renderRebalance() {
     return { ticker: g.ticker, account: g.account, count, isIRA,
       holdingLabel, allLT, allST, daysHeldMin,
       vsSpx, totalAlpha, totalThemeAlpha, totalGl, totalEstTax, totalInvested, totalExit, portfolioPct,
+      // glPct = aggregate G/L as % of invested basis (ST/LT-aware reading lives downstream).
+      // themeAlphaPct = theme-α dollars / invested, expressed as pp — comparable across position sizes.
+      glPct: totalInvested > 0 ? (totalGl / totalInvested) * 100 : null,
+      themeAlphaPct: (totalThemeAlpha !== null && totalInvested > 0) ? (totalThemeAlpha / totalInvested) * 100 : null,
       industryPct, themeApprox, remainingValue, remainingPct, strategyPct, industryName, strategyName,
       signal, signalClass };
   });
@@ -17874,7 +17921,12 @@ function renderRebalance() {
   rows.sort((a, b) => {
     let av, bv;
     if (rebalSortCol === 'ticker') return a.ticker.localeCompare(b.ticker) * rebalSortDir;
+    if (rebalSortCol === 'strategy') return (a.strategyName || '').localeCompare(b.strategyName || '') * rebalSortDir;
     if (rebalSortCol === 'daysHeld') { av = a.daysHeldMin ?? 0; bv = b.daysHeldMin ?? 0; }
+    else if (rebalSortCol === 'value')        { av = a.totalExit ?? 0;  bv = b.totalExit ?? 0; }
+    else if (rebalSortCol === 'soak')         { av = a.daysHeldMin ?? 0; bv = b.daysHeldMin ?? 0; } // soak reads as held-days under the hood
+    else if (rebalSortCol === 'industryPct')  { av = a.industryPct ?? 0; bv = b.industryPct ?? 0; }
+    else if (rebalSortCol === 'glPct')        { av = a.glPct ?? -9999;  bv = b.glPct ?? -9999; }
     else if (rebalSortCol === 'portfolioPct') { av = a.portfolioPct ?? 0; bv = b.portfolioPct ?? 0; }
     else if (rebalSortCol === 'dollarAlpha') { av = a.totalAlpha ?? -9999; bv = b.totalAlpha ?? -9999; }
     else if (rebalSortCol === 'themeAlpha') { av = a.totalThemeAlpha ?? -9999; bv = b.totalThemeAlpha ?? -9999; }
@@ -17885,7 +17937,7 @@ function renderRebalance() {
   });
 
   // Update sort indicators
-  ['ticker','daysHeld','portfolioPct','dollarAlpha','themeAlpha','gl'].forEach(col => {
+  ['ticker','strategy','value','soak','daysHeld','industryPct','glPct','portfolioPct','dollarAlpha','themeAlpha','gl'].forEach(col => {
     const el = document.getElementById('sort-' + col);
     if (el) el.textContent = rebalSortCol === col ? (rebalSortDir === 1 ? ' ↑' : ' ↓') : '';
     const th = el?.closest('th');
@@ -17893,7 +17945,7 @@ function renderRebalance() {
   });
 
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10" class="no-rows">No open positions to analyse.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="no-rows">No open positions to analyse.</td></tr>`;
     return;
   }
 
@@ -17963,7 +18015,20 @@ function renderRebalance() {
       soakTooltip = `Held ${d - soakThreshold} days past soak (${sleeve} threshold: ${soakThreshold}d)`;
     }
 
-    return `<tr>
+    // ── Trim Watch tier classification per row ──
+    // Three independent triggers contribute; the row's left-border reflects the worst tier.
+    // Tier colors are also applied to individual cells (Growth%, Theme α, % of book) so the
+    // visual reading lines up between the Trim Watch summary above and this main table.
+    const gainTier = trimTier(r.glPct, twGain(), Math.max(twGain() * 2, twGain() + 40));
+    const alphaTier = trimTier(r.themeAlphaPct, twAlpha(), Math.max(twAlpha() * 2, twAlpha() + 30));
+    const concTier = trimTier(r.portfolioPct, twConcYellow(), twConcRed());
+    const rowTier = tierWorst([gainTier, alphaTier, concTier]);
+    const rowBorder = rowTier === 'none' ? '' : `box-shadow: inset 4px 0 0 0 ${tierColor(rowTier)};`;
+    const gainColor = gainTier === 'none' ? 'var(--color-text-secondary)' : tierColor(gainTier);
+    const concColor = concTier === 'none' ? 'var(--color-text-secondary)' : tierColor(concTier);
+    const rowAnchorId = 'rebal-row-' + esc(r.ticker) + '-' + esc((r.account || '').replace(/[^A-Za-z0-9]/g, ''));
+
+    return `<tr id="${rowAnchorId}" style="${rowBorder}">
       <td>
         <span style="font-weight:700;font-size:13px">${esc(r.ticker)}</span>
         ${trancheNote}
@@ -17974,8 +18039,9 @@ function renderRebalance() {
       <td class="r" style="font-weight:600;color:${heldColor}">${heldLabel}</td>
       <td class="r" style="font-size:10px;color:${soakColor};font-weight:600" title="${soakTooltip}">${soakLabel}</td>
       <td style="white-space:nowrap"><span style="font-size:10px;font-weight:600;color:${sleeveColor};border-left:3px solid ${sleeveColor};padding-left:5px">${sleeve || '—'}</span></td>
-      <td class="r" style="font-weight:600;color:var(--color-text-secondary)">${r.portfolioPct !== null ? r.portfolioPct.toFixed(1) + '%' : '—'}</td>
+      <td class="r" style="font-weight:600;color:${concColor}">${r.portfolioPct !== null ? r.portfolioPct.toFixed(1) + '%' : '—'}</td>
       <td class="r" style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5">${r.industryPct !== null ? `<div><span style="color:#fbbf24;font-weight:600">${(r.themeApprox ? '≤' : '') + r.industryPct.toFixed(1)}%</span> <span style="color:var(--color-text-secondary);font-weight:600">${fmtDollar(r.totalExit)}</span></div><div style="color:var(--color-text-tertiary);font-size:9px">leaves <span style="color:var(--color-text-danger);font-weight:600">${(r.themeApprox ? '≥' : '') + r.remainingPct.toFixed(1)}% · ${fmtDollar(r.remainingValue)}</span></div>` : '—'}</td>
+      <td class="r" style="font-weight:700;color:${gainColor}" title="Unrealized G/L as a % of cost basis. Threshold for trim-watch surfacing: ${twGain()}%.">${r.glPct !== null ? (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%' : '—'}</td>
       <td class="r" style="font-weight:700;font-size:13px;background:${alphaBg};color:${alphaColor}">${r.totalAlpha !== null ? fmtDollar(r.totalAlpha) : '—'}</td>
       <td class="r" style="font-weight:600;font-size:12px;background:${(() => {
           if (r.totalThemeAlpha === null) return 'transparent';
@@ -17996,6 +18062,118 @@ function renderRebalance() {
     slider.max = Math.max(wrap.scrollWidth - wrap.clientWidth, 100);
     wrap.onscroll = () => { slider.value = wrap.scrollLeft; };
   }
+
+  renderTrimWatch(rows);
+}
+
+// Trim Watch — summary block above the main rebalance table.
+// Surfaces lots that cross at least one of three thresholds:
+//   (1) Unrealized G/L %  ≥ twGain()     [absolute gain — "you've earned a real return here"]
+//   (2) Theme alpha %     ≥ twAlpha()    [relative outperformance — "you've beaten the theme"]
+//   (3) % of book         ≥ twConcYellow()  [concentration — "this has grown into a big position"]
+// Trigger logic is OR (any one qualifies) — confirmed with user; pure AND would be too rare-event.
+// Each surfaced row gets color-graded tier badges per trigger, and a "→ jump" link that scrolls
+// the matching main-table row into view. Threshold inputs are editable inline; defaults match
+// user-specified values (35% gain, 20pp alpha, 5%/10% concentration).
+function renderTrimWatch(rows) {
+  const el = document.getElementById('trim-watch-block');
+  if (!el) return;
+
+  const gT = twGain(), aT = twAlpha(), cY = twConcYellow(), cR = twConcRed();
+
+  // Classify each row's triggers — same tier logic as the main-table cells, so the visuals
+  // stay reconciled. The "redAt" anchor for gain/alpha (where the gradient saturates) is a
+  // judgment call: I'm using "threshold × 2 or +40/+30pp, whichever is greater" so a low
+  // threshold still has a sensible red zone.
+  const flagged = rows
+    .map(r => {
+      const gain = trimTier(r.glPct, gT, Math.max(gT * 2, gT + 40));
+      const alpha = trimTier(r.themeAlphaPct, aT, Math.max(aT * 2, aT + 30));
+      const conc = trimTier(r.portfolioPct, cY, cR);
+      const triggers = [];
+      if (gain !== 'none') triggers.push({ kind: 'gain',  tier: gain,  value: r.glPct });
+      if (alpha !== 'none') triggers.push({ kind: 'alpha', tier: alpha, value: r.themeAlphaPct });
+      if (conc !== 'none') triggers.push({ kind: 'conc',  tier: conc,  value: r.portfolioPct });
+      return { r, triggers, worst: tierWorst(triggers.map(t => t.tier)) };
+    })
+    .filter(x => x.triggers.length > 0)
+    // Sort by worst tier first (red → orange → yellow), then by number of triggers, then by % of book.
+    .sort((a, b) => {
+      const order = { red: 3, orange: 2, yellow: 1, none: 0 };
+      const ta = order[a.worst], tb = order[b.worst];
+      if (ta !== tb) return tb - ta;
+      if (b.triggers.length !== a.triggers.length) return b.triggers.length - a.triggers.length;
+      return (b.r.portfolioPct || 0) - (a.r.portfolioPct || 0);
+    });
+
+  // Threshold editor — always shown, even when nothing is flagged, so the user can tune to surface.
+  const editor = `
+    <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:10px;color:var(--color-text-tertiary);margin-bottom:10px">
+      <span style="font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-secondary)">Thresholds</span>
+      <label style="display:flex;align-items:center;gap:4px">Gain ≥ <input type="number" value="${gT}" min="0" step="1" onchange="setTrimWatchThreshold('gainPct', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />%</label>
+      <label style="display:flex;align-items:center;gap:4px">Theme α ≥ <input type="number" value="${aT}" min="0" step="1" onchange="setTrimWatchThreshold('alphaPct', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />pp</label>
+      <label style="display:flex;align-items:center;gap:4px">% book yellow ≥ <input type="number" value="${cY}" min="0" step="0.5" onchange="setTrimWatchThreshold('concYellow', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />%</label>
+      <label style="display:flex;align-items:center;gap:4px">red ≥ <input type="number" value="${cR}" min="0" step="0.5" onchange="setTrimWatchThreshold('concRed', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />%</label>
+    </div>`;
+
+  if (flagged.length === 0) {
+    el.innerHTML = `
+      <div style="background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px 14px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-secondary);margin-bottom:8px">Trim Watch <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--color-text-tertiary)">· earned alpha + concentration</span></div>
+        ${editor}
+        <div style="font-size:11px;color:var(--color-text-tertiary);padding:8px 0">No positions currently cross any threshold. Adjust above to surface more.</div>
+      </div>`;
+    return;
+  }
+
+  // Body rows
+  const triggerLabel = (t) => {
+    if (t.kind === 'gain')  return `Gain <span style="font-weight:700">${t.value >= 0 ? '+' : ''}${t.value.toFixed(1)}%</span>`;
+    if (t.kind === 'alpha') return `Theme α <span style="font-weight:700">${t.value >= 0 ? '+' : ''}${t.value.toFixed(1)}pp</span>`;
+    if (t.kind === 'conc')  return `% of book <span style="font-weight:700">${t.value.toFixed(1)}%</span>`;
+    return '';
+  };
+
+  const bodyRows = flagged.map(({ r, triggers, worst }) => {
+    const anchorId = 'rebal-row-' + esc(r.ticker) + '-' + esc((r.account || '').replace(/[^A-Za-z0-9]/g, ''));
+    const stLtTag = r.isIRA ? '<span style="font-size:9px;color:var(--color-text-tertiary);margin-left:6px" title="IRA — no tax cost to trim">IRA</span>'
+      : r.allLT ? '<span style="font-size:9px;color:var(--color-text-success);margin-left:6px" title="Long-term — favorable tax rate">LT</span>'
+      : r.allST ? '<span style="font-size:9px;color:#fbbf24;margin-left:6px" title="Short-term — higher tax cost to trim">ST · high tax cost</span>'
+      : '<span style="font-size:9px;color:var(--color-text-tertiary);margin-left:6px">Mixed</span>';
+    const triggerCells = triggers.map(t =>
+      `<span style="display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;background:${tierColor(t.tier)}22;color:${tierColor(t.tier)};border:0.5px solid ${tierColor(t.tier)}55;margin-right:5px">${triggerLabel(t)}</span>`
+    ).join('');
+    const heldStr = r.daysHeldMin !== null ? r.daysHeldMin + 'd held' : '';
+    return `
+      <div style="display:flex;align-items:center;gap:12px;padding:7px 10px;border-left:3px solid ${tierColor(worst)};background:${tierColor(worst)}0e;border-radius:var(--border-radius-sm);margin-bottom:5px">
+        <div style="min-width:90px">
+          <span style="font-weight:700;font-size:12px">${esc(r.ticker)}</span>${stLtTag}
+          <div style="font-size:9px;color:var(--color-text-tertiary)">${esc(r.account || '')}${heldStr ? ' · ' + heldStr : ''}</div>
+        </div>
+        <div style="flex:1;line-height:1.7">${triggerCells}</div>
+        <div style="font-size:10px;color:var(--color-text-tertiary);min-width:90px;text-align:right">${fmtDollar(r.totalExit)}</div>
+        <a href="javascript:void(0)" onclick="document.getElementById('${anchorId}')?.scrollIntoView({behavior:'smooth',block:'center'})" style="font-size:10px;color:var(--color-text-info);text-decoration:none;white-space:nowrap" title="Jump to this row in the table below">→ row</a>
+      </div>`;
+  }).join('');
+
+  const counts = { red: 0, orange: 0, yellow: 0 };
+  flagged.forEach(f => { counts[f.worst] = (counts[f.worst] || 0) + 1; });
+  const summary = [
+    counts.red > 0 ? `<span style="color:#ef4444;font-weight:700">${counts.red} red</span>` : '',
+    counts.orange > 0 ? `<span style="color:#f97316;font-weight:700">${counts.orange} orange</span>` : '',
+    counts.yellow > 0 ? `<span style="color:#fbbf24;font-weight:700">${counts.yellow} yellow</span>` : ''
+  ].filter(x => x).join(' · ');
+
+  el.innerHTML = `
+    <div style="background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-secondary)">Trim Watch <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--color-text-tertiary)">· earned alpha + concentration</span></div>
+        <div style="font-size:10px;color:var(--color-text-tertiary)">${flagged.length} flagged · ${summary}</div>
+      </div>
+      ${editor}
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px;line-height:1.5">Any one threshold triggers a flag (OR, not AND). Color reflects the worst tier across triggers; rows in the table below are border-tagged to match. "ST" tag flags short-term lots where trimming carries higher tax cost.</div>
+      ${bodyRows}
+    </div>`;
 }
 
 
