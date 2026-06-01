@@ -18063,7 +18063,7 @@ function renderRebalance() {
     wrap.onscroll = () => { slider.value = wrap.scrollLeft; };
   }
 
-  renderTrimWatch(rows);
+  renderTrimWatchBlock(rows);
 }
 
 // Trim Watch — summary block above the main rebalance table.
@@ -18075,7 +18075,7 @@ function renderRebalance() {
 // Each surfaced row gets color-graded tier badges per trigger, and a "→ jump" link that scrolls
 // the matching main-table row into view. Threshold inputs are editable inline; defaults match
 // user-specified values (35% gain, 20pp alpha, 5%/10% concentration).
-function renderTrimWatch(rows) {
+function renderTrimWatchBlock(rows) {
   const el = document.getElementById('trim-watch-block');
   if (!el) return;
 
