@@ -2657,13 +2657,18 @@ async function savePositions() {
     localStorage.setItem('portfolio-ledger', JSON.stringify({ cashLedger }));
     // Prune stale benchAlphaCache entries — anything whose tsNow doesn't match
     // the current latest priceHistory entry is from a previous refresh and useless.
+    // Keys come in two formats post-fix:
+    //   new:    benchTicker|tsPrev|tsNow  (3 parts)
+    //   legacy: posTicker|benchTicker|tsPrev|tsNow (4 parts, written pre-fix)
+    // tsNow is the last segment in both, so we compare parts[parts.length-1].
     try {
       if (Array.isArray(priceHistory) && priceHistory.length > 0) {
         const latestTs = priceHistory[priceHistory.length - 1].ts;
         Object.keys(benchAlphaCache).forEach(k => {
-          // key format: positionTicker|benchTicker|tsPrev|tsNow
           const parts = k.split('|');
-          if (parts.length === 4 && parts[3] !== latestTs) delete benchAlphaCache[k];
+          if ((parts.length === 3 || parts.length === 4) && parts[parts.length - 1] !== latestTs) {
+            delete benchAlphaCache[k];
+          }
         });
       } else {
         benchAlphaCache = {};
@@ -10825,7 +10830,7 @@ function renderPriceMoves() {
         benchCell = '<td style="padding:5px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px" title="This position IS its own theme benchmark, so α = 0 by construction">self (' + esc(benchInfo.benchTicker) + ')<br><span style="font-size:9px">α = 0</span></td>';
       } else {
         const ckey = _benchCacheKey(r.ticker, benchInfo.benchTicker, sl.tsPrev, sl.tsNow);
-        const cached = benchAlphaCache[ckey];
+        const cached = _benchCacheRead(benchInfo.benchTicker, sl.tsPrev, sl.tsNow);
         if (!cached) {
           benchCell = '<td style="padding:5px 8px;text-align:right">' +
             '<button onclick="triggerBenchAlphaFetch(\'' + r.ticker + '\',\'' + benchInfo.benchTicker + '\',\'' + sl.tsPrev + '\',\'' + sl.tsNow + '\')" style="background:transparent;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);padding:2px 8px;font-size:10px;border-radius:3px;cursor:pointer" title="Fetch ' + esc(benchInfo.benchTicker) + ' close for the window — one API call">fetch vs ' + esc(benchInfo.benchTicker) + '</button>' +
@@ -11470,7 +11475,26 @@ function resetPriceHistory() {
 // don't hammer Polygon. Cell shows a "retry" link the user can click.
 // ─────────────────────────────────────────────
 function _benchCacheKey(posTicker, benchTicker, tsPrev, tsNow) {
-  return (posTicker || '') + '|' + (benchTicker || '') + '|' + (tsPrev || '') + '|' + (tsNow || '');
+  // Position-INDEPENDENT key: the benchmark's price movement over the window doesn't depend
+  // on which position is asking. Sharing the cache across positions with the same benchmark +
+  // same window is correct and saves a Polygon call per duplicate. (posTicker parameter retained
+  // in the signature for call-site compatibility but no longer part of the key.)
+  void posTicker;
+  return (benchTicker || '') + '|' + (tsPrev || '') + '|' + (tsNow || '');
+}
+
+// Read from benchAlphaCache with legacy-key fallback: pre-fix entries were keyed
+// "posTicker|benchTicker|tsPrev|tsNow" — if no new-format entry exists, scan for any legacy
+// entry whose last three parts match (any posTicker prefix). Lets already-cached fetches keep
+// working through the transition without forcing re-fetches.
+function _benchCacheRead(benchTicker, tsPrev, tsNow) {
+  const newKey = (benchTicker || '') + '|' + (tsPrev || '') + '|' + (tsNow || '');
+  if (benchAlphaCache[newKey]) return benchAlphaCache[newKey];
+  const suffix = '|' + newKey;
+  for (const k of Object.keys(benchAlphaCache)) {
+    if (k.endsWith(suffix)) return benchAlphaCache[k];
+  }
+  return null;
 }
 
 // Pick most recent bar whose t (ms) is <= cutoff. Bars must be ascending by t.
@@ -11484,8 +11508,10 @@ function _pickBarLE(bars, cutoffMs) {
 
 async function fetchBenchAlphaForRow(posTicker, benchTicker, tsPrev, tsNow, pctChangeOfPos) {
   const key = _benchCacheKey(posTicker, benchTicker, tsPrev, tsNow);
-  // Already cached (success or error) — nothing to do.
-  if (benchAlphaCache[key] && !benchAlphaCache[key].pending) return benchAlphaCache[key];
+  // Already cached (success or error) — nothing to do. Read via the legacy-fallback helper so
+  // pre-fix entries also count as "cached" and avoid a needless re-fetch.
+  const existing = _benchCacheRead(benchTicker, tsPrev, tsNow);
+  if (existing && !existing.pending) return existing;
   benchAlphaCache[key] = { pending: true, benchTicker };
   if (typeof renderPriceMoves === 'function') renderPriceMoves();
 
