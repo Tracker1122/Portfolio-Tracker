@@ -17809,6 +17809,18 @@ function renderRebalance() {
     .filter(p => !p.closed && p.ticker)
     .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
 
+  // ── Active-book denominator (Trim Watch only) ──
+  // For trim-candidate concentration the denominator should reflect your ACTIVELY-managed
+  // book — "where am I making picks" — not a parked-money fund like VOO that you hold for
+  // diversification. Excluding true passive-core S&P/total-market ETFs avoids letting a
+  // diversification holding inflate the denominator and silently shrink every flagged %.
+  // List is intentionally short and well-known; add to it if you start holding a fifth.
+  const _PASSIVE_CORE = new Set(['VOO', 'SPY', 'IVV', 'VTI']);
+  const _isPassiveCore = (p) => _PASSIVE_CORE.has((p.ticker || '').toUpperCase());
+  const totalActivePortfolioValue = positions
+    .filter(p => !p.closed && p.ticker && !_isPassiveCore(p))
+    .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+
   // --- Per-TICKER total holdings: all your direct lots of a ticker (across every account) PLUS that
   // ticker's pass-through from inside funds you hold (VOO etc.). Used by the "% of total X" column so
   // each row shows what fraction of your ENTIRE exposure to that name this lot is — i.e. how much of
@@ -17857,6 +17869,13 @@ function renderRebalance() {
     const totalInvested = tranches.reduce((s, d) => s + (d.c.invested || 0), 0);
     const totalExit = tranches.reduce((s, d) => s + (d.c.exitValue || 0), 0);
     const portfolioPct = totalPortfolioValue > 0 ? (totalExit / totalPortfolioValue) * 100 : null;
+    // activePortfolioPct: same idea but denominator excludes passive-core. Used by Trim Watch's
+    // concentration trigger so VOO/SPY-class holdings don't dilute the denominator. Identical to
+    // portfolioPct when you don't hold any passive-core positions, so the two reconcile in that case.
+    const isPassiveCorePos = _isPassiveCore({ ticker: g.ticker });
+    const activePortfolioPct = (totalActivePortfolioValue > 0 && !isPassiveCorePos)
+      ? (totalExit / totalActivePortfolioValue) * 100
+      : null;
 
     // Industry and strategy percentages
     const ticker = g.ticker;
@@ -17935,6 +17954,7 @@ function renderRebalance() {
     return { ticker: g.ticker, account: g.account, count, isIRA,
       holdingLabel, allLT, allST, daysHeldMin,
       vsSpx, totalAlpha, totalThemeAlpha, totalGl, totalEstTax, totalInvested, totalExit, portfolioPct,
+      activePortfolioPct, isPassiveCorePos,
       // glPct = aggregate G/L as % of invested basis (ST/LT-aware reading lives downstream).
       // themeAlphaPct = theme-α dollars / invested, expressed as pp — comparable across position sizes.
       glPct: totalInvested > 0 ? (totalGl / totalInvested) * 100 : null,
@@ -18113,23 +18133,26 @@ function renderTrimWatchBlock(rows) {
   // threshold still has a sensible red zone.
   const flagged = rows
     .map(r => {
+      // Trim Watch concentration uses ACTIVE-book denominator (excludes VOO/SPY/IVV/VTI).
+      // Passive-core rows themselves are skipped — they're diversification, not trim candidates.
+      if (r.isPassiveCorePos) return null;
       const gain = trimTier(r.glPct, gT, Math.max(gT * 2, gT + 40));
       const alpha = trimTier(r.themeAlphaPct, aT, Math.max(aT * 2, aT + 30));
-      const conc = trimTier(r.portfolioPct, cY, cR);
+      const conc = trimTier(r.activePortfolioPct, cY, cR);
       const triggers = [];
       if (gain !== 'none') triggers.push({ kind: 'gain',  tier: gain,  value: r.glPct });
       if (alpha !== 'none') triggers.push({ kind: 'alpha', tier: alpha, value: r.themeAlphaPct });
-      if (conc !== 'none') triggers.push({ kind: 'conc',  tier: conc,  value: r.portfolioPct });
+      if (conc !== 'none') triggers.push({ kind: 'conc',  tier: conc,  value: r.activePortfolioPct });
       return { r, triggers, worst: tierWorst(triggers.map(t => t.tier)) };
     })
-    .filter(x => x.triggers.length > 0)
+    .filter(x => x && x.triggers.length > 0)
     // Sort by worst tier first (red → orange → yellow), then by number of triggers, then by % of book.
     .sort((a, b) => {
       const order = { red: 3, orange: 2, yellow: 1, none: 0 };
       const ta = order[a.worst], tb = order[b.worst];
       if (ta !== tb) return tb - ta;
       if (b.triggers.length !== a.triggers.length) return b.triggers.length - a.triggers.length;
-      return (b.r.portfolioPct || 0) - (a.r.portfolioPct || 0);
+      return (b.r.activePortfolioPct || 0) - (a.r.activePortfolioPct || 0);
     });
 
   // Threshold editor — always shown, even when nothing is flagged, so the user can tune to surface.
@@ -18138,7 +18161,7 @@ function renderTrimWatchBlock(rows) {
       <span style="font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-secondary)">Thresholds</span>
       <label style="display:flex;align-items:center;gap:4px">Gain ≥ <input type="number" value="${gT}" min="0" step="1" onchange="setTrimWatchThreshold('gainPct', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />%</label>
       <label style="display:flex;align-items:center;gap:4px">Theme α ≥ <input type="number" value="${aT}" min="0" step="1" onchange="setTrimWatchThreshold('alphaPct', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />pp</label>
-      <label style="display:flex;align-items:center;gap:4px">% book yellow ≥ <input type="number" value="${cY}" min="0" step="0.5" onchange="setTrimWatchThreshold('concYellow', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />%</label>
+      <label style="display:flex;align-items:center;gap:4px">% active book yellow ≥ <input type="number" value="${cY}" min="0" step="0.5" onchange="setTrimWatchThreshold('concYellow', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />%</label>
       <label style="display:flex;align-items:center;gap:4px">red ≥ <input type="number" value="${cR}" min="0" step="0.5" onchange="setTrimWatchThreshold('concRed', this.value)" style="width:48px;text-align:right;font-size:10px;padding:2px 4px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />%</label>
     </div>`;
 
@@ -18156,7 +18179,7 @@ function renderTrimWatchBlock(rows) {
   const triggerLabel = (t) => {
     if (t.kind === 'gain')  return `Gain <span style="font-weight:700">${t.value >= 0 ? '+' : ''}${t.value.toFixed(1)}%</span>`;
     if (t.kind === 'alpha') return `Theme α <span style="font-weight:700">${t.value >= 0 ? '+' : ''}${t.value.toFixed(1)}pp</span>`;
-    if (t.kind === 'conc')  return `% of book <span style="font-weight:700">${t.value.toFixed(1)}%</span>`;
+    if (t.kind === 'conc')  return `% of active book <span style="font-weight:700">${t.value.toFixed(1)}%</span>`;
     return '';
   };
 
@@ -18170,6 +18193,19 @@ function renderTrimWatchBlock(rows) {
       `<span style="display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;background:${tierColor(t.tier)}22;color:${tierColor(t.tier)};border:0.5px solid ${tierColor(t.tier)}55;margin-right:5px">${triggerLabel(t)}</span>`
     ).join('');
     const heldStr = r.daysHeldMin !== null ? r.daysHeldMin + 'd held' : '';
+
+    // Cost basis → market value display. Green if up, red if down. Tooltip carries the dollar G/L
+    // and the unrealized G/L %, so hover gives the full read without bloating the visible line.
+    const gainSign = (r.totalGl >= 0) ? '+' : '−';
+    const gainColor = r.totalGl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const arrowColor = r.totalGl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const valTooltip = `Cost basis ${fmtDollar(r.totalInvested)} → market value ${fmtDollar(r.totalExit)}\nUnrealized G/L: ${gainSign}${fmtDollar(Math.abs(r.totalGl))}${r.glPct !== null ? ' (' + (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%)' : ''}`;
+    const valueBlock = `<div style="font-size:10px;color:var(--color-text-tertiary);min-width:170px;text-align:right;line-height:1.4" title="${esc(valTooltip)}">
+      <span style="color:var(--color-text-tertiary)">${fmtDollar(r.totalInvested)}</span>
+      <span style="color:${arrowColor};margin:0 4px">→</span>
+      <span style="color:${gainColor};font-weight:600">${fmtDollar(r.totalExit)}</span>
+    </div>`;
+
     return `
       <div style="display:flex;align-items:center;gap:12px;padding:7px 10px;border-left:3px solid ${tierColor(worst)};background:${tierColor(worst)}0e;border-radius:var(--border-radius-sm);margin-bottom:5px">
         <div style="min-width:90px">
@@ -18177,8 +18213,8 @@ function renderTrimWatchBlock(rows) {
           <div style="font-size:9px;color:var(--color-text-tertiary)">${esc(r.account || '')}${heldStr ? ' · ' + heldStr : ''}</div>
         </div>
         <div style="flex:1;line-height:1.7">${triggerCells}</div>
-        <div style="font-size:10px;color:var(--color-text-tertiary);min-width:90px;text-align:right">${fmtDollar(r.totalExit)}</div>
-        <a href="javascript:void(0)" onclick="document.getElementById('${anchorId}')?.scrollIntoView({behavior:'smooth',block:'center'})" style="font-size:10px;color:var(--color-text-info);text-decoration:none;white-space:nowrap" title="Jump to this row in the table below">→ row</a>
+        ${valueBlock}
+        <a href="javascript:void(0)" onclick="document.getElementById('${anchorId}')?.scrollIntoView({behavior:'smooth',block:'center'})" style="font-size:10px;color:var(--color-text-info);text-decoration:none;white-space:nowrap" title="Jump to this row in the Trim Candidates table below">get details ↓</a>
       </div>`;
   }).join('');
 
@@ -18197,7 +18233,7 @@ function renderTrimWatchBlock(rows) {
         <div style="font-size:10px;color:var(--color-text-tertiary)">${flagged.length} flagged · ${summary}</div>
       </div>
       ${editor}
-      <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px;line-height:1.5">Any one threshold triggers a flag (OR, not AND). Color reflects the worst tier across triggers; rows in the table below are border-tagged to match. "ST" tag flags short-term lots where trimming carries higher tax cost.</div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px;line-height:1.5">Any one threshold triggers a flag (OR, not AND). Color reflects the worst tier across triggers; rows in the table below are border-tagged to match. "ST" tag flags short-term lots where trimming carries higher tax cost. <span title="The concentration denominator EXCLUDES passive-core ETFs (VOO/SPY/IVV/VTI) so diversification holdings don't dilute the picture. Stocks and active ETFs (SMH, GRID, GLD, etc.) stay in the denominator — they're picks too. May differ slightly from the % of book column in the table below, which uses the whole-book denominator." style="text-decoration:underline dotted;cursor:help">% of active book</span> = position value ÷ (whole book − passive-core).</div>
       ${bodyRows}
     </div>`;
 }
