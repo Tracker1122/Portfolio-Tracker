@@ -13872,32 +13872,44 @@ function _candPositionCountDelta() {
 // Evaluation tab's rotation paragraph, generalized for a mixed queue (any number of adds + trims, not
 // a single-ETF rotation). Every figure is computed from the per-name true-exposure deltas, the frozen
 // tax, and the position-count delta — nothing asserted.
-function _candMovedParagraph(nameMoves, tax, pos) {
-  const held = nameMoves.filter(r => r.before >= 1);
-  const fresh = nameMoves.filter(r => r.before < 1);
-  const sum = arr => arr.reduce((s, r) => s + r.change, 0);
-  const heldNet = sum(held), freshNet = sum(fresh);
+function _candMovedParagraph(nameMoves, tax, pos, directVia) {
+  directVia = directVia || {};
   const D = n => fmtDollarWhole(Math.abs(n));
+  // Direct trims vs adds, name by name, from the scenario's own direct/via deltas — NOT the netted
+  // per-name change (which would let unrelated adds cancel an unrelated trim).
+  const trims = Object.entries(directVia).filter(([, v]) => v.directDelta < -1);
+  const directCut = trims.reduce((s, [, v]) => s + Math.abs(v.directDelta), 0);
+  const viaAdd = Object.values(directVia).reduce((s, v) => s + Math.max(0, v.viaDelta || 0), 0);
+  const directAdd = Object.values(directVia).reduce((s, v) => s + Math.max(0, v.directDelta || 0), 0);
+  const grossAdd = viaAdd + directAdd;
+  // Genuine hand-back = a name you trim directly that the funds you're adding ALSO hold (same name
+  // returning via the fund). Deepening different names you hold passively does NOT count here.
+  const handedBack = trims.reduce((s, [, v]) => s + Math.min(Math.abs(v.directDelta), Math.max(0, v.viaDelta || 0)), 0);
+  const reshuffledNames = trims.filter(([, v]) => Math.max(0, v.viaDelta || 0) >= Math.abs(v.directDelta) * 0.5).map(([k]) => k);
+  const reshuffleShare = directCut > 0 ? Math.min(100, Math.round((handedBack / directCut) * 100)) : null;
+  const freshNet = nameMoves.filter(r => r.before < 1).reduce((s, r) => s + r.change, 0);
+
   const parts = [];
-  if (heldNet < 0 && freshNet > 0) parts.push(`This scenario cuts a net ${D(heldNet)} from names you already had exposure to and adds ${D(freshNet)} of genuinely new exposure.`);
-  else if (heldNet >= 0 && freshNet > 0) parts.push(`This scenario adds ${D(freshNet)} of new exposure and tops up names you already held by ${D(heldNet)}.`);
-  else if (Math.abs(freshNet) < 1) parts.push(`This scenario introduces no new names — it reshuffles ${D(heldNet)} of exposure among names you already hold.`);
-  else parts.push(`Net change across held and new names: ${heldNet + freshNet >= 0 ? '+' : '\u2212'}${D(heldNet + freshNet)}.`);
-  // Hand-back / reshuffle insight: of the exposure cut from held names, how much comes right back via
-  // the names you're buying (positive change on a held name). High share = reshuffle, not reduction.
-  const grossCut = held.filter(r => r.change < 0).reduce((s, r) => s + Math.abs(r.change), 0);
-  const handBack = held.filter(r => r.change > 0).reduce((s, r) => s + r.change, 0);
-  const barelyMoved = held.filter(r => Math.abs(r.change) < r.before * 0.34).length;
-  const reshuffleShare = grossCut > 0 ? Math.min(100, Math.round((handBack / grossCut) * 100)) : null;
+  // 1. Headline — trims and adds stated separately, so a large trim isn't silently netted against
+  //    unrelated adds on other names.
+  if (directCut > 1 && grossAdd > 1) parts.push(`This scenario trims ${D(directCut)} of direct exposure and adds ${D(grossAdd)} of exposure on other names.`);
+  else if (directCut > 1) parts.push(`This scenario trims ${D(directCut)} of direct exposure.`);
+  else if (grossAdd > 1) parts.push(`This scenario adds ${D(grossAdd)} of exposure${freshNet > grossAdd * 0.5 ? ', most of it to names you didn\u2019t hold before' : ''}.`);
+  // 2. Reshuffle vs reduction — judged ONLY on same-name hand-back.
   if (reshuffleShare !== null && reshuffleShare >= 15) {
-    parts.push(`But much of what you trim comes straight back: roughly ${reshuffleShare}% of the exposure you cut from held names is handed back through the names you're adding (and VOO still holds them on top of that)${barelyMoved ? `, so ${barelyMoved} held name${barelyMoved === 1 ? "'s true exposure barely moves" : "s' true exposure barely move"}` : ''}. Closer to a reshuffle of the same exposure than a reduction of it.`);
-  } else if (heldNet < 0 && grossCut > 0) {
-    parts.push(`Most of the cut on held names isn't handed back, so this meaningfully shifts exposure rather than just reshuffling it.`);
+    const nm = reshuffledNames.slice(0, 3);
+    parts.push(`Of that direct cut, roughly ${reshuffleShare}% comes straight back: the fund(s) you're adding hold the same name${nm.length === 1 ? '' : 's'}${nm.length ? ' (' + nm.join(', ') + ')' : ''}, so for those names this reshuffles rather than reduces, and VOO still holds them on top.`);
+  } else if (directCut > 1 && grossAdd > 1) {
+    parts.push(`The names you're trimming aren't held by what you're adding, so the cut is a real reduction of those names — the added exposure is a separate, intentional bet on different names (which you may have held only passively before), not the same exposure coming back.`);
+  } else if (directCut > 1) {
+    parts.push(`Nothing in the scenario hands the trimmed exposure back, so this is a genuine reduction.`);
   }
+  // 3. Position-count effect.
   if (pos && pos.before !== pos.after) {
     const d = pos.before - pos.after;
     parts.push(`Position count goes ${pos.before} \u2192 ${pos.after} (${d > 0 ? d + ' fewer line' + (d === 1 ? '' : 's') + ' to track' : Math.abs(d) + ' more line' + (Math.abs(d) === 1 ? '' : 's')}).`);
   }
+  // 4. Tax.
   if (tax && tax.totalTax > 0) {
     let s = `Estimated tax to do this: ~${fmtDollarWhole(tax.totalTax)}`;
     if (tax.shelteredProceeds > 0 && tax.taxableProceeds > 0) s += ` (only the ${fmtDollarWhole(tax.taxableProceeds)} sold from taxable lots is taxed; ${fmtDollarWhole(tax.shelteredProceeds)} sits in IRA)`;
@@ -13909,7 +13921,7 @@ function _candMovedParagraph(nameMoves, tax, pos) {
 }
 
 // The boxed "What really moved" synthesis for the candidate scenario.
-function _candWhatMovedHtml(nameMoves, nameRows, tax) {
+function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia) {
   if (!nameMoves || !nameMoves.length) return '';
   const held = nameMoves.filter(r => r.before >= 1);
   const fresh = nameMoves.filter(r => r.before < 1);
@@ -13923,7 +13935,7 @@ function _candWhatMovedHtml(nameMoves, nameRows, tax) {
   else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up held ones by ${fmtDollarWhole(Math.abs(heldNet))}.`;
   else if (Math.abs(freshNet) < 1) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already hold \u2014 no new exposure.`;
   else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
-  const para = _candMovedParagraph(nameMoves, tax, _candPositionCountDelta());
+  const para = _candMovedParagraph(nameMoves, tax, _candPositionCountDelta(), directVia);
   return `<div style="margin-top:10px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
     <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:5px">What really moved</div>
     <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
@@ -13939,6 +13951,16 @@ function candCompute() {
   if (!_candQueue.length) { out.innerHTML = ''; _candScenario = null; return; }
   let before, after, clRows = [], ebBefore = 0, ebAfter = 0, nameRows = [], nameMoves = [];
   const adjustments = _candQueueAdjustments();
+  // Per-name direct vs via-fund delta (canonical-keyed), so the summary can tell a genuine same-name
+  // hand-back (you trim X directly AND a fund you're adding holds X) apart from simply deepening other
+  // names you happen to hold passively — those are NOT the trimmed exposure "coming back".
+  const directVia = {};
+  adjustments.forEach(a => {
+    const k = qrCanonical(a.ticker).key;
+    if (!directVia[k]) directVia[k] = { directDelta: 0, viaDelta: 0 };
+    directVia[k].directDelta += (a.deltaDirect || 0);
+    directVia[k].viaDelta += (a.deltaViaFunds || 0);
+  });
   try {
     before = computeThemeClusters();
     after = computeThemeClusters({ adjustments });
@@ -14000,7 +14022,7 @@ function candCompute() {
   out.innerHTML =
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${ebBefore.toFixed(1)} → ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>` +
-    _candWhatMovedHtml(nameMoves, nameRows, tax) +
+    _candWhatMovedHtml(nameMoves, nameRows, tax, directVia) +
     clTable + nameTable + slTable + taxTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
@@ -14011,7 +14033,7 @@ function candCompute() {
     sig: _candScenarioSignature(),
     trades: _candQueue.map(_candTradeLabel),
     clRows, ebBefore, ebAfter, nameRows, sleeveRows, tax,
-    summary: _candMovedParagraph(nameMoves, tax, _pos),
+    summary: _candMovedParagraph(nameMoves, tax, _pos, directVia),
     posBefore: _pos.before, posAfter: _pos.after,
     perf: _perf
   };
