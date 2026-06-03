@@ -1056,9 +1056,6 @@
   <!-- Dashboard Tab -->
   <div class="tab-panel active" id="tab-dashboard">
 
-    <!-- PE -> IPO single-name concentration warning (filled by renderPeIpoConcBlock) -->
-    <div id="pe-ipo-conc-block"></div>
-
     <!-- Stale Prices Banner (filled by renderStaleBanner) -->
     <div id="stale-banner" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.35);border-radius:var(--border-radius-md);padding:8px 14px;margin-bottom:14px;font-size:11px;color:#fbbf24;display:flex;align-items:center;gap:10px"></div>
 
@@ -1093,6 +1090,10 @@
       <div class="analytics-card" id="pe-deals-card" onclick="showCardOverlay('private-investments')" style="cursor:pointer">
         <div class="analytics-card-title">Private Investments — Direct PE Deals</div>
         <div id="pe-deals-content"></div>
+      </div>
+      <div class="analytics-card" id="pe-ipo-conc-card" style="display:none">
+        <div class="analytics-card-title">IPO'd Private Holdings — Concentration</div>
+        <div id="pe-ipo-conc-content"></div>
       </div>
       <div class="analytics-card" id="capital-deployed-card" onclick="showCardOverlay('capital-deployed')" style="cursor:pointer">
         <div class="analytics-card-title">Capital Deployed — Money In Over Time</div>
@@ -18478,15 +18479,14 @@ let _peEditId = null; // null = add mode, otherwise the id of the deal being edi
 // Derive computed metrics for one deal. Returns null if amountInvested is missing/zero
 // (you can't compute much without that). Other fields may be null if the underlying
 // data isn't present, and downstream code should handle that.
-// === PE -> IPO single-name concentration warning =============================
-// While a PE deal is still private its value sits in AUM but is invisible to the
-// per-name concentration views (Trim Watch + signal table only look at actual
-// positions). This surfaces, on the dashboard, what each active PE name WOULD be
-// as a single public position -- measured against BOTH the active book (excl.
-// passive-core index funds, matching Trim Watch) and the total book -- and keeps
-// expressing it until the live projection falls to a target you set, or you dismiss
-// it (after which it persists muted). Per-deal-id state: {target, plan, dismissed}.
-// Persisted to localStorage and carried in the Drive backup _settings block.
+// === IPO'd private holdings -- single-name concentration =====================
+// When a private deal IPOs (the "IPO'd" button -> convertPeDealToPublic), it becomes
+// a public position carrying years of private-era size. This surfaces, in a card next
+// to the PE-deals card, what each IPO'd-from-private holding now is as a single name --
+// against the active book (open non-passive positions) and against total AUM (positions
+// + S&P/VOO sleeve + cash + still-private PE) -- and keeps expressing it until the live
+// figure reaches a target you set, or you dismiss it (after which it persists muted).
+// Per-position-id state {target, plan, dismissed}: localStorage + Drive backup _settings.
 let peIpoConcState = (function () {
   try { return JSON.parse(localStorage.getItem('pe-ipo-conc-state-v1')) || {}; }
   catch (e) { return {}; }
@@ -18521,83 +18521,97 @@ function reengagePeIpoConc(id) {
   _savePeIpoConcState();
   renderPeIpoConcBlock();
 }
-// Projected concentration for one active PE deal. Uses the deal's current mark as the
-// value it would carry into the public book at IPO (the real IPO price is unknowable
-// until then; calcPeDeal falls back to cost when no current mark is set). At IPO the
-// name joins the public book, so it sits in BOTH numerator and denominator.
-function _peIpoProjection(deal) {
-  const c = calcPeDeal(deal);
-  if (!c || !(c.currentValue > 0)) return null;
-  const dealVal = c.currentValue;
-  const openPos = positions.filter(p => !p.closed && p.ticker);
-  const _PASSIVE_CORE = new Set(['VOO', 'SPY', 'IVV', 'VTI']);
-  const totalBook = openPos.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
-  const activeBook = openPos
-    .filter(p => !_PASSIVE_CORE.has((p.ticker || '').toUpperCase()))
-    .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
-  const activePct = (activeBook + dealVal) > 0 ? (dealVal / (activeBook + dealVal)) * 100 : 0;
-  const totalPct  = (totalBook  + dealVal) > 0 ? (dealVal / (totalBook  + dealVal)) * 100 : 0;
-  return { dealVal, activePct, totalPct, hasMark: (c.ppsCur > 0) };
+// Current market value of an open position, falling back to its IPO mark for a freshly
+// converted holding not yet priced (so the card is meaningful the moment you convert).
+// The SAME function feeds numerator and denominators, so they stay consistent.
+function _peIpoPosValue(p) {
+  const v = (calcPos(p).exitValue) || 0;
+  if (v > 0) return v;
+  if (p.peConverted) {
+    const sh = parseFloat(p.shares), ip = parseFloat(p.peIpoPrice);
+    if (sh > 0 && ip > 0) return sh * ip;
+  }
+  return 0;
+}
+// Full AUM: open positions + S&P/VOO sleeve + cash + still-private PE deals.
+function _peIpoTotalAum(openPos) {
+  const posTotal = openPos.reduce((s, p) => s + _peIpoPosValue(p), 0);
+  let spVal = 0;
+  try {
+    const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+    if (sp) spVal = (sp.price > 0 ? sp.currentValue : sp.totalInvested) || 0;
+  } catch (e) {}
+  const cash = (typeof cashBuckets === 'object' && cashBuckets) ? ((cashBuckets.Taxable || 0) + (cashBuckets.IRA || 0)) : 0;
+  let peVal = 0;
+  try {
+    const pe = (typeof computePeTotals === 'function') ? computePeTotals() : null;
+    if (pe) peVal = pe.totalCurrentValue || 0;
+  } catch (e) {}
+  return posTotal + spVal + cash + peVal;
 }
 function renderPeIpoConcBlock() {
-  const host = document.getElementById('pe-ipo-conc-block');
+  const card = document.getElementById('pe-ipo-conc-card');
+  const host = document.getElementById('pe-ipo-conc-content');
   if (!host) return;
+  const openPos = positions.filter(p => !p.closed && p.ticker);
+  const _PASSIVE_CORE = new Set(['VOO', 'SPY', 'IVV', 'VTI']);
+  const activeBook = openPos
+    .filter(p => !_PASSIVE_CORE.has((p.ticker || '').toUpperCase()))
+    .reduce((s, p) => s + _peIpoPosValue(p), 0);
+  const totalAum = _peIpoTotalAum(openPos);
   const cards = [], muted = [];
-  (peDeals || []).forEach(function (deal) {
-    const proj = _peIpoProjection(deal);
-    if (!proj) return; // missing cost data -- nothing to project
-    const st = peIpoConcState[deal.id] || {};
+  openPos.filter(p => p.peConverted).forEach(function (p) {
+    const val = _peIpoPosValue(p);
+    if (!(val > 0)) return;
+    const activePct = activeBook > 0 ? (val / activeBook) * 100 : 0;
+    const totalPct  = totalAum  > 0 ? (val / totalAum)  * 100 : 0;
+    const st = peIpoConcState[p.id] || {};
     const target = (typeof st.target === 'number' && st.target >= 0) ? st.target : null;
-    // Resolved: live projection has reached the target you set -> stop expressing it.
-    if (target !== null && proj.activePct <= target) return;
-    const co = esc(deal.company || 'this deal');
-    const idq = escq(deal.id);
-    const a = proj.activePct.toFixed(1);
-    const t = proj.totalPct.toFixed(1);
+    if (target !== null && activePct <= target) return; // reached target -> stop expressing
+    const name = esc(p.peCompany || p.ticker || 'holding');
+    const tk = esc(p.ticker || '');
+    const idq = escq(String(p.id));
+    const a = activePct.toFixed(1);
+    const t = totalPct.toFixed(1);
     if (st.dismissed) {
       muted.push(
-        '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px;color:var(--color-text-tertiary)">' +
-          '<span>' + co + ' &mdash; projected <strong style="color:var(--color-text-secondary)">' + a + '%</strong> of active book at IPO (' + t + '% of total). Dismissed.</span>' +
-          '<button onclick="reengagePeIpoConc(\'' + idq + '\')" style="background:none;border:1px solid var(--color-border);color:var(--color-text-secondary);border-radius:var(--border-radius-sm);font-size:10px;padding:1px 7px;cursor:pointer">show</button>' +
+        '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px;color:var(--color-text-tertiary)">' +
+          '<span>' + name + ' (' + tk + ') &mdash; <strong style="color:var(--color-text-secondary)">' + a + '%</strong> active / ' + t + '% total. Dismissed.</span>' +
+          '<button onclick="reengagePeIpoConc(\'' + idq + '\')" style="background:none;border:1px solid var(--color-border);color:var(--color-text-secondary);border-radius:var(--border-radius-sm);font-size:9px;padding:0 6px;cursor:pointer">show</button>' +
         '</div>'
       );
       return;
     }
-    const sev = proj.activePct >= 20 ? '#ef4444' : proj.activePct >= 10 ? '#f59e0b' : 'var(--color-text-info)';
+    const sev = activePct >= 20 ? '#ef4444' : activePct >= 10 ? '#f59e0b' : 'var(--color-text-info)';
     const planVal = esc(st.plan || '');
     let progress = '';
     if (target !== null) {
-      const diff = (proj.activePct - target).toFixed(1);
-      progress = '<div style="margin-top:6px;font-size:11px;color:var(--color-text-secondary)">Currently <strong style="color:' + sev + '">' + a + '%</strong> &middot; your target <strong>' + target.toFixed(1) + '%</strong> of active book &middot; <strong style="color:' + sev + '">' + diff + ' pp</strong> to go. Clears automatically once it reaches your target.</div>';
+      const diff = (activePct - target).toFixed(1);
+      progress = '<div style="margin-top:4px;font-size:10px;color:var(--color-text-secondary)">target <strong>' + target.toFixed(1) + '%</strong> &middot; <strong style="color:' + sev + '">' + diff + ' pp</strong> to go</div>';
     }
-    const markNote = proj.hasMark ? '' : ' <span style="color:var(--color-text-tertiary);font-weight:400">(valued at cost &mdash; no current mark yet)</span>';
     cards.push(
-      '<div style="margin-bottom:12px;padding:13px 16px;background:var(--color-background-secondary);border-left:4px solid ' + sev + ';border-radius:var(--border-radius-sm)">' +
-        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">' +
-          '<div style="font-weight:700;color:var(--color-text-primary);font-size:13px">' + co + ' &middot; concentration at IPO' + markNote + '</div>' +
-          '<button onclick="dismissPeIpoConc(\'' + idq + '\')" style="background:none;border:1px solid var(--color-border);color:var(--color-text-secondary);border-radius:var(--border-radius-sm);font-size:10px;padding:2px 9px;cursor:pointer;white-space:nowrap">Dismiss</button>' +
+      '<div style="margin-bottom:10px;padding:9px 11px;background:var(--color-background-tertiary);border-left:3px solid ' + sev + ';border-radius:var(--border-radius-sm)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">' +
+          '<span style="font-weight:700;color:var(--color-text-primary);font-size:12px">' + name + ' &middot; ' + tk + '</span>' +
+          '<button onclick="dismissPeIpoConc(\'' + idq + '\')" style="background:none;border:1px solid var(--color-border);color:var(--color-text-secondary);border-radius:var(--border-radius-sm);font-size:9px;padding:1px 7px;cursor:pointer">Dismiss</button>' +
         '</div>' +
-        '<div style="margin-top:8px;font-size:13px;color:var(--color-text-primary);line-height:1.5">' +
-          'As a single public position, <strong>' + co + '</strong> would be <strong style="color:' + sev + ';font-size:15px">' + a + '%</strong> of your active book and <strong style="color:' + sev + '">' + t + '%</strong> of your total book.' +
+        '<div style="margin-top:5px;font-size:11px;color:var(--color-text-secondary);line-height:1.45">' +
+          '<strong style="color:' + sev + ';font-size:13px">' + a + '%</strong> of active book &middot; <strong style="color:' + sev + '">' + t + '%</strong> of total AUM' +
         '</div>' +
-        '<div style="margin-top:8px;font-weight:700;color:var(--color-text-primary);font-size:12px">How do you intend to address it?</div>' +
-        '<div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--color-text-secondary)">' +
-          '<label>Clear this once active-book concentration is at or below</label>' +
-          '<input type="number" min="0" step="0.5" value="' + (target !== null ? target : '') + '" onchange="setPeIpoTarget(\'' + idq + '\', this.value)" style="width:70px;padding:3px 6px;background:var(--color-background-tertiary);border:1px solid var(--color-border);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-size:12px"> %' +
+        '<div style="margin-top:6px;display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:10px;color:var(--color-text-secondary)">' +
+          '<label>clear at or below</label>' +
+          '<input type="number" min="0" step="0.5" value="' + (target !== null ? target : '') + '" onchange="setPeIpoTarget(\'' + idq + '\', this.value)" style="width:56px;padding:2px 5px;background:var(--color-background-secondary);border:1px solid var(--color-border);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-size:11px"> % active' +
         '</div>' +
         progress +
-        '<textarea placeholder="Your plan (optional) &mdash; e.g. trim to 8% over two quarters, harvest losses elsewhere first..." oninput="setPeIpoPlan(\'' + idq + '\', this.value)" style="margin-top:8px;width:100%;box-sizing:border-box;min-height:46px;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-size:12px;line-height:1.45;resize:vertical;font-family:inherit">' + planVal + '</textarea>' +
+        '<textarea placeholder="Plan (optional)..." oninput="setPeIpoPlan(\'' + idq + '\', this.value)" style="margin-top:6px;width:100%;box-sizing:border-box;min-height:34px;padding:5px 7px;background:var(--color-background-secondary);border:1px solid var(--color-border);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-size:11px;line-height:1.4;resize:vertical;font-family:inherit">' + planVal + '</textarea>' +
       '</div>'
     );
   });
   let html = '';
-  if (cards.length) {
-    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--color-text-secondary);margin-bottom:8px">Looming single-name concentration</div>' + cards.join('');
-  }
-  if (muted.length) {
-    html += '<div style="margin-top:' + (cards.length ? '4' : '0') + 'px">' + muted.join('') + '</div>';
-  }
+  if (cards.length) html += cards.join('');
+  if (muted.length) html += '<div style="margin-top:' + (cards.length ? '2' : '0') + 'px">' + muted.join('') + '</div>';
   host.innerHTML = html;
+  if (card) card.style.display = (cards.length || muted.length) ? '' : 'none';
 }
 
 function calcPeDeal(d) {
