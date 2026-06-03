@@ -21199,8 +21199,19 @@ async function driveExecuteSync({ manual = false } = {}) {
   driveSetStatus('saving');
   try {
     const payload = driveBuildBackupPayload();
+    // Daily auto-pin: the first SUCCESSFUL sync of each local calendar day is pinned
+    // (keepRevisionForever) and labeled "Auto YYYY-MM-DD", guaranteeing a durable dated
+    // restore point even on days you never click "+ Named snapshot". Every other same-day
+    // sync stays a normal (prunable) revision. The date is recorded only after a successful
+    // upload, so a failed upload retries the pin next time rather than leaving a gap.
+    const _d = new Date();
+    const _today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
+    const _autoPin = driveStoreGet('last-auto-pin-date') !== _today;
+    const _autoLabel = `Auto ${_today}`;
+    if (_autoPin) payload._backupMeta.snapshotLabel = _autoLabel;
     const json = JSON.stringify(payload, null, 2);
-    await driveUploadBackup(json);
+    await driveUploadBackup(json, _autoPin ? { keepForever: true, snapshotLabel: _autoLabel } : {});
+    if (_autoPin) driveStoreSet('last-auto-pin-date', _today);
     DriveState.lastBackupAt = Date.now();
     DriveState.lastBackupSize = json.length;
     driveStoreSet('last-backup-at', String(DriveState.lastBackupAt));
