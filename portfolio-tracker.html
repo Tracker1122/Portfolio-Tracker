@@ -3786,7 +3786,7 @@ function renderBookIsolateDelta(openArr) {
     <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px">
       <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-tertiary);margin-bottom:6px">Full book → without what's turned off</div>
       ${fmtPair('Your return', full.yourReturn, filt.yourReturn, 'pct')}
-      ${fmtPair('WTD S&P %', full.weightedSpx, filt.weightedSpx, 'pct')}
+      ${fmtPair("S&P's performance", full.weightedSpx, filt.weightedSpx, 'pct')}
       ${fmtPair('Edge vs S&P', full.vsSpx, filt.vsSpx, 'pp')}
       ${fmtPair('Dollar alpha', full.dollarAlpha, filt.dollarAlpha, 'dollar')}
       <div style="font-size:11px;line-height:1.55;color:var(--color-text-primary);margin-top:8px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)">${prose}</div>
@@ -3900,15 +3900,18 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
   const s = calcSummary(posArr);
   const exitLabel = isOpen ? 'Current Value' : 'Exit Value';
   const glLabel = isOpen ? 'Gain / Loss' : 'Realised G/L';
+  // On the open dashboard and the Isolate card these figures cover only the active (managed) sleeve,
+  // not the whole book — flag that so they aren't mistaken for the all-in total. Not shown on closed.
+  const sleeveSub = isOpen ? '<span style="text-transform:none;letter-spacing:0;font-size:8px;display:block;color:var(--color-text-tertiary);font-weight:400">active sleeve</span>' : '';
 
   el.innerHTML = `
     ${isOpen && typeof aumCardHtml === 'function' ? aumCardHtml() : ''}
     <div class="summary-card">
-      <div class="summary-card-label">Total Invested</div>
+      <div class="summary-card-label">Total Invested${sleeveSub}</div>
       <div class="summary-card-value">${fmtDollar(s.totalInvested)}</div>
     </div>
     <div class="summary-card">
-      <div class="summary-card-label">${exitLabel}</div>
+      <div class="summary-card-label">${exitLabel}${sleeveSub}</div>
       <div class="summary-card-value">${fmtDollar(s.totalExit)}</div>
     </div>
     <div class="summary-card">
@@ -3919,12 +3922,12 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
       <div class="summary-card-label">Your Return %</div>
       <div class="summary-card-value ${colorClass(s.yourReturn)}">${fmtPct(s.yourReturn)}</div>
     </div>
-    <div class="summary-card">
-      <div class="summary-card-label">Wtd S&P %</div>
+    <div class="summary-card" title="What the S&P 500 returned on the same capital over the same holding periods — your apples-to-apples benchmark.">
+      <div class="summary-card-label">S&P's performance</div>
       <div class="summary-card-value ${colorClass(s.weightedSpx)}">${fmtPct(s.weightedSpx)}</div>
     </div>
-    <div class="summary-card">
-      <div class="summary-card-label">Wtd vs S&P</div>
+    <div class="summary-card" title="Your return minus the S&P's performance over the same capital and periods, in percentage points.">
+      <div class="summary-card-label">Edge vs S&P</div>
       <div class="summary-card-value ${colorClass(s.vsSpx)}">${fmtPp(s.vsSpx)}</div>
     </div>
     ${isOpen ? `<div class="summary-card" title="Dollar alpha = what you generated above (or below) what the index would have returned on the same capital over the same period">
@@ -12149,9 +12152,14 @@ function importSpCsv(input) {
 // broken out rather than conflated: a LIQUID public total (managed + VOO) and an ALL-IN total
 // (+ private). Cash was removed from the tracker, so it is not a component.
 function aumCardHtml() {
-  // Managed open positions — current market value.
-  const managed = positions.filter(p => !p.closed && p.ticker)
+  // Managed open positions — current market value, split by account so the liquid (taxable) book
+  // can be separated from the tax-sheltered IRA holdings (IRA money is not liquid public book).
+  const openManaged = positions.filter(p => !p.closed && p.ticker);
+  const managed = openManaged.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const managedIra = openManaged
+    .filter(p => (p.account || '').toUpperCase().includes('IRA'))
     .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const managedTaxable = managed - managedIra;
 
   // VOO passive core — current value if a live price exists, else invested basis.
   const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
@@ -12168,8 +12176,14 @@ function aumCardHtml() {
     });
   }
 
-  const liquid = managed + voo;       // public, mark-to-market
+  const liquid = managed + voo;       // public, mark-to-market (taxable + IRA combined)
   const allIn = liquid + pe;          // + illiquid private
+  // Split the public book by account. IRA holdings are tax-sheltered and not freely liquid, so they
+  // are shown separately rather than folded into a single "liquid" figure.
+  const vooTaxable = sp ? sp.taxableValue : 0;
+  const vooIra = sp ? sp.iraValue : 0;
+  const liquidTaxable = managedTaxable + vooTaxable;
+  const iraSheltered = managedIra + vooIra;
 
   const fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : (n) => '$' + Math.round(n).toLocaleString();
   const pct = (v) => allIn > 0 ? ((v / allIn) * 100).toFixed(0) + '%' : '—';
@@ -12195,8 +12209,12 @@ function aumCardHtml() {
       ${peCount ? row('Private deals', pe, `${peCount} deal${peCount > 1 ? 's' : ''} · at cost`) : ''}
       <div style="border-top:1px solid var(--color-border-tertiary);margin-top:5px;padding-top:5px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
-          <span style="font-size:10px;color:var(--color-text-tertiary)">Liquid public book <span style="font-size:9px">(managed + VOO)</span></span>
-          <span style="font-size:13px;font-weight:700;color:var(--color-text-secondary);white-space:nowrap">${fmt(liquid)}</span>
+          <span style="font-size:10px;color:var(--color-text-tertiary)">Liquid · taxable <span style="font-size:9px">(managed + VOO)</span></span>
+          <span style="font-size:13px;font-weight:700;color:var(--color-text-secondary);white-space:nowrap">${fmt(liquidTaxable)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-top:3px">
+          <span style="font-size:10px;color:var(--color-text-tertiary)">IRA · tax-sheltered <span style="font-size:9px">(managed + VOO)</span></span>
+          <span style="font-size:13px;font-weight:700;color:var(--color-text-secondary);white-space:nowrap">${fmt(iraSheltered)}</span>
         </div>
       </div>
     </div>`;
@@ -12212,17 +12230,21 @@ function renderAumCard() {
 function getSpTotals() {
   if (spLots.length === 0) return null;
   const price = spCurrentPrice || 0;
-  let totalInvested = 0, totalShares = 0, taxableInvested = 0, iraInvested = 0;
+  let totalInvested = 0, totalShares = 0, taxableInvested = 0, iraInvested = 0, taxableShares = 0, iraShares = 0;
   spLots.forEach(l => {
     const invested = l.shares * l.pricePaid;
     totalInvested += invested;
     totalShares += l.shares;
-    if (l.account === 'IRA') iraInvested += invested;
-    else taxableInvested += invested;
+    if (l.account === 'IRA') { iraInvested += invested; iraShares += l.shares; }
+    else { taxableInvested += invested; taxableShares += l.shares; }
   });
   const currentValue = totalShares * price;
+  // Per-account current value (falls back to cost basis when no live price), so the AUM card can
+  // separate the liquid taxable VOO from the tax-sheltered IRA VOO.
+  const taxableValue = price > 0 ? taxableShares * price : taxableInvested;
+  const iraValue = price > 0 ? iraShares * price : iraInvested;
   const gl = price > 0 ? currentValue - totalInvested : 0;
-  return { totalInvested, totalShares, currentValue, gl, taxableInvested, iraInvested, price };
+  return { totalInvested, totalShares, currentValue, gl, taxableInvested, iraInvested, taxableShares, iraShares, taxableValue, iraValue, price };
 }
 
 function renderSpBar() {
