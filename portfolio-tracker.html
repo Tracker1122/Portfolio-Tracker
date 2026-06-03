@@ -13475,6 +13475,7 @@ function _candShellHtml() {
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-sm" onclick="candAddToQueue()" style="font-size:11px">+ Add to scenario</button>
       <button class="btn btn-sm" onclick="candClearScenario()" style="font-size:11px">Clear scenario</button>
+      <button class="btn btn-sm" onclick="candExportPdf()" style="font-size:11px" title="Export this scenario summary and the AI review as a PDF to share with an advisor">⤓ Export PDF</button>
     </div>
     <div id="cand-queue" style="margin-top:8px"></div>
     <div id="cand-output" style="margin-top:12px"></div>
@@ -13829,6 +13830,70 @@ function candClearScenario() {
   candRenderQueue();
   const out = document.getElementById('cand-output'); if (out) out.innerHTML = '';
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
+}
+
+// Export the staged scenario + AI review as a clean, light-themed printable document → the browser's
+// "Save as PDF" produces a shareable file for an advisor. No external library (works offline): we clone
+// the already-formatted on-screen summary, strip interactive controls, expand the collapsed detail,
+// recolor for white paper, and add the AI review text. Opens a print window.
+function candExportPdf() {
+  if (!_candQueue.length || !_candScenario) { alert('Stage a scenario first — add at least one move, then export.'); return; }
+  // Clone a DOM fragment, remove buttons/links, force <details> open, and darken light-on-dark accents
+  // so they read on white. Inline CSS-variable colors resolve against the light :root we define below.
+  const cleanFrag = (html) => {
+    const t = document.createElement('div');
+    t.innerHTML = html || '';
+    t.querySelectorAll('[onclick]').forEach(el => el.remove());      // edit / × / refresh-performance
+    t.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
+    t.querySelectorAll('summary').forEach(s => s.remove());          // drop the toggle label; body shows expanded
+    return t.innerHTML
+      .replace(/#fbbf24/g, '#b45309')   // amber → readable on white
+      .replace(/#34d399/g, '#15803d')   // green
+      .replace(/#f87171/g, '#dc2626');  // red
+  };
+  const queueHtml = cleanFrag((document.getElementById('cand-queue') || {}).innerHTML);
+  const outputHtml = cleanFrag((document.getElementById('cand-output') || {}).innerHTML);
+
+  const esc2 = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let aiHtml = '<p class="note">No AI review has been run for this scenario yet — run "Analyze with AI" first to include it.</p>';
+  if (typeof bookAiReview !== 'undefined' && bookAiReview && bookAiReview.text) {
+    const blocks = [`<div class="ai">${esc2(bookAiReview.text)}</div>`];
+    (bookAiReview.thread || []).slice(1).forEach(t => {
+      if (!t || !t.text || t.error) return;
+      if (t.role === 'user') blocks.push(`<p class="aiq">Follow-up: ${esc2(t.text)}</p>`);
+      else blocks.push(`<div class="ai">${esc2(t.text)}</div>`);
+    });
+    const stale = (typeof bookAiReviewStale === 'function') && bookAiReviewStale();
+    blocks.push(`<p class="note" style="margin-top:10px">Generated ${esc2(new Date(bookAiReview.at).toLocaleString())}${stale ? ' — inputs changed since this ran, so it may not reflect the scenario above' : ''}. Observations for discussion, not advice.</p>`);
+    aiHtml = blocks.join('');
+  }
+
+  const now = new Date();
+  const doc =
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Portfolio Scenario Review</title><style>` +
+    `:root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}` +
+    `*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
+    `.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}` +
+    `h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px}` +
+    `.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}` +
+    `.ai{white-space:pre-wrap;font-size:12px;line-height:1.55;color:#111;margin:2px 0}.aiq{font-weight:600;font-size:12px;margin:14px 0 2px}` +
+    `table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}` +
+    `</style></head><body><div class="doc">` +
+    `<h1>Portfolio Scenario Review</h1>` +
+    `<div class="sub">Prepared ${esc2(now.toLocaleDateString())} for discussion with my advisor.</div>` +
+    `<div class="note">Hypothetical. Figures are estimates from my own tracker — true-exposure look-through using fund weights I maintain, and a single-year tax estimate using my assumed rates. Not tax or investment advice.</div>` +
+    `<h2>Staged scenario</h2><div class="section">${queueHtml}</div>` +
+    `<h2>Scenario analysis</h2><div class="section">${outputHtml}</div>` +
+    `<h2>AI review</h2><div class="section">${aiHtml}</div>` +
+    `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting, harvested-loss and prior-year carryforward offsets; no $3,000 ordinary-income offset; losses not split by ST/LT character) — a CPA should confirm the actual figures.</div>` +
+    `</div></body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) { alert('Allow pop-ups for this site to export the PDF, then try again.'); return; }
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+  setTimeout(function () { try { w.focus(); w.print(); } catch (e) { } }, 400);
 }
 
 function _candTradeLabel(tr) {
