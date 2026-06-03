@@ -351,7 +351,7 @@
   .drive-status.disconnected .dot { background: var(--color-text-tertiary); }
   @keyframes drive-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-  .drive-modal { max-width: 560px; }
+  .drive-modal { max-width: 560px; max-height: 90vh; overflow-y: auto; overscroll-behavior: contain; }
   .drive-section {
     border-top: 1px solid var(--color-border-tertiary);
     padding-top: 16px; margin-top: 16px;
@@ -371,7 +371,7 @@
   .drive-row .value.danger { color: var(--color-text-danger); }
   .drive-row .value.info { color: var(--color-text-info); }
   .revisions-list {
-    max-height: 280px; overflow-y: auto;
+    max-height: 280px; overflow-y: auto; overscroll-behavior: contain;
     border: 1px solid var(--color-border-tertiary);
     border-radius: var(--border-radius-md);
     background: var(--color-background-tertiary);
@@ -987,7 +987,7 @@
   <input id="spx-manual-input" class="spx-manual-input" type="number" step="any" min="0" placeholder="e.g. 7165" title="Type today's S&P — pushes to all open rows" oninput="setSpxToday(this.value)">
   <span id="spx-stale" style="font-size:9px;color:var(--color-text-tertiary)"></span>
   <span class="spx-manual-hint">↑ update daily — feeds all open positions</span>
-  <a class="spx-link" href="https://multpl.com/s-p-500-historical-prices/table/by-month" target="_blank">↗ Historical S&P (multpl.com)</a>
+  <a class="spx-link" href="https://multpl.com/s-p-500-historical-prices/table/by-month" target="_blank" rel="noopener">↗ Historical S&P (multpl.com)</a>
   <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
     <button id="refresh-prices-btn" class="btn btn-sm btn-primary" onclick="refreshAllPrices()" style="font-size:10px;padding:4px 12px">⟳ Refresh Prices</button>
     <span id="refresh-prices-stale" style="font-size:9px;color:var(--color-text-tertiary)"></span>
@@ -1005,7 +1005,7 @@
 <div id="polygon-key-panel" style="display:none;background:var(--color-background-secondary);border-bottom:1px solid var(--color-border-tertiary);padding:8px 20px;align-items:center;gap:10px">
   <span style="font-size:10px;color:var(--color-text-tertiary)">Polygon.io API Key</span>
   <input id="polygon-key-input" class="modal-input" type="password" placeholder="Paste your Polygon API key here" style="width:280px;font-size:11px;padding:4px 8px" oninput="savePolygonKey(this.value)" onchange="savePolygonKey(this.value)" onblur="savePolygonKey(this.value)">
-  <a href="https://polygon.io/dashboard/api-keys" target="_blank" style="font-size:10px;color:var(--color-text-info)">Get key at polygon.io ↗</a>
+  <a href="https://polygon.io/dashboard/api-keys" target="_blank" rel="noopener" style="font-size:10px;color:var(--color-text-info)">Get key at polygon.io ↗</a>
   <span style="font-size:10px;color:var(--color-text-tertiary)">Free account · previous day close</span>
 </div>
 
@@ -3812,7 +3812,7 @@ function renderBookExcludePanel(openArr) {
       const color = palette[i % palette.length];
       const fill = off ? `background:repeating-linear-gradient(45deg,transparent,transparent 3px,${color}22 3px,${color}22 6px);border:1px dashed ${color}` : `background:${color}`;
       const lbl = (t.pct >= 7 && !off) ? `<span style="font-size:9px;color:#0b0b0f;font-weight:700;white-space:nowrap;overflow:hidden;padding:0 2px">${t.pct.toFixed(0)}%</span>` : '';
-      return `<div title="${esc(t.label)} — ${t.pct.toFixed(1)}% of direct book · ${fmtD(t.value)}${off ? ' (turned OFF)' : ' · click to turn off'}" onclick="toggleBookExclude('themes','${esc(t.label).replace(/'/g, "\\'")}')" style="width:${t.pct}%;${fill};cursor:pointer;display:flex;align-items:center;justify-content:center;min-width:2px">${lbl}</div>`;
+      return `<div title="${esc(t.label)} — ${t.pct.toFixed(1)}% of direct book · ${fmtD(t.value)}${off ? ' (turned OFF)' : ' · click to turn off'}" onclick="toggleBookExclude('themes','${escq(t.label)}')" style="width:${t.pct}%;${fill};cursor:pointer;display:flex;align-items:center;justify-content:center;min-width:2px">${lbl}</div>`;
     }).join('')}
   </div>`;
 
@@ -3824,7 +3824,7 @@ function renderBookExcludePanel(openArr) {
     const st = themeStats[t.label];
     const ret = st && st.yourReturn !== null ? `${st.yourReturn >= 0 ? '+' : ''}${st.yourReturn.toFixed(1)}%` : '—';
     const retCol = st && st.yourReturn >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-    return `<div onclick="toggleBookExclude('themes','${esc(t.label).replace(/'/g, "\\'")}')" style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--border-radius-sm);cursor:pointer;font-size:11px;${off ? 'opacity:0.5' : ''}" onmouseover="this.style.background='var(--color-background-secondary)'" onmouseout="this.style.background='transparent'">
+    return `<div onclick="toggleBookExclude('themes','${escq(t.label)}')" style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--border-radius-sm);cursor:pointer;font-size:11px;${off ? 'opacity:0.5' : ''}" onmouseover="this.style.background='var(--color-background-secondary)'" onmouseout="this.style.background='transparent'">
       <span style="width:10px;height:10px;border-radius:2px;background:${color};flex-shrink:0;${off ? 'outline:1px solid ' + color + ';background:transparent' : ''}"></span>
       <span style="color:var(--color-text-primary);flex:1;${off ? 'text-decoration:line-through' : ''}"><strong>${esc(t.label)}</strong> <span style="font-size:9px;color:var(--color-text-tertiary)">${t.names.length} name${t.names.length > 1 ? 's' : ''}</span></span>
       <span style="font-size:9px;color:${retCol};white-space:nowrap;margin-right:6px" title="This theme's own return (its positions only)">${ret}</span>
@@ -3839,7 +3839,7 @@ function renderBookExcludePanel(openArr) {
     const style = off
       ? base + 'background:rgba(251,191,36,0.16);border-color:rgba(251,191,36,0.5);color:#fbbf24;text-decoration:line-through;'
       : base + 'background:var(--color-surface-2,rgba(255,255,255,0.04));border-color:var(--color-border,rgba(255,255,255,0.12));color:var(--color-text-secondary);';
-    return `<span style="${style}" onclick="toggleBookExclude('${kind}','${esc(value).replace(/'/g, "\\'")}')" title="${off ? 'Excluded — click to put back' : 'Click to exclude'}">${off ? '✕ ' : ''}${esc(label)}</span>`;
+    return `<span style="${style}" onclick="toggleBookExclude('${kind}','${escq(value)}')" title="${off ? 'Excluded — click to put back' : 'Click to exclude'}">${off ? '✕ ' : ''}${esc(label)}</span>`;
   };
 
   const excludedCount = openArr.filter(isBookExcluded).length;
@@ -4411,7 +4411,20 @@ function renderRow(pos) {
 
 function esc(v) {
   if (v === null || v === undefined) return '';
-  return String(v).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+// Escape for interpolation inside a SINGLE-QUOTED JS string that sits in an HTML on*=""
+// handler attribute, e.g.  onclick="fn('${escq(x)}')". HTML entity-decoding happens BEFORE
+// JS parsing, so the quote must be backslash-escaped (not entity-escaped) to survive; the
+// trailing HTML escapes then keep the attribute itself unbreakable. Backslash MUST go first.
+function escq(v) {
+  return String(v === null || v === undefined ? '' : v)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // ─────────────────────────────────────────────
@@ -6883,8 +6896,8 @@ function renderIndexEditor() {
       ? (hasHoldings
           ? `<span style="color:var(--color-text-success)">✓ you hold ~${fmtDollarWhole(held)} \u2014 look-through active</span>${coverageNote}`
           : (blankOnPurposeNote
-              ? `<span style="color:var(--color-text-tertiary)">✓ you hold ~${fmtDollarWhole(held)} \u2014 marked blank on purpose (no decomposition needed)</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${esc(fund)}')" style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">undo</a>`
-              : `<span style="color:#fbbf24">✓ you hold ~${fmtDollarWhole(held)} \u2014 paste its holdings below to enable look-through</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${esc(fund)}')" style="font-size:9px;color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="If this fund doesn't need decomposing (e.g. gold, cash, a commodity), mark it so it stops flagging as a to-do">mark blank on purpose</a>`))
+              ? `<span style="color:var(--color-text-tertiary)">✓ you hold ~${fmtDollarWhole(held)} \u2014 marked blank on purpose (no decomposition needed)</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${escq(fund)}')" style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">undo</a>`
+              : `<span style="color:#fbbf24">✓ you hold ~${fmtDollarWhole(held)} \u2014 paste its holdings below to enable look-through</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${escq(fund)}')" style="font-size:9px;color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="If this fund doesn't need decomposing (e.g. gold, cash, a commodity), mark it so it stops flagging as a to-do">mark blank on purpose</a>`))
       : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 look-through inactive until you own it</span>`;
     const ageDays = (() => { try { return tbl.asOf ? Math.round((Date.now() - new Date(tbl.asOf).getTime()) / 86400000) : null; } catch(e){ return null; } })();
     const stale = ageDays != null && ageDays > 120;
@@ -6896,9 +6909,9 @@ function renderIndexEditor() {
       return `
       <div style="display:flex;gap:5px;align-items:center;margin-bottom:3px">
         <span style="font-size:10px;color:var(--color-text-primary);min-width:54px;font-weight:600">${esc(tk)}</span>
-        <input type="number" step="0.01" value="${w}" onchange="setIndexWeight('${esc(fund)}','${esc(tk)}',this.value)" style="width:64px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:2px 5px">
+        <input type="number" step="0.01" value="${w}" onchange="setIndexWeight('${escq(fund)}','${escq(tk)}',this.value)" style="width:64px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:2px 5px">
         <span style="font-size:9px;color:var(--color-text-tertiary)">%</span>${dollarVal}
-        <button class="btn btn-sm" onclick="deleteIndexTicker('${esc(fund)}','${esc(tk)}')" title="Remove ${esc(tk)}" style="font-size:9px;padding:1px 6px;color:var(--color-text-danger)">✕</button>
+        <button class="btn btn-sm" onclick="deleteIndexTicker('${escq(fund)}','${escq(tk)}')" title="Remove ${esc(tk)}" style="font-size:9px;padding:1px 6px;color:var(--color-text-danger)">✕</button>
       </div>`;
     }).join('');
     html += `
@@ -6906,32 +6919,32 @@ function renderIndexEditor() {
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
           <strong style="font-size:12px;color:var(--color-text-primary)">${esc(fund)}</strong>
           <span style="font-size:9px">${heldNote}</span>
-          <button class="btn btn-sm" onclick="deleteIndexFund('${esc(fund)}')" style="font-size:9px;margin-left:auto;color:var(--color-text-danger)">Remove fund</button>
+          <button class="btn btn-sm" onclick="deleteIndexFund('${escq(fund)}')" style="font-size:9px;margin-left:auto;color:var(--color-text-danger)">Remove fund</button>
         </div>
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
           <span style="font-size:9px;color:var(--color-text-tertiary)">Weights as of</span>
-          <input type="date" value="${esc(tbl.asOf || today)}" onchange="setIndexAsOf('${esc(fund)}',this.value)" style="background:var(--color-background-tertiary);border:1px solid ${stale?'#fbbf24':'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:9px;padding:2px 5px">
+          <input type="date" value="${esc(tbl.asOf || today)}" onchange="setIndexAsOf('${escq(fund)}',this.value)" style="background:var(--color-background-tertiary);border:1px solid ${stale?'#fbbf24':'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:9px;padding:2px 5px">
           ${stale?`<span style="font-size:9px;color:#fbbf24">⚠ ${ageDays} days old \u2014 may have drifted; refresh from the fund\u2019s page</span>`:''}
         </div>
         ${rows || '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">No tickers yet \u2014 paste the fund\u2019s holdings below, or add them one at a time.</div>'}
-        ${hasHoldings ? `<button class="btn btn-sm" onclick="clearIndexHoldings('${esc(fund)}')" title="Remove all holdings for ${esc(fund)} (your position is untouched)" style="font-size:9px;padding:1px 8px;margin-top:2px;color:var(--color-text-danger)">Clear all holdings</button>` : ''}
+        ${hasHoldings ? `<button class="btn btn-sm" onclick="clearIndexHoldings('${escq(fund)}')" title="Remove all holdings for ${esc(fund)} (your position is untouched)" style="font-size:9px;padding:1px 8px;margin-top:2px;color:var(--color-text-danger)">Clear all holdings</button>` : ''}
         <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--color-border-tertiary)">
           <div style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Paste holdings (ticker + weight, from the fund\u2019s page) — replaces this fund\u2019s list</div>
           <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:5px">
-            Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${esc(fund)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(fund)} holdings →</a>
+            Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${escq(fund)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(fund)} holdings →</a>
             <span>opens it on stockanalysis.com (free); copy the table and paste — row #, name & shares are ignored automatically.</span>
           </div>
-          <textarea id="qr-idx-paste-${esc(fund)}" rows="2" oninput="renderIndexPastePreview('${esc(fund)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, TSM 10% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
+          <textarea id="qr-idx-paste-${esc(fund)}" rows="2" oninput="renderIndexPastePreview('${escq(fund)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, TSM 10% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
           <div id="qr-idx-preview-${esc(fund)}" style="margin-top:5px"></div>
           <div style="display:flex;gap:5px;align-items:center;margin-top:4px">
-            <button class="btn btn-sm btn-primary" onclick="pasteIndexHoldings('${esc(fund)}')" style="font-size:9px">Parse &amp; replace list</button>
+            <button class="btn btn-sm btn-primary" onclick="pasteIndexHoldings('${escq(fund)}')" style="font-size:9px">Parse &amp; replace list</button>
             <span style="font-size:8px;color:var(--color-text-tertiary)">or add one at a time:</span>
           </div>
         </div>
         <div style="display:flex;gap:5px;align-items:center;margin-top:6px">
           <input id="qr-idx-add-tk-${esc(fund)}" type="text" placeholder="TICKER" style="width:70px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:2px 5px;text-transform:uppercase">
           <input id="qr-idx-add-w-${esc(fund)}" type="number" step="0.01" placeholder="%" style="width:58px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:2px 5px">
-          <button class="btn btn-sm" onclick="addIndexTicker('${esc(fund)}')" style="font-size:9px">+ Add ticker</button>
+          <button class="btn btn-sm" onclick="addIndexTicker('${escq(fund)}')" style="font-size:9px">+ Add ticker</button>
         </div>
         <div id="qr-idx-paste-msg-${esc(fund)}" style="margin-top:4px"></div>
       </div>`;
@@ -8400,7 +8413,7 @@ function qrRenderStockSwap() {
     const h = held[k] || { display:k, val:0 };
     return `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:12px;padding:2px 8px;margin:0 5px 4px 0;font-size:10px">
       ${esc(h.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(h.val)}</span>${acctTag(k)}
-      <button type="button" onclick="qrSwapRemoveSell('${esc(k)}')" style="border:none;background:none;color:var(--color-text-tertiary);cursor:pointer;font-size:12px;padding:0;line-height:1">×</button></span>`;
+      <button type="button" onclick="qrSwapRemoveSell('${escq(k)}')" style="border:none;background:none;color:var(--color-text-tertiary);cursor:pointer;font-size:12px;padding:0;line-height:1">×</button></span>`;
   }).join('');
 
   let impact = '';
@@ -9170,7 +9183,7 @@ function renderQrCardAnalysis(id) {
     const checked = new Set(c.rotateOut || []);
     const checklist = rotCandidates.map(rc =>
       `<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;font-size:10px;cursor:pointer;color:var(--color-text-secondary)">
-        <input type="checkbox" ${checked.has(rc.norm)?'checked':''} onchange="qrCardToggleRotate('${id}','${rc.norm}')" style="cursor:pointer">
+        <input type="checkbox" ${checked.has(rc.norm)?'checked':''} onchange="qrCardToggleRotate('${id}','${escq(rc.norm)}')" style="cursor:pointer">
         ${esc(rc.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(rc.directValue)}</span>${acctTag(rc.norm)}
       </label>`).join('');
 
@@ -12968,16 +12981,16 @@ function renderSimResult() {
   if (sim.opaqueBlocks.length) {
     opaqueNote = sim.opaqueBlocks.map(b => `<div style="font-size:10px;color:var(--color-text-primary);padding:8px 10px;background:rgba(251,191,36,0.08);border-left:3px solid #fbbf24;border-radius:var(--border-radius-md);margin-top:6px;line-height:1.5">
       <div style="color:#fbbf24">⚠ ${esc(b.ticker)} (${fmtDollarWhole(b.amount)}) is an opaque block — paste its top holdings below to see its true per-name impact + overlap for this scenario. <span style="color:var(--color-text-tertiary)">(Temporary — not saved; saving a fund's holdings happens in True Exposure once you actually own it.)</span></div>
-      <div style="font-size:9px;color:var(--color-text-tertiary);margin:5px 0 3px">Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${esc(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a> — copy the ticker + % column and paste here.</div>
-      <textarea id="sim-temp-paste-${esc(b.ticker)}" rows="2" oninput="renderSimHoldingsPreview('${esc(b.ticker)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, MSFT 10% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin:5px 0 3px">Need the list? <a href="#" onclick="qrOpenIndexSource(event,'${escq(b.ticker)}')" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">Get ${esc(b.ticker)} holdings →</a> — copy the ticker + % column and paste here.</div>
+      <textarea id="sim-temp-paste-${esc(b.ticker)}" rows="2" oninput="renderSimHoldingsPreview('${escq(b.ticker)}')" placeholder="Paste the holdings table — e.g. NVDA 22%, MSFT 10% — or the raw rows straight from the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px;resize:vertical"></textarea>
       <div id="sim-temp-preview-${esc(b.ticker)}" style="margin-top:5px"></div>
-      <div style="margin-top:4px"><button class="btn btn-sm btn-primary" onclick="applySimTempHoldings('${esc(b.ticker)}')" style="font-size:9px">Parse &amp; use (this scenario only)</button></div>
+      <div style="margin-top:4px"><button class="btn btn-sm btn-primary" onclick="applySimTempHoldings('${escq(b.ticker)}')" style="font-size:9px">Parse &amp; use (this scenario only)</button></div>
     </div>`).join('');
   }
   // For temp-decomposed ETFs, offer a clear/undo so the user can revert to opaque.
   const tempActive = Object.keys(simTempHoldings).filter(tk => simTrades.some(t => t.action === 'buy' && t.kind === 'etf' && t.ticker.toUpperCase() === tk));
   if (tempActive.length) {
-    opaqueNote += tempActive.map(tk => `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">✓ ${esc(tk)} decomposed from pasted holdings (scenario-only). <a href="#" onclick="clearSimTempHoldings('${esc(tk)}');return false" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">clear</a></div>`).join('');
+    opaqueNote += tempActive.map(tk => `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">✓ ${esc(tk)} decomposed from pasted holdings (scenario-only). <a href="#" onclick="clearSimTempHoldings('${escq(tk)}');return false" style="color:var(--color-text-info);text-decoration:underline;cursor:pointer">clear</a></div>`).join('');
   }
 
   const netCash = sim.cashOut - sim.cashIn;
@@ -13268,7 +13281,7 @@ function renderIndustryRef() {
       </div>`;
     }).join('');
 
-    return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;display:flex;flex-direction:column;cursor:pointer;transition:border-color 0.15s" onclick="showCardOverlay('industry:${esc(theme).replace(/'/g, "\\'")}')" onmouseover="this.style.borderColor='var(--color-text-info)'" onmouseout="this.style.borderColor='var(--color-border-tertiary)'">
+    return `<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;display:flex;flex-direction:column;cursor:pointer;transition:border-color 0.15s" onclick="showCardOverlay('industry:${escq(theme)}')" onmouseover="this.style.borderColor='var(--color-text-info)'" onmouseout="this.style.borderColor='var(--color-border-tertiary)'">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px">
         <span style="font-size:9px;font-weight:700;color:var(--color-text-primary);text-transform:uppercase;letter-spacing:0.08em">${esc(theme)}</span>
         ${headerRight}
@@ -15662,7 +15675,7 @@ function renderBenchmarkFeesEditor() {
       <td style="font-weight:700">${esc(tk)}</td>
       <td class="r">
         <input type="number" step="0.01" min="0" value="${fee}"
-          onchange="setBenchmarkFee('${esc(tk)}', this.value)"
+          onchange="setBenchmarkFee('${escq(tk)}', this.value)"
           style="width:64px;text-align:right;font-size:11px;padding:2px 5px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-primary)" />
         <span style="font-size:10px;color:var(--color-text-tertiary);margin-left:3px">%/yr</span>
       </td>
@@ -15801,7 +15814,7 @@ function renderThemeClusters() {
     // a no-op). Nothing is selected as "—" anymore; the live assignment is always shown.
     const currentThemeMatch = themeOptions.find(t => clusterLabelForBench(themeBench[t]) === n.label);
     const editControl = clusterEditExpanded ? `
-      <select onchange="reassignCluster('${esc(n.key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;margin-left:6px;cursor:pointer">
+      <select onchange="reassignCluster('${escq(n.key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;margin-left:6px;cursor:pointer">
         ${isOverridden ? '<option value="__auto__">↺ reset to auto</option>' : ''}
         ${themeOptions.map(t => `<option value="${esc(t)}"${currentThemeMatch === t ? ' selected' : ''}>${esc(t)}</option>`).join('')}
       </select>` : '';
@@ -15916,7 +15929,7 @@ function renderSectorPanel() {
 
   // The sector <select> for a name, with each option's definition as a title (hover) tooltip.
   const sectorSelect = (key, currentSector) => `
-    <select onchange="setSectorTag('${esc(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer">
+    <select onchange="setSectorTag('${escq(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer">
       <option value="__unset__"${!currentSector ? ' selected' : ''}>— untagged —</option>
       ${SECTOR_VOCAB.map(s => `<option value="${s.id}"${currentSector === s.id ? ' selected' : ''} title="${esc(s.blurb)}">${esc(s.label)}</option>`).join('')}
     </select>`;
@@ -16173,7 +16186,7 @@ function discoveryInfoCardHtml(key, state) {
     `<a href="${esc(l.url)}" target="_blank" rel="noopener" title="${esc(l.hint)}" style="font-size:9px;color:var(--color-text-info);text-decoration:none;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:2px 7px;white-space:nowrap">${esc(l.label)} ↗</a>`
   ).join('') + `</div>`;
   const note = (info.userNote || '');
-  const noteField = `<div style="margin-top:5px"><textarea data-info-note="${esc(key)}" placeholder="Your own note on ${esc(key)} (saved automatically)…" oninput="saveDiscoveryNote('${esc(key)}', this.value)" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:9px;background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:4px 6px;resize:vertical" rows="2">${esc(note)}</textarea></div>`;
+  const noteField = `<div style="margin-top:5px"><textarea data-info-note="${esc(key)}" placeholder="Your own note on ${esc(key)} (saved automatically)…" oninput="saveDiscoveryNote('${escq(key)}', this.value)" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:9px;background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:4px 6px;resize:vertical" rows="2">${esc(note)}</textarea></div>`;
   return `<div style="margin-top:6px;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:10px">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px">
       <span style="font-size:10px;font-weight:700;color:var(--color-text-primary)">${esc(key)}</span>
@@ -16908,14 +16921,14 @@ function renderThemeDiscovery() {
       const bg = top ? 'rgba(52,211,153,0.15)' : 'var(--color-background-tertiary)';
       rankBadge = `<span title="Rank by 1-year return within this theme (best = #1), of ${rk.of} names with data" style="font-size:8px;font-weight:700;color:${col};background:${bg};border-radius:var(--border-radius-sm);padding:0 5px">#${rk.rank}</span>`;
     }
-    return `<div onclick="toggleDiscoverySelect('${esc(key)}')" title="${atCap ? '5 selected — deselect one to add another' : 'Click to ' + (selected ? 'deselect' : 'select for fetch')}" style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:${selected ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)'};border:1px solid ${selected ? 'var(--color-accent)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);cursor:${atCap ? 'not-allowed' : 'pointer'};${atCap ? 'opacity:0.5' : ''}">
+    return `<div onclick="toggleDiscoverySelect('${escq(key)}')" title="${atCap ? '5 selected — deselect one to add another' : 'Click to ' + (selected ? 'deselect' : 'select for fetch')}" style="display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;margin:2px;background:${selected ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)'};border:1px solid ${selected ? 'var(--color-accent)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);cursor:${atCap ? 'not-allowed' : 'pointer'};${atCap ? 'opacity:0.5' : ''}">
       ${rankBadge}
       <span style="font-size:11px;font-weight:600;color:var(--color-text-primary)">${selected ? '✓ ' : ''}${esc(c.display)}</span>
       <span style="font-size:8px;color:var(--color-text-tertiary)">${convictionPhrase(topFund, topW)}${moreNote}</span>
       ${hn ? `<span style="font-size:8px;color:#fbbf24" title="You already hold some of this (computed from your funds, no fetch) — so this 'gap' is partly filled already.">· ${esc(hn)}</span>` : ''}
       <span data-perf-slot="${esc(key)}" style="font-size:8px">${perfInit}</span>
-      <span onclick="event.stopPropagation();toggleDiscoveryDetail('${esc(key)}')" title="More performance detail: 1-month & 1-year return, max drawdown, volatility, vs-benchmark — all from the data already fetched (no new API call)." style="font-size:9px;color:var(--color-text-info);cursor:pointer;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;line-height:1.4">📊</span>
-      <span onclick="event.stopPropagation();showDiscoveryInfo('${esc(key)}')" title="What does this company do? (sector, description, market cap — fetched from Polygon on demand)" style="font-size:9px;color:var(--color-text-info);cursor:help;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;line-height:1.4">ℹ</span>
+      <span onclick="event.stopPropagation();toggleDiscoveryDetail('${escq(key)}')" title="More performance detail: 1-month & 1-year return, max drawdown, volatility, vs-benchmark — all from the data already fetched (no new API call)." style="font-size:9px;color:var(--color-text-info);cursor:pointer;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;line-height:1.4">📊</span>
+      <span onclick="event.stopPropagation();showDiscoveryInfo('${escq(key)}')" title="What does this company do? (sector, description, market cap — fetched from Polygon on demand)" style="font-size:9px;color:var(--color-text-info);cursor:help;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;line-height:1.4">ℹ</span>
     </div>
     <div data-detail-slot="${esc(key)}" style="display:none;flex-basis:100%"></div>`;
   };
@@ -21295,7 +21308,7 @@ function driveRenderModalState() {
     lastEl.textContent = d.toLocaleString() + sizeStr;
   } else { lastEl.textContent = 'Never'; }
   if (DriveState.fileId) {
-    fileEl.innerHTML = `<a href="https://drive.google.com/file/d/${DriveState.fileId}/view" target="_blank" style="color:var(--color-text-info);text-decoration:none">View in Drive ↗</a>`;
+    fileEl.innerHTML = `<a href="https://drive.google.com/file/d/${DriveState.fileId}/view" target="_blank" rel="noopener" style="color:var(--color-text-info);text-decoration:none">View in Drive ↗</a>`;
   } else { fileEl.textContent = '—'; }
 }
 
@@ -21434,7 +21447,7 @@ async function loadRevisionList() {
           </div>
           <div class="revision-actions">
             <button class="btn" style="font-size:9px;padding:3px 8px" onclick="previewRevision('${r.id}')">Preview</button>
-            <button class="btn btn-danger" style="font-size:9px;padding:3px 8px" onclick="confirmRestoreRevision('${r.id}', '${d.toLocaleString().replace(/'/g,"\\'")}')">Restore</button>
+            <button class="btn btn-danger" style="font-size:9px;padding:3px 8px" onclick="confirmRestoreRevision('${r.id}', '${escq(d.toLocaleString())}')">Restore</button>
           </div>
         </div>
       `;
