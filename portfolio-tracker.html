@@ -16575,6 +16575,15 @@ const discoveryThemeRank = {};
 // Also fetches each name's source-fund benchmark once (cached/deduped). After fetching, computes the
 // rank purely from the cached y1 values and re-renders so the badges appear; we do NOT reorder the
 // chips (fragile with the live click handlers) — the rank shows as a badge on each chip.
+// Staleness threshold for the discovery cache. Tied to the green freshness dot: a perf value fetched
+// within the last 24h is "fresh" and reused; ≥24h old (or with no timestamp) is "stale" and re-pulled.
+const DISCOVERY_STALE_MS = 24 * 60 * 60 * 1000;
+function _discoveryStale(p) {
+  if (!(p && typeof p === 'object' && !p.err)) return false; // not a good cached value — leave to the normal fetch gate
+  if (typeof p.fetchedAt !== 'number') return true;          // older-format entry with no timestamp → treat as stale
+  return (Date.now() - p.fetchedAt) >= DISCOVERY_STALE_MS;
+}
+
 async function fetchThemeAndRank(themeJson, btnId) {
   let theme;
   try { theme = JSON.parse(decodeURIComponent(themeJson)); } catch (e) { return; }
@@ -16597,6 +16606,14 @@ async function fetchThemeAndRank(themeJson, btnId) {
   const total = tickers.length + funds.length;
   const SAFE_SPACING = 12000; // 12s between calls = ~5/min — the proven free-tier-safe pace (per Get Benchmarks)
   const estMin = Math.ceil((total * SAFE_SPACING) / 60000);
+
+  // Staleness refresh — the point of this button. Drop cached slots that are ≥24h old (or undated) so
+  // _polyFetchInto re-pulls them fresh; names fetched within the last day (green dot) stay cached and
+  // are skipped. So a click freshens only what's gone stale, instead of either re-pulling everything
+  // (slow) or nothing (the old behavior, which just re-ranked stale numbers).
+  let refreshed = 0;
+  tickers.forEach(t => { const k = t.toUpperCase(); if (_discoveryStale(discoveryPerf[k])) { delete discoveryPerf[k]; updatePerfSlot(k); refreshed++; } });
+  funds.forEach(f => { if (_discoveryStale(discoveryBenchPerf[f])) delete discoveryBenchPerf[f]; });
 
   // Phase 1: every name in the theme.
   for (const tk of tickers) {
@@ -16627,7 +16644,10 @@ async function fetchThemeAndRank(themeJson, btnId) {
     setStatus(`<span style="color:#fbbf24;font-size:9px;line-height:1.5">⚠ ${miss} of ${total} didn't fetch${note}</span>`);
   } else {
     const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    setStatus(`<span style="color:var(--color-text-success);font-size:9px">✓ Re-ranked all ${tickers.length} by 1-year return · ${t}</span>`);
+    const freshNote = refreshed > 0
+      ? `pulled fresh prices for ${refreshed} stale name${refreshed > 1 ? 's' : ''}`
+      : `all data under 24h — nothing needed re-pulling`;
+    setStatus(`<span style="color:var(--color-text-success);font-size:9px">✓ Re-ranked ${tickers.length} by 1-year return · ${freshNote} · ${t}</span>`);
   }
   if (btn) { btn.disabled = false; btn.textContent = `↻ Re-fetch & rank (${tickers.length})`; }
 }
@@ -17046,7 +17066,7 @@ function renderThemeDiscovery() {
     const themeEnc = encodeURIComponent(JSON.stringify(theme));
     const rankBtnId = 'themerank-' + theme.replace(/[^a-zA-Z0-9]/g, '');
     const ranked = !!rankMap;
-    const rankBtn = `<button id="${rankBtnId}" class="btn btn-sm" onclick="event.preventDefault();event.stopPropagation();fetchThemeAndRank('${themeEnc}','${rankBtnId}')" style="font-size:9px" title="Fetches the 1-year return for every name in this theme, paced at ~12s/call so it never trips Polygon's 5/min free-tier limit — so a 13-name theme takes ~3 min. Then ranks them best→worst and reorders the chips. Already-fetched names are skipped, so re-running is fast.">${ranked ? `↻ Re-fetch & rank (${names.length})` : `↡ Fetch all ${names.length} & rank by 1Y (~${Math.ceil(names.length * 12 / 60)}min)`}</button>`;
+    const rankBtn = `<button id="${rankBtnId}" class="btn btn-sm" onclick="event.preventDefault();event.stopPropagation();fetchThemeAndRank('${themeEnc}','${rankBtnId}')" style="font-size:9px" title="Fetches the 1-year return for every name in this theme, paced at ~12s/call so it never trips Polygon's 5/min free-tier limit — so a 13-name theme takes ~3 min. Then ranks them best→worst and reorders the chips. Names fetched within the last 24h (green freshness dot) are skipped; anything older is re-pulled fresh (~12s each). So a daily click freshens only what's gone stale.">${ranked ? `↻ Re-fetch & rank (${names.length})` : `↡ Fetch all ${names.length} & rank by 1Y (~${Math.ceil(names.length * 12 / 60)}min)`}</button>`;
     return `
       <details${open ? ' open' : ''} style="border:1px solid ${src.isNiche ? 'rgba(52,211,153,0.3)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);padding:8px 11px;margin-bottom:6px;${src.isNiche ? '' : 'opacity:0.78'}">
         <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none;flex-wrap:wrap">
