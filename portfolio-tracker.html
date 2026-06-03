@@ -16586,6 +16586,11 @@ async function fetchThemeAndRank(themeJson, btnId) {
   const statusId = btnId + '-status';
   const setStatus = (html) => { const el = document.getElementById(statusId); if (el) el.innerHTML = html; };
   if (btn) { btn.disabled = true; }
+  // Immediate, visible "working" state. Without this, an all-cached run (every name already fetched)
+  // finishes before the browser repaints, so the click looks like a no-op. The 0ms yield lets the
+  // status actually render before the loop runs.
+  setStatus('<span style="color:var(--color-text-info);font-size:9px">\u27f3 Ranking\u2026</span>');
+  await new Promise(r => setTimeout(r, 0));
 
   let done = 0, miss = 0, rateMiss = 0, noKey = false;
   const funds = [...new Set(tickers.map(t => (discoverySourceFund[t.toUpperCase()] || '')).filter(Boolean).map(f => f.toUpperCase()))];
@@ -16620,7 +16625,10 @@ async function fetchThemeAndRank(themeJson, btnId) {
       ? ` — hit the ~5/min ceiling. Wait ~60s and click again; it fetches only what's still missing.`
       : ` — some tickers returned no data (thin/unavailable on Polygon).`;
     setStatus(`<span style="color:#fbbf24;font-size:9px;line-height:1.5">⚠ ${miss} of ${total} didn't fetch${note}</span>`);
-  } else setStatus(`<span style="color:var(--color-text-success);font-size:9px">✓ Ranked all ${tickers.length} by 1-year return.</span>`);
+  } else {
+    const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setStatus(`<span style="color:var(--color-text-success);font-size:9px">✓ Re-ranked all ${tickers.length} by 1-year return · ${t}</span>`);
+  }
   if (btn) { btn.disabled = false; btn.textContent = `↻ Re-fetch & rank (${tickers.length})`; }
 }
 
