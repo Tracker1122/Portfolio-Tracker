@@ -13752,10 +13752,99 @@ function _candScenarioSignature() {
   return JSON.stringify(_candQueue.map(tr => tr.kind === 'trim' ? ['t', tr.ticker, Math.round(tr.proceeds), tr.lotId || ''] : tr.kind === 'etf' ? ['e', tr.ticker, Math.round(tr.amount), Math.round(tr.coverage), (tr.holdings || []).length] : ['s', tr.ticker, Math.round(tr.amount), tr.theme || '']));
 }
 
+// Position-count effect of the staged scenario. Each stock/ETF add is a new line; a trim removes a
+// line only if it clears the lot/position entirely (a partial trim keeps the line). Estimate from the
+// frozen queue against current lots — nothing is executed.
+function _candPositionCountDelta() {
+  const before = positions.filter(p => !p.closed && p.ticker).length;
+  let buys = 0, eliminated = 0;
+  const EPS = 1e-4;
+  _candQueue.forEach(tr => {
+    if (tr.kind === 'stock' || tr.kind === 'etf') { buys++; return; }
+    if (tr.kind === 'trim') {
+      if (tr.lotId) {
+        const lot = _candTickerLots(tr.ticker).find(p => String(p.id) === String(tr.lotId));
+        if (lot && tr.shares >= (parseFloat(lot.shares) || 0) - EPS) eliminated++;
+      } else {
+        const lots = _candTickerLots(tr.ticker);
+        const tot = lots.reduce((s, p) => s + (parseFloat(p.shares) || 0), 0);
+        if (tot > 0 && tr.shares >= tot - EPS) eliminated += lots.length;
+      }
+    }
+  });
+  return { before, after: before + buys - eliminated, buys, eliminated };
+}
+
+// Plain-language synthesis of the staged scenario — the candidate-card analogue of the New Position
+// Evaluation tab's rotation paragraph, generalized for a mixed queue (any number of adds + trims, not
+// a single-ETF rotation). Every figure is computed from the per-name true-exposure deltas, the frozen
+// tax, and the position-count delta — nothing asserted.
+function _candMovedParagraph(nameMoves, tax, pos) {
+  const held = nameMoves.filter(r => r.before >= 1);
+  const fresh = nameMoves.filter(r => r.before < 1);
+  const sum = arr => arr.reduce((s, r) => s + r.change, 0);
+  const heldNet = sum(held), freshNet = sum(fresh);
+  const D = n => fmtDollarWhole(Math.abs(n));
+  const parts = [];
+  if (heldNet < 0 && freshNet > 0) parts.push(`This scenario cuts a net ${D(heldNet)} from names you already had exposure to and adds ${D(freshNet)} of genuinely new exposure.`);
+  else if (heldNet >= 0 && freshNet > 0) parts.push(`This scenario adds ${D(freshNet)} of new exposure and tops up names you already held by ${D(heldNet)}.`);
+  else if (Math.abs(freshNet) < 1) parts.push(`This scenario introduces no new names — it reshuffles ${D(heldNet)} of exposure among names you already hold.`);
+  else parts.push(`Net change across held and new names: ${heldNet + freshNet >= 0 ? '+' : '\u2212'}${D(heldNet + freshNet)}.`);
+  // Hand-back / reshuffle insight: of the exposure cut from held names, how much comes right back via
+  // the names you're buying (positive change on a held name). High share = reshuffle, not reduction.
+  const grossCut = held.filter(r => r.change < 0).reduce((s, r) => s + Math.abs(r.change), 0);
+  const handBack = held.filter(r => r.change > 0).reduce((s, r) => s + r.change, 0);
+  const barelyMoved = held.filter(r => Math.abs(r.change) < r.before * 0.34).length;
+  const reshuffleShare = grossCut > 0 ? Math.min(100, Math.round((handBack / grossCut) * 100)) : null;
+  if (reshuffleShare !== null && reshuffleShare >= 15) {
+    parts.push(`But much of what you trim comes straight back: roughly ${reshuffleShare}% of the exposure you cut from held names is handed back through the names you're adding (and VOO still holds them on top of that)${barelyMoved ? `, so ${barelyMoved} held name${barelyMoved === 1 ? "'s true exposure barely moves" : "s' true exposure barely move"}` : ''}. Closer to a reshuffle of the same exposure than a reduction of it.`);
+  } else if (heldNet < 0 && grossCut > 0) {
+    parts.push(`Most of the cut on held names isn't handed back, so this meaningfully shifts exposure rather than just reshuffling it.`);
+  }
+  if (pos && pos.before !== pos.after) {
+    const d = pos.before - pos.after;
+    parts.push(`Position count goes ${pos.before} \u2192 ${pos.after} (${d > 0 ? d + ' fewer line' + (d === 1 ? '' : 's') + ' to track' : Math.abs(d) + ' more line' + (Math.abs(d) === 1 ? '' : 's')}).`);
+  }
+  if (tax && tax.totalTax > 0) {
+    let s = `Estimated tax to do this: ~${fmtDollarWhole(tax.totalTax)}`;
+    if (tax.shelteredProceeds > 0 && tax.taxableProceeds > 0) s += ` (only the ${fmtDollarWhole(tax.taxableProceeds)} sold from taxable lots is taxed; ${fmtDollarWhole(tax.shelteredProceeds)} sits in IRA)`;
+    parts.push(s + '.');
+  } else if (tax && tax.anyLoss && tax.totalTax === 0) {
+    parts.push(`No tax cost — the trims realize losses, not gains.`);
+  }
+  return parts.join(' ');
+}
+
+// The boxed "What really moved" synthesis for the candidate scenario.
+function _candWhatMovedHtml(nameMoves, nameRows, tax) {
+  if (!nameMoves || !nameMoves.length) return '';
+  const held = nameMoves.filter(r => r.before >= 1);
+  const fresh = nameMoves.filter(r => r.before < 1);
+  const sum = arr => arr.reduce((s, r) => s + r.change, 0);
+  const heldNet = sum(held), freshNet = sum(fresh);
+  const sgn = n => (n >= 0 ? '+' : '\u2212') + fmtDollarWhole(Math.abs(n));
+  const shownFresh = (nameRows || []).filter(r => r.before < 1).length;
+  const hiddenFresh = Math.max(0, fresh.length - shownFresh);
+  let verdict;
+  if (heldNet < 0 && freshNet > 0) verdict = `Net: trims ${fmtDollarWhole(Math.abs(heldNet))} from names you held and adds ${fmtDollarWhole(Math.abs(freshNet))} in new ones.`;
+  else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up held ones by ${fmtDollarWhole(Math.abs(heldNet))}.`;
+  else if (Math.abs(freshNet) < 1) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already hold \u2014 no new exposure.`;
+  else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
+  const para = _candMovedParagraph(nameMoves, tax, _candPositionCountDelta());
+  return `<div style="margin-top:10px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
+    <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:5px">What really moved</div>
+    <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
+    <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh > 0 ? `, ${hiddenFresh} below table` : ''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
+    <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
+    <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${para}</div>
+    <div style="margin-top:6px;font-size:8px;color:var(--color-text-tertiary);font-style:italic">Approximate \u2014 fund weights drift, tax is an estimate (not advice).</div>
+  </div>`;
+}
+
 function candCompute() {
   const out = document.getElementById('cand-output'); if (!out) return;
   if (!_candQueue.length) { out.innerHTML = ''; _candScenario = null; return; }
-  let before, after, clRows = [], ebBefore = 0, ebAfter = 0, nameRows = [];
+  let before, after, clRows = [], ebBefore = 0, ebAfter = 0, nameRows = [], nameMoves = [];
   const adjustments = _candQueueAdjustments();
   try {
     before = computeThemeClusters();
@@ -13772,6 +13861,7 @@ function candCompute() {
     teRows.forEach(r => { teMap[r.key] = { display: r.display, before: r.total, after: r.total }; });
     adjustments.forEach(a => { const k = qrCanonical(a.ticker).key; const d = (a.deltaDirect || 0) + (a.deltaViaFunds || 0); if (!teMap[k]) teMap[k] = { display: (a.display || a.ticker).toUpperCase(), before: 0, after: 0 }; teMap[k].after = Math.max(0, teMap[k].after + d); });
     nameRows = Object.values(teMap).map(r => ({ ...r, d: r.after - r.before })).filter(r => Math.abs(r.d) > 1).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 8);
+    nameMoves = Object.values(teMap).map(r => ({ display: r.display, before: r.before, after: r.after, change: r.after - r.before })).filter(r => Math.abs(r.change) > 1);
   } catch (e) {
     out.innerHTML = `<div style="font-size:11px;color:var(--color-text-danger)">Couldn't compute the scenario: ${esc(e.message || 'error')}</div>`;
     _candScenario = null;
@@ -13817,6 +13907,7 @@ function candCompute() {
   out.innerHTML =
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${ebBefore.toFixed(1)} → ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>` +
+    _candWhatMovedHtml(nameMoves, nameRows, tax) +
     clTable + nameTable + slTable + taxTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
