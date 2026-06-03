@@ -13346,6 +13346,7 @@ function _candShellHtml() {
         <select id="cand-etf-theme" class="modal-input" style="font-size:11px;padding:4px 8px" title="Where the UNCOVERED remainder of the ETF (anything you don't paste, or the gap below 100%) gets bucketed."><option value="">— Theme for the rest —</option></select>
         <select id="cand-etf-sleeve" class="modal-input" style="font-size:11px;padding:4px 8px"><option value="">— Sleeve (optional) —</option></select>
       </div>
+      <div style="font-size:9px;color:var(--color-text-tertiary)">Need the holdings? <a href="#" onclick="candOpenHoldingsSource(event)" style="color:var(--color-text-info);text-decoration:underline">↗ Open this ETF on stockanalysis.com</a> (free) — copy the holdings table and paste it below. Row #, name &amp; shares are ignored automatically.</div>
       <textarea id="cand-etf-paste" placeholder="Paste the ETF's holdings — ticker + %weight per line (same format as the Distribution look-through paste). Covered names spread the add by weight; the uncovered remainder routes to the theme above." oninput="candEtfPastePreview()" style="width:100%;box-sizing:border-box;min-height:54px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-size:10px;padding:6px 8px;font-family:inherit"></textarea>
       <div id="cand-etf-preview" style="font-size:9px;color:var(--color-text-tertiary)"></div>
     </div>
@@ -13436,6 +13437,16 @@ function _candTrimShares(T, val, unit) {
   return { sh, totalSh, px, proceeds: px > 0 ? sh * px : 0 };
 }
 
+// Open this ETF's holdings page on stockanalysis.com (free, no login) — copy the table and paste it
+// below. Just a link; nothing is fetched/scraped. Reads whatever ETF ticker is currently typed.
+function candOpenHoldingsSource(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  const el = document.getElementById('cand-etf-ticker');
+  const tk = el ? (el.value || '').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '') : '';
+  const url = tk ? `https://stockanalysis.com/etf/${encodeURIComponent(tk)}/holdings/` : 'https://stockanalysis.com/etf/';
+  window.open(url, '_blank', 'noopener');
+}
+
 function candEtfPastePreview() {
   const ta = document.getElementById('cand-etf-paste');
   const out = document.getElementById('cand-etf-preview');
@@ -13519,6 +13530,30 @@ function candRemoveFromQueue(i) {
   else candClearScenario();
 }
 
+// Edit a staged move: load its values back into the form (switching to the right mode) and pull it
+// OUT of the queue, so adjusting and hitting "+ Add to scenario" puts the edited version back.
+function candEditQueueItem(i) {
+  const tr = _candQueue[i];
+  if (!tr) return;
+  const setVal = (id, v) => { const e = document.getElementById(id); if (e) e.value = (v === null || v === undefined) ? '' : v; };
+  candSetMode(tr.kind);
+  if (tr.kind === 'stock') {
+    setVal('cand-ticker', tr.ticker); setVal('cand-amount', tr.amount); setVal('cand-theme', tr.theme || ''); setVal('cand-sleeve', tr.sleeve || '');
+  } else if (tr.kind === 'etf') {
+    setVal('cand-etf-ticker', tr.ticker); setVal('cand-etf-amount', tr.amount); setVal('cand-etf-theme', tr.theme || ''); setVal('cand-etf-sleeve', tr.sleeve || '');
+    const ta = document.getElementById('cand-etf-paste'); if (ta) ta.value = (tr.holdings || []).map(hh => `${hh.ticker}\t${hh.weight}%`).join('\n');
+    candEtfPastePreview();
+  } else if (tr.kind === 'trim') {
+    setVal('cand-holding', tr.ticker); candSetTrimUnit('sh'); setVal('cand-trim-amt', Math.round((tr.shares || 0) * 1e6) / 1e6);
+  }
+  _candQueue.splice(i, 1);
+  if (_candQueue.length) { saveCandQueue(); candRenderQueue(); candCompute(); }
+  else candClearScenario();
+  candReadout();
+  const focusId = tr.kind === 'stock' ? 'cand-ticker' : tr.kind === 'etf' ? 'cand-etf-ticker' : 'cand-trim-amt';
+  const fe = document.getElementById(focusId); if (fe) { try { fe.focus(); } catch (_) {} }
+}
+
 function candClearScenario() {
   _candQueue = []; _candScenario = null; _candTempHoldings = {};
   saveCandQueue();
@@ -13538,7 +13573,7 @@ function candRenderQueue() {
   const el = document.getElementById('cand-queue'); if (!el) return;
   if (!_candQueue.length) { el.innerHTML = '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No moves staged yet. Add one or more above — they combine into a single scenario.</div>'; return; }
   el.innerHTML = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Scenario (${_candQueue.length} move${_candQueue.length === 1 ? '' : 's'})</div>` +
-    _candQueue.map((tr, i) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary);padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px"><span>${esc(_candTradeLabel(tr))}</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:12px" title="Remove">×</span></div>`).join('');
+    _candQueue.map((tr, i) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary);padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this move back into the form to edit it">edit</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>`).join('');
 }
 
 // Build the per-name true-exposure adjustments for the whole staged scenario.
