@@ -12442,12 +12442,13 @@ function importSpCsv(input) {
   reader.readAsText(file);
 }
 
-// AUM card — total assets under management, broken out by component, computed LIVE (not stored) so
-// it tracks current prices. Components: managed open positions (calcPos), VOO passive core
-// (getSpTotals), and direct private deals (calcPeDeal). Shows two subtotals the user asked for,
-// broken out rather than conflated: a LIQUID public total (managed + VOO) and an ALL-IN total
-// (+ private). Cash was removed from the tracker, so it is not a component.
-function aumCardHtml() {
+// aumTotals() — pure computation of the whole-book figures, computed LIVE (not stored) so they
+// track current prices. SINGLE SOURCE OF TRUTH shared by the on-screen AUM card (aumCardHtml) and
+// the book-level AI prompt (buildBookAiPrompt), so the numbers the model reasons about can never
+// drift from the numbers the user sees. Components: managed open positions (calcPos market value,
+// split by account), VOO passive core (getSpTotals), and direct private deals (calcPeDeal, AT COST).
+// Cash was removed from the tracker, so it is not a component.
+function aumTotals() {
   // Managed open positions — current market value, split by account so the liquid (taxable) book
   // can be separated from the tax-sheltered IRA holdings (IRA money is not liquid public book).
   const openManaged = positions.filter(p => !p.closed && p.ticker);
@@ -12460,6 +12461,8 @@ function aumCardHtml() {
   // VOO passive core — current value if a live price exists, else invested basis.
   const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
   const voo = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
+  const vooTaxable = sp ? sp.taxableValue : 0;
+  const vooIra = sp ? sp.iraValue : 0;
 
   // Direct private deals — CAPITAL INVESTED (cost basis), not the estimated current valuation.
   // Unlike VOO/managed (live market prices), a PE mark is a manual, unverifiable estimate, so for a
@@ -12476,10 +12479,18 @@ function aumCardHtml() {
   const allIn = liquid + pe;          // + illiquid private
   // Split the public book by account. IRA holdings are tax-sheltered and not freely liquid, so they
   // are shown separately rather than folded into a single "liquid" figure.
-  const vooTaxable = sp ? sp.taxableValue : 0;
-  const vooIra = sp ? sp.iraValue : 0;
   const liquidTaxable = managedTaxable + vooTaxable;
   const iraSheltered = managedIra + vooIra;
+
+  return { managed, managedIra, managedTaxable, voo, vooTaxable, vooIra, pe, peCount, liquid, allIn, liquidTaxable, iraSheltered };
+}
+
+// AUM card — renders aumTotals() broken out by component. Shows two subtotals the user asked for,
+// broken out rather than conflated: a LIQUID public total (managed + VOO) and an ALL-IN total (+ private).
+function aumCardHtml() {
+  // All figures come from aumTotals() — the shared source of truth (see above), so this card and
+  // the AI prompt can never drift apart.
+  const { managed, voo, pe, peCount, allIn, liquidTaxable, iraSheltered } = aumTotals();
 
   const fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : (n) => '$' + Math.round(n).toLocaleString();
   const pct = (v) => allIn > 0 ? ((v / allIn) * 100).toFixed(0) + '%' : '—';
@@ -18588,6 +18599,24 @@ function buildBookAiPrompt() {
   try { clusters = computeThemeClusters(); } catch (e) {}
   try { sectors = computeSectorClusters(); } catch (e) {}
 
+  // --- Whole-book AUM context (added so the model frames concentration against the FULL book, not
+  // just the actively-managed sleeve). Uses aumTotals() — the same source as the on-screen AUM card,
+  // so the numbers match what the user sees. Pushed FIRST so it frames everything that follows. ---
+  try {
+    const a = (typeof aumTotals === 'function') ? aumTotals() : null;
+    if (a && a.allIn > 0) {
+      const p = v => ((v / a.allIn) * 100).toFixed(0);
+      const aum = [];
+      aum.push(`WHOLE-BOOK CONTEXT — assets under management (live values; this frames everything below). All-in total $${Math.round(a.allIn).toLocaleString()}, made up of:`);
+      aum.push(`- Managed positions (the actively-picked sleeve): $${Math.round(a.managed).toLocaleString()} (~${p(a.managed)}% of all-in).`);
+      aum.push(`- Passive core — VOO (broad S&P 500 index fund; the user treats this as a DIVERSIFIED BASE, not an active bet): $${Math.round(a.voo).toLocaleString()} (~${p(a.voo)}% of all-in).`);
+      if (a.peCount) aum.push(`- Private deals (${a.peCount} direct private investment${a.peCount > 1 ? 's' : ''}; illiquid; counted AT COST, not a self-marked valuation): $${Math.round(a.pe).toLocaleString()} (~${p(a.pe)}% of all-in).`);
+      aum.push(`Account split of the public book: liquid taxable $${Math.round(a.liquidTaxable).toLocaleString()}; tax-sheltered IRA $${Math.round(a.iraSheltered).toLocaleString()}. (IRA gains are untaxed; taxable lots carry LT/ST tax on sale.)`);
+      aum.push(`HOW TO USE THIS FRAME: the theme/sector percentages below are shares of the PUBLIC book's TRUE EXPOSURE (managed direct positions + the user's look-through share inside funds they hold, including VOO); VOO's untagged remainder is the "diversified base" line. The private-deals sleeve is NOT included in any theme/sector/look-through math below. So a theme that is, e.g., 20% of the public book is a SMALLER share of the all-in book once VOO and the illiquid private sleeve are counted. You MAY note when a concentration looks larger against the managed sleeve but smaller against all-in AUM — but do NOT recompute the theme percentages against all-in (you don't have per-name all-in splits); keep the percentages below as given and use the AUM totals qualitatively, as framing.`);
+      lines.push(aum.join('\n'));
+    }
+  } catch (e) {}
+
   // --- Book structure (move-together themes) ---
   if (clusters && clusters.clusters && clusters.clusters.length) {
     lines.push(`THEME CONCENTRATION (true exposure: direct + your look-through share inside funds you hold). Book behaves like ~${(clusters.effectiveBets || 0).toFixed(1)} independent bets (lower = more concentrated). Diversified base (broad-index tail, not a bet): ${clusters.base ? clusters.base.pct.toFixed(1) : '0'}%.`);
@@ -18723,7 +18752,7 @@ Rules:
   • RISK FIGURES: maxDD/vol/return numbers exist ONLY for tickers explicitly listed with them — the selected discovery tickers, and any scenario tickers under "Recent price performance" in the staged what-if block. Do not state risk or return figures for any book holding (none were provided) or for any ticker not listed above with figures.
 
 Output in four sections:
-1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few independent bets, any theme resting on one name). FROM INPUTS, plainly stated.
+1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few independent bets, any theme resting on one name). FROM INPUTS, plainly stated. If a WHOLE-BOOK CONTEXT block is present, OPEN by situating the managed sleeve within the full book — what share of all-in AUM is the actively-picked sleeve vs the VOO diversified base vs the illiquid private sleeve — so every concentration you then discuss is read against the whole picture, not the managed sleeve in isolation.
 2. GAPS & BLIND SPOTS — where the book is thin, absent, or exposed. This is the part that should generate ideas the user takes to a full evaluation.
 3. SELECTED CANDIDATES vs THE GAPS — for each selected discovery ticker: does it ADDRESS a gap or DEEPEN an existing concentration? How would it move true exposure? What would the user need to pressure-test in a full New Position Evaluation? Be willing to say a selected name is a poor structural fit. If none selected, say so and skip.
 4. DIRECTIONS WORTH EXPLORING — turn the gaps and concentrations above into QUESTIONS to investigate, not actions to take. THIS IS THE MOST DELICATE SECTION — strict rules:
