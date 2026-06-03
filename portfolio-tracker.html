@@ -21180,6 +21180,20 @@ function driveBuildBackupPayload() {
     themeUniverseHistory,
     trackRecordMatureOnly, industryAlphaMatureOnly,
     taxProfile,
+    // Connection + settings so a restore rebuilds SETUP too (not just data). Captured as raw
+    // localStorage strings. Includes the Polygon API key by choice — it lives in your own Drive
+    // under the narrow drive.file scope, alongside data that's more sensitive than the key itself.
+    // To exclude the key from backups, remove 'polygon_api_key' from this list.
+    _settings: (function(){
+      var keys = ['polygon_api_key','av_worker_url','ai_worker_url',
+        'portfolio-index-lookthrough-v1','portfolio-cluster-overrides-v1',
+        'portfolio-sector-map-v1','portfolio-sector-ai-mode',
+        'trim-watch-thresholds-v1','portfolio-csv-mappings',
+        'portfolio-book-exclude-v1','portfolio-book-ai-review-v1'];
+      var out = {};
+      keys.forEach(function(k){ try { var v = localStorage.getItem(k); if (v !== null) out[k] = v; } catch(e){} });
+      return out;
+    })(),
     version: '2.2',
     benchmarks: typeof BENCHMARKS !== 'undefined' ? BENCHMARKS : null,
     _backupMeta: { backedUpAt: new Date().toISOString(), source: 'portfolio-tracker-auto' },
@@ -21574,6 +21588,21 @@ async function executeRestore() {
     if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
     if (data.taxProfile && typeof data.taxProfile === 'object') { taxProfile = { ...taxProfile, ...data.taxProfile }; applyTaxProfile(); }
     if (data.bookAiReview && typeof data.bookAiReview === 'object') { bookAiReview = data.bookAiReview; saveBookAiReview(); }
+
+    // Restore connection + settings (worker URLs, Polygon key, overrides, mappings) so a restore
+    // brings back full SETUP, not just data. Write to storage, then re-run the void loaders so the
+    // values apply immediately — deliberately NOT a page reload, which would drop the in-memory
+    // Drive token. Older backups without _settings simply skip this block.
+    if (data._settings && typeof data._settings === 'object') {
+      Object.keys(data._settings).forEach(function(k){
+        try { if (data._settings[k] != null) localStorage.setItem(k, data._settings[k]); } catch(e){}
+      });
+      try { if (typeof loadPolygonKey === 'function') loadPolygonKey(); } catch(e){}
+      try { if (typeof loadAvWorkerUrl === 'function') loadAvWorkerUrl(); } catch(e){}
+      try { if (typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl(); } catch(e){}
+      try { if (typeof loadIndexLookthrough === 'function') loadIndexLookthrough(); } catch(e){}
+      try { if (typeof loadBookExclude === 'function') loadBookExclude(); } catch(e){}
+    }
 
     migratePositionsV1ToV2();
 
