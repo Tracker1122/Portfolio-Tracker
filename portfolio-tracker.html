@@ -13301,6 +13301,24 @@ let _candQueue = [];          // linked moves: {kind:'stock'|'etf'|'trim', ...}
 let _candScenario = null;     // last computed result, fed to the book AI: {sig, ...}
 let _candTempHoldings = {};   // ETF paste, card-local (never persisted): { ETF: [{ticker,weight}] }
 
+// Persist ONLY the staged queue (the moves you built) — a scratchpad so a refresh doesn't wipe what
+// you've staged for the AI to read. The computed result (_candScenario) is rederived from the queue on
+// load, so the saved book review lines up instead of falsely reading stale. Deliberately kept out of
+// exportData and the Drive backup: it's a what-if, not portfolio data.
+function saveCandQueue() {
+  try {
+    if (_candQueue && _candQueue.length) localStorage.setItem('portfolio-cand-scenario-v1', JSON.stringify(_candQueue));
+    else localStorage.removeItem('portfolio-cand-scenario-v1');
+  } catch (e) { /* storage full/unavailable — non-fatal, scenario just won't persist */ }
+}
+function loadCandQueue() {
+  try {
+    const raw = localStorage.getItem('portfolio-cand-scenario-v1');
+    const arr = raw ? JSON.parse(raw) : null;
+    _candQueue = Array.isArray(arr) ? arr.filter(tr => tr && tr.kind && tr.ticker) : [];
+  } catch (e) { _candQueue = []; }
+}
+
 function _candPillOn() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600'; }
 function _candPillOff() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)'; }
 function _candUnitOn() { return 'font-size:10px;cursor:pointer;padding:3px 9px;border-radius:12px;background:var(--color-text-info);color:#000;font-weight:600'; }
@@ -13379,6 +13397,9 @@ function renderCandidatePanel() {
   candSetMode(_candMode);
   candSetTrimUnit(_candTrimUnit);
   candRenderQueue();
+  // After a refresh the queue is rehydrated from storage but the computed result isn't — recompute once
+  // so the output redraws and the saved book review reads as matching (not falsely stale).
+  if (_candQueue.length && !_candScenario) candCompute();
 }
 
 function candSetMode(m) {
@@ -13487,10 +13508,12 @@ function candAddToQueue() {
   candReadout();
   candRenderQueue();
   candCompute();
+  saveCandQueue();
 }
 
 function candRemoveFromQueue(i) {
   _candQueue.splice(i, 1);
+  saveCandQueue();
   candRenderQueue();
   if (_candQueue.length) candCompute();
   else candClearScenario();
@@ -13498,6 +13521,7 @@ function candRemoveFromQueue(i) {
 
 function candClearScenario() {
   _candQueue = []; _candScenario = null; _candTempHoldings = {};
+  saveCandQueue();
   candRenderQueue();
   const out = document.getElementById('cand-output'); if (out) out.innerHTML = '';
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
@@ -22769,6 +22793,7 @@ async function init() {
   await loadPositions();
   loadBookExclude();
   loadBookAiReview();
+  loadCandQueue();
   loadDiscoveryCache();
 
   // ─────────────────────────────────────────────
