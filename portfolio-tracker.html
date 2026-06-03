@@ -12875,10 +12875,17 @@ function simulateQueue(trades) {
   const opaqueBlocks = []; // {ticker, amount} — ETF buys with no look-through table
   const etfOverlaps = []; // {ticker, amount, overlapPct, overlapDollars} — ETF buys WITH look-through that overlap holdings
   let cashIn = 0, cashOut = 0; // new capital for buys vs proceeds from sells
+  // Tax detail (added): per-sell lots + short/long-term gain/loss buckets, plus the ticker sets needed
+  // to flag wash sales (selling a name at a loss while buying it back in the same queue).
+  const taxLots = []; // {ticker, shares, proceeds, basis, gain, isIRA, isLT, daysHeld, daysToLT, rate}
+  let stGain = 0, stLoss = 0, ltGain = 0, ltLoss = 0; // losses stored as positive magnitudes
+  const lossSaleTickers = new Set(); // taxable names sold at a loss (normalized)
+  const buyTickers = new Set();      // names bought in this queue (normalized)
 
   trades.forEach(t => {
     if (t.action === 'buy') {
       cashIn += t.amount;
+      buyTickers.add(qrNormTicker(t.ticker)); // for wash-sale check against loss sales below
       const th = t.theme || '(unassigned)', sl = t.sleeve || '(unassigned)';
       if (t.kind === 'stock') {
         ens(t.ticker).direct += t.amount;
@@ -12929,11 +12936,21 @@ function simulateQueue(trades) {
       themeAfter[th] = Math.max(0, (themeAfter[th] || 0) - proceeds);
       sleeveAfter[sl] = Math.max(0, (sleeveAfter[sl] || 0) - proceeds);
       const isIRA = (lot.account || '').toUpperCase().includes('IRA');
+      // Holding term from dateBought → today (same convention as taxRateForOpen / the Holdings tab):
+      // >365d = long-term; missing/invalid date = short-term (worst case).
+      const buyD = lot.dateBought ? new Date(lot.dateBought) : null;
+      const daysHeld = (buyD && !isNaN(buyD)) ? Math.floor((Date.now() - buyD) / 86400000) : null;
+      const isLT = daysHeld != null && daysHeld > 365;
+      const daysToLT = (daysHeld != null && !isLT) ? Math.max(0, 366 - daysHeld) : null;
+      const rate = (typeof taxRateForOpen === 'function') ? taxRateForOpen(lot) : 0;
+      taxLots.push({ ticker: lot.ticker, shares: sh, proceeds, basis: sh * pp, gain, isIRA, isLT, daysHeld, daysToLT, rate });
       if (isIRA) { hasIRA = true; shelteredProceeds += proceeds; }
       else {
         taxableProceeds += proceeds;
-        if (gain > 0) { taxableGain += gain; estTax += gain * ((typeof taxRateForOpen === 'function') ? taxRateForOpen(lot) : 0); }
-        else if (gain < 0) anyLoss = true;
+        if (gain > 0) { taxableGain += gain; estTax += gain * rate; }
+        else if (gain < 0) { anyLoss = true; lossSaleTickers.add(qrNormTicker(lot.ticker)); }
+        if (isLT) { if (gain >= 0) ltGain += gain; else ltLoss += -gain; }
+        else { if (gain >= 0) stGain += gain; else stLoss += -gain; }
       }
     }
   });
@@ -12963,7 +12980,29 @@ function simulateQueue(trades) {
   const themeRows = buildGroup(themeBefore, themeAfter, directBefore, directAfter);
   const sleeveRows = buildGroup(sleeveBefore, sleeveAfter, directBefore, directAfter);
 
-  return { rows, taxableGain, estTax, shelteredProceeds, taxableProceeds, anyLoss, hasIRA, opaqueBlocks, etfOverlaps, themeRows, sleeveRows, cashIn, cashOut };
+  // ---- Tax aggregate. Net short-term and long-term separately; if one bucket is a loss and the other
+  // a gain, the loss offsets the gain before tax (IRS-style); the surviving gain is taxed at its own
+  // bucket's rate. NIIT is already folded into the profile's effective ST/LT rates. Single-year view —
+  // cross-year capital-loss carryforward is noted in the UI but not modeled here.
+  const _ST = (typeof TAX_RATE_ST === 'number') ? TAX_RATE_ST : 0.36;
+  const _LT = (typeof TAX_RATE_LT === 'number') ? TAX_RATE_LT : 0.27;
+  const netST = stGain - stLoss, netLT = ltGain - ltLoss;
+  let taxableST = 0, taxableLT = 0;
+  if (netST >= 0 && netLT >= 0) { taxableST = netST; taxableLT = netLT; }
+  else if (netST < 0 && netLT < 0) { /* overall loss — nothing taxable */ }
+  else { const combined = netST + netLT; if (combined > 0) { if (netST > 0) taxableST = combined; else taxableLT = combined; } }
+  const totalTax = taxableST * _ST + taxableLT * _LT;
+  const netRealized = netST + netLT;
+  // Wash sale: a taxable loss sale of a name that's also bought back in this same queue.
+  const washSale = [...lossSaleTickers].filter(tk => buyTickers.has(tk));
+  // Wait-for-long-term: short-term GAIN sales that would be taxed less if held to the 1-year mark.
+  const waitLT = taxLots
+    .filter(l => !l.isIRA && !l.isLT && l.gain > 0 && l.daysToLT != null && (_ST - _LT) > 0)
+    .map(l => ({ ticker: l.ticker, daysToLT: l.daysToLT, saving: l.gain * (_ST - _LT) }))
+    .sort((a, b) => b.saving - a.saving);
+
+  return { rows, taxableGain, estTax, shelteredProceeds, taxableProceeds, anyLoss, hasIRA, opaqueBlocks, etfOverlaps, themeRows, sleeveRows, cashIn, cashOut,
+    taxLots, stGain, stLoss, ltGain, ltLoss, netST, netLT, taxableST, taxableLT, totalTax, netRealized, washSale, waitLT };
 }
 
 // Live preview of a temp-ETF paste (chips + coverage + skipped lines) — mirrors
@@ -13045,13 +13084,81 @@ function renderSimResult() {
     </tr>`;
   }).join('');
 
-  // Tax summary
-  let taxNote;
-  if (sim.estTax > 0) { taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains`; if (sim.shelteredProceeds > 0) taxNote += ` · ${fmtDollarWhole(sim.shelteredProceeds)} of sales are in your IRA (tax-free)`; }
-  else if (sim.hasIRA && sim.taxableProceeds === 0) taxNote = `no tax — sales are entirely in your IRA (sheltered)`;
-  else if (sim.anyLoss && sim.taxableGain === 0) taxNote = `no tax (sales at a loss)`;
-  else if (sim.cashOut === 0) taxNote = `no sales — no realized tax`;
-  else taxNote = `no taxable gain`;
+  // Tax impact block — per-trade detail, aggregate ST/LT netting, wait-for-LT, wash-sale.
+  let taxBlock;
+  {
+    const fmt = fmtDollarWhole;
+    const stPct = Math.round(((typeof TAX_RATE_ST === 'number') ? TAX_RATE_ST : 0.36) * 100);
+    const ltPct = Math.round(((typeof TAX_RATE_LT === 'number') ? TAX_RATE_LT : 0.27) * 100);
+    if (sim.taxLots.length === 0) {
+      taxBlock = `<div style="font-size:10px;margin:0 0 8px;color:var(--color-text-secondary)">Tax: no sales queued — nothing realized.</div>`;
+    } else {
+      // Headline
+      let head;
+      if (sim.taxableProceeds === 0 && sim.hasIRA) head = `<span style="color:var(--color-text-success);font-weight:700">No tax</span> — sales are entirely in your IRA (sheltered)`;
+      else if (sim.totalTax > 0) head = `<span style="color:var(--color-text-danger);font-weight:700">≈${fmt(sim.totalTax)} estimated tax</span> on a net ${fmt(sim.netRealized)} realized gain`;
+      else if (sim.netRealized < 0) head = `<span style="color:var(--color-text-success);font-weight:700">No tax due</span> — a net ${fmt(Math.abs(sim.netRealized))} realized loss (usable to offset gains)`;
+      else head = `<span style="font-weight:700">No tax</span> — no net taxable gain`;
+      const shelteredLine = (sim.shelteredProceeds > 0 && sim.taxableProceeds > 0) ? ` <span style="color:var(--color-text-tertiary)">· ${fmt(sim.shelteredProceeds)} of sales are in your IRA (sheltered)</span>` : '';
+
+      // Per-sale rows
+      const rowsHtml = sim.taxLots.map(l => {
+        const glCol = l.gain > 0 ? 'var(--color-text-success)' : l.gain < 0 ? 'var(--color-text-danger)' : 'var(--color-text-tertiary)';
+        const gl = `<span style="color:${glCol}">${l.gain >= 0 ? '+' : '−'}${fmt(Math.abs(l.gain))}</span>`;
+        let term, taxCell;
+        if (l.isIRA) { term = 'IRA · sheltered'; taxCell = '<span style="color:var(--color-text-tertiary)">— no tax</span>'; }
+        else {
+          term = l.isLT ? 'LT' : (l.daysToLT != null ? `ST · ${l.daysToLT}d to LT` : 'ST · date unknown');
+          taxCell = l.gain > 0 ? `≈${fmt(l.gain * l.rate)} <span style="color:var(--color-text-tertiary)">(${l.isLT ? ltPct : stPct}%)</span>`
+                  : l.gain < 0 ? '<span style="color:var(--color-text-tertiary)">$0 · loss banked</span>' : '$0';
+        }
+        return `<tr>
+          <td style="padding:3px 8px;color:var(--color-text-primary)">Sell ${l.shares} ${esc(l.ticker)}</td>
+          <td style="padding:3px 8px;color:var(--color-text-secondary)">${term}</td>
+          <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmt(l.proceeds)}</td>
+          <td style="padding:3px 8px;text-align:right">${gl}</td>
+          <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${taxCell}</td>
+        </tr>`;
+      }).join('');
+
+      // Aggregate (taxable buckets)
+      const aggParts = [];
+      const netCol = (v) => v >= 0 ? 'var(--color-text-secondary)' : 'var(--color-text-danger)';
+      if (sim.stGain || sim.stLoss) aggParts.push(`Short-term: +${fmt(sim.stGain)} gains − ${fmt(sim.stLoss)} losses = <strong style="color:${netCol(sim.netST)}">net ${sim.netST >= 0 ? '+' : '−'}${fmt(Math.abs(sim.netST))}</strong> <span style="color:var(--color-text-tertiary)">@ ${stPct}%</span>`);
+      if (sim.ltGain || sim.ltLoss) aggParts.push(`Long-term: +${fmt(sim.ltGain)} gains − ${fmt(sim.ltLoss)} losses = <strong style="color:${netCol(sim.netLT)}">net ${sim.netLT >= 0 ? '+' : '−'}${fmt(Math.abs(sim.netLT))}</strong> <span style="color:var(--color-text-tertiary)">@ ${ltPct}%</span>`);
+      const crossOffset = (sim.netST > 0 && sim.netLT < 0) || (sim.netST < 0 && sim.netLT > 0);
+      if (crossOffset) aggParts.push(`<span style="color:var(--color-text-tertiary)">A loss in one bucket offsets the gain in the other before tax — so the total below is lower than the per-sale taxes added up.</span>`);
+      const aggHtml = aggParts.length ? `<div style="font-size:10px;line-height:1.7;color:var(--color-text-secondary);margin-top:7px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">${aggParts.join('<br>')}</div>` : '';
+
+      // Notes
+      let notes = '';
+      if (sim.washSale.length) {
+        notes += `<div style="font-size:10px;color:var(--color-text-primary);padding:7px 10px;background:rgba(239,68,68,0.10);border-left:3px solid #ef4444;border-radius:var(--border-radius-md);margin-top:6px;line-height:1.5">⚠ <strong>Wash-sale risk:</strong> you're selling ${sim.washSale.map(t => esc(t.toUpperCase())).join(', ')} at a loss and buying the same name in this queue. The IRS can disallow the loss if you repurchase within 30 days — meaning it wouldn't lower your tax this year.</div>`;
+      }
+      if (sim.waitLT.length) {
+        const totalSave = sim.waitLT.reduce((s, w) => s + w.saving, 0);
+        const items = sim.waitLT.slice(0, 4).map(w => `${esc(w.ticker)} (${w.daysToLT}d → save ≈${fmt(w.saving)})`).join(', ');
+        notes += `<div style="font-size:9px;color:#fbbf24;margin-top:6px;line-height:1.5">⏳ <strong>Hold-for-long-term:</strong> these short-term gains drop from ${stPct}% to ${ltPct}% once held a year — ${items}${sim.waitLT.length > 1 ? ` · ≈${fmt(totalSave)} total if you wait on all` : ''}.</div>`;
+      }
+      if (sim.netRealized < 0 && (sim.stLoss + sim.ltLoss) > 0) {
+        notes += `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.5">Your net ${fmt(Math.abs(sim.netRealized))} loss offsets other realized gains this year; up to $3,000 of any leftover offsets ordinary income, and the rest carries forward to future years (carryforward isn't modeled here).</div>`;
+      }
+
+      taxBlock = `
+        <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">Tax impact ${sim.taxLots.length > 1 ? '· these trades' : '· this trade'} <span style="color:var(--color-text-tertiary);text-transform:none">(estimate · ${ltPct}% LT / ${stPct}% ST, your profile)</span></div>
+        <div style="font-size:11px;color:var(--color-text-primary);margin-bottom:5px">${head}${shelteredLine}</div>
+        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+            <th style="padding:3px 8px;text-align:left;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Sale</th>
+            <th style="padding:3px 8px;text-align:left;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Term</th>
+            <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Proceeds</th>
+            <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Gain/Loss</th>
+            <th style="padding:3px 8px;text-align:right;font-size:9px;text-transform:uppercase;color:var(--color-text-tertiary)">Est. tax</th>
+          </tr></thead><tbody>${rowsHtml}</tbody></table></div>
+        ${aggHtml}
+        ${notes}`;
+    }
+  }
 
   // Opaque ETF blocks (no holdings yet) — paste holdings inline, TEMPORARILY, right here.
   // Mirrors the Distribution look-through paste (same parser, same chip preview), but stays
@@ -13115,7 +13222,7 @@ function renderSimResult() {
 
   resultEl.innerHTML = `
     <div style="font-size:9px;color:var(--color-text-tertiary);margin:8px 0 4px">${simTrades.length} trade${simTrades.length > 1 ? 's' : ''} queued · ${cashLine}</div>
-    <div style="font-size:10px;margin:0 0 8px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
+    ${taxBlock}
     ${opaqueNote}
     ${overlapNote}
     <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">True exposure — names that move (direct + inside funds)</div>
