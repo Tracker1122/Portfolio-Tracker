@@ -3788,7 +3788,7 @@ function renderBookIsolateDelta(openArr) {
       ${fmtPair('Your return', full.yourReturn, filt.yourReturn, 'pct')}
       ${fmtPair("S&P's return", full.weightedSpx, filt.weightedSpx, 'pct')}
       ${fmtPair('Edge vs S&P', full.vsSpx, filt.vsSpx, 'pp')}
-      ${fmtPair('Dollar alpha', full.dollarAlpha, filt.dollarAlpha, 'dollar')}
+      ${fmtPair('Dollar alpha vs S&P', full.dollarAlpha, filt.dollarAlpha, 'dollar')}
       <div style="font-size:11px;line-height:1.55;color:var(--color-text-primary);margin-top:8px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)">${prose}</div>
     </div>`;
 }
@@ -3930,8 +3930,8 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
       <div class="summary-card-label">Edge vs S&P</div>
       <div class="summary-card-value ${colorClass(s.vsSpx)}">${fmtPp(s.vsSpx)}</div>
     </div>
-    ${isOpen ? `<div class="summary-card" title="Dollar alpha = what you generated above (or below) what the index would have returned on the same capital over the same period">
-      <div class="summary-card-label">Dollar Alpha</div>
+    ${isOpen ? `<div class="summary-card" title="Dollar alpha = the dollars you generated above (or below) what the S&P 500 would have returned on the same capital over the same holding periods.">
+      <div class="summary-card-label">Dollar Alpha vs S&P</div>
       <div class="summary-card-value ${s.dollarAlpha >= 0 ? 'success' : 'danger'}">${fmtDollarWhole(s.dollarAlpha)}${fmtAlphaPct(s.dollarAlpha, s.totalInvested)}</div>
     </div>` : ''}
     <div class="summary-card" ${isOpen ? `onclick="showCardOverlay('beating')" style="cursor:pointer" title="Click to see which positions are beating the S&P"` : ''}>
