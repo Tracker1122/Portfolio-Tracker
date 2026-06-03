@@ -13872,7 +13872,7 @@ function _candPositionCountDelta() {
 // Evaluation tab's rotation paragraph, generalized for a mixed queue (any number of adds + trims, not
 // a single-ETF rotation). Every figure is computed from the per-name true-exposure deltas, the frozen
 // tax, and the position-count delta — nothing asserted.
-function _candMovedParagraph(nameMoves, tax, pos, directVia) {
+function _candMovedParagraph(nameMoves, tax, pos, directVia, adds) {
   directVia = directVia || {};
   const D = n => fmtDollarWhole(Math.abs(n));
   // Direct trims vs adds, name by name, from the scenario's own direct/via deltas — NOT the netted
@@ -13900,16 +13900,29 @@ function _candMovedParagraph(nameMoves, tax, pos, directVia) {
     const nm = reshuffledNames.slice(0, 3);
     parts.push(`Of that direct cut, roughly ${reshuffleShare}% comes straight back: the fund(s) you're adding hold the same name${nm.length === 1 ? '' : 's'}${nm.length ? ' (' + nm.join(', ') + ')' : ''}, so for those names this reshuffles rather than reduces, and VOO still holds them on top.`);
   } else if (directCut > 1 && grossAdd > 1) {
-    parts.push(`The names you're trimming aren't held by what you're adding, so the cut is a real reduction of those names — the added exposure is a separate, intentional bet on different names (which you may have held only passively before), not the same exposure coming back.`);
+    parts.push(`The names you're trimming aren't held by what you're adding, so the cut is a real reduction of those names — the added exposure is a separate, intentional bet on different names, not the same exposure coming back.`);
   } else if (directCut > 1) {
     parts.push(`Nothing in the scenario hands the trimmed exposure back, so this is a genuine reduction.`);
   }
-  // 3. Position-count effect.
+  // 3. How the adds land — deepening what you already hold vs opening new names, and what that means.
+  if (adds && (adds.direct > 1 || adds.passive > 1 || adds.new > 1)) {
+    const ap = [];
+    if (adds.direct > 1) ap.push(`${D(adds.direct)} deepens ${adds.directNames.length} name${adds.directNames.length === 1 ? '' : 's'} you hold directly${adds.directNames.length && adds.directNames.length <= 3 ? ` (${adds.directNames.join(', ')})` : ''}`);
+    if (adds.passive > 1) ap.push(`${D(adds.passive)} builds up ${adds.passiveNames.length} name${adds.passiveNames.length === 1 ? '' : 's'} you held only passively (inside VOO / your funds)`);
+    if (adds.new > 1) ap.push(`${D(adds.new)} opens ${adds.newNames.length} name${adds.newNames.length === 1 ? '' : 's'} new to your book`);
+    let sentence = `Of what you're adding: ${ap.join('; ')}.`;
+    const deepening = adds.direct + adds.passive;
+    if (deepening > 1 && adds.new > 1) sentence += ` Deepening names already in your book raises your exposure to them; only the new names broaden it.`;
+    else if (deepening > 1) sentence += ` All of it deepens names already in your book — it raises existing exposure rather than broadening.`;
+    else if (adds.new > 1) sentence += ` All of it lands on names new to your book — it broadens rather than concentrates.`;
+    parts.push(sentence);
+  }
+  // 4. Position-count effect.
   if (pos && pos.before !== pos.after) {
     const d = pos.before - pos.after;
     parts.push(`Position count goes ${pos.before} \u2192 ${pos.after} (${d > 0 ? d + ' fewer line' + (d === 1 ? '' : 's') + ' to track' : Math.abs(d) + ' more line' + (Math.abs(d) === 1 ? '' : 's')}).`);
   }
-  // 4. Tax.
+  // 5. Tax.
   if (tax && tax.totalTax > 0) {
     let s = `Estimated tax to do this: ~${fmtDollarWhole(tax.totalTax)}`;
     if (tax.shelteredProceeds > 0 && tax.taxableProceeds > 0) s += ` (only the ${fmtDollarWhole(tax.taxableProceeds)} sold from taxable lots is taxed; ${fmtDollarWhole(tax.shelteredProceeds)} sits in IRA)`;
@@ -13921,7 +13934,7 @@ function _candMovedParagraph(nameMoves, tax, pos, directVia) {
 }
 
 // The boxed "What really moved" synthesis for the candidate scenario.
-function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia) {
+function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) {
   if (!nameMoves || !nameMoves.length) return '';
   const held = nameMoves.filter(r => r.before >= 1);
   const fresh = nameMoves.filter(r => r.before < 1);
@@ -13935,12 +13948,20 @@ function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia) {
   else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up held ones by ${fmtDollarWhole(Math.abs(heldNet))}.`;
   else if (Math.abs(freshNet) < 1) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already hold \u2014 no new exposure.`;
   else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
-  const para = _candMovedParagraph(nameMoves, tax, _candPositionCountDelta(), directVia);
+  const para = _candMovedParagraph(nameMoves, tax, _candPositionCountDelta(), directVia, adds);
+  const addsBits = [];
+  if (adds) {
+    if (adds.direct > 1) addsBits.push(`${fmtDollarWhole(adds.direct)} deepens held-direct`);
+    if (adds.passive > 1) addsBits.push(`${fmtDollarWhole(adds.passive)} builds passive`);
+    if (adds.new > 1) addsBits.push(`${fmtDollarWhole(adds.new)} new names`);
+  }
+  const addsLine = addsBits.length ? `<div style="margin-top:4px;font-size:9px;color:var(--color-text-secondary)">Adds land as: ${addsBits.join(' · ')}</div>` : '';
   return `<div style="margin-top:10px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
     <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:5px">What really moved</div>
     <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
     <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh > 0 ? `, ${hiddenFresh} below table` : ''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
     <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
+    ${addsLine}
     <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${para}</div>
     <div style="margin-top:6px;font-size:8px;color:var(--color-text-tertiary);font-style:italic">Approximate \u2014 fund weights drift, tax is an estimate (not advice).</div>
   </div>`;
@@ -13949,7 +13970,7 @@ function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia) {
 function candCompute() {
   const out = document.getElementById('cand-output'); if (!out) return;
   if (!_candQueue.length) { out.innerHTML = ''; _candScenario = null; return; }
-  let before, after, clRows = [], ebBefore = 0, ebAfter = 0, nameRows = [], nameMoves = [];
+  let before, after, clRows = [], ebBefore = 0, ebAfter = 0, nameRows = [], nameMoves = [], adds = null;
   const adjustments = _candQueueAdjustments();
   // Per-name direct vs via-fund delta (canonical-keyed), so the summary can tell a genuine same-name
   // hand-back (you trim X directly AND a fund you're adding holds X) apart from simply deepening other
@@ -13977,6 +13998,21 @@ function candCompute() {
     adjustments.forEach(a => { const k = qrCanonical(a.ticker).key; const d = (a.deltaDirect || 0) + (a.deltaViaFunds || 0); if (!teMap[k]) teMap[k] = { display: (a.display || a.ticker).toUpperCase(), before: 0, after: 0 }; teMap[k].after = Math.max(0, teMap[k].after + d); });
     nameRows = Object.values(teMap).map(r => ({ ...r, d: r.after - r.before })).filter(r => Math.abs(r.d) > 1).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 8);
     nameMoves = Object.values(teMap).map(r => ({ display: r.display, before: r.before, after: r.after, change: r.after - r.before })).filter(r => Math.abs(r.change) > 1);
+    // Breakdown of the ADDED dollars by how the name was held BEFORE: a real direct position
+    // (deepening), only passively inside VOO/funds (building a passive sliver), or not at all (new).
+    // Categorical — no dollar threshold — using the same canonical keys as teMap/directVia.
+    const heldDirectKeys = new Set();
+    positions.filter(p => !p.closed && p.ticker).forEach(p => heldDirectKeys.add(qrCanonical(p.ticker).key));
+    adds = { direct: 0, passive: 0, new: 0, directNames: [], passiveNames: [], newNames: [] };
+    Object.entries(directVia).forEach(([k, v]) => {
+      const add = Math.max(0, v.directDelta || 0) + Math.max(0, v.viaDelta || 0);
+      if (add <= 1) return;
+      const prior = teMap[k] ? teMap[k].before : 0;
+      const disp = (teMap[k] && teMap[k].display) || k;
+      if (heldDirectKeys.has(k)) { adds.direct += add; adds.directNames.push(disp); }
+      else if (prior >= 1) { adds.passive += add; adds.passiveNames.push(disp); }
+      else { adds.new += add; adds.newNames.push(disp); }
+    });
   } catch (e) {
     out.innerHTML = `<div style="font-size:11px;color:var(--color-text-danger)">Couldn't compute the scenario: ${esc(e.message || 'error')}</div>`;
     _candScenario = null;
@@ -14022,7 +14058,7 @@ function candCompute() {
   out.innerHTML =
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${ebBefore.toFixed(1)} → ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>` +
-    _candWhatMovedHtml(nameMoves, nameRows, tax, directVia) +
+    _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) +
     clTable + nameTable + slTable + taxTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
@@ -14033,7 +14069,8 @@ function candCompute() {
     sig: _candScenarioSignature(),
     trades: _candQueue.map(_candTradeLabel),
     clRows, ebBefore, ebAfter, nameRows, sleeveRows, tax,
-    summary: _candMovedParagraph(nameMoves, tax, _pos, directVia),
+    summary: _candMovedParagraph(nameMoves, tax, _pos, directVia, adds),
+    adds,
     posBefore: _pos.before, posAfter: _pos.after,
     perf: _perf
   };
@@ -18448,6 +18485,10 @@ function buildBookAiPrompt() {
     }
     if (typeof sc.posBefore === 'number' && typeof sc.posAfter === 'number') lines.push(`Position count under this scenario: ${sc.posBefore} → ${sc.posAfter}.`);
     if (sc.summary) lines.push(`Plain-language read the tracker computed for this scenario: ${sc.summary}`);
+    if (sc.adds && (sc.adds.direct > 1 || sc.adds.passive > 1 || sc.adds.new > 1)) {
+      const a = sc.adds;
+      lines.push(`How the added exposure lands by prior ownership: $${Math.round(a.direct).toLocaleString()} deepens names held DIRECTLY, $${Math.round(a.passive).toLocaleString()} builds names held ONLY PASSIVELY (inside VOO/funds), $${Math.round(a.new).toLocaleString()} opens names NEW to the book. Deepening already-held names raises concentration in them; only the new names broaden the book.`);
+    }
     if (sc.tax) {
       const tx = sc.tax;
       if (tx.totalTax > 0) {
