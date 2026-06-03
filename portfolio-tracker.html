@@ -1048,7 +1048,7 @@
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
     <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
     <button class="tab-btn" onclick="switchTab('quality')">New Position Evaluation</button>
-    <button class="tab-btn" onclick="switchTab('rebalance')">Tax and Balance Impact</button>
+    <button class="tab-btn" onclick="switchTab('rebalance')">Holdings &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
   </div>
@@ -1126,7 +1126,7 @@
       <div id="true-exposure-panel" style="grid-column:1 / -1;margin:4px 0 0"></div>
       <!-- ACTION TIER -->
       <div class="analytics-card" id="trim-watch-card" onclick="showCardOverlay('trim')" style="cursor:pointer">
-        <div class="analytics-card-title">Top 5 Trim Candidates — by Dollar Alpha</div>
+        <div class="analytics-card-title">Top Laggards (vs S&P, $)</div>
         <div id="trim-watch-content"></div>
       </div>
       <div class="analytics-card" id="add-watch-card" onclick="showCardOverlay('add')" style="cursor:pointer">
@@ -1379,7 +1379,7 @@
 
   <!-- Rebalance & Tax Tab -->
   <div class="tab-panel" id="tab-rebalance">
-    <div class="section-heading">Trim Candidates</div>
+    <div class="section-heading">Holdings — Signals &amp; Tax</div>
     <div class="rebal-controls">
       <span class="rebal-control-label">Short-term rate</span>
       <input class="rebal-rate-input" id="rate-st" type="number" value="36" min="0" max="100" step="1" oninput="renderRebalance()">
@@ -4660,7 +4660,7 @@ function computeAddCandidates() {
     const daysRemaining = inSoak ? (soakThreshold - oldestDays) : 0;
 
     // Score: alpha-per-dollar (efficiency)
-    // Use SPX alpha for primary scoring (consistent with Trim Candidates' use of dollar alpha).
+    // Use SPX alpha for primary scoring (consistent with the Holdings — Signals & Tax table's use of dollar alpha).
     // Theme alpha already gated by ≥+$300 floor; scoring by SPX gives a clean "capital efficiency"
     // ranking comparable across positions.
     const score = totalInvested > 0 ? totalSpxAlpha / totalInvested : 0;
@@ -13494,7 +13494,7 @@ function _renderCardOverlay(type) {
     });
 
   } else if (type === 'trim') {
-    html = '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:16px">Top Trim Candidates — Full Picture</div>';
+    html = '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:16px">Top Laggards — Full Picture (vs S&P, $)</div>';
     const totalVal = open.reduce((s,p)=>s+(calcPos(p).exitValue||0),0);
     const candidates = [...open].map(p => {
       const c = calcPos(p);
@@ -14767,7 +14767,7 @@ const SLEEVE_TARGETS = {
 //   - Thesis Plays: 180 days — already enforced as "hard floor" in spotlight signal logic
 //   - PBP: 1095 days (36 months) — matches existing UI text in PBP opt-in picker
 //   - Quality: 365 days (12 months) — aligned with LT/ST tax cutoff
-// Used by the Soak Status column on Trim Candidates. Passive informational only —
+// Used by the Soak Status column on the Holdings — Signals & Tax table. Passive informational only —
 // does NOT change signal-firing logic.
 const SLEEVE_SOAK = {
   'Thesis Plays': 180,
