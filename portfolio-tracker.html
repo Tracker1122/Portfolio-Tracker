@@ -13300,6 +13300,8 @@ let _candTrimUnit = 'pct';    // 'pct' | 'sh' | 'usd'
 let _candQueue = [];          // linked moves: {kind:'stock'|'etf'|'trim', ...}
 let _candScenario = null;     // last computed result, fed to the book AI: {sig, ...}
 let _candTempHoldings = {};   // ETF paste, card-local (never persisted): { ETF: [{ticker,weight}] }
+let _candPerf = {};           // recent-performance windows per ticker (from fetchTickerWindows): { TICKER: {m1,m3,m6,y1,ytd,maxDrawdown,annVol,shortHist,fetchedAt,error} }
+let _candPerfBusy = false;    // guard so overlapping fetches don't stack
 
 // Persist ONLY the staged queue (the moves you built) — a scratchpad so a refresh doesn't wipe what
 // you've staged for the AI to read. The computed result (_candScenario) is rederived from the queue on
@@ -13317,6 +13319,90 @@ function loadCandQueue() {
     const arr = raw ? JSON.parse(raw) : null;
     _candQueue = Array.isArray(arr) ? arr.filter(tr => tr && tr.kind && tr.ticker) : [];
   } catch (e) { _candQueue = []; }
+}
+
+// Persist the cached performance windows too (same scratchpad spirit — kept out of exportData / Drive).
+// Survives a reload so the staged scenario's perf is still there for the AI; each entry carries its own
+// fetchedAt so staleness is visible and a refresh re-pulls. We do NOT auto-fetch on load (that would
+// hammer Polygon's free tier on every refresh) — only on an explicit add or the manual refresh button.
+function saveCandPerf() {
+  try {
+    if (_candPerf && Object.keys(_candPerf).length) localStorage.setItem('portfolio-cand-perf-v1', JSON.stringify(_candPerf));
+    else localStorage.removeItem('portfolio-cand-perf-v1');
+  } catch (e) { /* non-fatal */ }
+}
+function loadCandPerf() {
+  try { const raw = localStorage.getItem('portfolio-cand-perf-v1'); const o = raw ? JSON.parse(raw) : null; _candPerf = (o && typeof o === 'object') ? o : {}; }
+  catch (e) { _candPerf = {}; }
+}
+
+// The candidate tickers we fetch performance for: each stock add, each ETF add (the fund itself), and
+// each trimmed name. NOT the ETF's underlying holdings — that's the look-through table's job, and it
+// would blow the rate limit. Deduped, uppercased.
+function _candScenarioTickers() {
+  const set = new Set();
+  _candQueue.forEach(tr => { if (tr.ticker) set.add(tr.ticker.toUpperCase()); });
+  return [...set];
+}
+
+// Fetch recent-performance windows for the scenario's tickers via fetchTickerWindows (one Polygon
+// range call each). force=false only fills gaps (used on add); force=true re-pulls everything (the
+// manual refresh button). Sequential with a small gap to be polite to the free tier; stops early and
+// flags the rest if Polygon rate-limits. Re-renders the queue and recomputes so the AI sees fresh perf.
+async function candFetchPerf(force) {
+  if (_candPerfBusy) return;
+  const tickers = _candScenarioTickers();
+  if (!tickers.length) return;
+  const todo = force ? tickers : tickers.filter(t => !_candPerf[t] || _candPerf[t].error);
+  if (!todo.length) { candRenderQueue(); return; }
+  _candPerfBusy = true;
+  candRenderQueue();
+  let rateLimited = false;
+  for (const t of todo) {
+    if (rateLimited) { _candPerf[t] = { error: 'rate', fetchedAt: Date.now() }; continue; }
+    try {
+      const w = await fetchTickerWindows(t);
+      _candPerf[t] = { m1: w.m1, m3: w.m3, m6: w.m6, y1: w.y1, ytd: w.ytd, maxDrawdown: w.maxDrawdown, annVol: w.annVol, shortHist: w.shortHist, histDays: w.histDays, fetchedAt: w.fetchedAt };
+    } catch (e) {
+      const msg = (e && e.message) || 'err';
+      if (msg === 'rate') { rateLimited = true; _candPerf[t] = { error: 'rate', fetchedAt: Date.now() }; }
+      else _candPerf[t] = { error: msg === 'nokey' ? 'nokey' : 'err', fetchedAt: Date.now() };
+    }
+    await new Promise(r => setTimeout(r, 350));
+  }
+  _candPerfBusy = false;
+  saveCandPerf();
+  candRenderQueue();
+  if (_candQueue.length) candCompute(); // re-attach perf to _candScenario for the AI
+}
+
+// Signed percent for the queue display: null → "—", else e.g. "+3.2%" / "−1.1%" with a colour.
+function _candFmtPctHtml(v) {
+  if (v == null || isNaN(v)) return '<span style="color:var(--color-text-tertiary)">—</span>';
+  const col = v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
+  return `<span style="color:${col}">${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}%</span>`;
+}
+function _candPerfAgeStr(fetchedAt) {
+  if (!fetchedAt) return '';
+  const mins = Math.round((Date.now() - fetchedAt) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.round(hrs / 24) + 'd ago';
+}
+// One compact performance line for a queue row's ticker (or a status note if it failed / is loading).
+function _candPerfLineHtml(ticker) {
+  const T = (ticker || '').toUpperCase();
+  const p = _candPerf[T];
+  if (_candPerfBusy && !p) return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">fetching ${esc(T)} performance…</div>`;
+  if (!p) return '';
+  if (p.error === 'nokey') return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">add a Polygon key for recent performance</div>`;
+  if (p.error === 'rate') return `<div style="font-size:8px;color:#fbbf24;margin-top:1px">Polygon rate-limited — refresh again shortly</div>`;
+  if (p.error) return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">no performance data for ${esc(T)}</div>`;
+  const dd = (p.maxDrawdown != null) ? `<span style="color:var(--color-text-tertiary)"> · maxDD ${p.maxDrawdown.toFixed(0)}%</span>` : '';
+  const oneY = p.shortHist ? `${_candFmtPctHtml(p.y1)}<span style="color:#fbbf24">*</span>` : _candFmtPctHtml(p.y1);
+  return `<div style="font-size:8px;color:var(--color-text-secondary);margin-top:1px">1M ${_candFmtPctHtml(p.m1)} · 3M ${_candFmtPctHtml(p.m3)} · 1Y ${oneY}${dd} <span style="color:var(--color-text-tertiary)">(${_candPerfAgeStr(p.fetchedAt)})</span></div>`;
 }
 
 function _candPillOn() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600'; }
@@ -13654,6 +13740,7 @@ function candAddToQueue() {
   candRenderQueue();
   candCompute();
   saveCandQueue();
+  candFetchPerf(); // auto: fill recent performance for any newly added ticker (gaps only)
 }
 
 function candRemoveFromQueue(i) {
@@ -13689,8 +13776,9 @@ function candEditQueueItem(i) {
 }
 
 function candClearScenario() {
-  _candQueue = []; _candScenario = null; _candTempHoldings = {};
+  _candQueue = []; _candScenario = null; _candTempHoldings = {}; _candPerf = {};
   saveCandQueue();
+  saveCandPerf();
   candRenderQueue();
   const out = document.getElementById('cand-output'); if (out) out.innerHTML = '';
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
@@ -13710,8 +13798,13 @@ function _candTradeLabel(tr) {
 function candRenderQueue() {
   const el = document.getElementById('cand-queue'); if (!el) return;
   if (!_candQueue.length) { el.innerHTML = '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No moves staged yet. Add one or more above — they combine into a single scenario.</div>'; return; }
-  el.innerHTML = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Scenario (${_candQueue.length} move${_candQueue.length === 1 ? '' : 's'})</div>` +
-    _candQueue.map((tr, i) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary);padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this move back into the form to edit it">edit</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>`).join('');
+  const refreshBtn = `<span onclick="candFetchPerf(true)" style="cursor:pointer;color:var(--color-text-info);font-size:8px;text-decoration:underline;text-transform:none;letter-spacing:0" title="Re-pull recent performance for every ticker in the scenario from Polygon">↻ ${_candPerfBusy ? 'refreshing…' : 'refresh performance'}</span>`;
+  el.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px"><span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Scenario (${_candQueue.length} move${_candQueue.length === 1 ? '' : 's'})</span>${refreshBtn}</div>` +
+    _candQueue.map((tr, i) => `<div style="padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this move back into the form to edit it">edit</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
+      ${_candPerfLineHtml(tr.ticker)}
+    </div>`).join('') +
+    `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">Recent performance via Polygon daily bars; * = under ~1Y of history. Informational — not a return forecast.</div>`;
 }
 
 // Build the per-name true-exposure adjustments for the whole staged scenario.
@@ -13911,10 +14004,16 @@ function candCompute() {
     clTable + nameTable + slTable + taxTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
+  const _pos = _candPositionCountDelta();
+  const _perf = {};
+  _candScenarioTickers().forEach(t => { if (_candPerf[t] && !_candPerf[t].error) _perf[t] = _candPerf[t]; });
   _candScenario = {
     sig: _candScenarioSignature(),
     trades: _candQueue.map(_candTradeLabel),
-    clRows, ebBefore, ebAfter, nameRows, sleeveRows, tax
+    clRows, ebBefore, ebAfter, nameRows, sleeveRows, tax,
+    summary: _candMovedParagraph(nameMoves, tax, _pos),
+    posBefore: _pos.before, posAfter: _pos.after,
+    perf: _perf
   };
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
 }
@@ -18325,6 +18424,32 @@ function buildBookAiPrompt() {
       lines.push(`Per-name true-exposure moves (direct + via funds; a name can move because an added ETF holds it):`);
       sc.nameRows.forEach(r => lines.push(`  · ${r.display}: $${Math.round(r.before).toLocaleString()} → $${Math.round(r.after).toLocaleString()} (${r.d >= 0 ? '+' : '−'}$${Math.round(Math.abs(r.d)).toLocaleString()})`));
     }
+    if (typeof sc.posBefore === 'number' && typeof sc.posAfter === 'number') lines.push(`Position count under this scenario: ${sc.posBefore} → ${sc.posAfter}.`);
+    if (sc.summary) lines.push(`Plain-language read the tracker computed for this scenario: ${sc.summary}`);
+    if (sc.tax) {
+      const tx = sc.tax;
+      if (tx.totalTax > 0) {
+        let s = `Estimated tax to execute the trims: ~$${Math.round(tx.totalTax).toLocaleString()}`;
+        const bits = [];
+        if (tx.taxableST > 0) bits.push(`$${Math.round(tx.taxableST).toLocaleString()} short-term @ ${Math.round(tx.rateST * 100)}%`);
+        if (tx.taxableLT > 0) bits.push(`$${Math.round(tx.taxableLT).toLocaleString()} long-term @ ${Math.round(tx.rateLT * 100)}%`);
+        if (bits.length) s += ` (on ${bits.join(' + ')})`;
+        if (tx.shelteredProceeds > 0) s += `; $${Math.round(tx.shelteredProceeds).toLocaleString()} of proceeds is in tax-sheltered IRA lots (untaxed)`;
+        lines.push(s + '.');
+        if (tx.washSale && tx.washSale.length) lines.push(`  ⚠ Possible wash sale flagged: ${tx.washSale.join(', ')} sold at a loss while also being bought in this scenario.`);
+        if (tx.waitLT && tx.waitLT.length) { const w = tx.waitLT[0]; lines.push(`  Holding-period note: ${w.ticker} is ${w.daysToLT} day(s) from long-term; waiting would cut tax by ~$${Math.round(w.saving).toLocaleString()}.`); }
+      } else if (tx.anyLoss) {
+        lines.push(`The staged trims realize net losses, not gains — no tax cost estimated (potentially harvestable).`);
+      } else {
+        lines.push(`Estimated tax to execute the trims: ~$0.`);
+      }
+    }
+    const perfKeys = sc.perf ? Object.keys(sc.perf) : [];
+    if (perfKeys.length) {
+      lines.push(`Recent price performance of the scenario's tickers (Polygon daily bars — trailing total returns, plus max drawdown over the window; * = under ~1Y of history, so 1Y is partial):`);
+      perfKeys.forEach(t => { const p = sc.perf[t]; const f = v => v == null ? 'n/a' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; lines.push(`  · ${t}: 1M ${f(p.m1)}, 3M ${f(p.m3)}, 6M ${f(p.m6)}, 1Y ${f(p.y1)}${p.shortHist ? '*' : ''}, YTD ${f(p.ytd)}; maxDD ${p.maxDrawdown != null ? p.maxDrawdown.toFixed(0) + '%' : 'n/a'}.`); });
+      lines.push(`These performance figures ARE provided as FROM INPUTS for these specific tickers. They are PAST returns over fixed windows, not forecasts — do not extrapolate them into expected future return.`);
+    }
     lines.push(`Any ticker named ONLY in this scenario is a HYPOTHETICAL the user is considering — NOT a holding unless it also appears in the theme lists above. A name's true exposure can be non-zero before the scenario because it already sits inside funds the user holds; use the figures given, don't invent.`);
   }
 
@@ -18346,7 +18471,7 @@ Rules:
   • COUNTS, NOT NAMES: Each theme line gives a name COUNT and at most a few example names. The unlisted names are NOT provided — do not invent them or characterize them. If the count exceeds the examples shown, the extra names are unknown to you — say so, don't guess them.
   • SELECTED CANDIDATES ARE NOT HOLDINGS: A selected discovery ticker is something the user is CONSIDERING, not something they own — UNLESS that exact ticker also appears verbatim as a held name in the theme lists above. Do NOT say a candidate is "already held" or would "deepen an existing position" unless its ticker literally appears in the holdings facts. Check before claiming it.
   • ABSENCES: You may note that an asset class or theme is "not listed in the inputs," but do NOT assert the user definitively holds NONE of it — the facts list themes that EXIST, it does not enumerate everything absent. Phrase gaps as "not visible in the computed themes" rather than "the book has no X." This is an [inference] about the inputs, not a FROM INPUTS fact.
-  • RISK FIGURES: maxDD/vol/return numbers exist ONLY for the selected discovery tickers explicitly listed with them. Do not state risk figures for any book holding (none were provided) or for an unfetched candidate.
+  • RISK FIGURES: maxDD/vol/return numbers exist ONLY for tickers explicitly listed with them — the selected discovery tickers, and any scenario tickers under "Recent price performance" in the staged what-if block. Do not state risk or return figures for any book holding (none were provided) or for any ticker not listed above with figures.
 
 Output in four sections:
 1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few independent bets, any theme resting on one name). FROM INPUTS, plainly stated.
@@ -18359,7 +18484,7 @@ Output in four sections:
    • For each GAP: pose the question of what filling it would actually require and the trap to check (e.g. whether a candidate already comes via the user's funds, so a direct add would concentrate not diversify).
    • For CONCENTRATION: pose the rebalancing QUESTION it raises — e.g. "with ~X% in two correlated themes, the question is what genuinely uncorrelated exposure looks like, and whether [the user's selected tickers] provide it or just add correlated beta." Tie this explicitly to the SELECTED discovery tickers where relevant — frame whether those specific clicked names move toward or away from the concentration, as a question, not a verdict.
    • Every item ends pointing to the next step: this is candidate-generation; the actual decision happens in New Position Evaluation, not here.
-5. STAGED WHAT-IF — include this section ONLY if a "STAGED WHAT-IF SCENARIO" block appears in the facts above; otherwise omit it entirely. Read what the staged moves do to the book's STRUCTURE, FROM INPUTS: which clusters move and in which direction, whether the scenario deepens or relieves the largest concentrations and how independent-bets shifts, and — for an added ETF — that its look-through can deepen names the user already holds (call out any such name from the per-name moves). Then turn it into QUESTIONS for New Position Evaluation under the same rules as section 4 (no buy/sell/trim/rebalance imperatives). Do NOT tell the user whether to make the trade.
+5. STAGED WHAT-IF — include this section ONLY if a "STAGED WHAT-IF SCENARIO" block appears in the facts above; otherwise omit it entirely. Read what the staged moves do to the book's STRUCTURE, FROM INPUTS: which clusters move and in which direction, whether the scenario deepens or relieves the largest concentrations and how independent-bets shifts, and — for an added ETF — that its look-through can deepen names the user already holds (call out any such name from the per-name moves). Where the tracker's plain-language read flags the trade as closer to a reshuffle than a reduction (much of what's trimmed handed back through what's bought), engage with that FROM INPUTS rather than ignoring it. If an estimated tax figure is given, state it as the dollar cost of the rotation (and surface any wash-sale or "days-from-long-term" flag), framed as a fact to weigh — never as a reason to act or not act. If recent-performance figures are given for scenario tickers, you may reference them as PAST returns/drawdown to characterize what's being bought or trimmed (e.g. trimming a name after a large run, or adding one deep in a drawdown), but do NOT treat past performance as predictive or as a buy/sell signal. Then turn all of it into QUESTIONS for New Position Evaluation under the same rules as section 4 (no buy/sell/trim/rebalance imperatives). Do NOT tell the user whether to make the trade.
 End with CLAIMS TO VERIFY (the ⚠UNVERIFIED external facts you leaned on, if any).
 
 Keep it tight and scannable. The checkable structure facts are already on the user's screen — your value is the gaps, the candidate screen, and the questions to explore, not restating every number.`;
@@ -23077,6 +23202,7 @@ async function init() {
   loadBookExclude();
   loadBookAiReview();
   loadCandQueue();
+  loadCandPerf();
   loadDiscoveryCache();
 
   // ─────────────────────────────────────────────
