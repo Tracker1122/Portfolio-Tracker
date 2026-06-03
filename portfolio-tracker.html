@@ -1056,6 +1056,9 @@
   <!-- Dashboard Tab -->
   <div class="tab-panel active" id="tab-dashboard">
 
+    <!-- PE -> IPO single-name concentration warning (filled by renderPeIpoConcBlock) -->
+    <div id="pe-ipo-conc-block"></div>
+
     <!-- Stale Prices Banner (filled by renderStaleBanner) -->
     <div id="stale-banner" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.35);border-radius:var(--border-radius-md);padding:8px 14px;margin-bottom:14px;font-size:11px;color:#fbbf24;display:flex;align-items:center;gap:10px"></div>
 
@@ -18475,6 +18478,128 @@ let _peEditId = null; // null = add mode, otherwise the id of the deal being edi
 // Derive computed metrics for one deal. Returns null if amountInvested is missing/zero
 // (you can't compute much without that). Other fields may be null if the underlying
 // data isn't present, and downstream code should handle that.
+// === PE -> IPO single-name concentration warning =============================
+// While a PE deal is still private its value sits in AUM but is invisible to the
+// per-name concentration views (Trim Watch + signal table only look at actual
+// positions). This surfaces, on the dashboard, what each active PE name WOULD be
+// as a single public position -- measured against BOTH the active book (excl.
+// passive-core index funds, matching Trim Watch) and the total book -- and keeps
+// expressing it until the live projection falls to a target you set, or you dismiss
+// it (after which it persists muted). Per-deal-id state: {target, plan, dismissed}.
+// Persisted to localStorage and carried in the Drive backup _settings block.
+let peIpoConcState = (function () {
+  try { return JSON.parse(localStorage.getItem('pe-ipo-conc-state-v1')) || {}; }
+  catch (e) { return {}; }
+})();
+function _savePeIpoConcState() {
+  try { localStorage.setItem('pe-ipo-conc-state-v1', JSON.stringify(peIpoConcState)); } catch (e) {}
+}
+function _peIpoStateFor(id) {
+  if (!peIpoConcState[id]) peIpoConcState[id] = { target: null, plan: '', dismissed: false };
+  return peIpoConcState[id];
+}
+function setPeIpoTarget(id, val) {
+  const st = _peIpoStateFor(id);
+  const n = parseFloat(val);
+  st.target = (isNaN(n) || n < 0) ? null : n;
+  _savePeIpoConcState();
+  renderPeIpoConcBlock();
+}
+function setPeIpoPlan(id, text) {
+  // sanitizeId strips < > at the input boundary; render side uses esc(). No re-render
+  // here so the caret doesn't jump while the user is typing.
+  _peIpoStateFor(id).plan = sanitizeId(typeof text === 'string' ? text : '');
+  _savePeIpoConcState();
+}
+function dismissPeIpoConc(id) {
+  _peIpoStateFor(id).dismissed = true;
+  _savePeIpoConcState();
+  renderPeIpoConcBlock();
+}
+function reengagePeIpoConc(id) {
+  _peIpoStateFor(id).dismissed = false;
+  _savePeIpoConcState();
+  renderPeIpoConcBlock();
+}
+// Projected concentration for one active PE deal. Uses the deal's current mark as the
+// value it would carry into the public book at IPO (the real IPO price is unknowable
+// until then; calcPeDeal falls back to cost when no current mark is set). At IPO the
+// name joins the public book, so it sits in BOTH numerator and denominator.
+function _peIpoProjection(deal) {
+  const c = calcPeDeal(deal);
+  if (!c || !(c.currentValue > 0)) return null;
+  const dealVal = c.currentValue;
+  const openPos = positions.filter(p => !p.closed && p.ticker);
+  const _PASSIVE_CORE = new Set(['VOO', 'SPY', 'IVV', 'VTI']);
+  const totalBook = openPos.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const activeBook = openPos
+    .filter(p => !_PASSIVE_CORE.has((p.ticker || '').toUpperCase()))
+    .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const activePct = (activeBook + dealVal) > 0 ? (dealVal / (activeBook + dealVal)) * 100 : 0;
+  const totalPct  = (totalBook  + dealVal) > 0 ? (dealVal / (totalBook  + dealVal)) * 100 : 0;
+  return { dealVal, activePct, totalPct, hasMark: (c.ppsCur > 0) };
+}
+function renderPeIpoConcBlock() {
+  const host = document.getElementById('pe-ipo-conc-block');
+  if (!host) return;
+  const cards = [], muted = [];
+  (peDeals || []).forEach(function (deal) {
+    const proj = _peIpoProjection(deal);
+    if (!proj) return; // missing cost data -- nothing to project
+    const st = peIpoConcState[deal.id] || {};
+    const target = (typeof st.target === 'number' && st.target >= 0) ? st.target : null;
+    // Resolved: live projection has reached the target you set -> stop expressing it.
+    if (target !== null && proj.activePct <= target) return;
+    const co = esc(deal.company || 'this deal');
+    const idq = escq(deal.id);
+    const a = proj.activePct.toFixed(1);
+    const t = proj.totalPct.toFixed(1);
+    if (st.dismissed) {
+      muted.push(
+        '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px;color:var(--color-text-tertiary)">' +
+          '<span>' + co + ' &mdash; projected <strong style="color:var(--color-text-secondary)">' + a + '%</strong> of active book at IPO (' + t + '% of total). Dismissed.</span>' +
+          '<button onclick="reengagePeIpoConc(\'' + idq + '\')" style="background:none;border:1px solid var(--color-border);color:var(--color-text-secondary);border-radius:var(--border-radius-sm);font-size:10px;padding:1px 7px;cursor:pointer">show</button>' +
+        '</div>'
+      );
+      return;
+    }
+    const sev = proj.activePct >= 20 ? '#ef4444' : proj.activePct >= 10 ? '#f59e0b' : 'var(--color-text-info)';
+    const planVal = esc(st.plan || '');
+    let progress = '';
+    if (target !== null) {
+      const diff = (proj.activePct - target).toFixed(1);
+      progress = '<div style="margin-top:6px;font-size:11px;color:var(--color-text-secondary)">Currently <strong style="color:' + sev + '">' + a + '%</strong> &middot; your target <strong>' + target.toFixed(1) + '%</strong> of active book &middot; <strong style="color:' + sev + '">' + diff + ' pp</strong> to go. Clears automatically once it reaches your target.</div>';
+    }
+    const markNote = proj.hasMark ? '' : ' <span style="color:var(--color-text-tertiary);font-weight:400">(valued at cost &mdash; no current mark yet)</span>';
+    cards.push(
+      '<div style="margin-bottom:12px;padding:13px 16px;background:var(--color-background-secondary);border-left:4px solid ' + sev + ';border-radius:var(--border-radius-sm)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">' +
+          '<div style="font-weight:700;color:var(--color-text-primary);font-size:13px">' + co + ' &middot; concentration at IPO' + markNote + '</div>' +
+          '<button onclick="dismissPeIpoConc(\'' + idq + '\')" style="background:none;border:1px solid var(--color-border);color:var(--color-text-secondary);border-radius:var(--border-radius-sm);font-size:10px;padding:2px 9px;cursor:pointer;white-space:nowrap">Dismiss</button>' +
+        '</div>' +
+        '<div style="margin-top:8px;font-size:13px;color:var(--color-text-primary);line-height:1.5">' +
+          'As a single public position, <strong>' + co + '</strong> would be <strong style="color:' + sev + ';font-size:15px">' + a + '%</strong> of your active book and <strong style="color:' + sev + '">' + t + '%</strong> of your total book.' +
+        '</div>' +
+        '<div style="margin-top:8px;font-weight:700;color:var(--color-text-primary);font-size:12px">How do you intend to address it?</div>' +
+        '<div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--color-text-secondary)">' +
+          '<label>Clear this once active-book concentration is at or below</label>' +
+          '<input type="number" min="0" step="0.5" value="' + (target !== null ? target : '') + '" onchange="setPeIpoTarget(\'' + idq + '\', this.value)" style="width:70px;padding:3px 6px;background:var(--color-background-tertiary);border:1px solid var(--color-border);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-size:12px"> %' +
+        '</div>' +
+        progress +
+        '<textarea placeholder="Your plan (optional) &mdash; e.g. trim to 8% over two quarters, harvest losses elsewhere first..." oninput="setPeIpoPlan(\'' + idq + '\', this.value)" style="margin-top:8px;width:100%;box-sizing:border-box;min-height:46px;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-size:12px;line-height:1.45;resize:vertical;font-family:inherit">' + planVal + '</textarea>' +
+      '</div>'
+    );
+  });
+  let html = '';
+  if (cards.length) {
+    html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--color-text-secondary);margin-bottom:8px">Looming single-name concentration</div>' + cards.join('');
+  }
+  if (muted.length) {
+    html += '<div style="margin-top:' + (cards.length ? '4' : '0') + 'px">' + muted.join('') + '</div>';
+  }
+  host.innerHTML = html;
+}
+
 function calcPeDeal(d) {
   const inv = parseFloat(d.amountInvested);
   if (!(inv > 0)) return null;
@@ -19553,6 +19678,7 @@ function renderAll() {
   // reported to diagnostics and the remaining panels still render.
   safeRender('renderSummary(open)', () => renderSummary('open-summary', open, true));
   safeRender('renderAumCard', renderAumCard);
+  safeRender('renderPeIpoConcBlock', renderPeIpoConcBlock);
   safeRender('renderSummary(closed)', () => renderSummary('closed-summary', closed, false));
   safeRender('renderSplitBenchmarkNote', renderSplitBenchmarkNote);
   safeRender('renderBookExcludePanel', () => renderBookExcludePanel(open));
@@ -21230,7 +21356,8 @@ function driveBuildBackupPayload() {
         'portfolio-index-lookthrough-v1','portfolio-cluster-overrides-v1',
         'portfolio-sector-map-v1','portfolio-sector-ai-mode',
         'trim-watch-thresholds-v1','portfolio-csv-mappings',
-        'portfolio-book-exclude-v1','portfolio-book-ai-review-v1'];
+        'portfolio-book-exclude-v1','portfolio-book-ai-review-v1',
+        'pe-ipo-conc-state-v1'];
       var out = {};
       keys.forEach(function(k){ try { var v = localStorage.getItem(k); if (v !== null) out[k] = v; } catch(e){} });
       return out;
