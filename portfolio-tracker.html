@@ -3016,6 +3016,241 @@ async function fetchRowData(id) {
 }
 
 // ─────────────────────────────────────────────
+// Live single-ticker price popout (clicked from the Price Moves table)
+// Fetches Yahoo regularMarketPrice (live-ish) with a Polygon previous-close fallback, lets you
+// evaluate it against your stored price / cost basis, then optionally writes it to exitPrice on
+// every open lot of that ticker — the field gain/loss, true-exposure, the simulator, and the tax
+// estimate all read. A session-only cache feeds the table's "Live" column WITHOUT touching the
+// snapshot columns (those stay pinned to their refresh timestamps, by request).
+// ─────────────────────────────────────────────
+let livePxCache = {};   // TICKER -> { price, fetchedAt(ms), source:'live'|'prev', marketTime(ms|null) }
+let _livePxEsc = null;  // active Escape-key handler so we can detach on close
+
+function _livePxAge(ms) {
+  if (!ms) return '';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 45) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+
+// "Live" table cell. Colored vs the snapshot "now" price only to show direction of drift since the
+// snapshot — not a performance judgment.
+function _livePxCell(ticker, snapshotNow) {
+  const c = livePxCache[(ticker || '').toUpperCase()];
+  if (!c) return '<td style="padding:5px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px" title="Tap the ticker to fetch a live price">—</td>';
+  const col = (snapshotNow != null && c.price > snapshotNow) ? 'var(--color-text-success)'
+            : (snapshotNow != null && c.price < snapshotNow) ? 'var(--color-text-danger)'
+            : 'var(--color-text-primary)';
+  const tag = (c.source === 'prev' ? 'prev close · ' : '') + _livePxAge(c.fetchedAt);
+  return '<td style="padding:5px 8px;text-align:right;color:' + col + '">$' + c.price.toFixed(2) +
+    '<div style="font-size:9px;color:var(--color-text-tertiary)">' + tag + '</div></td>';
+}
+
+// Clickable ticker label for Price Moves rows (suffixHtml stays OUTSIDE the clickable span).
+function _livePxTickerLabel(ticker, suffixHtml) {
+  return '<span onclick="openLivePricePopout(\'' + escq(ticker) + '\')" style="cursor:pointer;border-bottom:1px dotted var(--color-text-tertiary)" title="Fetch a live price for ' + esc(ticker) + '">' + esc(ticker) + '</span>' + (suffixHtml || '');
+}
+
+async function _livePxFetch(ticker) {
+  const T = (ticker || '').toUpperCase();
+  // 1) Yahoo live price (regularMarketPrice) — same source the per-row fetch uses.
+  try {
+    const url = PROXY_BASES[0] + '/v8/finance/chart/' + encodeURIComponent(T) + '?interval=1d&range=1d';
+    const data = await yahooFetch(url);
+    const meta = data.chart.result[0].meta;
+    const px = meta.regularMarketPrice;
+    const prevClose = meta.previousClose || meta.chartPreviousClose || null;
+    if (px > 0) return { price: px, source: 'live', marketTime: meta.regularMarketTime ? meta.regularMarketTime * 1000 : null, prevClose };
+  } catch (e) { /* fall through to Polygon */ }
+  // 2) Polygon previous-close fallback (only if a key is set).
+  if (typeof polygonKey !== 'undefined' && polygonKey) {
+    try {
+      const clean = T.replace('-', '.');
+      const r = await fetch('https://api.polygon.io/v2/aggs/ticker/' + clean + '/prev?adjusted=true&apiKey=' + polygonKey);
+      const d = await r.json();
+      if (d.results && d.results.length) return { price: d.results[0].c, source: 'prev', marketTime: null, prevClose: null };
+    } catch (e) { /* fall through to error */ }
+  }
+  throw new Error('Couldn\'t reach Yahoo' + ((typeof polygonKey !== 'undefined' && polygonKey) ? ', and the Polygon fallback failed' : ' (no Polygon key set for fallback)') + '.');
+}
+
+function _livePxLots(ticker) {
+  const T = (ticker || '').toUpperCase();
+  return positions.filter(p => !p.closed && (p.ticker || '').toUpperCase() === T);
+}
+
+function openLivePricePopout(ticker) {
+  const T = (ticker || '').toUpperCase();
+  const lots = _livePxLots(T);
+  const shares = lots.reduce((s, p) => s + (parseFloat(p.shares) || 0), 0);
+  const basis = lots.reduce((s, p) => s + (parseFloat(p.shares) || 0) * (parseFloat(p.pricePaid) || 0), 0);
+  let storedPx = 0, storedAt = null;
+  lots.forEach(p => { const px = parseFloat(p.exitPrice) || 0; if (px > 0 && storedPx === 0) { storedPx = px; storedAt = p.priceFetchedAt || null; } });
+  const isVoo = T === 'VOO';
+
+  let overlay = document.getElementById('live-px-overlay');
+  if (overlay) overlay.remove();
+  overlay = document.createElement('div');
+  overlay.id = 'live-px-overlay';
+  overlay.setAttribute('onclick', 'if(event.target===this)closeLivePricePopout()');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+
+  const heldLine = shares > 0
+    ? esc(T) + ' · ' + (Math.round(shares * 100) / 100) + ' sh held' + (storedPx > 0 ? ' · stored $' + storedPx.toFixed(2) + (storedAt ? ' <span style="color:var(--color-text-tertiary)">(' + esc(_livePxAge(new Date(storedAt).getTime())) + ')</span>' : '') : '')
+    : esc(T) + (isVoo ? ' · S&P / VOO sleeve' : ' · no open position');
+
+  overlay.innerHTML =
+    '<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-lg);max-width:440px;width:100%;padding:18px 20px;box-shadow:0 12px 40px rgba(0,0,0,0.5)">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">' +
+        '<div style="font-size:14px;font-weight:700;color:var(--color-text-primary)">Live price · ' + esc(T) + '</div>' +
+        '<button onclick="closeLivePricePopout()" style="background:none;border:none;color:var(--color-text-tertiary);cursor:pointer;font-size:18px;line-height:1;padding:0">✕</button>' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:12px">' + heldLine + '</div>' +
+      '<div id="live-px-body" style="font-size:12px;color:var(--color-text-secondary);min-height:60px">' +
+        '<div style="color:var(--color-text-tertiary)">⟳ Fetching live price…</div>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+  _livePxEsc = function (e) { if (e.key === 'Escape') closeLivePricePopout(); };
+  document.addEventListener('keydown', _livePxEsc);
+
+  // Resolve the theme benchmark this ticker is measured against (for its live price + today's α).
+  const benchInfo = (typeof _resolveBenchForRow === 'function') ? _resolveBenchForRow(T) : null;
+  const benchT = (benchInfo && !benchInfo.isSelf && benchInfo.benchTicker) ? benchInfo.benchTicker.toUpperCase() : null;
+  const isSelfBench = !!(benchInfo && benchInfo.isSelf);
+
+  // Auto-fetch on open (you tapped the ticker — you want the number). Benchmark fetched in parallel.
+  Promise.all([
+    _livePxFetch(T).then(r => ({ ok: true, r })).catch(e => ({ ok: false, e })),
+    benchT ? _livePxFetch(benchT).then(r => ({ ok: true, r })).catch(e => ({ ok: false, e })) : Promise.resolve(null)
+  ]).then(results => {
+    const mainRes = results[0], benchRes = results[1];
+    if (!mainRes.ok) {
+      const body = document.getElementById('live-px-body');
+      if (body) body.innerHTML = '<div style="color:var(--color-text-danger);line-height:1.5">Couldn\'t fetch a live price.<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">' + esc((mainRes.e && mainRes.e.message) || '') + ' Yahoo can intermittently block requests — try again in a moment.</div></div>' +
+        '<div style="margin-top:12px"><button onclick="openLivePricePopout(\'' + escq(T) + '\')" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);padding:5px 12px;font-size:11px;border-radius:var(--border-radius-sm);cursor:pointer">Retry</button></div>';
+      return;
+    }
+    livePxCache[T] = { price: mainRes.r.price, fetchedAt: Date.now(), source: mainRes.r.source, marketTime: mainRes.r.marketTime };
+    if (benchT && benchRes && benchRes.ok) livePxCache[benchT] = { price: benchRes.r.price, fetchedAt: Date.now(), source: benchRes.r.source, marketTime: benchRes.r.marketTime };
+    _livePxRenderBody(T, {
+      shares: shares, basis: basis, storedPx: storedPx, isVoo: isVoo, res: mainRes.r,
+      benchT: benchT, isSelfBench: isSelfBench,
+      benchRes: (benchT && benchRes && benchRes.ok) ? benchRes.r : null,
+      benchErr: !!(benchT && benchRes && !benchRes.ok)
+    });
+    if (typeof renderPriceMoves === 'function') renderPriceMoves(); // fills the Live column for ticker AND benchmark
+  });
+}
+
+function _livePxStat(label, val, color) {
+  return '<div style="display:flex;align-items:baseline;justify-content:space-between;margin:3px 0"><span style="font-size:11px;color:var(--color-text-tertiary)">' + esc(label) + '</span><span style="font-size:13px;font-weight:600;color:' + color + '">' + val + '</span></div>';
+}
+
+function _livePxRenderBody(ticker, ctx) {
+  const body = document.getElementById('live-px-body');
+  if (!body) return;
+  const T = (ticker || '').toUpperCase();
+  const shares = ctx.shares, basis = ctx.basis, storedPx = ctx.storedPx, isVoo = ctx.isVoo, res = ctx.res;
+  const benchT = ctx.benchT, isSelfBench = ctx.isSelfBench, benchRes = ctx.benchRes, benchErr = ctx.benchErr;
+  const live = res.price;
+  const srcLabel = res.source === 'live'
+    ? 'Yahoo live' + (res.marketTime ? ' · as of ' + new Date(res.marketTime).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '')
+    : 'Polygon previous close (Yahoo unavailable)';
+  const dCol = (v) => v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
+
+  let rows = '';
+  rows += '<div style="display:flex;align-items:baseline;justify-content:space-between"><span style="font-size:11px;color:var(--color-text-tertiary)">Live price</span><span style="font-size:22px;font-weight:700;color:var(--color-text-primary)">$' + live.toFixed(2) + '</span></div>';
+  rows += '<div style="font-size:9px;color:var(--color-text-tertiary);text-align:right;margin-bottom:10px">' + esc(srcLabel) + '</div>';
+
+  if (storedPx > 0) {
+    const dPer = live - storedPx;
+    const dPct = storedPx ? (dPer / storedPx) * 100 : 0;
+    rows += _livePxStat('vs your stored $' + storedPx.toFixed(2), (dPer >= 0 ? '+' : '−') + '$' + Math.abs(dPer).toFixed(2) + ' (' + (dPct >= 0 ? '+' : '') + dPct.toFixed(2) + '%)', dCol(dPer));
+    if (shares > 0) {
+      const dOnPos = shares * dPer;
+      rows += _livePxStat('$ on your position', (dOnPos >= 0 ? '+' : '−') + fmtDollarWhole(Math.abs(dOnPos)), dCol(dOnPos));
+    }
+  }
+  if (shares > 0 && basis > 0) {
+    const valLive = shares * live;
+    const gl = valLive - basis;
+    const glPct = basis ? (gl / basis) * 100 : 0;
+    rows += '<div style="border-top:1px solid var(--color-border-tertiary);margin:8px 0;padding-top:8px"></div>';
+    rows += _livePxStat('Position value at live', fmtDollarWhole(valLive), 'var(--color-text-primary)');
+    rows += _livePxStat('Unrealized G/L vs basis', (gl >= 0 ? '+' : '−') + fmtDollarWhole(Math.abs(gl)) + ' (' + (glPct >= 0 ? '+' : '') + glPct.toFixed(1) + '%)', dCol(gl));
+  }
+
+  // Benchmark: live price + today's relative move (live α), when intraday data is available.
+  if (isSelfBench) {
+    rows += '<div style="border-top:1px solid var(--color-border-tertiary);margin:8px 0;padding-top:8px"></div>';
+    rows += '<div style="font-size:11px;color:var(--color-text-tertiary)">' + esc(T) + ' is its own theme benchmark — α = 0 by construction.</div>';
+  } else if (benchT) {
+    rows += '<div style="border-top:1px solid var(--color-border-tertiary);margin:8px 0;padding-top:8px"></div>';
+    if (benchRes) {
+      rows += _livePxStat('Benchmark · ' + benchT + ' (live)', '$' + benchRes.price.toFixed(2), 'var(--color-text-primary)');
+      const mPrev = (res.source === 'live' && res.prevClose > 0) ? res.prevClose : null;
+      const bPrev = (benchRes.source === 'live' && benchRes.prevClose > 0) ? benchRes.prevClose : null;
+      if (mPrev && bPrev) {
+        const mPct = (res.price - mPrev) / mPrev * 100;
+        const bPct = (benchRes.price - bPrev) / bPrev * 100;
+        const a = mPct - bPct;
+        rows += _livePxStat('Today · ' + T + ' vs ' + benchT, (mPct >= 0 ? '+' : '') + mPct.toFixed(2) + '% vs ' + (bPct >= 0 ? '+' : '') + bPct.toFixed(2) + '%', 'var(--color-text-secondary)');
+        rows += _livePxStat('Live α (today)', (a >= 0 ? '+' : '') + a.toFixed(2) + 'pp', dCol(a));
+      } else {
+        rows += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">Today\'s % vs benchmark needs intraday data from both — not available right now.</div>';
+      }
+    } else if (benchErr) {
+      rows += _livePxStat('Benchmark · ' + benchT, 'couldn\'t fetch', 'var(--color-text-danger)');
+    }
+  }
+
+  let actions;
+  if (shares > 0 || isVoo) {
+    actions = '<button onclick="applyLivePrice(\'' + escq(T) + '\')" style="background:var(--color-accent-blue);border:none;color:#fff;padding:7px 14px;font-size:12px;border-radius:var(--border-radius-sm);cursor:pointer;font-weight:600">Use this price</button>' +
+      '<button onclick="closeLivePricePopout()" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);padding:7px 14px;font-size:12px;border-radius:var(--border-radius-sm);cursor:pointer">Close</button>';
+  } else {
+    actions = '<div style="font-size:10px;color:var(--color-text-tertiary)">No open position to apply this to — shown for reference.</div>' +
+      '<button onclick="closeLivePricePopout()" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);padding:7px 14px;font-size:12px;border-radius:var(--border-radius-sm);cursor:pointer">Close</button>';
+  }
+  rows += '<div id="live-px-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px">' + actions + '</div>';
+  rows += '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">"Use this price" writes to every open lot of ' + esc(T) + ' and updates gain/loss, true-exposure, the trade simulator, and the tax estimate. The table\'s snapshot columns are left as-is.</div>';
+  body.innerHTML = rows;
+}
+
+function applyLivePrice(ticker) {
+  const T = (ticker || '').toUpperCase();
+  const c = livePxCache[T];
+  if (!c) return;
+  const px = c.price;
+  const fetchedAt = new Date().toISOString();
+  let applied = 0;
+  if (T === 'VOO') {
+    if (typeof spCurrentPrice !== 'undefined') spCurrentPrice = px;
+    const el = document.getElementById('sp-price-input'); if (el) el.value = px.toFixed(2);
+    applied = 1;
+  } else {
+    _livePxLots(T).forEach(p => { p.exitPrice = px.toFixed(2); p.priceFetchedAt = fetchedAt; applied++; });
+  }
+  if (typeof scheduleSave === 'function') scheduleSave();
+  if (typeof renderAll === 'function') renderAll();
+  const actions = document.getElementById('live-px-actions');
+  if (actions) actions.innerHTML = '<div style="color:var(--color-text-success);font-size:12px;font-weight:600">✓ Applied to ' + applied + ' lot' + (applied === 1 ? '' : 's') + ' — now used everywhere.</div>' +
+    '<button onclick="closeLivePricePopout()" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);padding:7px 14px;font-size:12px;border-radius:var(--border-radius-sm);cursor:pointer">Close</button>';
+}
+
+function closeLivePricePopout() {
+  const overlay = document.getElementById('live-px-overlay');
+  if (overlay) overlay.remove();
+  document.body.style.overflow = '';
+  if (_livePxEsc) { document.removeEventListener('keydown', _livePxEsc); _livePxEsc = null; }
+}
+
+// ─────────────────────────────────────────────
 // Tax Profile Module
 //
 // Configurable tax rates via named presets + a guided Custom builder.
@@ -10883,12 +11118,12 @@ function renderPriceMoves() {
     // Build per-ticker rows
     const rowHtml = rows.map(r => {
       if (r.isNew) {
-        return '<tr><td style="padding:5px 8px;font-weight:600">' + r.ticker + '</td>' +
-          '<td colspan="6" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">new this refresh — no prior price to compare</td></tr>';
+        return '<tr><td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker) + '</td>' +
+          '<td colspan="7" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">new this refresh — no prior price to compare</td></tr>';
       }
       if (r.isMissing) {
-        return '<tr><td style="padding:5px 8px;font-weight:600">' + r.ticker + '</td>' +
-          '<td colspan="6" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">price not fetched this refresh</td></tr>';
+        return '<tr><td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker) + '</td>' +
+          '<td colspan="7" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">price not fetched this refresh</td></tr>';
       }
       const shTag = r.sharesChanged
         ? ' <span style="color:var(--color-text-tertiary);font-size:9px">(' + (Math.round(r.sharesThen * 100) / 100) + ' sh then)</span>'
@@ -10935,9 +11170,10 @@ function renderPriceMoves() {
       }
 
       return '<tr>' +
-        '<td style="padding:5px 8px;font-weight:600">' + r.ticker + shTag + '</td>' +
+        '<td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker, shTag) + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">$' + r.pricePrev.toFixed(2) + '</td>' +
         '<td style="padding:5px 8px;text-align:right">$' + r.priceNow.toFixed(2) + '</td>' +
+        _livePxCell(r.ticker, r.priceNow) +
         '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.perShare) + '">' + (r.perShare >= 0 ? '+' : '') + '$' + Math.abs(r.perShare).toFixed(2) + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.moveOnPosition) + ';font-weight:600">' + (r.moveOnPosition >= 0 ? '+' : '−') + '$' + Math.abs(r.moveOnPosition).toFixed(2) + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:' + pColor(r.pctChange) + '">' + (r.pctChange >= 0 ? '+' : '') + r.pctChange.toFixed(2) + '%</td>' +
@@ -10950,6 +11186,7 @@ function renderPriceMoves() {
       '<td style="padding:7px 8px;font-weight:700">Book total</td>' +
       '<td style="padding:7px 8px;text-align:right;color:var(--color-text-secondary)">$' + b.bookThen.toFixed(2) + '</td>' +
       '<td style="padding:7px 8px;text-align:right;font-weight:600">$' + b.bookNow.toFixed(2) + '</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
       '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
       '<td style="padding:7px 8px;text-align:right;color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(2) + '</td>' +
       '<td style="padding:7px 8px;text-align:right;color:' + pColor(b.bookPct) + ';font-weight:600">' + (b.bookPct !== null ? (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%' : '—') + '</td>' +
@@ -10969,6 +11206,7 @@ function renderPriceMoves() {
           sortableTh('ticker', 'Ticker', 'left') +
           sortableTh('pricePrev', 'Price ' + prevDateLbl, 'right', sl.tsPrev) +
           sortableTh('priceNow', 'Price ' + nowDateLbl, 'right', sl.tsNow) +
+          '<th style="padding:4px 8px;text-align:right" title="Live price fetched on demand — tap a ticker. Does not change the snapshot columns.">Live</th>' +
           sortableTh('perShare', 'Per-share Δ', 'right') +
           sortableTh('moveOnPosition', '$ on your position', 'right') +
           sortableTh('pctChange', 'Price % change', 'right', 'Per-share price change as a percent') +
@@ -11016,11 +11254,12 @@ function renderPriceMoves() {
       const dateStr = fmtPmTs(r.tsFirst);
       const spark = pmSparkline(r.spark, 60, 18);
       return '<tr>' +
-        '<td style="padding:5px 8px;font-weight:600">' + r.ticker + '</td>' +
+        '<td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker) + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">$' + r.priceFirst.toFixed(2) +
           '<div style="font-size:9px;color:var(--color-text-tertiary)">' + dateStr + '</div></td>' +
         '<td style="padding:5px 8px;text-align:right">$' + r.priceNow.toFixed(2) +
           '<div style="font-size:9px;color:var(--color-text-tertiary)">' + (Math.round(r.sharesNow * 100) / 100) + ' sh now</div></td>' +
+        _livePxCell(r.ticker, r.priceNow) +
         '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.perShare) + '">' + (r.perShare >= 0 ? '+' : '') + '$' + Math.abs(r.perShare).toFixed(2) + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.moveOnCurrent) + ';font-weight:600">' + (r.moveOnCurrent >= 0 ? '+' : '−') + '$' + Math.abs(r.moveOnCurrent).toFixed(2) + '</td>' +
         '<td style="padding:5px 8px;text-align:right;color:' + pColor(r.pctChange) + '">' + (r.pctChange >= 0 ? '+' : '') + r.pctChange.toFixed(2) + '%</td>' +
@@ -11031,6 +11270,7 @@ function renderPriceMoves() {
     const b = at.book;
     const bookRow = '<tr style="background:var(--color-background-secondary);border-top:1px solid var(--color-border-secondary)">' +
       '<td style="padding:7px 8px;font-weight:700">Book total</td>' +
+      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
       '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
       '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
       '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
@@ -11057,6 +11297,7 @@ function renderPriceMoves() {
           sortableTh('ticker', 'Ticker', 'left') +
           sortableTh('pricePrev', 'First-seen price', 'right') +
           sortableTh('priceNow', 'Latest price', 'right') +
+          '<th style="padding:4px 8px;text-align:right" title="Live price fetched on demand — tap a ticker.">Live</th>' +
           sortableTh('perShare', 'Per-share Δ', 'right') +
           sortableTh('moveOnPosition', '$ on current position', 'right', 'Current shares × price change since first seen. Price drift only — not realized gain.') +
           sortableTh('pctChange', 'Price % change', 'right', 'Per-share price change as a percent') +
