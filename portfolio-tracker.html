@@ -13351,7 +13351,8 @@ function _candShellHtml() {
       <div id="cand-etf-preview" style="font-size:9px;color:var(--color-text-tertiary)"></div>
     </div>
     <div id="cand-trim-row" style="display:none;flex-wrap:wrap;gap:8px;align-items:center">
-      <select id="cand-holding" class="modal-input" style="font-size:11px;padding:4px 8px;max-width:280px" onchange="candReadout()"><option value="">— Pick a holding —</option></select>
+      <select id="cand-holding" class="modal-input" style="font-size:11px;padding:4px 8px;max-width:280px" onchange="candOnHoldingPick()"><option value="">— Pick a holding —</option></select>
+      <select id="cand-lot" class="modal-input" style="font-size:11px;padding:4px 8px;max-width:320px" onchange="candReadout()" title="Pick a specific tax lot for an exact gain / short-vs-long-term / IRA-shelter read, or leave on Whole position to trim across all lots pro-rata."><option value="">— Whole position (blended) —</option></select>
       <input id="cand-trim-amt" class="modal-input" type="number" placeholder="Amount" style="width:100px;font-size:11px;padding:4px 8px" oninput="candReadout()">
       <span style="display:inline-flex;gap:4px">
         <span id="cand-unit-pct" onclick="candSetTrimUnit('pct')" style="${_candUnitOff()}">%</span>
@@ -13395,6 +13396,7 @@ function renderCandidatePanel() {
       Object.keys(byTicker).sort().map(t => `<option value="${esc(t)}">${esc(t)} · ${Math.round(byTicker[t].shares * 100) / 100} sh · ${fmtDollarWhole(byTicker[t].value)}${byTicker[t].theme ? ' · ' + esc(byTicker[t].theme) : ''}</option>`).join('');
     if (cur) hold.value = cur;
   }
+  candPopulateLots();
   candSetMode(_candMode);
   candSetTrimUnit(_candTrimUnit);
   candRenderQueue();
@@ -13425,8 +13427,11 @@ function _candDirectBook() {
 function _candTickerLots(T) {
   return positions.filter(p => !p.closed && p.ticker && p.ticker.toUpperCase() === T);
 }
-function _candTrimShares(T, val, unit) {
-  const lots = _candTickerLots(T);
+function _candTrimShares(T, val, unit, lotId) {
+  // When a specific lot is chosen, the % / share / $ amount is scoped to THAT lot's shares and price.
+  // Otherwise it's the whole position (blended) — total shares, first stored price found.
+  const allLots = _candTickerLots(T);
+  const lots = lotId ? allLots.filter(p => String(p.id) === String(lotId)) : allLots;
   const totalSh = lots.reduce((s, p) => s + (parseFloat(p.shares) || 0), 0);
   let px = 0; for (const p of lots) { const v = parseFloat(p.exitPrice) || 0; if (v > 0) { px = v; break; } }
   let sh = 0;
@@ -13435,6 +13440,79 @@ function _candTrimShares(T, val, unit) {
   else if (unit === 'usd') sh = px > 0 ? val / px : 0;
   sh = Math.min(Math.max(sh, 0), totalSh);
   return { sh, totalSh, px, proceeds: px > 0 ? sh * px : 0 };
+}
+
+// ── Scenario tax ─────────────────────────────────────────────────────────────────────────────────
+// Resolve ONE trim into per-lot taxable detail, FROZEN at stage time. If lotId is set, the trim hits
+// that lot only; otherwise the shares are spread pro-rata across the ticker's open lots by share count.
+// Mirrors simulateQueue's per-lot convention: proceeds = sh·exitPrice, basis = sh·pricePaid, gain =
+// proceeds − basis; >365 days held = long-term (missing date = short-term, worst case); IRA lots are
+// tax-sheltered (counted as sheltered proceeds, never taxed). Returns RAW buckets so the scenario can
+// net short vs long across ALL trims (IRS-style) at compute time.
+function _candResolveTrimTax(ticker, lotId, shares) {
+  const all = _candTickerLots(ticker);
+  let picks = [];
+  if (lotId) {
+    const lot = all.find(p => String(p.id) === String(lotId));
+    if (lot) picks = [{ lot, sh: Math.min(shares, parseFloat(lot.shares) || 0) }];
+  } else {
+    const tot = all.reduce((s, p) => s + (parseFloat(p.shares) || 0), 0);
+    if (tot > 0) picks = all.map(p => ({ lot: p, sh: shares * ((parseFloat(p.shares) || 0) / tot) }));
+  }
+  const out = { stGain: 0, stLoss: 0, ltGain: 0, ltLoss: 0, taxableProceeds: 0, shelteredProceeds: 0, anyLoss: false, hasIRA: false, lots: [], lossTickers: [] };
+  picks.forEach(({ lot, sh }) => {
+    if (sh <= 0) return;
+    const px = parseFloat(lot.exitPrice) || 0, pp = parseFloat(lot.pricePaid) || 0;
+    const proceeds = sh * px, gain = sh * (px - pp);
+    const isIRA = (lot.account || '').toUpperCase().includes('IRA');
+    const dh = _candDaysHeld(lot);
+    const isLT = dh != null && dh > 365;
+    const daysToLT = (dh != null && !isLT) ? Math.max(0, 366 - dh) : null;
+    out.lots.push({ ticker: lot.ticker, sh, proceeds, gain, isLT, isIRA, daysToLT });
+    if (isIRA) { out.hasIRA = true; out.shelteredProceeds += proceeds; return; }
+    out.taxableProceeds += proceeds;
+    if (gain < 0) { out.anyLoss = true; out.lossTickers.push(qrNormTicker(lot.ticker)); }
+    if (isLT) { if (gain >= 0) out.ltGain += gain; else out.ltLoss += -gain; }
+    else { if (gain >= 0) out.stGain += gain; else out.stLoss += -gain; }
+  });
+  return out;
+}
+
+// Aggregate every staged trim's frozen tax buckets, net ST vs LT across the whole scenario (a loss in
+// one bucket offsets a gain in the other before tax; overall loss = nothing owed), and apply the
+// profile's effective ST/LT rates (NIIT already folded in). Also flags wash sales (a loss-sale name
+// also being bought elsewhere in the scenario) and short-term gains close to the 1-year mark.
+function _candScenarioTax() {
+  const _ST = (typeof TAX_RATE_ST === 'number') ? TAX_RATE_ST : 0.36;
+  const _LT = (typeof TAX_RATE_LT === 'number') ? TAX_RATE_LT : 0.27;
+  let stGain = 0, stLoss = 0, ltGain = 0, ltLoss = 0, taxableProceeds = 0, shelteredProceeds = 0, hasIRA = false, anyLoss = false;
+  const lossTickers = new Set(), buyTickers = new Set();
+  const allLots = [];
+  _candQueue.forEach(tr => {
+    if ((tr.kind === 'stock' || tr.kind === 'etf') && tr.ticker) buyTickers.add(qrNormTicker(tr.ticker));
+    if (tr.kind === 'trim' && tr.tax) {
+      const t = tr.tax;
+      stGain += t.stGain || 0; stLoss += t.stLoss || 0; ltGain += t.ltGain || 0; ltLoss += t.ltLoss || 0;
+      taxableProceeds += t.taxableProceeds || 0; shelteredProceeds += t.shelteredProceeds || 0;
+      if (t.hasIRA) hasIRA = true; if (t.anyLoss) anyLoss = true;
+      (t.lossTickers || []).forEach(tk => lossTickers.add(tk));
+      (t.lots || []).forEach(l => allLots.push(l));
+    }
+  });
+  const hasTrim = _candQueue.some(tr => tr.kind === 'trim');
+  if (!hasTrim) return null;
+  const netST = stGain - stLoss, netLT = ltGain - ltLoss;
+  let taxableST = 0, taxableLT = 0;
+  if (netST >= 0 && netLT >= 0) { taxableST = netST; taxableLT = netLT; }
+  else if (netST < 0 && netLT < 0) { /* overall loss — nothing taxable */ }
+  else { const combined = netST + netLT; if (combined > 0) { if (netST > 0) taxableST = combined; else taxableLT = combined; } }
+  const totalTax = taxableST * _ST + taxableLT * _LT;
+  const washSale = [...lossTickers].filter(tk => buyTickers.has(tk));
+  const waitLT = allLots
+    .filter(l => !l.isIRA && !l.isLT && l.gain > 0 && l.daysToLT != null && (_ST - _LT) > 0)
+    .map(l => ({ ticker: l.ticker, daysToLT: l.daysToLT, saving: l.gain * (_ST - _LT) }))
+    .sort((a, b) => b.saving - a.saving);
+  return { totalTax, taxableGain: Math.max(0, netST) + Math.max(0, netLT), stGain, stLoss, ltGain, ltLoss, netST, netLT, taxableST, taxableLT, taxableProceeds, shelteredProceeds, hasIRA, anyLoss, washSale, waitLT, rateST: _ST, rateLT: _LT };
 }
 
 // Open this ETF's holdings page on stockanalysis.com (free, no login) — copy the table and paste it
@@ -13462,6 +13540,44 @@ function candEtfPastePreview() {
     + (cov < 95 ? ` — the uncovered ${(100 - Math.min(cov, 100)).toFixed(0)}% routes to the "theme for the rest"` : '');
 }
 
+// Days a lot has been held (dateBought → today). Missing/invalid date → null (treated as short-term,
+// the worst case — same convention as simulateQueue and taxRateForOpen).
+function _candDaysHeld(lot) {
+  if (!lot || !lot.dateBought) return null;
+  const d = new Date(lot.dateBought);
+  if (isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+// One lot's identity line for the picker: date · shares · LT/ST · account · unrealized gain.
+function _candLotLabel(lot) {
+  const sh = parseFloat(lot.shares) || 0;
+  const px = parseFloat(lot.exitPrice) || 0, pp = parseFloat(lot.pricePaid) || 0;
+  const gain = px > 0 ? sh * (px - pp) : null;
+  const dh = _candDaysHeld(lot);
+  const term = (dh != null && dh > 365) ? 'LT' : 'ST';
+  const acct = (lot.account || '').toUpperCase().includes('IRA') ? 'IRA' : 'Taxable';
+  let dateStr = '—';
+  if (lot.dateBought) { const d = new Date(lot.dateBought); if (!isNaN(d.getTime())) dateStr = (d.getMonth() + 1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(-2); }
+  const gStr = gain == null ? 'no px' : (gain >= 0 ? '+' : '−') + '$' + Math.round(Math.abs(gain)).toLocaleString();
+  return `${dateStr} · ${Math.round(sh * 100) / 100} sh · ${term} · ${acct} · ${gStr}`;
+}
+// Repopulate the per-lot picker for whichever holding is selected. Preserves the current pick if it
+// still exists. "Whole position (blended)" stays as the first option (value "").
+function candPopulateLots() {
+  const sel = document.getElementById('cand-lot'); if (!sel) return;
+  const T = ((document.getElementById('cand-holding') || {}).value || '').toUpperCase();
+  const cur = sel.value;
+  const lots = T ? _candTickerLots(T) : [];
+  sel.innerHTML = '<option value="">— Whole position (blended) —</option>' +
+    lots.map(p => `<option value="${esc(String(p.id))}">${esc(_candLotLabel(p))}</option>`).join('');
+  // keep prior pick only if that lot still belongs to this ticker
+  if (cur && lots.some(p => String(p.id) === cur)) sel.value = cur; else sel.value = '';
+}
+function candOnHoldingPick() {
+  candPopulateLots();
+  candReadout();
+}
+
 function candReadout() {
   const el = document.getElementById('cand-readout'); if (!el) return;
   const db = _candDirectBook();
@@ -13474,9 +13590,22 @@ function candReadout() {
   } else {
     const T = ((document.getElementById('cand-holding') || {}).value || '').toUpperCase();
     const val = parseFloat((document.getElementById('cand-trim-amt') || {}).value) || 0;
+    const lotId = (document.getElementById('cand-lot') || {}).value || '';
     if (!T || val <= 0) { el.textContent = ''; return; }
-    const r = _candTrimShares(T, val, _candTrimUnit);
-    el.textContent = r.sh > 0 ? `≈ trim ${Math.round(r.sh * 100) / 100} sh (${(r.totalSh > 0 ? r.sh / r.totalSh * 100 : 0).toFixed(0)}% of ${Math.round(r.totalSh * 100) / 100} sh)${r.proceeds ? ' · ~$' + Math.round(r.proceeds).toLocaleString() : ''}` : '';
+    const r = _candTrimShares(T, val, _candTrimUnit, lotId);
+    if (r.sh <= 0) { el.textContent = ''; return; }
+    const scope = lotId ? 'this lot' : 'whole position';
+    let line = `≈ trim ${Math.round(r.sh * 100) / 100} sh (${(r.totalSh > 0 ? r.sh / r.totalSh * 100 : 0).toFixed(0)}% of ${Math.round(r.totalSh * 100) / 100} sh ${scope})${r.proceeds ? ' · ~$' + Math.round(r.proceeds).toLocaleString() : ''}`;
+    // Live tax preview for THIS move alone (the scenario summary nets it against any other trims).
+    const tx = _candResolveTrimTax(T, lotId, r.sh);
+    const gain = (tx.stGain + tx.ltGain) - (tx.stLoss + tx.ltLoss);
+    if (tx.shelteredProceeds > 0 && tx.taxableProceeds <= 0) {
+      line += ' · IRA lot — no tax';
+    } else if (Math.abs(gain) >= 1) {
+      const term = tx.ltGain + tx.ltLoss > 0 && tx.stGain + tx.stLoss === 0 ? 'LT' : (tx.stGain + tx.stLoss > 0 && tx.ltGain + tx.ltLoss === 0 ? 'ST' : 'mixed');
+      line += ` · ${gain >= 0 ? '+' : '−'}$${Math.round(Math.abs(gain)).toLocaleString()} ${gain >= 0 ? 'gain' : 'loss'} (${term})`;
+    }
+    el.textContent = line;
   }
 }
 
@@ -13507,14 +13636,19 @@ function candAddToQueue() {
   } else {
     const T = ((document.getElementById('cand-holding') || {}).value || '').toUpperCase();
     const val = parseFloat((document.getElementById('cand-trim-amt') || {}).value) || 0;
+    const lotId = (document.getElementById('cand-lot') || {}).value || '';
     if (!T) { alert('Pick a holding to trim.'); return; }
     if (val <= 0) { alert('Enter how much to trim.'); return; }
-    if (_candTrimUnit === 'usd') { const lots0 = _candTickerLots(T); let hasPx = false; for (const p of lots0) { if ((parseFloat(p.exitPrice) || 0) > 0) { hasPx = true; break; } } if (!hasPx) { alert('No stored price for this holding — trim by % or shares instead.'); return; } }
-    const r = _candTrimShares(T, val, _candTrimUnit);
+    if (_candTrimUnit === 'usd') { const lots0 = lotId ? _candTickerLots(T).filter(p => String(p.id) === String(lotId)) : _candTickerLots(T); let hasPx = false; for (const p of lots0) { if ((parseFloat(p.exitPrice) || 0) > 0) { hasPx = true; break; } } if (!hasPx) { alert('No stored price for this lot — trim by % or shares instead.'); return; } }
+    const r = _candTrimShares(T, val, _candTrimUnit, lotId);
     if (r.sh <= 0) { alert('Computed trim is zero shares.'); return; }
     const lots = _candTickerLots(T);
-    _candQueue.push({ kind: 'trim', ticker: T, shares: r.sh, totalSh: r.totalSh, proceeds: r.proceeds, sleeve: (lots[0] && lots[0].sleeve) ? lots[0].sleeve : '(unassigned)', theme: (lots[0] && lots[0].theme) ? lots[0].theme : '(unassigned)' });
+    const chosen = lotId ? lots.find(p => String(p.id) === String(lotId)) : null;
+    const src = chosen || lots[0];
+    const tax = _candResolveTrimTax(T, lotId, r.sh);
+    _candQueue.push({ kind: 'trim', ticker: T, shares: r.sh, totalSh: r.totalSh, proceeds: r.proceeds, lotId: lotId || null, lotLabel: chosen ? _candLotLabel(chosen) : '', sleeve: (src && src.sleeve) ? src.sleeve : '(unassigned)', theme: (src && src.theme) ? src.theme : '(unassigned)', tax });
     const amt = document.getElementById('cand-trim-amt'); if (amt) amt.value = '';
+    const lotSel = document.getElementById('cand-lot'); if (lotSel) lotSel.value = '';
   }
   candReadout();
   candRenderQueue();
@@ -13544,7 +13678,7 @@ function candEditQueueItem(i) {
     const ta = document.getElementById('cand-etf-paste'); if (ta) ta.value = (tr.holdings || []).map(hh => `${hh.ticker}\t${hh.weight}%`).join('\n');
     candEtfPastePreview();
   } else if (tr.kind === 'trim') {
-    setVal('cand-holding', tr.ticker); candSetTrimUnit('sh'); setVal('cand-trim-amt', Math.round((tr.shares || 0) * 1e6) / 1e6);
+    setVal('cand-holding', tr.ticker); candPopulateLots(); setVal('cand-lot', tr.lotId || ''); candSetTrimUnit('sh'); setVal('cand-trim-amt', Math.round((tr.shares || 0) * 1e6) / 1e6);
   }
   _candQueue.splice(i, 1);
   if (_candQueue.length) { saveCandQueue(); candRenderQueue(); candCompute(); }
@@ -13565,7 +13699,11 @@ function candClearScenario() {
 function _candTradeLabel(tr) {
   if (tr.kind === 'stock') return `Add $${Math.round(tr.amount).toLocaleString()} ${tr.ticker}${tr.theme ? ' · ' + tr.theme : ''}`;
   if (tr.kind === 'etf') return `Add $${Math.round(tr.amount).toLocaleString()} ${tr.ticker} (ETF · ${tr.holdings.length} holdings · ${Math.round(Math.min(tr.coverage, 100))}% covered)`;
-  if (tr.kind === 'trim') return `Trim ${Math.round(tr.shares * 100) / 100} sh ${tr.ticker}${tr.proceeds ? ' (~$' + Math.round(tr.proceeds).toLocaleString() + ')' : ''}`;
+  if (tr.kind === 'trim') {
+    let lotTag = '';
+    if (tr.lotId && tr.lotLabel) { const seg = tr.lotLabel.split(' · '); lotTag = ` — ${(seg[0] || '').trim()} ${(seg[2] || '').trim()} lot`; }
+    return `Trim ${Math.round(tr.shares * 100) / 100} sh ${tr.ticker}${lotTag}${tr.proceeds ? ' (~$' + Math.round(tr.proceeds).toLocaleString() + ')' : ''}`;
+  }
   return '';
 }
 
@@ -13611,7 +13749,7 @@ function _candSleeveDelta() {
 }
 
 function _candScenarioSignature() {
-  return JSON.stringify(_candQueue.map(tr => tr.kind === 'trim' ? ['t', tr.ticker, Math.round(tr.proceeds)] : tr.kind === 'etf' ? ['e', tr.ticker, Math.round(tr.amount), Math.round(tr.coverage), (tr.holdings || []).length] : ['s', tr.ticker, Math.round(tr.amount), tr.theme || '']));
+  return JSON.stringify(_candQueue.map(tr => tr.kind === 'trim' ? ['t', tr.ticker, Math.round(tr.proceeds), tr.lotId || ''] : tr.kind === 'etf' ? ['e', tr.ticker, Math.round(tr.amount), Math.round(tr.coverage), (tr.holdings || []).length] : ['s', tr.ticker, Math.round(tr.amount), tr.theme || '']));
 }
 
 function candCompute() {
@@ -13657,16 +13795,35 @@ function candCompute() {
     ? `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Sleeve shift <span style="text-transform:none;color:var(--color-text-tertiary)">(direct book — sleeves tag direct positions only)</span></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Sleeve</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Δ</th></tr></thead><tbody>${slBody}</tbody></table></div>`
     : '';
 
+  const tax = _candScenarioTax();
+  let taxTable = '';
+  if (tax) {
+    const lines = [];
+    const netReal = tax.netST + tax.netLT;
+    if (tax.totalTax > 0) lines.push(`<div style="font-size:13px;color:var(--color-text-danger);font-weight:700">≈ ${fmtDollarWhole(tax.totalTax)} estimated tax</div>`);
+    else if (netReal < 0) lines.push(`<div style="font-size:13px;color:var(--color-text-success);font-weight:700">$0 tax — realized loss of ${fmtDollarWhole(Math.abs(netReal))}</div>`);
+    else lines.push(`<div style="font-size:13px;color:var(--color-text-secondary);font-weight:700">≈ $0 estimated tax</div>`);
+    const parts = [];
+    if (tax.taxableST > 0) parts.push(`ST ${fmtDollarWhole(tax.taxableST)} @ ${Math.round(tax.rateST * 100)}%`);
+    if (tax.taxableLT > 0) parts.push(`LT ${fmtDollarWhole(tax.taxableLT)} @ ${Math.round(tax.rateLT * 100)}%`);
+    if (parts.length) lines.push(`<div style="font-size:10px;color:var(--color-text-secondary)">on ${parts.join(' + ')}</div>`);
+    if (tax.stLoss > 0 || tax.ltLoss > 0) lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">Net ST ${tax.netST >= 0 ? '+' : '−'}${fmtDollarWhole(Math.abs(tax.netST))} · net LT ${tax.netLT >= 0 ? '+' : '−'}${fmtDollarWhole(Math.abs(tax.netLT))} — losses offset gains before tax</div>`);
+    if (tax.shelteredProceeds > 0) lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">${fmtDollarWhole(tax.shelteredProceeds)} of proceeds from IRA lots — not taxable</div>`);
+    if (tax.washSale && tax.washSale.length) lines.push(`<div style="font-size:9px;color:#fbbf24">⚠ Possible wash sale: ${esc(tax.washSale.join(', '))} sold at a loss while also being bought in this scenario — the loss may be disallowed.</div>`);
+    if (tax.waitLT && tax.waitLT.length) { const w = tax.waitLT[0]; lines.push(`<div style="font-size:9px;color:#fbbf24">${esc(w.ticker)} is ${w.daysToLT} day${w.daysToLT === 1 ? '' : 's'} from long-term — waiting would save ≈ ${fmtDollarWhole(w.saving)}.</div>`); }
+    taxTable = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Tax impact <span style="text-transform:none;color:var(--color-text-tertiary)">(trims only · single-year estimate · NIIT folded into rates)</span></div>` + lines.join('');
+  }
+
   out.innerHTML =
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${ebBefore.toFixed(1)} → ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>` +
-    clTable + nameTable + slTable +
+    clTable + nameTable + slTable + taxTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
   _candScenario = {
     sig: _candScenarioSignature(),
     trades: _candQueue.map(_candTradeLabel),
-    clRows, ebBefore, ebAfter, nameRows, sleeveRows
+    clRows, ebBefore, ebAfter, nameRows, sleeveRows, tax
   };
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
 }
