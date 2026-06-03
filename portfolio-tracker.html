@@ -1373,11 +1373,12 @@
     </div>
     <div id="add-candidates-tier1-wrap"></div>
     <div id="add-candidates-tier2-wrap" style="margin-top:12px"></div>
+
+    <div id="trim-watch-block" style="margin-top:24px;margin-bottom:18px"></div>
   </div><!-- end tab-analysis -->
 
   <!-- Rebalance & Tax Tab -->
   <div class="tab-panel" id="tab-rebalance">
-    <div id="trim-watch-block" style="margin-bottom:18px"></div>
     <div class="section-heading">Trim Candidates</div>
     <div class="rebal-controls">
       <span class="rebal-control-label">Short-term rate</span>
@@ -5383,7 +5384,7 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
-  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); }
+  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
   if (name === 'rebalance') { safeRender('renderRebalance', renderRebalance); if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'quality') safeRender('renderQualityTab', renderQualityTab);
@@ -18233,7 +18234,6 @@ function renderTrimWatchBlock(rows) {
   };
 
   const bodyRows = flagged.map(({ r, triggers, worst }) => {
-    const anchorId = 'rebal-row-' + esc(r.ticker) + '-' + esc((r.account || '').replace(/[^A-Za-z0-9]/g, ''));
     const stLtTag = r.isIRA ? '<span style="font-size:9px;color:var(--color-text-tertiary);margin-left:6px" title="IRA — no tax cost to trim">IRA</span>'
       : r.allLT ? '<span style="font-size:9px;color:var(--color-text-success);margin-left:6px" title="Long-term — favorable tax rate">LT</span>'
       : r.allST ? '<span style="font-size:9px;color:#fbbf24;margin-left:6px" title="Short-term — higher tax cost to trim">ST · high tax cost</span>'
@@ -18263,7 +18263,6 @@ function renderTrimWatchBlock(rows) {
         </div>
         <div style="flex:1;line-height:1.7">${triggerCells}</div>
         ${valueBlock}
-        <a href="javascript:void(0)" onclick="document.getElementById('${anchorId}')?.scrollIntoView({behavior:'smooth',block:'center'})" style="font-size:10px;color:var(--color-text-info);text-decoration:none;white-space:nowrap" title="Jump to this row in the Trim Candidates table below">get details ↓</a>
       </div>`;
   }).join('');
 
