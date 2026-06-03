@@ -4535,12 +4535,15 @@ function renderTrimWatch() {
     const allLT = tranches.every(d => d.isLT);
     const allST = tranches.every(d => !d.isLT && !d.isIRA);
 
-    let signal, signalClass;
-    const trailing = totalAlpha !== null && totalAlpha < 0;
-    if (isIRA) { signal = 'Rotate'; signalClass = 'signal-monitor'; }
-    else if (totalGl < 0) { signal = 'Harvest'; signalClass = 'signal-harvest'; }
-    else if (allLT) { signal = 'Review — LT'; signalClass = 'signal-trail-lt'; }
-    else { signal = 'Wait for LT'; signalClass = 'signal-trail-st'; }
+    // Capital-weighted % alpha vs S&P — same computation the Holdings & Tax table uses, so the
+    // shared signalFor() verdict matches there. Selection/sort below still ranks by dollar alpha.
+    let vsSpxNum = 0, vsSpxDen = 0;
+    tranches.forEach(d => {
+      if (d.c.vsSpx !== null && d.c.invested > 0) { vsSpxNum += d.c.vsSpx * d.c.invested; vsSpxDen += d.c.invested; }
+    });
+    const vsSpx = vsSpxDen > 0 ? vsSpxNum / vsSpxDen : null;
+
+    const { signal, signalClass } = signalFor({ vsSpx, isIRA, totalGl, allLT, allST });
 
     return { ticker: g.ticker, account: g.account, totalAlpha, totalGl, totalExit, daysHeldMax, signal, signalClass, isIRA, allLT };
   })
@@ -17827,6 +17830,29 @@ function sortRebal(col) {
   renderRebalance();
 }
 
+// ── Unified position verdict — SINGLE SOURCE OF TRUTH ──
+// Both the Holdings & Tax table and the Top Laggards card derive their SIGNAL from this one
+// function, so the two screens can never disagree for the same position. "Trailing"/"beating"
+// is defined on PERCENTAGE alpha vs the S&P (vsSpx) with a ±0.5pp dead-band. The tax/holding
+// tail (Harvest / Review—LT / Wait for LT / Review—Mixed) is unchanged from the original table.
+function signalFor({ vsSpx, isIRA, totalGl, allLT, allST }) {
+  const trailing = vsSpx !== null && vsSpx < -0.5;
+  const beating  = vsSpx !== null && vsSpx > 0.5;
+  if (isIRA) {
+    if (trailing) return { signal: 'Rotate',  signalClass: 'signal-monitor' };
+    if (beating)  return { signal: 'Hold',    signalClass: 'signal-hold' };
+    return { signal: 'Monitor', signalClass: 'signal-monitor' };
+  }
+  if (beating) return { signal: 'Hold', signalClass: 'signal-hold' };
+  if (trailing) {
+    if (totalGl < 0) return { signal: 'Harvest',       signalClass: 'signal-harvest' };
+    if (allLT)       return { signal: 'Review — LT',   signalClass: 'signal-trail-lt' };
+    if (allST)       return { signal: 'Wait for LT',   signalClass: 'signal-trail-st' };
+    return { signal: 'Review — Mixed', signalClass: 'signal-trail-lt' };
+  }
+  return { signal: 'Monitor', signalClass: 'signal-monitor' };
+}
+
 function renderRebalance() {
   const tbody = document.getElementById('rebal-tbody');
   if (!tbody) return;
@@ -17981,25 +18007,8 @@ function renderRebalance() {
       return min === null ? d.daysHeld : Math.max(min, d.daysHeld);
     }, null);
 
-    // Signal — based on aggregated data
-    let signal, signalClass;
-    const trailing = vsSpx !== null && vsSpx < -0.5;
-    const beating = vsSpx !== null && vsSpx > 0.5;
-
-    if (isIRA) {
-      if (trailing) { signal = 'Rotate'; signalClass = 'signal-monitor'; }
-      else if (beating) { signal = 'Hold'; signalClass = 'signal-hold'; }
-      else { signal = 'Monitor'; signalClass = 'signal-monitor'; }
-    } else {
-      if (beating) {
-        signal = 'Hold'; signalClass = 'signal-hold';
-      } else if (trailing) {
-        if (totalGl < 0) { signal = 'Harvest'; signalClass = 'signal-harvest'; }
-        else if (allLT) { signal = 'Review — LT'; signalClass = 'signal-trail-lt'; }
-        else if (allST) { signal = 'Wait for LT'; signalClass = 'signal-trail-st'; }
-        else { signal = 'Review — Mixed'; signalClass = 'signal-trail-lt'; }
-      } else { signal = 'Monitor'; signalClass = 'signal-monitor'; }
-    }
+    // Signal — single source of truth (see signalFor). Same rule drives the Top Laggards card.
+    const { signal, signalClass } = signalFor({ vsSpx, isIRA, totalGl, allLT, allST });
 
     return { ticker: g.ticker, account: g.account, count, isIRA,
       holdingLabel, allLT, allST, daysHeldMin,
