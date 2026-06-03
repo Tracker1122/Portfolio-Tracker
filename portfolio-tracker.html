@@ -17840,6 +17840,14 @@ function setTrimWatchThreshold(key, val) {
   try { localStorage.setItem('trim-watch-thresholds-v1', JSON.stringify(trimWatchThresholds)); } catch (e) {}
   renderRebalance();
 }
+
+// Trim Watch sort mode (session-only). 'tier' = default worst-flag-tier ordering; the rest sort the
+// flagged rows by a single metric, descending, with missing values last. Re-renders via renderRebalance.
+let trimWatchSort = 'tier';
+function setTrimWatchSort(key) {
+  trimWatchSort = key;
+  renderRebalance();
+}
 // Color tier helpers: linear interpolation from yellow at threshold to red at "deeply over."
 // Returns a tier label ('none' | 'yellow' | 'orange' | 'red') so we can both pick a CSS color
 // and surface the tier in the trim-watch row.
@@ -18271,6 +18279,21 @@ function renderTrimWatchBlock(rows) {
       return (b.r.activePortfolioPct || 0) - (a.r.activePortfolioPct || 0);
     });
 
+  // Optional metric sort, layered on top of the default tier ordering. Descending; rows whose metric
+  // is missing (e.g. no theme benchmark) fall to the bottom rather than sorting as zero.
+  const sortMetric = { gain: f => f.r.glPct, alpha: f => f.r.themeAlphaPct, conc: f => f.r.activePortfolioPct }[trimWatchSort];
+  if (sortMetric) {
+    flagged.sort((a, b) => {
+      const va = sortMetric(a), vb = sortMetric(b);
+      const na = (va === null || va === undefined || isNaN(va));
+      const nb = (vb === null || vb === undefined || isNaN(vb));
+      if (na && nb) return 0;
+      if (na) return 1;
+      if (nb) return -1;
+      return vb - va;
+    });
+  }
+
   // Threshold editor — always shown, even when nothing is flagged, so the user can tune to surface.
   const editor = `
     <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:10px;color:var(--color-text-tertiary);margin-bottom:10px">
@@ -18340,6 +18363,20 @@ function renderTrimWatchBlock(rows) {
     counts.yellow > 0 ? `<span style="color:#fbbf24;font-weight:700">${counts.yellow} yellow</span>` : ''
   ].filter(x => x).join(' · ');
 
+  // Sort controls — reorder the flagged rows by a single metric. Active button is highlighted.
+  const sortBtn = (key, label) => {
+    const on = trimWatchSort === key;
+    return `<button onclick="setTrimWatchSort('${key}')" style="font-family:inherit;font-size:9px;padding:2px 8px;border-radius:3px;cursor:pointer;background:${on ? 'var(--color-background-info)' : 'transparent'};color:${on ? 'var(--color-text-info)' : 'var(--color-text-tertiary)'};border:0.5px solid ${on ? 'var(--color-text-info)' : 'var(--color-border-tertiary)'}">${label}</button>`;
+  };
+  const sortControls = `
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px">
+      <span style="text-transform:uppercase;letter-spacing:0.06em">Sort</span>
+      ${sortBtn('tier', 'Flag tier')}
+      ${sortBtn('gain', 'Gain %')}
+      ${sortBtn('alpha', 'Theme \u03b1')}
+      ${sortBtn('conc', '% of active book')}
+    </div>`;
+
   el.innerHTML = `
     <div style="background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
@@ -18348,6 +18385,7 @@ function renderTrimWatchBlock(rows) {
       </div>
       ${editor}
       <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px;line-height:1.5">Any one threshold triggers a flag (OR, not AND). Color reflects the worst tier across triggers; rows in the table below are border-tagged to match. "ST" tag flags short-term lots where trimming carries higher tax cost. <span title="The concentration denominator EXCLUDES passive-core ETFs (VOO/SPY/IVV/VTI) so diversification holdings don't dilute the picture. Stocks and active ETFs (SMH, GRID, GLD, etc.) stay in the denominator — they're picks too. May differ slightly from the % of book column in the table below, which uses the whole-book denominator." style="text-decoration:underline dotted;cursor:help">% of active book</span> = position value ÷ (whole book − passive-core).</div>
+      ${sortControls}
       ${bodyRows}
     </div>`;
 }
