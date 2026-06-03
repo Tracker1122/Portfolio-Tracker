@@ -2646,6 +2646,15 @@ async function savePositions() {
     // Coerce numeric fields to numbers on write (review item 4): new/edited data
     // persists as numbers; legacy string data keeps working via parseFloat paths.
     positions.forEach(coercePositionNumerics);
+    // Input-boundary sanitize: strip angle brackets from identifier/free-text fields so no
+    // pasted/imported/restored value can carry executable markup into a render site.
+    positions.forEach(function(p){
+      if (typeof p.ticker === 'string') p.ticker = sanitizeId(p.ticker);
+      if (typeof p.account === 'string') p.account = sanitizeId(p.account);
+      if (typeof p.theme === 'string') p.theme = sanitizeId(p.theme);
+      if (typeof p.sleeve === 'string') p.sleeve = sanitizeId(p.sleeve);
+      if (typeof p.notes === 'string') p.notes = sanitizeId(p.notes);
+    });
     const slim = positions.map(p => {
       const { fetchState, priceToday, ...rest } = p;
       return rest;
@@ -4428,6 +4437,30 @@ function escq(v) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+// INPUT-BOUNDARY SANITIZER. Short identifier/free-text fields (ticker, account, theme,
+// sleeve, notes, fund) never legitimately contain '<' or '>'. Stripping those at ingestion
+// neutralizes any HTML/script markup before it can reach a render site — closing the
+// paste / CSV-import / restore injection class at the source, regardless of how many output
+// sites exist downstream. Only angle brackets are removed, so quotes/apostrophes in account
+// names or notes are preserved.
+function sanitizeId(s) {
+  return typeof s === 'string' ? s.replace(/[<>]/g, '') : s;
+}
+// Clean a pasted/restored index-look-through table (fund keys + ticker keys are user/paste data).
+function sanitizeLookthrough(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const clean = {};
+  Object.keys(obj).forEach(function(fund){
+    const t = obj[fund] || {};
+    const cw = {};
+    if (t && t.weights && typeof t.weights === 'object') {
+      Object.keys(t.weights).forEach(function(tk){ cw[sanitizeId(tk)] = t.weights[tk]; });
+    }
+    clean[sanitizeId(fund)] = Object.assign({}, t, { weights: cw });
+  });
+  return clean;
 }
 
 // ─────────────────────────────────────────────
@@ -14775,7 +14808,7 @@ let indexLookthrough = null;
 function loadIndexLookthrough() {
   try {
     const raw = localStorage.getItem('portfolio-index-lookthrough-v1');
-    if (raw) { indexLookthrough = JSON.parse(raw); return; }
+    if (raw) { indexLookthrough = sanitizeLookthrough(JSON.parse(raw)); return; }
   } catch (e) {}
   // deep-copy the seed so edits don't mutate the constant
   indexLookthrough = JSON.parse(JSON.stringify(INDEX_LOOKTHROUGH_SEED));
@@ -20826,7 +20859,7 @@ function csvGoToPreview() {
     tr.className = r.cls;
     tr.innerHTML = `
       <td>${r.action}</td>
-      <td>${r.ticker}</td>
+      <td>${esc(r.ticker)}</td>
       <td>${r.date}</td>
       <td style="text-align:right">${r.shares}</td>
       <td style="text-align:right">${r.price}</td>
@@ -21419,7 +21452,7 @@ async function backupNowManual() {
 }
 
 async function createNamedSnapshot() {
-  const label = prompt('Label for this snapshot (e.g. "Pre-rebalance May 21"):');
+  const label = sanitizeId(prompt('Label for this snapshot (e.g. "Pre-rebalance May 21"):'));
   if (!label || !label.trim()) return;
   DriveState.syncInFlight = true;
   driveSetStatus('saving');
