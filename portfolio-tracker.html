@@ -1409,7 +1409,7 @@
             <th onclick="sortRebal('dollarAlpha')" class="sortable r">Dollar Alpha <span id="sort-dollarAlpha"></span></th>
             <th onclick="sortRebal('themeAlpha')" class="sortable r" title="Theme-relative alpha — your dollar gain vs theme benchmark over the same period. More honest comparison for sleeves with assigned theme benchmarks.">Theme α <span id="sort-themeAlpha"></span></th>
             <th onclick="sortRebal('gl')" class="sortable r">Unreal. G/L <span id="sort-gl"></span></th>
-            <th>Signal</th>
+            <th>Term</th>
           </tr>
         </thead>
         <tbody id="rebal-tbody"></tbody>
@@ -18024,9 +18024,27 @@ function renderRebalance() {
       return min === null ? d.daysHeld : Math.max(min, d.daysHeld);
     }, null);
 
-    // Signal — single source of truth (see signalFor). Used by this Holdings & Tax table.
-    // (The Top Laggards card no longer shows a signal; it shows ST/LT tax term instead.)
-    const { signal, signalClass } = signalFor({ vsSpx, isIRA, totalGl, allLT, allST });
+    // Tax term (replaces the old SIGNAL column). Per-lot tax fact: each lot is short-term
+    // (held <=365d) or long-term (>365d). For a grouped row, if any taxable lot is still ST we
+    // show ST plus the days until the SOONEST such lot crosses to long-term; if every taxable lot
+    // is already LT we show LT. IRA holdings are tax-sheltered -> "Sheltered". daysToLT = 366 -
+    // daysHeld, matching the Top Laggards card and this tab's day-count convention.
+    const datedTranches = tranches.filter(d => d.daysHeld !== null);
+    let term, termColor, termTitle = '';
+    if (isIRA) {
+      term = 'Sheltered'; termColor = 'var(--color-text-tertiary)';
+    } else if (datedTranches.length === 0) {
+      term = '\u2014'; termColor = 'var(--color-text-tertiary)';
+    } else {
+      const stTranches = datedTranches.filter(d => !d.isLT);
+      if (stTranches.length === 0) {
+        term = 'LT'; termColor = 'var(--color-text-success)';
+      } else {
+        const daysToLT = Math.min.apply(null, stTranches.map(d => 366 - d.daysHeld));
+        term = 'ST \u00b7 ' + daysToLT + 'd'; termColor = 'var(--color-text-info)';
+        termTitle = daysToLT + ' days until long-term';
+      }
+    }
 
     return { ticker: g.ticker, account: g.account, count, isIRA,
       holdingLabel, allLT, allST, daysHeldMin,
@@ -18037,7 +18055,7 @@ function renderRebalance() {
       glPct: totalInvested > 0 ? (totalGl / totalInvested) * 100 : null,
       themeAlphaPct: (totalThemeAlpha !== null && totalInvested > 0) ? (totalThemeAlpha / totalInvested) * 100 : null,
       industryPct, themeApprox, remainingValue, remainingPct, strategyPct, industryName, strategyName,
-      signal, signalClass };
+      term, termColor, termTitle };
   });
 
   // Sort
@@ -18156,7 +18174,6 @@ function renderRebalance() {
         <span style="font-weight:700;font-size:13px">${esc(r.ticker)}</span>
         ${trancheNote}
         <br><span style="color:var(--color-text-tertiary);font-size:10px">${esc(r.account)}</span>
-        <span style="font-size:9px;color:${holdColor};margin-left:6px">${r.holdingLabel}</span>
       </td>
       <td class="r" style="font-weight:600;color:var(--color-text-secondary)">${fmtDollar(r.totalExit)}</td>
       <td class="r" style="font-weight:600;color:${heldColor}">${heldLabel}</td>
@@ -18174,7 +18191,7 @@ function renderRebalance() {
           return r.totalThemeAlpha > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
         })()}">${r.totalThemeAlpha !== null ? fmtDollar(r.totalThemeAlpha) : '<span style="font-size:9px;font-style:italic">no bench</span>'}</td>
       <td class="r" style="font-weight:600;background:${glBg};color:${glColor}">${fmtDollar(r.totalGl)}</td>
-      <td><span class="signal-badge ${r.signalClass}">${r.signal}</span></td>
+      <td><span title="${esc(r.termTitle)}" style="color:${r.termColor};font-weight:600;white-space:nowrap">${r.term}</span></td>
     </tr>`;
   }).join('');
 
