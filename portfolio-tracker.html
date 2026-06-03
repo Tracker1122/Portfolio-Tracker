@@ -1005,11 +1005,16 @@
 </div>
 
 <!-- Polygon API Key Panel -->
-<div id="polygon-key-panel" style="display:none;background:var(--color-background-secondary);border-bottom:1px solid var(--color-border-tertiary);padding:8px 20px;align-items:center;gap:10px">
+<div id="polygon-key-panel" style="display:none;background:var(--color-background-secondary);border-bottom:1px solid var(--color-border-tertiary);padding:8px 20px;align-items:center;gap:10px;flex-wrap:wrap;row-gap:8px">
   <span style="font-size:10px;color:var(--color-text-tertiary)">Polygon.io API Key</span>
   <input id="polygon-key-input" class="modal-input" type="password" placeholder="Paste your Polygon API key here" style="width:280px;font-size:11px;padding:4px 8px" oninput="savePolygonKey(this.value)" onchange="savePolygonKey(this.value)" onblur="savePolygonKey(this.value)">
   <a href="https://polygon.io/dashboard/api-keys" target="_blank" rel="noopener" style="font-size:10px;color:var(--color-text-info)">Get key at polygon.io ↗</a>
   <span style="font-size:10px;color:var(--color-text-tertiary)">Free account · previous day close</span>
+  <span style="flex-basis:100%;height:0"></span>
+  <span style="font-size:10px;color:var(--color-text-tertiary)">Finnhub API Key</span>
+  <input id="finnhub-key-input" class="modal-input" type="password" placeholder="Paste your Finnhub API key here" style="width:280px;font-size:11px;padding:4px 8px" oninput="saveFinnhubKey(this.value)" onchange="saveFinnhubKey(this.value)" onblur="saveFinnhubKey(this.value)">
+  <a href="https://finnhub.io/register" target="_blank" rel="noopener" style="font-size:10px;color:var(--color-text-info)">Get free key at finnhub.io ↗</a>
+  <span style="font-size:10px;color:var(--color-text-tertiary)">Free account · real-time US quotes</span>
 </div>
 
 <!-- Update Instructions -->
@@ -2501,6 +2506,7 @@ let nextId = 1;
 let spxLive = null;
 let spxLiveDate = null;
 let polygonKey = '';
+let finnhubKey = '';
 // Cache of company info (sector / description / market cap) keyed by ticker, fetched on demand from
 // Polygon's ticker-details endpoint and persisted so the discovery panel never re-fetches on re-render.
 // Shape per ticker: { name, sector, description, marketCap, homepage, fetchedDate, userNote }
@@ -3055,25 +3061,33 @@ function _livePxTickerLabel(ticker, suffixHtml) {
 
 async function _livePxFetch(ticker) {
   const T = (ticker || '').toUpperCase();
-  // 1) Yahoo live price (regularMarketPrice) — same source the per-row fetch uses.
-  try {
-    const url = PROXY_BASES[0] + '/v8/finance/chart/' + encodeURIComponent(T) + '?interval=1d&range=1d';
-    const data = await yahooFetch(url);
-    const meta = data.chart.result[0].meta;
-    const px = meta.regularMarketPrice;
-    const prevClose = meta.previousClose || meta.chartPreviousClose || null;
-    if (px > 0) return { price: px, source: 'live', marketTime: meta.regularMarketTime ? meta.regularMarketTime * 1000 : null, prevClose };
-  } catch (e) { /* fall through to Polygon */ }
-  // 2) Polygon previous-close fallback (only if a key is set).
+  if (typeof finnhubKey !== 'undefined' && !finnhubKey && typeof loadFinnhubKey === 'function') loadFinnhubKey();
+  if (typeof polygonKey !== 'undefined' && !polygonKey && typeof loadPolygonKey === 'function') loadPolygonKey();
+  // 1) Finnhub real-time quote (if a key is set). The token is a query param per Finnhub's API; it is
+  //    URL-encoded here and is never rendered, logged, or placed in any error message.
+  if (typeof finnhubKey !== 'undefined' && finnhubKey) {
+    try {
+      const url = 'https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(T) + '&token=' + encodeURIComponent(finnhubKey);
+      const r = await fetch(url);
+      if (r.ok) {
+        const d = await r.json();
+        const px = (d && typeof d.c === 'number') ? d.c : 0;
+        if (px > 0) return { price: px, source: 'live', marketTime: (typeof d.t === 'number' && d.t > 0) ? d.t * 1000 : Date.now(), prevClose: (typeof d.pc === 'number' && d.pc > 0) ? d.pc : null };
+      }
+    } catch (e) { /* fall through to Polygon */ }
+  }
+  // 2) Polygon previous-close fallback (if a key is set).
   if (typeof polygonKey !== 'undefined' && polygonKey) {
     try {
       const clean = T.replace('-', '.');
-      const r = await fetch('https://api.polygon.io/v2/aggs/ticker/' + clean + '/prev?adjusted=true&apiKey=' + polygonKey);
+      const r = await fetch('https://api.polygon.io/v2/aggs/ticker/' + clean + '/prev?adjusted=true&apiKey=' + encodeURIComponent(polygonKey));
       const d = await r.json();
       if (d.results && d.results.length) return { price: d.results[0].c, source: 'prev', marketTime: null, prevClose: null };
     } catch (e) { /* fall through to error */ }
   }
-  throw new Error('Couldn\'t reach Yahoo' + ((typeof polygonKey !== 'undefined' && polygonKey) ? ', and the Polygon fallback failed' : ' (no Polygon key set for fallback)') + '.');
+  throw new Error((typeof finnhubKey !== 'undefined' && finnhubKey)
+    ? 'Finnhub didn\'t return a quote and the Polygon fallback failed.'
+    : 'No live source set — add a free Finnhub key for real-time quotes (Polygon gives previous close as a fallback).');
 }
 
 function _livePxLots(ticker) {
@@ -3131,7 +3145,7 @@ function openLivePricePopout(ticker) {
     const mainRes = results[0], benchRes = results[1];
     if (!mainRes.ok) {
       const body = document.getElementById('live-px-body');
-      if (body) body.innerHTML = '<div style="color:var(--color-text-danger);line-height:1.5">Couldn\'t fetch a live price.<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">' + esc((mainRes.e && mainRes.e.message) || '') + ' Yahoo can intermittently block requests — try again in a moment.</div></div>' +
+      if (body) body.innerHTML = '<div style="color:var(--color-text-danger);line-height:1.5">Couldn\'t fetch a live price.<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">' + esc((mainRes.e && mainRes.e.message) || '') + ' Check your Finnhub/Polygon key, or try again in a moment.</div></div>' +
         '<div style="margin-top:12px"><button onclick="openLivePricePopout(\'' + escq(T) + '\')" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);padding:5px 12px;font-size:11px;border-radius:var(--border-radius-sm);cursor:pointer">Retry</button></div>';
       return;
     }
@@ -3159,8 +3173,8 @@ function _livePxRenderBody(ticker, ctx) {
   const benchT = ctx.benchT, isSelfBench = ctx.isSelfBench, benchRes = ctx.benchRes, benchErr = ctx.benchErr;
   const live = res.price;
   const srcLabel = res.source === 'live'
-    ? 'Yahoo live' + (res.marketTime ? ' · as of ' + new Date(res.marketTime).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '')
-    : 'Polygon previous close (Yahoo unavailable)';
+    ? 'Finnhub real-time' + (res.marketTime ? ' · as of ' + new Date(res.marketTime).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '')
+    : 'Polygon previous close (no live quote)';
   const dCol = (v) => v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
 
   let rows = '';
@@ -3192,7 +3206,8 @@ function _livePxRenderBody(ticker, ctx) {
   } else if (benchT) {
     rows += '<div style="border-top:1px solid var(--color-border-tertiary);margin:8px 0;padding-top:8px"></div>';
     if (benchRes) {
-      rows += _livePxStat('Benchmark · ' + benchT + ' (live)', '$' + benchRes.price.toFixed(2), 'var(--color-text-primary)');
+      const bSrc = benchRes.source === 'live' ? 'live' : 'prev close';
+      rows += _livePxStat('Benchmark · ' + benchT + ' (' + bSrc + ')', '$' + benchRes.price.toFixed(2), 'var(--color-text-primary)');
       const mPrev = (res.source === 'live' && res.prevClose > 0) ? res.prevClose : null;
       const bPrev = (benchRes.source === 'live' && benchRes.prevClose > 0) ? benchRes.prevClose : null;
       if (mPrev && bPrev) {
@@ -11712,7 +11727,12 @@ function togglePolygonKey() {
   const panel = document.getElementById('polygon-key-panel');
   const isHidden = panel.style.display === 'none' || panel.style.display === '';
   panel.style.display = isHidden ? 'flex' : 'none';
-  if (isHidden && polygonKey) document.getElementById('polygon-key-input').value = polygonKey;
+  if (isHidden) {
+    if (!polygonKey) loadPolygonKey();
+    if (!finnhubKey) loadFinnhubKey();
+    if (polygonKey) document.getElementById('polygon-key-input').value = polygonKey;
+    const fi = document.getElementById('finnhub-key-input'); if (fi && finnhubKey) fi.value = finnhubKey;
+  }
 }
 
 function savePolygonKey(val) {
@@ -11722,6 +11742,17 @@ function savePolygonKey(val) {
 
 function loadPolygonKey() {
   try { const k = localStorage.getItem('polygon_api_key'); if (k) polygonKey = k; } catch(e) {}
+}
+
+// Finnhub key — same storage path as Polygon: localStorage only, never in app state, password-masked
+// input, URL-encoded at fetch time, never rendered or logged.
+function saveFinnhubKey(val) {
+  finnhubKey = (val || '').trim();
+  try { localStorage.setItem('finnhub_api_key', finnhubKey); } catch(e) {}
+}
+
+function loadFinnhubKey() {
+  try { const k = localStorage.getItem('finnhub_api_key'); if (k) finnhubKey = k; } catch(e) {}
 }
 
 // ─────────────────────────────────────────────
@@ -21829,11 +21860,12 @@ function driveBuildBackupPayload() {
     trackRecordMatureOnly, industryAlphaMatureOnly,
     taxProfile,
     // Connection + settings so a restore rebuilds SETUP too (not just data). Captured as raw
-    // localStorage strings. Includes the Polygon API key by choice — it lives in your own Drive
-    // under the narrow drive.file scope, alongside data that's more sensitive than the key itself.
-    // To exclude the key from backups, remove 'polygon_api_key' from this list.
+    // localStorage strings. Includes the Polygon + Finnhub API keys by choice — they live in your
+    // own Drive under the narrow drive.file scope, alongside data more sensitive than the keys, and
+    // are deliberately NOT included in the downloadable Export file. To exclude a key from backups,
+    // remove its entry ('polygon_api_key' / 'finnhub_api_key') from this list.
     _settings: (function(){
-      var keys = ['polygon_api_key','av_worker_url','ai_worker_url',
+      var keys = ['polygon_api_key','finnhub_api_key','av_worker_url','ai_worker_url',
         'portfolio-index-lookthrough-v1','portfolio-cluster-overrides-v1',
         'portfolio-sector-map-v1','portfolio-sector-ai-mode',
         'trim-watch-thresholds-v1','portfolio-csv-mappings',
