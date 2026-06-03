@@ -351,7 +351,7 @@
   .drive-status.disconnected .dot { background: var(--color-text-tertiary); }
   @keyframes drive-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-  .drive-modal { max-width: 560px; max-height: 90vh; overflow-y: auto; overscroll-behavior: contain; }
+  .drive-modal { max-width: 560px; max-height: calc(100vh - 40px); overflow-y: auto; overscroll-behavior: contain; }
   .drive-section {
     border-top: 1px solid var(--color-border-tertiary);
     padding-top: 16px; margin-top: 16px;
@@ -371,7 +371,7 @@
   .drive-row .value.danger { color: var(--color-text-danger); }
   .drive-row .value.info { color: var(--color-text-info); }
   .revisions-list {
-    max-height: 280px; overflow-y: auto; overscroll-behavior: contain;
+    max-height: 280px; overflow-y: auto;
     border: 1px solid var(--color-border-tertiary);
     border-radius: var(--border-radius-md);
     background: var(--color-background-tertiary);
