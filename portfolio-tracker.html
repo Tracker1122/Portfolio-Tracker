@@ -1000,7 +1000,7 @@
     <span id="refresh-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
     <span id="benchmark-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
     <span id="backfill-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
-    <span id="polygon-key-toggle" style="font-size:10px;color:var(--color-text-tertiary);cursor:pointer;text-decoration:underline" onclick="togglePolygonKey()">API Key</span>
+    <span id="polygon-key-toggle" style="font-size:10px;color:var(--color-text-secondary);cursor:pointer;text-decoration:underline" onclick="togglePolygonKey()">🔑 API Keys</span>
   </div>
 </div>
 
@@ -1375,6 +1375,40 @@
     <div class="summary-grid" id="book-isolate-summary" style="margin-bottom:8px"></div>
     <div id="book-isolate-delta" style="margin-bottom:8px"></div>
     <div id="book-exclude-panel" style="margin:6px 0 20px"></div>
+
+    <div class="section-heading" style="margin-top:24px">Test a Candidate — Sized What-If</div>
+    <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
+      Model a sized <b>add</b> of any ticker (even one Discovery never surfaced), or a partial <b>trim</b> of a holding, and see how it moves your theme &amp; sleeve weights — then optionally get the AI's read on the shift. Uses the same engine as the trade simulator; nothing here changes your data.
+    </div>
+    <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:12px 14px;margin-bottom:20px">
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <span id="cand-mode-add" onclick="candSetMode('add')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600">Add</span>
+        <span id="cand-mode-trim" onclick="candSetMode('trim')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)">Trim</span>
+      </div>
+      <div id="cand-add-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <input id="cand-ticker" class="modal-input" type="text" placeholder="Ticker" style="width:90px;font-size:11px;padding:4px 8px;text-transform:uppercase" oninput="candReadout()">
+        <span style="font-size:11px;color:var(--color-text-tertiary)">$</span>
+        <input id="cand-amount" class="modal-input" type="number" placeholder="Amount" style="width:110px;font-size:11px;padding:4px 8px" oninput="candReadout()">
+        <select id="cand-theme" class="modal-input" style="font-size:11px;padding:4px 8px"><option value="">— Theme (optional) —</option></select>
+        <select id="cand-sleeve" class="modal-input" style="font-size:11px;padding:4px 8px"><option value="">— Sleeve (optional) —</option></select>
+      </div>
+      <div id="cand-trim-row" style="display:none;flex-wrap:wrap;gap:8px;align-items:center">
+        <select id="cand-holding" class="modal-input" style="font-size:11px;padding:4px 8px;max-width:280px" onchange="candReadout()"><option value="">— Pick a holding —</option></select>
+        <input id="cand-trim-amt" class="modal-input" type="number" placeholder="Amount" style="width:100px;font-size:11px;padding:4px 8px" oninput="candReadout()">
+        <span style="display:inline-flex;gap:4px">
+          <span id="cand-unit-pct" onclick="candSetTrimUnit('pct')" style="font-size:10px;cursor:pointer;padding:3px 9px;border-radius:12px;background:var(--color-text-info);color:#000;font-weight:600">%</span>
+          <span id="cand-unit-sh" onclick="candSetTrimUnit('sh')" style="font-size:10px;cursor:pointer;padding:3px 9px;border-radius:12px;color:var(--color-text-tertiary);border:1px solid var(--color-border-tertiary)">shares</span>
+          <span id="cand-unit-usd" onclick="candSetTrimUnit('usd')" style="font-size:10px;cursor:pointer;padding:3px 9px;border-radius:12px;color:var(--color-text-tertiary);border:1px solid var(--color-border-tertiary)">$</span>
+        </span>
+      </div>
+      <div id="cand-readout" style="font-size:10px;color:var(--color-text-tertiary);margin-top:6px;min-height:13px"></div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-sm btn-primary" onclick="candCompute()" style="font-size:11px">Compute impact</button>
+        <button id="cand-ai-btn" class="btn btn-sm" onclick="candAnalyzeAI()" style="font-size:11px;display:none">✦ Analyze with AI</button>
+      </div>
+      <div id="cand-output" style="margin-top:12px"></div>
+      <div id="cand-ai-output" style="margin-top:10px"></div>
+    </div>
 
     <div class="section-heading" style="margin-top:24px">Add Candidates</div>
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
@@ -5657,7 +5691,7 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
-  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
+  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); safeRender('renderCandidatePanel', renderCandidatePanel); }
   if (name === 'rebalance') { safeRender('renderRebalance', renderRebalance); if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'quality') safeRender('renderQualityTab', renderQualityTab);
@@ -13280,6 +13314,294 @@ function simulateQueue(trades) {
 // Live preview of a temp-ETF paste (chips + coverage + skipped lines) — mirrors
 // renderIndexPastePreview in Distribution, using the SAME hardened parseHoldings so raw
 // stockanalysis rows (row #, name, shares, CUSIPs, foreign listings) are handled identically.
+// ─────────────────────────────────────────────
+// Test a Candidate — sized what-if on the Book Performance tab.
+// Drives the SAME simulateQueue engine (sized buys + partial sells) and renders before→after theme &
+// sleeve weights; an optional AI pass narrates the structural shift under the book-review guardrails
+// (describes the shift, poses questions, never recommends). New Position Evaluation mapping reuses
+// this and is a planned fast-follow.
+// ─────────────────────────────────────────────
+let _candMode = 'add', _candTrimUnit = 'pct', _candLastSim = null, _candLastHypo = null, _candLastClusters = null;
+
+function renderCandidatePanel() {
+  const th = document.getElementById('cand-theme');
+  if (th && th.options.length <= 1) {
+    Object.entries(THEMES).filter(([_, c]) => c.dropdown).forEach(([name]) => { const o = document.createElement('option'); o.value = name; o.textContent = name; th.appendChild(o); });
+  }
+  const sl = document.getElementById('cand-sleeve');
+  if (sl && sl.options.length <= 1) {
+    SLEEVES.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; sl.appendChild(o); });
+  }
+  const hold = document.getElementById('cand-holding');
+  if (hold) {
+    const byTicker = {};
+    positions.filter(p => !p.closed && p.ticker).forEach(p => {
+      const t = p.ticker.toUpperCase();
+      if (!byTicker[t]) byTicker[t] = { shares: 0, theme: p.theme || '', value: 0 };
+      byTicker[t].shares += parseFloat(p.shares) || 0;
+      byTicker[t].value += calcPos(p).exitValue || 0;
+    });
+    const cur = hold.value;
+    hold.innerHTML = '<option value="">— Pick a holding —</option>' +
+      Object.keys(byTicker).sort().map(t => `<option value="${esc(t)}">${esc(t)} · ${Math.round(byTicker[t].shares * 100) / 100} sh · ${fmtDollarWhole(byTicker[t].value)}${byTicker[t].theme ? ' · ' + esc(byTicker[t].theme) : ''}</option>`).join('');
+    if (cur) hold.value = cur;
+  }
+}
+
+function candSetMode(m) {
+  _candMode = m;
+  renderCandidatePanel();
+  const addRow = document.getElementById('cand-add-row'), trimRow = document.getElementById('cand-trim-row');
+  if (addRow) addRow.style.display = (m === 'add') ? 'flex' : 'none';
+  if (trimRow) trimRow.style.display = (m === 'trim') ? 'flex' : 'none';
+  const on = 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600';
+  const off = 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)';
+  const a = document.getElementById('cand-mode-add'), t = document.getElementById('cand-mode-trim');
+  if (a) a.style.cssText = (m === 'add') ? on : off;
+  if (t) t.style.cssText = (m === 'trim') ? on : off;
+  candReadout();
+}
+
+function candSetTrimUnit(u) {
+  _candTrimUnit = u;
+  [['pct', 'cand-unit-pct'], ['sh', 'cand-unit-sh'], ['usd', 'cand-unit-usd']].forEach(([k, id]) => {
+    const el = document.getElementById(id); if (!el) return;
+    el.style.cssText = (u === k)
+      ? 'font-size:10px;cursor:pointer;padding:3px 9px;border-radius:12px;background:var(--color-text-info);color:#000;font-weight:600'
+      : 'font-size:10px;cursor:pointer;padding:3px 9px;border-radius:12px;color:var(--color-text-tertiary);border:1px solid var(--color-border-tertiary)';
+  });
+  candReadout();
+}
+
+function _candDirectBook() {
+  return positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+}
+function _candTickerLots(T) {
+  return positions.filter(p => !p.closed && p.ticker && p.ticker.toUpperCase() === T);
+}
+function _candTrimShares(T, val, unit) {
+  const lots = _candTickerLots(T);
+  const totalSh = lots.reduce((s, p) => s + (parseFloat(p.shares) || 0), 0);
+  let px = 0; for (const p of lots) { const v = parseFloat(p.exitPrice) || 0; if (v > 0) { px = v; break; } }
+  let sh = 0;
+  if (unit === 'pct') sh = totalSh * (val / 100);
+  else if (unit === 'sh') sh = val;
+  else if (unit === 'usd') sh = px > 0 ? val / px : 0;
+  sh = Math.min(Math.max(sh, 0), totalSh);
+  return { sh, totalSh, px, proceeds: px > 0 ? sh * px : 0 };
+}
+
+function candReadout() {
+  const el = document.getElementById('cand-readout'); if (!el) return;
+  if (_candMode === 'add') {
+    const amt = parseFloat((document.getElementById('cand-amount') || {}).value) || 0;
+    const db = _candDirectBook();
+    el.textContent = (amt > 0 && db > 0) ? `≈ ${(amt / db * 100).toFixed(1)}% of your direct book ($${Math.round(db).toLocaleString()})` : '';
+  } else {
+    const T = ((document.getElementById('cand-holding') || {}).value || '').toUpperCase();
+    const val = parseFloat((document.getElementById('cand-trim-amt') || {}).value) || 0;
+    if (!T || val <= 0) { el.textContent = ''; return; }
+    const r = _candTrimShares(T, val, _candTrimUnit);
+    el.textContent = r.sh > 0 ? `≈ trim ${Math.round(r.sh * 100) / 100} sh (${(r.totalSh > 0 ? r.sh / r.totalSh * 100 : 0).toFixed(0)}% of ${Math.round(r.totalSh * 100) / 100} sh)${r.proceeds ? ' · ~$' + Math.round(r.proceeds).toLocaleString() : ''}` : '';
+  }
+}
+
+function _candBuildTrades() {
+  if (_candMode === 'add') {
+    const ticker = ((document.getElementById('cand-ticker') || {}).value || '').trim().toUpperCase();
+    const amount = parseFloat((document.getElementById('cand-amount') || {}).value) || 0;
+    const theme = (document.getElementById('cand-theme') || {}).value || '';
+    const sleeve = (document.getElementById('cand-sleeve') || {}).value || '';
+    if (!ticker) return { error: 'Enter a ticker to add.' };
+    if (amount <= 0) return { error: 'Enter a dollar amount to add.' };
+    const db = _candDirectBook();
+    return {
+      trades: [{ action: 'buy', kind: 'stock', ticker, amount, theme, sleeve }],
+      hypo: { mode: 'add', ticker, amount, pctOfBook: db > 0 ? amount / db * 100 : 0, theme: theme || '(unassigned)', sleeve: sleeve || '(unassigned)' }
+    };
+  } else {
+    const T = ((document.getElementById('cand-holding') || {}).value || '').toUpperCase();
+    const val = parseFloat((document.getElementById('cand-trim-amt') || {}).value) || 0;
+    if (!T) return { error: 'Pick a holding to trim.' };
+    if (val <= 0) return { error: 'Enter how much to trim.' };
+    if (_candTrimUnit === 'usd') { const lots0 = _candTickerLots(T); let hasPx = false; for (const p of lots0) { if ((parseFloat(p.exitPrice) || 0) > 0) { hasPx = true; break; } } if (!hasPx) return { error: 'No stored price for this holding — trim by % or shares instead.' }; }
+    const r = _candTrimShares(T, val, _candTrimUnit);
+    if (r.sh <= 0) return { error: 'Computed trim is zero shares.' };
+    const lots = _candTickerLots(T);
+    // Distribute the trim across the ticker's open lots proportionally to each lot's shares.
+    const trades = lots.map(p => {
+      const lotSh = parseFloat(p.shares) || 0;
+      const portion = r.totalSh > 0 ? r.sh * (lotSh / r.totalSh) : 0;
+      return portion > 0 ? { action: 'sell', lotId: p.id, shares: portion } : null;
+    }).filter(Boolean);
+    const theme = (lots[0] && lots[0].theme) ? lots[0].theme : '(unassigned)';
+    const sleeve = (lots[0] && lots[0].sleeve) ? lots[0].sleeve : '(unassigned)';
+    return {
+      trades,
+      hypo: { mode: 'trim', ticker: T, shares: r.sh, pctOfPos: r.totalSh > 0 ? r.sh / r.totalSh * 100 : 0, proceeds: r.proceeds, theme, sleeve }
+    };
+  }
+}
+
+function candCompute() {
+  const out = document.getElementById('cand-output'); if (!out) return;
+  renderCandidatePanel();
+  const aiBtn = document.getElementById('cand-ai-btn');
+  const built = _candBuildTrades();
+  if (built.error) { out.innerHTML = `<div style="font-size:11px;color:var(--color-text-danger)">${esc(built.error)}</div>`; if (aiBtn) aiBtn.style.display = 'none'; return; }
+  let sim;
+  try { sim = simulateQueue(built.trades); }
+  catch (e) { out.innerHTML = `<div style="font-size:11px;color:var(--color-text-danger)">Couldn't compute: ${esc(e.message || 'error')}</div>`; if (aiBtn) aiBtn.style.display = 'none'; return; }
+  const h = built.hypo;
+  _candLastSim = sim; _candLastHypo = h; _candLastClusters = null;
+
+  const head = h.mode === 'add'
+    ? `Adding <strong>$${Math.round(h.amount).toLocaleString()}</strong> of <strong>${esc(h.ticker)}</strong> <span style="color:var(--color-text-tertiary)">(≈${h.pctOfBook.toFixed(1)}% of direct book, tagged ${esc(h.theme)} / ${esc(h.sleeve)})</span>`
+    : `Trimming <strong>${Math.round(h.shares * 100) / 100} sh</strong> of <strong>${esc(h.ticker)}</strong> <span style="color:var(--color-text-tertiary)">(${h.pctOfPos.toFixed(0)}% of the position${h.proceeds ? ', ~$' + Math.round(h.proceeds).toLocaleString() : ''})</span>`;
+
+  // ---- TRUE-EXPOSURE cluster delta (direct + look-through) — the holistic view ----
+  const deltaDirect = (h.mode === 'add') ? h.amount : -(h.proceeds || 0);
+  let teHtml = '';
+  if (deltaDirect === 0) {
+    teHtml = `<div style="font-size:10px;color:#fbbf24;margin-top:8px;line-height:1.5">No stored price for ${esc(h.ticker)}, so the dollar value of this trim is unknown — true-exposure impact can't be computed. Trim by $ (which needs a price) or refresh the price, or read the direct-book sleeve shift below.</div>`;
+  } else {
+    try {
+      const clHypo = { ticker: h.ticker, deltaDirect, themeTag: (h.mode === 'add' && h.theme && h.theme !== '(unassigned)') ? h.theme : null };
+      const before = computeThemeClusters();
+      const after = computeThemeClusters(clHypo);
+      const teRows = (computeTrueExposure() || {}).rows || [];
+      const ck = qrCanonical(h.ticker).key;
+      const teRow = teRows.find(r => r.key === ck);
+      const teBefore = teRow ? teRow.total : 0, embedded = teRow ? (teRow.viaFunds || 0) : 0;
+      const teAfter = Math.max(0, teBefore + deltaDirect);
+      const bMap = {}, aMap = {};
+      before.clusters.forEach(c => bMap[c.label] = c.pct); if (before.base && before.base.total > 0) bMap['Diversified base'] = before.base.pct;
+      after.clusters.forEach(c => aMap[c.label] = c.pct); if (after.base && after.base.total > 0) aMap['Diversified base'] = after.base.pct;
+      const labels = [...new Set([...Object.keys(bMap), ...Object.keys(aMap)])];
+      const clRows = labels.map(l => ({ label: l, bp: bMap[l] || 0, ap: aMap[l] || 0, d: (aMap[l] || 0) - (bMap[l] || 0) }))
+        .filter(r => Math.abs(r.d) >= 0.05).sort((x, y) => Math.abs(y.d) - Math.abs(x.d)).slice(0, 7);
+      _candLastClusters = { rows: clRows, ebBefore: before.effectiveBets, ebAfter: after.effectiveBets, teBefore, teAfter, embedded };
+
+      const candLine = `<div style="font-size:11px;color:var(--color-text-primary);margin:2px 0">${esc(h.ticker)} true exposure: <strong>${fmtDollarWhole(teBefore)} → ${fmtDollarWhole(teAfter)}</strong>${embedded > 1 ? ` <span style="color:var(--color-text-tertiary)">(already ${fmtDollarWhole(embedded)} via funds you hold — so this ${h.mode === 'add' ? 'deepens' : 'reduces'} an exposure bigger than the direct line shows)</span>` : ''}</div>`;
+      const ebCol = after.effectiveBets < before.effectiveBets ? 'var(--color-text-danger)' : after.effectiveBets > before.effectiveBets ? 'var(--color-text-success)' : 'var(--color-text-secondary)';
+      const ebLine = `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${before.effectiveBets.toFixed(1)} → ${after.effectiveBets.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>`;
+      const body = clRows.map(r => {
+        const col = r.d > 0 ? 'var(--color-text-success)' : r.d < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
+        return `<tr><td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.label)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${r.bp.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${r.ap.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:${col}">${r.d >= 0 ? '+' : ''}${r.d.toFixed(1)}pp</td></tr>`;
+      }).join('');
+      const table = clRows.length
+        ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Theme cluster</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Δ</th></tr></thead><tbody>${body}</tbody></table></div>`
+        : `<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">No material cluster shift.</div>`;
+      teHtml = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 3px">True exposure — theme clusters (direct + look-through)</div>${candLine}${ebLine}${table}`;
+    } catch (e) {
+      teHtml = `<div style="font-size:10px;color:var(--color-text-danger);margin-top:6px">Couldn't compute true-exposure clusters: ${esc(e.message || 'error')}</div>`;
+    }
+  }
+
+  // Sleeve shift stays a direct-book measure (sleeves organize direct positions only).
+  const slBody = (sim.sleeveRows || []).map(r => {
+    const col = r.dPct > 0 ? 'var(--color-text-success)' : r.dPct < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
+    return `<tr><td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.name)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${r.bp.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${r.ap.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:${col}">${r.dPct >= 0 ? '+' : ''}${r.dPct.toFixed(1)}pp</td></tr>`;
+  }).join('');
+  const sleeveHtml = (sim.sleeveRows && sim.sleeveRows.length)
+    ? `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Sleeve shift <span style="text-transform:none;color:var(--color-text-tertiary)">(direct book — sleeves tag direct positions only)</span></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Sleeve</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Δ</th></tr></thead><tbody>${slBody}</tbody></table></div>`
+    : '';
+
+  out.innerHTML = `<div style="font-size:12px;color:var(--color-text-primary);margin-bottom:2px">${head}</div>` + teHtml + sleeveHtml +
+    `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters are TRUE exposure (your direct holdings + your look-through share inside funds you own), so a name already inside an ETF you hold is counted. Computed locally — nothing changed in your data.</div>`;
+  if (aiBtn) aiBtn.style.display = '';
+  const aiOut = document.getElementById('cand-ai-output'); if (aiOut) aiOut.innerHTML = '';
+}
+
+function buildCandidateAiPrompt(hypo, sim, clusters) {
+  const lines = [];
+  let before = null;
+  try { before = computeThemeClusters(); } catch (e) {}
+  if (before && before.clusters && before.clusters.length) {
+    lines.push(`THEME CONCENTRATION NOW (true exposure: direct + your look-through share inside funds you hold). Book behaves like ~${(before.effectiveBets || 0).toFixed(1)} independent bets (lower = more concentrated). Top clusters:`);
+    before.clusters.slice(0, 8).forEach(c => lines.push(`- ${c.label}: ${c.pct.toFixed(1)}% of book ($${Math.round(c.total).toLocaleString()}).`));
+    if (before.base && before.base.pct > 0) lines.push(`- Diversified base (broad-index tail, not a bet): ${before.base.pct.toFixed(1)}%.`);
+  } else {
+    lines.push('THEME CONCENTRATION: not computed (insufficient data).');
+  }
+  if (hypo.mode === 'add') {
+    lines.push(`\nHYPOTHETICAL TRADE — ADD: buy $${Math.round(hypo.amount).toLocaleString()} of ${hypo.ticker}, tagged theme "${hypo.theme}", sleeve "${hypo.sleeve}". ${hypo.ticker} is a HYPOTHETICAL the user is considering — NOT owned directly unless it also appears as a held name above (though it may already sit inside funds they hold, shown next).`);
+  } else {
+    lines.push(`\nHYPOTHETICAL TRADE — TRIM: sell ${Math.round(hypo.shares * 100) / 100} shares of ${hypo.ticker} (${hypo.pctOfPos.toFixed(0)}% of the current position${hypo.proceeds ? ', ~$' + Math.round(hypo.proceeds).toLocaleString() + ' proceeds' : ''}); theme "${hypo.theme}", sleeve "${hypo.sleeve}". This REDUCES the direct holding; any exposure to the name via funds is unchanged.`);
+  }
+  if (clusters) {
+    lines.push(`\nTRUE-EXPOSURE IMPACT (direct + look-through — the holistic view):`);
+    lines.push(`- ${hypo.ticker} true exposure: $${Math.round(clusters.teBefore).toLocaleString()} → $${Math.round(clusters.teAfter).toLocaleString()}${clusters.embedded > 1 ? ` — and $${Math.round(clusters.embedded).toLocaleString()} of the "before" already sits INSIDE funds the user holds, so the name's real exposure is larger than any direct position line would suggest` : ''}.`);
+    lines.push(`- Independent bets (1/HHI over clusters): ${clusters.ebBefore.toFixed(1)} → ${clusters.ebAfter.toFixed(1)}.`);
+    if (clusters.rows && clusters.rows.length) {
+      lines.push(`- Theme-cluster weight shift (% of the true-exposure book):`);
+      clusters.rows.forEach(r => lines.push(`  · ${r.label}: ${r.bp.toFixed(1)}% → ${r.ap.toFixed(1)}% (${r.d >= 0 ? '+' : ''}${r.d.toFixed(1)}pp)`));
+    } else {
+      lines.push(`- No material theme-cluster shift.`);
+    }
+  } else {
+    lines.push(`\nTRUE-EXPOSURE IMPACT: unavailable (no price for this trim, so its dollar value is unknown). Only the direct-book sleeve shift below is known — say so; do not guess the true-exposure effect.`);
+  }
+  if (sim.sleeveRows && sim.sleeveRows.length) {
+    lines.push(`\nSLEEVE SHIFT (direct book only — sleeves tag direct positions, not fund look-through):`);
+    sim.sleeveRows.forEach(r => lines.push(`- ${r.name}: ${r.bp.toFixed(1)}% → ${r.ap.toFixed(1)}% (${r.dPct >= 0 ? '+' : ''}${r.dPct.toFixed(1)}pp)`));
+  }
+  const ctx = lines.join('\n');
+
+  return `You are a critical portfolio analyst helping someone understand how ONE hypothetical, SIZED trade would reshape their book's STRUCTURE on a TRUE-EXPOSURE basis (direct holdings + look-through inside funds they own). You are NOT an advisor and must NOT recommend buying, selling, trimming, holding, or rebalancing.
+
+Everything below is COMPUTED FACTS from the user's actual holdings plus one hypothetical trade. The cluster weights are true exposure; exposure inside funds is approximate (pasted fund holdings are partial); there is NO market-cap or per-name fundamental data.
+
+${ctx}
+
+Rules:
+- Do NOT give a verdict, score, lean, or recommendation. If a conclusion forms, convert it to a QUESTION under "What to pressure-test."
+- Label each claim: FROM INPUTS (restates/follows from the facts above), [inference] (your reasoning on the inputs), or EXTERNAL (any real-world fact not above — what the company does, sector, valuation). EXTERNAL facts are UNVERIFIED — put them ONLY in a "CLAIMS TO VERIFY" list, each tagged ⚠UNVERIFIED. Never state an external fact inline as if given.
+- Only ticker symbols and theme/cluster/sleeve names that appear VERBATIM above exist in the book. Do NOT name any other ticker as a holding; if you do, it is an EXTERNAL guess for CLAIMS TO VERIFY.
+- The hypothetical ticker is NOT directly owned unless it appears as a held name above. It MAY already have exposure via funds — use the true-exposure figure provided, don't invent one.
+
+Output, tight and scannable:
+1. WHAT THE TRADE DOES STRUCTURALLY — the true-exposure shifts that matter, FROM INPUTS: which cluster moves most and in which direction, whether it deepens, reduces, or leaves untouched the book's largest concentrations, and how the independent-bets count moves. If the name already had fund exposure, make explicit that this changes a position bigger than the direct line shows.
+2. WHAT IT DOESN'T CHANGE / BLIND SPOTS — what stays concentrated or thin even after this trade.
+3. WHAT TO PRESSURE-TEST — turn the above into QUESTIONS for the user's New Position Evaluation. FORBIDDEN: any imperative to buy/sell/add/trim/reduce/increase/rebalance/hedge. Use framings like "the question to take to evaluation is whether…", "worth investigating: does…". Each item ends pointing to that next step.
+End with CLAIMS TO VERIFY (the ⚠UNVERIFIED external facts you leaned on, if any).
+
+Keep it tight. The numbers are already on the user's screen — your value is the structural read and the questions, not restating every figure.`;
+}
+
+async function candAnalyzeAI() {
+  const out = document.getElementById('cand-ai-output'); if (!out) return;
+  if (!_candLastSim || !_candLastHypo) { out.innerHTML = `<div style="font-size:11px;color:var(--color-text-tertiary)">Compute an impact first.</div>`; return; }
+  if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
+  if (!aiWorkerUrl) {
+    out.innerHTML = `<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">No AI worker URL set. The analysis routes through your Cloudflare worker (the Anthropic API can't be called directly here — CORS). Set it via the "AI worker URL" box on the New Position Evaluation tab, then retry.</div>`;
+    return;
+  }
+  out.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:6px">Analyzing the structural shift…</div>`;
+  const prompt = buildCandidateAiPrompt(_candLastHypo, _candLastSim, _candLastClusters);
+  try {
+    let resp;
+    try { resp = await fetch(aiWorkerUrl + '/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) }); }
+    catch (netErr) { const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e; }
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok || data.error) {
+      const errObj = (data && typeof data.error === 'object') ? data.error : null;
+      const msg = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
+      const type = errObj ? (errObj.type || '') : '';
+      const e = new Error(msg || ('HTTP ' + resp.status));
+      e.aiKind = (typeof classifyAiError === 'function') ? classifyAiError(resp.status, type, msg) : 'unknown';
+      e.httpStatus = resp.status; throw e;
+    }
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if (!text) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
+    out.innerHTML = `<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:11px;color:var(--color-text-secondary);line-height:1.55;white-space:pre-wrap">${esc(text)}</div><div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Structural read of a hypothetical, sized trade — it describes shifts and poses questions, not advice. Any EXTERNAL facts are the model's own ⚠UNVERIFIED claims; check them.</div>`;
+  } catch (err) {
+    const info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { color: '#f87171', title: 'AI error', detail: (err && err.message) || '', raw: '' };
+    out.innerHTML = `<div style="border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:${info.color};line-height:1.5"><strong>${esc(info.title)}</strong><br><span style="color:var(--color-text-secondary)">${esc(info.detail)}</span>${info.raw ? `<br><span style="color:var(--color-text-tertiary);font-size:9px">Raw: ${esc(info.raw)}${err.httpStatus ? ' (HTTP ' + err.httpStatus + ')' : ''}</span>` : ''}<br><span style="color:var(--color-text-tertiary);font-size:9px;font-style:italic">The weight shifts above are computed locally — they don't need the AI.</span></div>`;
+  }
+}
+
 function renderSimHoldingsPreview(ticker) {
   const ta = document.getElementById('sim-temp-paste-' + ticker);
   const out = document.getElementById('sim-temp-preview-' + ticker);
@@ -15900,8 +16222,19 @@ function computeSectorClusters() {
   };
 }
 
-function computeThemeClusters() {
-  const { rows } = computeTrueExposure();
+function computeThemeClusters(hypo) {
+  let { rows } = computeTrueExposure();
+  // Hypothetical sized add/trim for the candidate what-if (null in normal use): adjust the named row's
+  // DIRECT exposure (embedded-via-funds is left intact) and re-cluster, so the panel can show the
+  // true-exposure cluster delta — the holistic view. Clones rows so the exposure cache isn't mutated.
+  let _hypoKey = null, _hypoTheme = null;
+  if (hypo && hypo.ticker && typeof hypo.deltaDirect === 'number' && hypo.deltaDirect !== 0) {
+    _hypoKey = qrCanonical(hypo.ticker).key; _hypoTheme = hypo.themeTag || null;
+    rows = rows.map(r => ({ ...r }));
+    const ex = rows.find(r => r.key === _hypoKey);
+    if (ex) { ex.total = Math.max(0, (ex.total || 0) + hypo.deltaDirect); ex.direct = Math.max(0, (ex.direct || 0) + hypo.deltaDirect); }
+    else if (hypo.deltaDirect > 0) { rows.push({ key: _hypoKey, display: hypo.ticker.toUpperCase(), total: hypo.deltaDirect, direct: hypo.deltaDirect, viaFunds: 0 }); }
+  }
   const totalBook = rows.reduce((s, r) => s + r.total, 0);
 
   // theme -> benchmark, and benchmark -> [themes] (for the merge label).
@@ -15918,6 +16251,7 @@ function computeThemeClusters() {
   // Direct theme tags (authoritative), keyed canonically.
   const directTheme = {};
   positions.filter(p => !p.closed && p.ticker && p.theme).forEach(p => { directTheme[qrCanonical(p.ticker).key] = p.theme; });
+  if (_hypoKey && _hypoTheme) directTheme[_hypoKey] = _hypoTheme; // route the hypothetical to its tagged theme cluster
 
   // For each canonical name: across THEME-benchmark funds, the summed weight per fund (dual classes
   // collapse to one key, so GOOGL+GOOG combine). Used to pick the most-characteristic theme.
