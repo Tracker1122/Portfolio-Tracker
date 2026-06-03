@@ -14035,6 +14035,22 @@ function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) {
 
 function candToggleTaxDetail(open) { _candTaxDetailOpen = !!open; }
 
+// Send a Discovery idea into the Test-a-Candidate form: switch to stock mode, fill the ticker (and its
+// theme if it maps to one of your theme options), then focus the amount box so you just type the size.
+// Does not auto-add — you complete the dollar amount and hit "Add to scenario".
+function candStageFromDiscovery(ticker, theme) {
+  const T = (ticker || '').toUpperCase().trim();
+  if (!T) return;
+  if (typeof candSetMode === 'function') candSetMode('stock');
+  const tEl = document.getElementById('cand-ticker'); if (tEl) tEl.value = T;
+  const thEl = document.getElementById('cand-theme');
+  if (thEl && theme && Array.from(thEl.options).some(o => o.value === theme)) thEl.value = theme;
+  if (typeof candReadout === 'function') candReadout();
+  const panel = document.getElementById('theme-candidate-panel');
+  if (panel && panel.scrollIntoView) { try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { } }
+  setTimeout(function () { const amt = document.getElementById('cand-amount'); if (amt) { try { amt.focus(); } catch (e) { } } }, 160);
+}
+
 function candCompute() {
   const out = document.getElementById('cand-output'); if (!out) return;
   if (!_candQueue.length) { out.innerHTML = ''; _candScenario = null; return; }
@@ -18338,6 +18354,7 @@ function renderThemeDiscovery() {
       <span data-perf-slot="${esc(key)}" style="font-size:8px">${perfInit}</span>
       <span onclick="event.stopPropagation();toggleDiscoveryDetail('${escq(key)}')" title="More performance detail: 1-month & 1-year return, max drawdown, volatility, vs-benchmark — all from the data already fetched (no new API call)." style="font-size:9px;color:var(--color-text-info);cursor:pointer;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;line-height:1.4">📊</span>
       <span onclick="event.stopPropagation();showDiscoveryInfo('${escq(key)}')" title="What does this company do? (sector, description, market cap — fetched from Polygon on demand)" style="font-size:9px;color:var(--color-text-info);cursor:help;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;line-height:1.4">ℹ</span>
+      <span onclick="event.stopPropagation();candStageFromDiscovery('${escq(key)}','${escq(theme || '')}')" title="Stage as a buy in Test a Candidate below — fills the ticker (and theme); you set the dollar amount" style="font-size:9px;color:var(--color-text-info);cursor:pointer;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;line-height:1.4;font-weight:700">＋</span>
     </div>
     <div data-detail-slot="${esc(key)}" style="display:none;flex-basis:100%"></div>`;
   };
