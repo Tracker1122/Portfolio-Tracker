@@ -3146,7 +3146,7 @@ function openLivePricePopout(ticker) {
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
 
   const heldLine = shares > 0
-    ? esc(T) + ' · ' + (Math.round(shares * 100) / 100) + ' sh held' + (storedPx > 0 ? ' · stored $' + storedPx.toFixed(2) + (storedAt ? ' <span style="color:var(--color-text-tertiary)">(' + esc(_livePxAge(new Date(storedAt).getTime())) + ')</span>' : '') : '')
+    ? esc(T) + ' · ' + (Math.round(shares * 100) / 100) + ' sh held' + (storedPx > 0 ? ' · stored $' + storedPx.toFixed(2) + (storedAt ? ' <span style="color:var(--color-text-tertiary)">· ' + esc(new Date(storedAt).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })) + ' (' + esc(_livePxAge(new Date(storedAt).getTime())) + ')</span>' : '') : '')
     : esc(T) + (isVoo ? ' · S&P / VOO sleeve' : ' · no open position');
 
   overlay.innerHTML =
@@ -3248,7 +3248,7 @@ function _livePxRenderBody(ticker, ctx) {
         const mPct = (res.price - mPrev) / mPrev * 100;
         const bPct = (benchRes.price - bPrev) / bPrev * 100;
         const a = mPct - bPct;
-        rows += _livePxStat('Today · ' + T + ' vs ' + benchT, (mPct >= 0 ? '+' : '') + mPct.toFixed(2) + '% vs ' + (bPct >= 0 ? '+' : '') + bPct.toFixed(2) + '%', 'var(--color-text-secondary)');
+        rows += _livePxStat('Today · ' + T + ' vs ' + benchT, '<span style="color:' + dCol(mPct) + '">' + (mPct >= 0 ? '+' : '') + mPct.toFixed(2) + '%</span> <span style="color:var(--color-text-tertiary);font-weight:400">vs</span> <span style="color:' + dCol(bPct) + '">' + (bPct >= 0 ? '+' : '') + bPct.toFixed(2) + '%</span>', 'var(--color-text-secondary)');
         rows += _livePxStat('Live α (today)', (a >= 0 ? '+' : '') + a.toFixed(2) + 'pp', dCol(a));
       } else {
         rows += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">Today\'s % vs benchmark needs intraday data from both — not available right now.</div>';
