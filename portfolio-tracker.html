@@ -13326,6 +13326,7 @@ let _candScenario = null;     // last computed result, fed to the book AI: {sig,
 let _candTempHoldings = {};   // ETF paste, card-local (never persisted): { ETF: [{ticker,weight}] }
 let _candPerf = {};           // recent-performance windows per ticker (from fetchTickerWindows): { TICKER: {m1,m3,m6,y1,ytd,maxDrawdown,annVol,shortHist,fetchedAt,error} }
 let _candPerfBusy = false;    // guard so overlapping fetches don't stack
+let _candTaxDetailOpen = false; // remembers whether the "adjust for year-to-date" detail is expanded
 
 // Persist ONLY the staged queue (the moves you built) — a scratchpad so a refresh doesn't wipe what
 // you've staged for the AI to read. The computed result (_candScenario) is rederived from the queue on
@@ -14032,6 +14033,8 @@ function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) {
   </div>`;
 }
 
+function candToggleTaxDetail(open) { _candTaxDetailOpen = !!open; }
+
 function candCompute() {
   const out = document.getElementById('cand-output'); if (!out) return;
   if (!_candQueue.length) { out.innerHTML = ''; _candScenario = null; return; }
@@ -14105,31 +14108,35 @@ function candCompute() {
   let taxTable = '';
   if (tax) {
     const lines = [];
-    const mt = tax.marginalTax;
-    if (mt > 1) lines.push(`<div style="font-size:13px;color:var(--color-text-danger);font-weight:700">≈ ${fmtDollarWhole(mt)} estimated tax</div>`);
-    else if (mt < -1) lines.push(`<div style="font-size:13px;color:var(--color-text-success);font-weight:700">≈ ${fmtDollarWhole(Math.abs(mt))} tax saved</div>`);
+    // ── The bubble: this trade in isolation (default view) ──
+    const st = tax.scenarioTax;
+    if (st > 1) lines.push(`<div style="font-size:13px;color:var(--color-text-danger);font-weight:700">≈ ${fmtDollarWhole(st)} estimated tax</div>`);
     else lines.push(`<div style="font-size:13px;color:var(--color-text-secondary);font-weight:700">≈ $0 estimated tax</div>`);
-    // Year-to-date context (from the Realized Gains Ledger on the Tax tab).
-    if (tax.ytd && tax.ytd.available) {
-      const y = tax.ytd;
-      const ytdActive = (y.ltGains + y.stGains + y.harvested + (y.carry || 0)) > 1;
-      if (ytdActive) {
-        const diff = Math.round(tax.scenarioTax - mt);
-        const interp = diff > 1 ? ` Your year-to-date losses${y.carry > 1 ? ' and carryforward' : ''} absorb ~${fmtDollarWhole(diff)} of it.` : (mt < -1 ? ` The scenario's losses offset your year-to-date gains.` : '');
-        const carryStr = y.carry > 1 ? ` · ${fmtDollarWhole(y.carry)} prior-year carryforward` : '';
-        lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">Counting your ${y.year} realized so far — LT ${fmtDollarWhole(y.ltGains)} · ST ${fmtDollarWhole(y.stGains)} · ${fmtDollarWhole(y.harvested)} losses harvested${carryStr} (est. bill ${fmtDollarWhole(y.netBill)}). The scenario on its own ≈ ${fmtDollarWhole(tax.scenarioTax)}.${interp}</div>`);
-      } else {
-        lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">No ${y.year} realizations or prior-year carryforward, so this is the full estimate.</div>`);
-      }
-    }
     const det = [];
     if (tax.aloneTaxedST > 0) det.push(`ST ${fmtDollarWhole(tax.aloneTaxedST)} @ ${Math.round(tax.rateST * 100)}%`);
     if (tax.aloneTaxedLT > 0) det.push(`LT ${fmtDollarWhole(tax.aloneTaxedLT)} @ ${Math.round(tax.rateLT * 100)}%`);
-    if (det.length) lines.push(`<div style="font-size:10px;color:var(--color-text-secondary)">Scenario taxed on ${det.join(' + ')}</div>`);
+    if (det.length) lines.push(`<div style="font-size:10px;color:var(--color-text-secondary)">on ${det.join(' + ')}</div>`);
     if (tax.shelteredProceeds > 0) lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">${fmtDollarWhole(tax.shelteredProceeds)} of proceeds from IRA lots — not taxable</div>`);
     if (tax.washSale && tax.washSale.length) lines.push(`<div style="font-size:9px;color:#fbbf24">⚠ Possible wash sale: ${esc(tax.washSale.join(', '))} sold at a loss while also being bought in this scenario — the loss may be disallowed.</div>`);
     if (tax.waitLT && tax.waitLT.length) { const w = tax.waitLT[0]; lines.push(`<div style="font-size:9px;color:#fbbf24">${esc(w.ticker)} is ${w.daysToLT} day${w.daysToLT === 1 ? '' : 's'} from long-term — waiting would save ≈ ${fmtDollarWhole(w.saving)}.</div>`); }
-    taxTable = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Tax impact <span style="text-transform:none;color:var(--color-text-tertiary)">(marginal vs your year-to-date · single-year estimate · NIIT folded into rates)</span></div>` + lines.join('');
+    // ── Collapsible: fold in your year-to-date (only shown when there's something to fold in) ──
+    const y = tax.ytd;
+    const hasYtd = y && y.available && (y.ltGains + y.stGains + y.harvested + (y.carry || 0)) > 1;
+    if (hasYtd) {
+      const mt = tax.marginalTax;
+      const diff = Math.round(st - mt);
+      const mtLine = mt < -1
+        ? `<div style="font-size:12px;color:var(--color-text-success);font-weight:700">≈ ${fmtDollarWhole(Math.abs(mt))} tax saved</div>`
+        : `<div style="font-size:12px;color:${mt > 1 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)'};font-weight:700">≈ ${fmtDollarWhole(Math.max(0, mt))} marginal tax</div>`;
+      const carryStr = y.carry > 1 ? ` · ${fmtDollarWhole(y.carry)} prior-year carryforward` : '';
+      const absorb = diff > 1 ? `Your year-to-date losses${y.carry > 1 ? ' and carryforward' : ''} absorb ~${fmtDollarWhole(diff)} of the bill.` : (mt < -1 ? `The scenario's losses offset gains you've already booked this year.` : `Your year-to-date position doesn't change the bill here.`);
+      const inner =
+        `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:2px">Your ${y.year} realized so far — LT ${fmtDollarWhole(y.ltGains)} · ST ${fmtDollarWhole(y.stGains)} · ${fmtDollarWhole(y.harvested)} losses harvested${carryStr} (est. bill ${fmtDollarWhole(y.netBill)}).</div>` +
+        mtLine +
+        `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">${absorb}</div>`;
+      lines.push(`<details ${_candTaxDetailOpen ? 'open' : ''} ontoggle="candToggleTaxDetail(this.open)" style="margin-top:5px"><summary style="cursor:pointer;font-size:9px;color:var(--color-text-info);list-style:revert">Adjust for your year-to-date</summary><div style="margin-top:3px;padding-left:2px">${inner}</div></details>`);
+    }
+    taxTable = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Tax impact <span style="text-transform:none;color:var(--color-text-tertiary)">(this trade alone · single-year estimate · NIIT folded into rates)</span></div>` + lines.join('');
   }
 
   // Realized G/L (economic gain/loss the trims lock in, including IRA lots) — sits above Tax impact.
