@@ -3676,11 +3676,12 @@ const _realizedYearSel = { inline: null, modal: null };
 
 // Build the realized-gains data for a given year ('all' or a number).
 // Returns { rows, ltGains, stGains, harvested, ltTax, stTax, netBill }.
-function buildRealizedData(year) {
+// Raw realized figures for a year (rows + this year's own gains/losses) — NO carryforward, NO net bill.
+// Kept separate so computeLossCarryforward can walk prior years without recursing into buildRealizedData.
+function _rawRealizedYear(year) {
   const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
   const rows = [];
   let ltGains = 0, stGains = 0, harvested = 0;
-
   positions.filter(p => p.closed && p.ticker && p.sellDate).forEach(p => {
     const sellYear = new Date(p.sellDate).getFullYear();
     if (year !== 'all' && sellYear !== year) return;
@@ -3691,29 +3692,52 @@ function buildRealizedData(year) {
     const sellDate = new Date(p.sellDate);
     const daysHeld = buyDate ? Math.floor((sellDate - buyDate) / 86400000) : null;
     const isLT = daysHeld !== null && daysHeld > 365; // IRS: more than one year
-    // Tax only on taxable (non-IRA) gains
     let estTax = 0;
     if (!isIRA && gl > 0) estTax = gl * (isLT ? ltRate : stRate);
-    // Accumulate tax totals (exclude IRA)
     if (!isIRA) {
       if (gl > 0) { isLT ? ltGains += gl : stGains += gl; }
       else if (gl < 0) harvested += Math.abs(gl);
     }
-    rows.push({
-      ticker: p.ticker, account: p.account || '', isIRA,
-      buyDate: p.dateBought || '', sellDate: p.sellDate,
-      daysHeld, isLT, gl, proceeds: c.exitValue || 0, estTax, sellYear,
-    });
+    rows.push({ ticker: p.ticker, account: p.account || '', isIRA, buyDate: p.dateBought || '', sellDate: p.sellDate, daysHeld, isLT, gl, proceeds: c.exitValue || 0, estTax, sellYear });
   });
-
-  // Sort newest sale first
   rows.sort((a, b) => (b.sellDate || '').localeCompare(a.sellDate || ''));
+  return { rows, ltGains, stGains, harvested };
+}
 
+// Capital-loss carryforward available going INTO `intoYear`, walking every prior year with realized
+// activity. Each year: prior carryforward + this year's losses offset this year's gains; if a net
+// capital loss remains, $3,000 goes against ordinary income and the rest carries forward (indefinitely).
+// Simplification (matches the ledger): losses aren't split by ST/LT character. 'all' → no carryforward.
+function computeLossCarryforward(intoYear) {
+  if (intoYear === 'all' || !Number.isFinite(intoYear)) return 0;
+  const priorYears = detectRealizedYears().filter(y => y < intoYear).sort((a, b) => a - b);
+  let carry = 0;
+  priorYears.forEach(Y => {
+    const r = _rawRealizedYear(Y);
+    const net = (r.ltGains + r.stGains) - r.harvested - carry; // gains minus this-year losses minus carried losses
+    carry = net >= 0 ? 0 : Math.max(0, (-net) - 3000);
+  });
+  return carry;
+}
+
+// Returns { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill,
+//           carryIn, carryforwardTaxSaved, netBillNoCarry }.
+function buildRealizedData(year) {
+  const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
+  const { rows, ltGains, stGains, harvested } = _rawRealizedYear(year);
+  const carryIn = computeLossCarryforward(year); // prior-year loss carryforward into this year
   const ltTax = ltGains * ltRate;
   const stTax = stGains * stRate;
-  const { grossTax, netBill, taxSaved: harvestOffset } = computeHarvestOffset(ltGains, stGains, harvested, ltRate, stRate);
-
-  return { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill };
+  // Carryforward acts as extra available losses this year (same harvest-offset model). Net bill below
+  // is AFTER applying it; netBillNoCarry is this year's harvest only — the gap is the carryforward's value.
+  const base = computeHarvestOffset(ltGains, stGains, harvested, ltRate, stRate);
+  const withCarry = computeHarvestOffset(ltGains, stGains, harvested + carryIn, ltRate, stRate);
+  const grossTax = base.grossTax;
+  const harvestOffset = base.taxSaved;                 // this year's harvesting, against this year's gains
+  const netBillNoCarry = base.netBill;
+  const netBill = withCarry.netBill;                   // after carryforward too
+  const carryforwardTaxSaved = Math.max(0, netBillNoCarry - netBill);
+  return { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill, carryIn, carryforwardTaxSaved, netBillNoCarry };
 }
 
 // Render the full ledger (summary + year selector + itemized table) into a mount element.
@@ -3742,8 +3766,8 @@ function renderRealizedLedger(mountId, mountKey) {
       <div class="eff-block"><span class="eff-label">LT gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.ltGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.ltTax)} @ ${(ltRate*100).toFixed(0)}%</span></div>
       <div class="eff-block"><span class="eff-label">ST gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.stGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.stTax)} @ ${(stRate*100).toFixed(0)}%</span></div>
       <div class="eff-block"><span class="eff-label">Losses harvested</span><span class="eff-value" style="font-size:14px;color:var(--color-text-success)">${fmtDollarWhole(data.harvested)}</span><span class="eff-breakdown">saves ~${fmtDollarWhole(data.harvestOffset)} in tax</span></div>
-      <div class="eff-block"><span class="eff-label">Est. net bill</span><span class="eff-value" style="font-size:14px;color:${data.netBill>0?'var(--color-text-danger)':'var(--color-text-success)'}">${fmtDollarWhole(data.netBill)}</span><span class="eff-breakdown">after harvest offset</span></div>
-    </div>`;
+      <div class="eff-block"><span class="eff-label">Est. net bill</span><span class="eff-value" style="font-size:14px;color:${data.netBill>0?'var(--color-text-danger)':'var(--color-text-success)'}">${fmtDollarWhole(data.netBill)}</span><span class="eff-breakdown">${data.carryIn > 0 ? 'after harvest + carryforward' : 'after harvest offset'}</span></div>
+    </div>${data.carryIn > 0 ? `<div style="font-size:10px;color:var(--color-text-tertiary);margin:-8px 0 12px">Includes ${fmtDollarWhole(data.carryIn)} capital-loss carryforward from prior years${data.carryforwardTaxSaved > 0 ? ` — saves ~${fmtDollarWhole(data.carryforwardTaxSaved)} this year` : ''}.</div>` : ''}`;
 
   // Itemized table
   let tableRows = '';
@@ -13598,7 +13622,29 @@ function _candScenarioTax() {
     .filter(l => !l.isIRA && !l.isLT && l.gain > 0 && l.daysToLT != null && (_ST - _LT) > 0)
     .map(l => ({ ticker: l.ticker, daysToLT: l.daysToLT, saving: l.gain * (_ST - _LT) }))
     .sort((a, b) => b.saving - a.saving);
-  return { totalTax, taxableGain: Math.max(0, netST) + Math.max(0, netLT), stGain, stLoss, ltGain, ltLoss, netST, netLT, taxableST, taxableLT, taxableProceeds, shelteredProceeds, hasIRA, anyLoss, washSale, waitLT, rateST: _ST, rateLT: _LT };
+  // Realized G/L (economic, not tax): every trimmed lot's gain — INCLUDING IRA lots (which are
+  // untaxed but still a real gain/loss). Taxable portion = netST + netLT; the rest sits in IRA.
+  const realizedTotalGL = allLots.reduce((s, l) => s + (l.gain || 0), 0);
+  const realizedIRAGL = allLots.filter(l => l.isIRA).reduce((s, l) => s + (l.gain || 0), 0);
+  const realizedTaxableGL = netST + netLT;
+  const proceedsTotal = taxableProceeds + shelteredProceeds;
+  const costBasisTotal = proceedsTotal - realizedTotalGL;
+  // Layer the staged trims on top of the user's ACTUAL year-to-date realized position (from the same
+  // Realized Gains Ledger on the Tax tab), using the ledger's harvest-offset model so the numbers agree.
+  // marginalTax = tax(YTD + scenario) − tax(YTD): the scenario's gain is absorbed by YTD harvested
+  // losses, and a scenario LOSS shows up as tax SAVED against existing YTD gains.
+  const scSTgains = stGain, scLTgains = ltGain, scLosses = stLoss + ltLoss; // scenario, ledger convention
+  const ytdYear = new Date().getFullYear();
+  let ytd = { ltGains: 0, stGains: 0, harvested: 0, netBill: 0, carry: 0, year: ytdYear, available: false };
+  try { if (typeof buildRealizedData === 'function') { const rd = buildRealizedData(ytdYear); ytd = { ltGains: rd.ltGains || 0, stGains: rd.stGains || 0, harvested: rd.harvested || 0, netBill: rd.netBill || 0, carry: rd.carryIn || 0, year: ytdYear, available: true }; } } catch (e) { /* no ledger — fall back to standalone */ }
+  const _hbill = (lt, st, harv) => { const nST = Math.max(0, st - harv); const rem = Math.max(0, harv - st); const nLT = Math.max(0, lt - rem); return { bill: nST * _ST + nLT * _LT, taxedST: nST, taxedLT: nLT }; };
+  const aloneR = _hbill(scLTgains, scSTgains, scLosses);
+  // YTD net bill already includes carryforward (buildRealizedData folds it); the combined must too.
+  const combinedR = _hbill(ytd.ltGains + scLTgains, ytd.stGains + scSTgains, ytd.harvested + ytd.carry + scLosses);
+  const scenarioTax = aloneR.bill;                       // the scenario in isolation
+  const combinedNetBill = combinedR.bill;
+  const marginalTax = combinedNetBill - ytd.netBill;     // incremental cost given the year so far
+  return { totalTax, taxableGain: Math.max(0, netST) + Math.max(0, netLT), stGain, stLoss, ltGain, ltLoss, netST, netLT, taxableST, taxableLT, taxableProceeds, shelteredProceeds, hasIRA, anyLoss, washSale, waitLT, rateST: _ST, rateLT: _LT, realizedTotalGL, realizedIRAGL, realizedTaxableGL, proceedsTotal, costBasisTotal, scenarioTax, marginalTax, combinedNetBill, ytd, aloneTaxedST: aloneR.taxedST, aloneTaxedLT: aloneR.taxedLT };
 }
 
 // Open this ETF's holdings page on stockanalysis.com (free, no login) — copy the table and paste it
@@ -14059,26 +14105,54 @@ function candCompute() {
   let taxTable = '';
   if (tax) {
     const lines = [];
-    const netReal = tax.netST + tax.netLT;
-    if (tax.totalTax > 0) lines.push(`<div style="font-size:13px;color:var(--color-text-danger);font-weight:700">≈ ${fmtDollarWhole(tax.totalTax)} estimated tax</div>`);
-    else if (netReal < 0) lines.push(`<div style="font-size:13px;color:var(--color-text-success);font-weight:700">$0 tax — realized loss of ${fmtDollarWhole(Math.abs(netReal))}</div>`);
+    const mt = tax.marginalTax;
+    if (mt > 1) lines.push(`<div style="font-size:13px;color:var(--color-text-danger);font-weight:700">≈ ${fmtDollarWhole(mt)} estimated tax</div>`);
+    else if (mt < -1) lines.push(`<div style="font-size:13px;color:var(--color-text-success);font-weight:700">≈ ${fmtDollarWhole(Math.abs(mt))} tax saved</div>`);
     else lines.push(`<div style="font-size:13px;color:var(--color-text-secondary);font-weight:700">≈ $0 estimated tax</div>`);
-    const parts = [];
-    if (tax.taxableST > 0) parts.push(`ST ${fmtDollarWhole(tax.taxableST)} @ ${Math.round(tax.rateST * 100)}%`);
-    if (tax.taxableLT > 0) parts.push(`LT ${fmtDollarWhole(tax.taxableLT)} @ ${Math.round(tax.rateLT * 100)}%`);
-    if (parts.length) lines.push(`<div style="font-size:10px;color:var(--color-text-secondary)">on ${parts.join(' + ')}</div>`);
-    if (tax.stLoss > 0 || tax.ltLoss > 0) lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">Net ST ${tax.netST >= 0 ? '+' : '−'}${fmtDollarWhole(Math.abs(tax.netST))} · net LT ${tax.netLT >= 0 ? '+' : '−'}${fmtDollarWhole(Math.abs(tax.netLT))} — losses offset gains before tax</div>`);
+    // Year-to-date context (from the Realized Gains Ledger on the Tax tab).
+    if (tax.ytd && tax.ytd.available) {
+      const y = tax.ytd;
+      const ytdActive = (y.ltGains + y.stGains + y.harvested + (y.carry || 0)) > 1;
+      if (ytdActive) {
+        const diff = Math.round(tax.scenarioTax - mt);
+        const interp = diff > 1 ? ` Your year-to-date losses${y.carry > 1 ? ' and carryforward' : ''} absorb ~${fmtDollarWhole(diff)} of it.` : (mt < -1 ? ` The scenario's losses offset your year-to-date gains.` : '');
+        const carryStr = y.carry > 1 ? ` · ${fmtDollarWhole(y.carry)} prior-year carryforward` : '';
+        lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">Counting your ${y.year} realized so far — LT ${fmtDollarWhole(y.ltGains)} · ST ${fmtDollarWhole(y.stGains)} · ${fmtDollarWhole(y.harvested)} losses harvested${carryStr} (est. bill ${fmtDollarWhole(y.netBill)}). The scenario on its own ≈ ${fmtDollarWhole(tax.scenarioTax)}.${interp}</div>`);
+      } else {
+        lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">No ${y.year} realizations or prior-year carryforward, so this is the full estimate.</div>`);
+      }
+    }
+    const det = [];
+    if (tax.aloneTaxedST > 0) det.push(`ST ${fmtDollarWhole(tax.aloneTaxedST)} @ ${Math.round(tax.rateST * 100)}%`);
+    if (tax.aloneTaxedLT > 0) det.push(`LT ${fmtDollarWhole(tax.aloneTaxedLT)} @ ${Math.round(tax.rateLT * 100)}%`);
+    if (det.length) lines.push(`<div style="font-size:10px;color:var(--color-text-secondary)">Scenario taxed on ${det.join(' + ')}</div>`);
     if (tax.shelteredProceeds > 0) lines.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">${fmtDollarWhole(tax.shelteredProceeds)} of proceeds from IRA lots — not taxable</div>`);
     if (tax.washSale && tax.washSale.length) lines.push(`<div style="font-size:9px;color:#fbbf24">⚠ Possible wash sale: ${esc(tax.washSale.join(', '))} sold at a loss while also being bought in this scenario — the loss may be disallowed.</div>`);
     if (tax.waitLT && tax.waitLT.length) { const w = tax.waitLT[0]; lines.push(`<div style="font-size:9px;color:#fbbf24">${esc(w.ticker)} is ${w.daysToLT} day${w.daysToLT === 1 ? '' : 's'} from long-term — waiting would save ≈ ${fmtDollarWhole(w.saving)}.</div>`); }
-    taxTable = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Tax impact <span style="text-transform:none;color:var(--color-text-tertiary)">(trims only · single-year estimate · NIIT folded into rates)</span></div>` + lines.join('');
+    taxTable = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Tax impact <span style="text-transform:none;color:var(--color-text-tertiary)">(marginal vs your year-to-date · single-year estimate · NIIT folded into rates)</span></div>` + lines.join('');
+  }
+
+  // Realized G/L (economic gain/loss the trims lock in, including IRA lots) — sits above Tax impact.
+  let glTable = '';
+  if (tax) {
+    const gl = tax.realizedTotalGL;
+    const glCol = gl > 0 ? 'var(--color-text-success)' : gl < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
+    const sgnD = v => (v >= 0 ? '+' : '−') + fmtDollarWhole(Math.abs(v));
+    const gls = [`<div style="font-size:13px;color:${glCol};font-weight:700">${sgnD(gl)} realized ${gl >= 0 ? 'gain' : 'loss'}</div>`];
+    const bb = [];
+    if (Math.abs(tax.netST) >= 1) bb.push(`short-term ${sgnD(tax.netST)}`);
+    if (Math.abs(tax.netLT) >= 1) bb.push(`long-term ${sgnD(tax.netLT)}`);
+    if (Math.abs(tax.realizedIRAGL) >= 1) bb.push(`IRA ${sgnD(tax.realizedIRAGL)} (untaxed)`);
+    if (bb.length) gls.push(`<div style="font-size:10px;color:var(--color-text-secondary)">${bb.join(' · ')}</div>`);
+    gls.push(`<div style="font-size:9px;color:var(--color-text-tertiary)">Proceeds ${fmtDollarWhole(tax.proceedsTotal)} on ${fmtDollarWhole(tax.costBasisTotal)} cost basis</div>`);
+    glTable = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Realized G/L <span style="text-transform:none;color:var(--color-text-tertiary)">(from the trims · vs your cost basis)</span></div>` + gls.join('');
   }
 
   out.innerHTML =
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${ebBefore.toFixed(1)} → ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>` +
     _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) +
-    clTable + nameTable + slTable + taxTable +
+    glTable + taxTable + clTable + nameTable + slTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
   const _pos = _candPositionCountDelta();
@@ -18510,20 +18584,18 @@ function buildBookAiPrompt() {
     }
     if (sc.tax) {
       const tx = sc.tax;
-      if (tx.totalTax > 0) {
-        let s = `Estimated tax to execute the trims: ~$${Math.round(tx.totalTax).toLocaleString()}`;
-        const bits = [];
-        if (tx.taxableST > 0) bits.push(`$${Math.round(tx.taxableST).toLocaleString()} short-term @ ${Math.round(tx.rateST * 100)}%`);
-        if (tx.taxableLT > 0) bits.push(`$${Math.round(tx.taxableLT).toLocaleString()} long-term @ ${Math.round(tx.rateLT * 100)}%`);
-        if (bits.length) s += ` (on ${bits.join(' + ')})`;
-        if (tx.shelteredProceeds > 0) s += `; $${Math.round(tx.shelteredProceeds).toLocaleString()} of proceeds is in tax-sheltered IRA lots (untaxed)`;
-        lines.push(s + '.');
+      const y = tx.ytd;
+      const ytdStr = (y && y.available && (y.ltGains + y.stGains + y.harvested + (y.carry || 0)) > 1) ? ` This is the MARGINAL tax on top of the user's ${y.year} realized so far (LT $${Math.round(y.ltGains).toLocaleString()}, ST $${Math.round(y.stGains).toLocaleString()}, $${Math.round(y.harvested).toLocaleString()} losses harvested${y.carry > 1 ? `, plus $${Math.round(y.carry).toLocaleString()} prior-year loss carryforward` : ''}); the scenario in isolation would be ~$${Math.round(tx.scenarioTax).toLocaleString()}.` : '';
+      if (tx.marginalTax > 1) {
+        let s = `Estimated tax to execute the trims: ~$${Math.round(tx.marginalTax).toLocaleString()}.${ytdStr}`;
+        if (tx.shelteredProceeds > 0) s += ` ($${Math.round(tx.shelteredProceeds).toLocaleString()} of proceeds is in tax-sheltered IRA lots, untaxed.)`;
+        lines.push(s);
         if (tx.washSale && tx.washSale.length) lines.push(`  ⚠ Possible wash sale flagged: ${tx.washSale.join(', ')} sold at a loss while also being bought in this scenario.`);
         if (tx.waitLT && tx.waitLT.length) { const w = tx.waitLT[0]; lines.push(`  Holding-period note: ${w.ticker} is ${w.daysToLT} day(s) from long-term; waiting would cut tax by ~$${Math.round(w.saving).toLocaleString()}.`); }
-      } else if (tx.anyLoss) {
-        lines.push(`The staged trims realize net losses, not gains — no tax cost estimated (potentially harvestable).`);
+      } else if (tx.marginalTax < -1) {
+        lines.push(`This scenario would REDUCE the user's estimated ${y && y.year ? y.year : 'current-year'} tax by ~$${Math.round(Math.abs(tx.marginalTax)).toLocaleString()} — its realized losses offset gains already booked year-to-date.`);
       } else {
-        lines.push(`Estimated tax to execute the trims: ~$0.`);
+        lines.push(`Estimated marginal tax to execute the trims: ~$0.`);
       }
     }
     const perfKeys = sc.perf ? Object.keys(sc.perf) : [];
