@@ -25199,6 +25199,9 @@ init();
   ];
   function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
   var COVERAGE_WARN = 0.7;
+  // VOO benchmark overlay color (P0). Amber — matches the app's existing #fbbf24 accents
+  // and reads against red/green book lines far better than the old gray. One knob, both renderers.
+  var BENCH_COLOR = 'var(--color-text-warning, #fbbf24)';
   function sparklinePath(path, w, h, loIn, hiIn) {
     if (!path || path.length < 2) return '';
     var ys = path.map(function (p) { return p.cum; });
@@ -25435,7 +25438,7 @@ init();
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
         '<svg width="120" height="28" viewBox="0 0 120 28" style="flex:0 0 auto">' +
-          (model.benchSparkD ? '<path d="' + model.benchSparkD + '" fill="none" stroke="var(--color-text-tertiary, #888)" stroke-width="1" stroke-opacity="0.45"/>' : '') +
+          (model.benchSparkD ? '<path d="' + model.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1" stroke-opacity="0.75"/>' : '') +
           '<path d="' + model.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="1.5"/>' +
           (model.troughDot ? '<circle cx="' + model.troughDot.x.toFixed(1) + '" cy="' + model.troughDot.y.toFixed(1) + '" r="2.2" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.8"><title>Max drawdown ' + model.drawdownPct.toFixed(1) + '% — trough here</title></circle>' : '') +
         '</svg>' +
@@ -25448,7 +25451,7 @@ init();
         '<div style="font-size:10px;margin-top:3px;color:var(--color-text-tertiary)">Market (VOO), same window: ' +
           '<strong style="color:' + (model.benchReturnPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (model.benchReturnPct >= 0 ? '+' : '') + model.benchReturnPct.toFixed(1) + '%</strong>' +
           ' — your book ' + (model.benchSpreadPct >= 0 ? 'outperformed by +' + model.benchSpreadPct.toFixed(1) : 'lagged by ' + Math.abs(model.benchSpreadPct).toFixed(1)) + ' pts ' +
-          '<span style="opacity:.75">(faint line = VOO)</span></div>'
+          '<span style="opacity:.75">(yellow line = VOO)</span></div>'
         : '') +
       (model.excluded && model.excluded.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No price history in this window: ' + model.excluded.join(', ') + '.</div>' : '') +
       breakdown +
@@ -25488,7 +25491,7 @@ init();
         : dash;
       var spark = (has && m.sparkD)
         ? '<svg width="64" height="16" viewBox="0 0 120 28" style="vertical-align:middle">' +
-            (m.benchSparkD ? '<path d="' + m.benchSparkD + '" fill="none" stroke="var(--color-text-tertiary, #888)" stroke-width="1.5" stroke-opacity="0.4"/>' : '') +
+            (m.benchSparkD ? '<path d="' + m.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1.5" stroke-opacity="0.7"/>' : '') +
             '<path d="' + m.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="2"/>' +
             (m.troughDot ? '<circle cx="' + m.troughDot.x.toFixed(1) + '" cy="' + m.troughDot.y.toFixed(1) + '" r="3" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="1"/>' : '') +
           '</svg>'
@@ -25504,7 +25507,7 @@ init();
     }).join('');
     el.innerHTML =
       '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
-      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed (click a window above to add or refresh it). \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; faint path = VOO.</div>' +
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed (click a window above to add or refresh it). \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; yellow path = VOO.</div>' +
       '<table style="border-collapse:collapse;width:100%;max-width:560px">' + header + rows + '</table>';
   }
 
