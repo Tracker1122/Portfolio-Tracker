@@ -14197,9 +14197,12 @@ function renderCandidatePanel() {
   candSetMode(_candMode);
   candSetTrimUnit(_candTrimUnit);
   candRenderQueue();
-  // After a refresh the queue is rehydrated from storage but the computed result isn't — recompute once
-  // so the output redraws and the saved book review reads as matching (not falsely stale).
-  if (_candQueue.length && !_candScenario) candCompute();
+  // The Themes tab rebuilds this whole panel (including #cand-output) on every render, so the queue is
+  // rehydrated but the output area comes back EMPTY. Recompute whenever there's a queued scenario — not
+  // just when one was never computed — otherwise the panel stays blank on tab re-entry until an
+  // add/remove/edit happens to call candCompute again. Recompute is cheap and yields an identical
+  // signature, so the saved book review still reads as matching (not falsely stale).
+  if (_candQueue.length) candCompute();
 }
 
 function candSetMode(m) {
@@ -14549,7 +14552,13 @@ function candExportPdf() {
       else blocks.push(`<div class="ai">${esc2(t.text)}</div>`);
     });
     const stale = (typeof bookAiReviewStale === 'function') && bookAiReviewStale();
-    blocks.push(`<p class="note" style="margin-top:10px">Generated ${esc2(new Date(bookAiReview.at).toLocaleString())}${stale ? ' — inputs changed since this ran, so it may not reflect the scenario above' : ''}. Observations for discussion, not advice.</p>`);
+    const basisMismatch = (typeof bookAiBasisMismatchNote === 'function') ? bookAiBasisMismatchNote() : '';
+    if (basisMismatch) {
+      // A basis flip is the most dangerous staleness: the prose and the tables state different values for
+      // the SAME metric. Call it out as a prominent banner ABOVE the review, not a quiet trailing note.
+      blocks.unshift(`<p class="note" style="margin:0 0 10px;padding:8px 11px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;color:#7f1d1d;font-style:normal;font-weight:600">⚠ Basis mismatch — ${esc2(basisMismatch)}. Re-run "Analyze with AI" on the current basis before sharing this report so the AI review and the tables agree.</p>`);
+    }
+    blocks.push(`<p class="note" style="margin-top:10px">Generated ${esc2(new Date(bookAiReview.at).toLocaleString())}${stale ? (basisMismatch ? ' — basis changed since this ran (see banner above)' : ' — inputs changed since this ran, so it may not reflect the scenario above') : ''}. Observations for discussion, not advice.</p>`);
     aiHtml = blocks.join('');
   }
 
@@ -19701,7 +19710,31 @@ function bookAiReviewStale() {
   // Also stale if the staged candidate scenario changed since the review ran.
   const scenarioNow = (_candScenario && _candScenario.sig) ? _candScenario.sig : '';
   if ((bookAiReview.scenarioAtRun || '') !== scenarioNow) return true;
+  // Also stale if the private-deal basis toggle changed since the review ran. The AI prose narrates
+  // figures on the basis that was active at run time; the deterministic tables follow the live toggle.
+  // If they no longer agree, the review must not masquerade as matching the displayed figures.
+  // (Older reviews have no basisAtRun; treat the absence as the legacy 'off'/'cost' default so we don't
+  // false-flag a review that predates basis tracking when the toggle is in its pre-existing position.)
+  const basisNow = (typeof peExposureMode !== 'undefined') ? peExposureMode : 'off';
+  const basisRan = (bookAiReview.basisAtRun != null) ? bookAiReview.basisAtRun : basisNow;
+  if (basisRan !== basisNow) return true;
   return false;
+}
+
+// Human-readable label for a private-deal basis token.
+function peBasisLabel(b) {
+  return b === 'cost' ? 'Incl. private (cost)' : b === 'market' ? 'Incl. private (market)' : 'Public';
+}
+
+// If the book review ran on a different private-deal basis than is now displayed, describe the mismatch
+// in plain language so a stale note can NAME it (turning a silent numeric contradiction into a labeled,
+// explained discrepancy). Returns '' when the basis matches or there is no review.
+function bookAiBasisMismatchNote() {
+  if (typeof bookAiReview === 'undefined' || !bookAiReview) return '';
+  const now = (typeof peExposureMode !== 'undefined') ? peExposureMode : 'off';
+  const ran = (bookAiReview.basisAtRun != null) ? bookAiReview.basisAtRun : now;
+  if (ran === now) return '';
+  return `the private-deal basis changed from "${peBasisLabel(ran)}" to "${peBasisLabel(now)}" since this ran, so the figures in this AI review are on the "${peBasisLabel(ran)}" basis while the tables above are on the "${peBasisLabel(now)}" basis`;
 }
 
 // Assemble the book context string. All COMPUTED FACTS (with caveats in-prompt); the only USER-ENTERED
@@ -19857,11 +19890,19 @@ function buildBookAiPrompt() {
   // --- Staged candidate what-if (from the Test-a-Candidate card above this review), if any ---
   if (_candScenario && _candScenario.trades && _candScenario.trades.length) {
     const sc = _candScenario;
+    // The scenario's independent-bets / cluster figures below are computed on whatever basis the toggle
+    // is set to (this is also the basis the reader sees in the report's deterministic tables). State it
+    // explicitly and pin the AI to it, so the prose can't free-hand a different-basis value for the SAME
+    // metric — the exact failure that puts two "independent bets" numbers on one page.
+    const _scBasis = (typeof peModeOn === 'function' && peModeOn())
+      ? (peModeBasis() === 'market' ? 'ALL-IN at self-marked value (public book + tagged private deals at the user\'s own illiquid self-marks)' : 'ALL-IN at cost (public book + tagged private deals at cost)')
+      : 'the PUBLIC book only (tagged private deals excluded)';
     lines.push(`\nSTAGED WHAT-IF SCENARIO (the user has staged a hypothetical set of moves in the Test-a-Candidate card; these are NOT executed and NOT held — they are a what-if to reason about):`);
+    lines.push(`BASIS OF THE SCENARIO FIGURES BELOW: ${_scBasis}. These are the EXACT figures shown in this report's deterministic tables. When you discuss the scenario's independent-bets or theme-cluster numbers, cite THESE values and name this basis. Do NOT substitute the public-only or the cost-vs-self-marked standing-book figures for the scenario's — those are different denominators. If you mention any figure on a different basis, label it explicitly; never state two differently-based values for the same metric without saying which is which.`);
     sc.trades.forEach(t => lines.push(`- ${t}`));
-    lines.push(`Independent bets (1/HHI over true-exposure clusters) under this scenario: ${sc.ebBefore.toFixed(1)} → ${sc.ebAfter.toFixed(1)}.`);
+    lines.push(`Independent bets (1/HHI over true-exposure clusters) under this scenario, on the basis named above: ${sc.ebBefore.toFixed(1)} → ${sc.ebAfter.toFixed(1)}.`);
     if (sc.clRows && sc.clRows.length) {
-      lines.push(`Theme-cluster shift (% of the true-exposure book — direct + look-through):`);
+      lines.push(`Theme-cluster shift (% of the true-exposure book — direct + look-through — on the basis named above):`);
       sc.clRows.forEach(r => lines.push(`  · ${r.label}: ${r.bp.toFixed(1)}% → ${r.ap.toFixed(1)}% (${r.d >= 0 ? '+' : ''}${r.d.toFixed(1)}pp)`));
     }
     if (sc.nameRows && sc.nameRows.length) {
@@ -19982,6 +20023,7 @@ async function runBookAiReview() {
       measured: !!(usage && typeof usage.input_tokens === 'number'),
       selectedAtRun: [...discoverySelected],  // snapshot for staleness detection
       scenarioAtRun: (_candScenario && _candScenario.sig) ? _candScenario.sig : '',  // staged what-if at run time
+      basisAtRun: peExposureMode,   // private-deal basis ('off'|'cost'|'market') the figures in this review were generated against — flipping the toggle desyncs the prose from the displayed tables, so it counts as stale
       openingPrompt: prompt,   // the full book context; reused as the head of every argue turn
       thread: [{               // conversation turns; turn 0 is the opening analysis
         role: 'ai', text,
@@ -20195,9 +20237,12 @@ function renderThemeAiReview() {
 
   const stale = bookAiReviewStale();
   const ranAgainst = (bookAiReview && bookAiReview.selectedAtRun) ? bookAiReview.selectedAtRun : [];
+  const _basisMismatch = (typeof bookAiBasisMismatchNote === 'function') ? bookAiBasisMismatchNote() : '';
   const staleBanner = (bookAiReview && stale) ? `
       <div style="background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:10px;color:#fbbf24;line-height:1.5">
-        ⚠ Your inputs changed since this review ran (discovery selection and/or the staged what-if scenario). It was run against ${ranAgainst.length ? esc(ranAgainst.join(', ')) : 'no selected tickers'}${(bookAiReview && bookAiReview.scenarioAtRun) ? ' and a staged scenario' : ''}; re-analyze to fold in your current choices${(_candScenario && _candScenario.trades && _candScenario.trades.length) ? ' (including the staged ' + _candScenario.trades.length + '-move scenario)' : ''}.
+        ${_basisMismatch
+          ? `⚠ Basis mismatch — ${esc(_basisMismatch)}. Re-analyze on the current basis so the AI review and the tables agree.`
+          : `⚠ Your inputs changed since this review ran (discovery selection and/or the staged what-if scenario). It was run against ${ranAgainst.length ? esc(ranAgainst.join(', ')) : 'no selected tickers'}${(bookAiReview && bookAiReview.scenarioAtRun) ? ' and a staged scenario' : ''}; re-analyze to fold in your current choices${(_candScenario && _candScenario.trades && _candScenario.trades.length) ? ' (including the staged ' + _candScenario.trades.length + '-move scenario)' : ''}.`}
       </div>` : '';
 
   const verify = bookAiReview ? verifyBookReviewTickers(bookAiReview.text) : { invented: [], misowned: [] };
