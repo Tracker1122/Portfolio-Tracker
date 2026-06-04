@@ -25553,6 +25553,58 @@ init();
     if (onDone) onDone(model);
   }
 
+  // Plain-English read of a single card: what window this is, how deep it went vs the
+  // market at the low, and how the recovery arc played out (back-to-even + where it stood
+  // at the latest available checkpoint, vs VOO). Pure fn of the model — every number it
+  // states is one already shown in the chart/table, so it summarizes, never extrapolates.
+  function _pctSigned(x) { return (x >= 0 ? '+' : '') + x.toFixed(1) + '%'; }
+  function _leadLag(spread) {
+    if (spread == null) return '';
+    if (Math.abs(spread) < 0.05) return 'dead even with the market';
+    return (spread >= 0 ? 'ahead of the market by ' : 'behind the market by ') + Math.abs(spread).toFixed(1) + ' pts';
+  }
+  function replaySummaryText(model) {
+    if (!model.hasData) return '';
+    var range = model.dateRange ? ' (' + model.dateRange + ')' : '';
+    var J = model.junctions, s = ['This replays your current holdings through the ' + (model.windowLabel || 'this window') + range + '.'];
+    if (J && J.length) {
+      var low = J[0], lowStr = 'At the low it was ' + (low.bookPct >= 0 ? 'up ' : 'down ') + Math.abs(low.bookPct).toFixed(1) + '%';
+      if (model.drawdownPct != null && low.bookPct != null && model.drawdownPct < low.bookPct - 0.5) lowStr += ' (dipping ' + Math.abs(model.drawdownPct).toFixed(1) + '% at its worst)';
+      if (low.vooPct != null) lowStr += ' against VOO\u2019s ' + _pctSigned(low.vooPct) + ' \u2014 ' + _leadLag(low.spreadPct);
+      s.push(lowStr + '.');
+      var firstRec = null, lastAvail = null, pending = [];
+      for (var i = 1; i < J.length; i++) {
+        var c = J[i];
+        if (c.pending) { pending.push(c.label); continue; }
+        if (c.missing || c.bookPct == null) continue;
+        if (c.recovered && !firstRec) firstRec = c;
+        lastAvail = c;
+      }
+      if (lastAvail) {
+        var arc;
+        if (firstRec) {
+          arc = 'It was back to even within ' + firstRec.label + ' of the bottom';
+          if (lastAvail !== firstRec) {
+            arc += ', and by ' + lastAvail.label + ' stood ' + _pctSigned(lastAvail.bookPct);
+            if (lastAvail.vooPct != null) arc += ' \u2014 ' + _leadLag(lastAvail.spreadPct);
+          }
+        } else {
+          arc = 'It was still ' + Math.abs(lastAvail.bookPct).toFixed(1) + '% below its pre-event level at ' + lastAvail.label;
+          if (lastAvail.vooPct != null) arc += ' (' + _leadLag(lastAvail.spreadPct) + ')';
+        }
+        s.push(arc + '.');
+      }
+      if (pending.length) s.push('The ' + pending.join(' and ') + ' checkpoint' + (pending.length > 1 ? 's haven\u2019t' : ' hasn\u2019t') + ' come around yet.');
+    } else {
+      var r = model.returnPct, up = 'It would have ' + (r >= 0 ? 'risen ' : 'fallen ') + Math.abs(r).toFixed(1) + '%';
+      if (model.benchReturnPct != null) up += ' while VOO did ' + _pctSigned(model.benchReturnPct) + ' \u2014 ' + _leadLag(model.benchSpreadPct);
+      s.push(up + '.');
+      if (model.drawdownPct > -1) s.push('No real drawdown here, so there\u2019s no recovery arc to read.');
+    }
+    s.push('Based on ' + model.coveragePct.toFixed(0) + '% of your liquid book' + (model.coverageWarn ? ' \u2014 low coverage, so read it loosely' : '') + '.');
+    return '<div style="font-size:11px;line-height:1.55;margin:6px 0 2px;color:var(--color-text-secondary)">' + s.join(' ') + '</div>';
+  }
+
   // Per-junction book-vs-VOO grid. Expresses the data that already exists (each
   // checkpoint's bookPct/vooPct + the window-scoped low figures) as one aligned
   // table: You / VOO / (You − VOO) across the four marked points low·6mo·1Y·2Y.
@@ -25599,7 +25651,6 @@ init();
       return '<div style="font-size:11px;color:var(--color-text-tertiary)">No replayable data for <strong>' + model.windowLabel + '</strong> yet (coverage ' + model.coveragePct.toFixed(0) + '%). The held names likely had no price history in this window.</div>';
     var pos = model.returnPct >= 0;
     var retColor = pos ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
-    var covColor = model.coverageWarn ? 'var(--color-text-danger, #ef4444)' : 'var(--color-text-tertiary)';
     var pn = model.perName || [], breakdown = '';
     if (pn.length) {
       var maxAbs = pn.reduce(function (m, r) { return Math.max(m, Math.abs(r.contrib)); }, 0) || 1;
@@ -25655,11 +25706,8 @@ init();
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
         (model.dateRange ? '<span style="font-size:10px;color:var(--color-text-tertiary)">' + model.dateRange + '</span>' : '') +
       '</div>' +
+      replaySummaryText(model) +
       chart +
-      '<div style="font-size:11px;margin-top:6px;color:var(--color-text-secondary)">Your book as it sits today would have ' +
-        '<strong style="color:' + retColor + '">' + (pos ? '+' : '') + model.returnPct.toFixed(1) + '%</strong> total, drawing down ' +
-        '<strong style="color:var(--color-text-danger, #ef4444)">' + model.drawdownPct.toFixed(1) + '%</strong>, on ' +
-        '<span style="color:' + covColor + '">' + model.coveragePct.toFixed(0) + '% of the liquid book</span>' + (model.coverageWarn ? ' ⚠ (low coverage — read with caution)' : '') + '.</div>' +
       (model.junctions ? renderJunctionTable(model) :
         (model.benchReturnPct != null ?
           '<div style="font-size:10px;margin-top:5px;color:var(--color-text-tertiary)">Market (VOO), same window: ' +
