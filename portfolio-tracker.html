@@ -10244,6 +10244,18 @@ function buildQrAiPrompt(candidate) {
   if (candidate.theme) {
     const ex = qrThemeExposure(candidate.theme);
     if (ex) computed.push(`Current ${candidate.theme} exposure: ${ex.portfolioPct.toFixed(1)}% of active portfolio across ${ex.tickers.length} position(s)${ex.tickers.length?' ('+ex.tickers.map(t=>t.ticker).join(', ')+')':''}.`);
+    // Private-deal overlap: if the candidate's theme matches tagged private holdings, surface them as a
+    // COMPUTED FACT so the eval weighs the buy against combined public+private concentration. AT COST,
+    // illiquid, single-name — labeled so the model never treats a private figure as market truth, and
+    // framed as "AT LEAST" since cost understates a marked-up deal. No mixed-basis % is fabricated.
+    try {
+      const _pe = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : null;
+      const _slice = _pe && _pe.byTheme[canonicalThemeName(candidate.theme)];
+      if (_slice && _slice.cost > 0) {
+        const _names = _slice.deals.slice().sort((a,b)=>b.cost-a.cost).map(d=>`${d.company} ~$${Math.round(d.cost).toLocaleString()}`).join(', ');
+        computed.push(`PRIVATE OVERLAP — you ALSO hold ~$${Math.round(_slice.cost).toLocaleString()} of ${candidate.theme} PRIVATELY, at cost (${_names}): illiquid, single-name DIRECT exposure, NOT counted in the public "${candidate.theme} exposure" % above (that % is public positions only). This candidate would add to a theme where the user is ALREADY exposed publicly AND privately — a concentration decision, not just a quality one. The private figure is at cost (conservative — a marked-up deal could be larger), so combined ${candidate.theme} concentration is AT LEAST the public exposure PLUS ~$${Math.round(_slice.cost).toLocaleString()}; weigh the buy against that combined exposure, not the public slice alone.`);
+      }
+    } catch (e) { /* additive only */ }
   }
   // Recent market performance for the candidate (and, for an ETF, the rotate-out trim targets),
   // pulled live via fetchTickerWindows into the shared _candPerf cache — the SAME plumbing as
@@ -19471,10 +19483,47 @@ function buildBookAiPrompt() {
       aum.push(`- Passive core — VOO (broad S&P 500 index fund; the user treats this as a DIVERSIFIED BASE, not an active bet): $${Math.round(a.voo).toLocaleString()} (~${p(a.voo)}% of all-in).`);
       if (a.peCount) aum.push(`- Private deals (${a.peCount} direct private investment${a.peCount > 1 ? 's' : ''}; illiquid; counted AT COST, not a self-marked valuation): $${Math.round(a.pe).toLocaleString()} (~${p(a.pe)}% of all-in).`);
       aum.push(`Account split of the public book: liquid taxable $${Math.round(a.liquidTaxable).toLocaleString()}; tax-sheltered IRA $${Math.round(a.iraSheltered).toLocaleString()}. (IRA gains are untaxed; taxable lots carry LT/ST tax on sale.)`);
-      aum.push(`HOW TO USE THIS FRAME: the theme/sector percentages below are shares of the PUBLIC book's TRUE EXPOSURE (managed direct positions + the user's look-through share inside funds they hold, including VOO); VOO's untagged remainder is the "diversified base" line. The private-deals sleeve is NOT included in any theme/sector/look-through math below. So a theme that is, e.g., 20% of the public book is a SMALLER share of the all-in book once VOO and the illiquid private sleeve are counted. You MAY note when a concentration looks larger against the managed sleeve but smaller against all-in AUM — but do NOT recompute the theme percentages against all-in (you don't have per-name all-in splits); keep the percentages below as given and use the AUM totals qualitatively, as framing.`);
+      aum.push(`HOW TO USE THIS FRAME: the theme/sector percentages below are shares of the PUBLIC book's TRUE EXPOSURE (managed direct positions + the user's look-through share inside funds they hold, including VOO); VOO's untagged remainder is the "diversified base" line. Your tagged private deals ARE now broken out per theme in a separate "PRIVATE-DEAL CONCENTRATION" block (at cost) — an ADDITIVE layer, NOT folded into the public percentages. The public theme percentages stay shares of the public book; where a private or all-in figure is given, each is LABELED with its own base. Use each figure against its stated base — do not mix the two denominators, and do not invent your own all-in recomputation of the public percentages.`);
       lines.push(aum.join('\n'));
     }
   } catch (e) {}
+
+  // --- Private-deal concentration (at cost; additive layer with its OWN denominator) ---
+  // Reuses the SAME helpers/engine as the on-screen "incl. private" panel, so the AI reads identical
+  // numbers to what the user sees. Public percentages are never recomputed; private is at cost, labeled
+  // illiquid/single-name; untagged deals are reported as a gap, never silently themed.
+  try {
+    const peExp = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : null;
+    if (peExp && (peExp.total > 0 || peExp.untaggedCount > 0)) {
+      const pl = [];
+      pl.push(`PRIVATE-DEAL CONCENTRATION (counted AT COST — conservative; self-marks excluded; illiquid, single-name DIRECT holdings; a marked-up deal could exceed the cost shown). ADDITIVE layer: it does NOT change the public theme percentages elsewhere in this frame.`);
+      if (peExp.total > 0) {
+        let allIn = null;
+        try { allIn = computeThemeClusters({ adjustments: peClusterAdjustments() }); } catch (e) {}
+        const pubByLabel = {};
+        if (clusters && clusters.clusters) clusters.clusters.forEach(c => { pubByLabel[c.label] = c; });
+        if (allIn && allIn.clusters) {
+          allIn.clusters.forEach(c => {
+            const p = pubByLabel[c.label];
+            const added = c.total - (p ? p.total : 0);
+            if (added <= 0.5) return; // theme not affected by private
+            const pubTxt = p ? `${p.pct.toFixed(1)}% of the public book` : `absent from the public book`;
+            pl.push(`- ${c.label}: ${pubTxt}; counting ~$${Math.round(added).toLocaleString()} of private deals at cost, ~${c.pct.toFixed(1)}% of the ALL-IN book (public + private). Two different bases — read each against its own.`);
+          });
+        }
+        // Raw per-theme deal names (independent of any cluster merging), so the holdings are always explicit.
+        Object.entries(peExp.byTheme).sort((a,b)=>b[1].cost-a[1].cost).forEach(([theme, info]) => {
+          const names = info.deals.slice().sort((a,b)=>b.cost-a.cost).map(d=>`${d.company} ~$${Math.round(d.cost).toLocaleString()}`).join(', ');
+          pl.push(`  · ${theme} (private, at cost): ${names}.`);
+        });
+        pl.push(`Effective independent bets, public vs once private is folded in: ${(clusters && clusters.effectiveBets || 0).toFixed(1)} → ${(allIn && allIn.effectiveBets || 0).toFixed(1)} (lower = more concentrated).`);
+      }
+      if (peExp.untaggedCount > 0) {
+        pl.push(`NOTE: ${peExp.untaggedCount} private deal(s) totaling ~$${Math.round(peExp.untaggedCost).toLocaleString()} at cost are UNTAGGED and excluded here — true private concentration may be higher than shown. Treat the private picture as incomplete; do not guess their themes.`);
+      }
+      lines.push(pl.join('\n'));
+    }
+  } catch (e) { /* additive only — never block the payload */ }
 
   // --- Book structure (move-together themes) ---
   if (clusters && clusters.clusters && clusters.clusters.length) {
