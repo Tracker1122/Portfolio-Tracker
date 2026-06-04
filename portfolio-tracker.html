@@ -25036,5 +25036,304 @@ document.addEventListener('wheel', (e) => {
 
 init();
 </script>
+
+<!-- ===== Risk & Stress Lens (Tier 1) — injected ===== -->
+<script>
+/* ════════════════════════════════════════════════════════════════════════
+   RISK & STRESS LENS — Tier 1 (Historical Scenario Replay)
+   Injected block. Self-contained: pure math core + Tier-1 helpers + the
+   live-fetch/DOM glue + an auto-init that drops a panel at the bottom of the
+   page. Reuses the app's own globals (positions, calcPos, qrCanonical,
+   polygonKey, _lastPolyFetch, peModeBasis, peThemeExposure).
+   The math here was unit-tested (32 checks) outside the browser; the live
+   Polygon fetch + rendering can only be exercised in the deployed page.
+   ════════════════════════════════════════════════════════════════════════ */
+(function (W) {
+  'use strict';
+
+  /* ---------- pure core: RiskLens (replay + covariance) ------------------- */
+  var DAY = 86400 * 1000, TRADING_DAYS = 252;
+
+  function simpleReturns(closes) {
+    var r = [];
+    for (var i = 1; i < closes.length; i++) if (closes[i - 1] > 0) r.push(closes[i] / closes[i - 1] - 1);
+    return r;
+  }
+  function commonDateIndex(seriesList) {
+    if (!seriesList.length) return [];
+    var counts = Object.create(null);
+    seriesList.forEach(function (bars) {
+      var seen = Object.create(null);
+      bars.forEach(function (b) { if (!seen[b.t]) { seen[b.t] = 1; counts[b.t] = (counts[b.t] || 0) + 1; } });
+    });
+    var need = seriesList.length;
+    return Object.keys(counts).filter(function (t) { return counts[t] === need; }).map(Number).sort(function (a, b) { return a - b; });
+  }
+  function closeOn(bars, t) {
+    if (!bars._idx) {
+      var m = Object.create(null);
+      for (var i = 0; i < bars.length; i++) m[bars[i].t] = bars[i].c;
+      Object.defineProperty(bars, '_idx', { value: m, enumerable: false });
+    }
+    return bars._idx[t];
+  }
+  function coversWindowStart(bars, startMs, slackDays) {
+    if (!bars || !bars.length) return false;
+    var slack = (slackDays == null ? 5 : slackDays) * DAY;
+    return bars[0].t <= startMs + slack;
+  }
+  function replayWindow(weights, barsByTicker, startMs, endMs, opts) {
+    opts = opts || {};
+    var liquid = Object.keys(weights).filter(function (k) {
+      var bars = barsByTicker[k];
+      return bars && bars.length >= 2 && coversWindowStart(bars, startMs, opts.slackDays);
+    });
+    var coveredWeight = liquid.reduce(function (s, k) { return s + weights[k]; }, 0);
+    if (!liquid.length || coveredWeight <= 0)
+      return { totalReturn: null, maxDrawdown: null, coverage: 0, path: [], included: [], excluded: Object.keys(weights) };
+    var w = {};
+    liquid.forEach(function (k) { w[k] = weights[k] / coveredWeight; });
+    var inWindow = liquid.map(function (k) {
+      return barsByTicker[k].filter(function (b) { return b.t >= startMs && b.t <= endMs; });
+    });
+    var dates = commonDateIndex(inWindow);
+    var excluded = Object.keys(weights).filter(function (k) { return liquid.indexOf(k) < 0; });
+    if (dates.length < 2)
+      return { totalReturn: null, maxDrawdown: null, coverage: coveredWeight, path: [], included: liquid, excluded: excluded };
+    var cum = 1, peak = 1, trough = 0, path = [{ t: dates[0], cum: 1 }];
+    for (var i = 1; i < dates.length; i++) {
+      var portRet = 0;
+      for (var j = 0; j < liquid.length; j++) {
+        var k = liquid[j], bars = barsByTicker[k];
+        var c0 = closeOn(bars, dates[i - 1]), c1 = closeOn(bars, dates[i]);
+        portRet += w[k] * ((c0 > 0) ? (c1 / c0 - 1) : 0);
+      }
+      cum *= (1 + portRet);
+      if (cum > peak) peak = cum;
+      var dd = cum / peak - 1; if (dd < trough) trough = dd;
+      path.push({ t: dates[i], cum: cum });
+    }
+    return { totalReturn: cum - 1, maxDrawdown: trough, coverage: coveredWeight, path: path, included: liquid, excluded: excluded };
+  }
+  function covCorr(barsByTicker, tickers) {
+    var used = tickers.filter(function (k) { return barsByTicker[k] && barsByTicker[k].length >= 2; });
+    var series = used.map(function (k) { return barsByTicker[k]; });
+    var dates = commonDateIndex(series), n = used.length;
+    if (dates.length < 3 || n < 1) return { tickers: used, dailyVol: [], cov: [], corr: [], nDates: dates.length };
+    var rets = used.map(function (k) { var bars = barsByTicker[k]; return simpleReturns(dates.map(function (t) { return closeOn(bars, t); })); });
+    var m = rets[0].length;
+    var means = rets.map(function (s) { return s.reduce(function (a, b) { return a + b; }, 0) / s.length; });
+    var cov = [];
+    for (var a = 0; a < n; a++) { cov[a] = []; for (var b = 0; b < n; b++) { var acc = 0; for (var t = 0; t < m; t++) acc += (rets[a][t] - means[a]) * (rets[b][t] - means[b]); cov[a][b] = acc / (m - 1); } }
+    var dailyVol = cov.map(function (row, i) { return Math.sqrt(row[i]); });
+    var corr = [];
+    for (var x = 0; x < n; x++) { corr[x] = []; for (var y = 0; y < n; y++) { var d = dailyVol[x] * dailyVol[y]; corr[x][y] = d > 0 ? cov[x][y] / d : 0; } }
+    return { tickers: used, dailyVol: dailyVol, cov: cov, corr: corr, nDates: dates.length };
+  }
+  function portfolioVol(weights, matrix, annualize) {
+    var tk = matrix.tickers; if (!tk.length || !matrix.cov.length) return null;
+    var sum = tk.reduce(function (s, k) { return s + (weights[k] || 0); }, 0); if (sum <= 0) return null;
+    var w = tk.map(function (k) { return (weights[k] || 0) / sum; }), variance = 0;
+    for (var i = 0; i < tk.length; i++) for (var j = 0; j < tk.length; j++) variance += w[i] * w[j] * matrix.cov[i][j];
+    var daily = Math.sqrt(Math.max(variance, 0));
+    return annualize ? daily * Math.sqrt(TRADING_DAYS) : daily;
+  }
+  function undiversifiedVol(weights, matrix, annualize) {
+    var tk = matrix.tickers; if (!tk.length) return null;
+    var sum = tk.reduce(function (s, k) { return s + (weights[k] || 0); }, 0); if (sum <= 0) return null;
+    var v = 0; for (var i = 0; i < tk.length; i++) v += ((weights[tk[i]] || 0) / sum) * matrix.dailyVol[i];
+    return annualize ? v * Math.sqrt(TRADING_DAYS) : v;
+  }
+  function diversification(weights, matrix) {
+    var sigPort = portfolioVol(weights, matrix, false), sigUndiv = undiversifiedVol(weights, matrix, false);
+    if (sigPort == null || sigUndiv == null || sigPort <= 0) return { dr: null, effectiveBets: null, ok: false };
+    var dr = sigUndiv / sigPort;
+    return { dr: dr, effectiveBets: dr * dr, sigPortDaily: sigPort, sigPortAnn: sigPort * Math.sqrt(TRADING_DAYS), sigUndivDaily: sigUndiv, ok: dr >= 1 - 1e-9 };
+  }
+  function topCorrelatedPairs(matrix, n) {
+    var tk = matrix.tickers, out = [];
+    for (var i = 0; i < tk.length; i++) for (var j = i + 1; j < tk.length; j++) out.push({ a: tk[i], b: tk[j], corr: matrix.corr[i][j] });
+    out.sort(function (p, q) { return q.corr - p.corr; });
+    return out.slice(0, n || 5);
+  }
+  W.RiskLens = { simpleReturns: simpleReturns, commonDateIndex: commonDateIndex, coversWindowStart: coversWindowStart,
+    replayWindow: replayWindow, covCorr: covCorr, portfolioVol: portfolioVol, undiversifiedVol: undiversifiedVol,
+    diversification: diversification, topCorrelatedPairs: topCorrelatedPairs };
+
+  /* ---------- pure Tier-1 helpers ---------------------------------------- */
+  function ms(iso) { return Date.parse(iso + 'T00:00:00Z'); }
+  var STRESS_WINDOWS = [
+    { id: 'tech2022', label: '2022 Tech Drawdown', from: '2022-01-03', to: '2022-10-12', stresses: 'Rate shock, growth/tech derating' },
+    { id: 'covid', label: 'COVID Crash', from: '2020-02-19', to: '2020-03-23', stresses: 'Fast liquidity / everything selloff' },
+    { id: 'tariff25', label: '2025 Tariff Selloff', from: '2025-02-01', to: '2025-04-30', stresses: 'Policy/macro shock (verify dates)' },
+    { id: 'carry24', label: 'Aug-2024 Carry Unwind', from: '2024-08-01', to: '2024-08-07', stresses: 'Sharp vol spike' }
+  ];
+  function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v1:' + windowId + ':' + ticker.toUpperCase(); }
+  var COVERAGE_WARN = 0.7;
+  function sparklinePath(path, w, h) {
+    if (!path || path.length < 2) return '';
+    var ys = path.map(function (p) { return p.cum; }), lo = Math.min.apply(null, ys), hi = Math.max.apply(null, ys);
+    var span = (hi - lo) || 1, n = path.length, d = '';
+    for (var i = 0; i < n; i++) { var x = (i / (n - 1)) * w, y = h - ((path[i].cum - lo) / span) * h; d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; }
+    return d.trim();
+  }
+  function replayCardModel(result, opts) {
+    opts = opts || {};
+    var has = result && result.totalReturn != null, cov = result ? result.coverage : 0;
+    return { windowLabel: opts.windowLabel || '', hasData: has,
+      returnPct: has ? result.totalReturn * 100 : null, drawdownPct: has ? result.maxDrawdown * 100 : null,
+      coveragePct: cov * 100, coverageWarn: cov < COVERAGE_WARN, excluded: result ? (result.excluded || []) : [],
+      sparkD: has ? sparklinePath(result.path, 120, 28) : '',
+      frozenLine: (opts.frozenPct > 0) ? '~' + (opts.frozenPct * 100).toFixed(0) + '% of your all-in book (' + (opts.basisLabel || 'self-marked privates') + ') is illiquid and cannot be sold during this drawdown.' : null };
+  }
+
+  /* ---------- live-fetch + DOM glue (the only untested-from-here seam) ----- */
+  var _barsCache = {};
+  function _loadBarsCache() {
+    try { _barsCache = {}; for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf('risk-replay-bars-v1:') === 0) _barsCache[k] = JSON.parse(localStorage.getItem(k)); } }
+    catch (e) { _barsCache = {}; }
+  }
+  function _saveOneBars(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
+
+  async function fetchBarsWindow(ticker, fromISO, toISO) {
+    if (typeof polygonKey === 'undefined' || !polygonKey) { if (typeof loadPolygonKey === 'function') loadPolygonKey(); }
+    if (typeof polygonKey === 'undefined' || !polygonKey) throw new Error('nokey');
+    var gap = 400; // raise toward ~13000 if you hit 429s on the strict 5/min free tier
+    if (typeof _lastPolyFetch === 'number') {
+      var since = Date.now() - _lastPolyFetch;
+      if (since < gap) await new Promise(function (r) { setTimeout(r, gap - since); });
+      _lastPolyFetch = Date.now();
+    }
+    var t = ticker.toUpperCase();
+    var url = 'https://api.polygon.io/v2/aggs/ticker/' + t + '/range/1/day/' + fromISO + '/' + toISO + '?adjusted=true&sort=asc&limit=400&apiKey=' + encodeURIComponent(polygonKey);
+    var res = await fetch(url);
+    if (res.status === 429) throw new Error('rate');
+    if (!res.ok) throw new Error('err');
+    var data = await res.json(), raw = data.results;
+    if (!raw || raw.length < 2) throw new Error('err');
+    return { bars: raw.map(function (b) { return { t: b.t, c: b.c }; }) };
+  }
+
+  // Guard-3-correct weights: held instruments AS THEMSELVES (ETFs not looked
+  // through), valued by the app's own calcPos(p).exitValue = shares × current px.
+  function riskLiquidWeights() {
+    if (typeof positions === 'undefined') return {};
+    var byKey = {}, total = 0;
+    positions.filter(function (p) { return !p.closed && p.ticker; }).forEach(function (p) {
+      var key = (typeof qrCanonical === 'function') ? qrCanonical(p.ticker).key : p.ticker.toUpperCase();
+      var v = (typeof calcPos === 'function') ? (calcPos(p).exitValue || 0) : 0;
+      if (v <= 0) return;
+      byKey[key] = (byKey[key] || 0) + v; total += v;
+    });
+    if (total <= 0) return {};
+    var w = {}; Object.keys(byKey).forEach(function (k) { w[k] = byKey[k] / total; });
+    return w;
+  }
+  function _publicBookValue() {
+    if (typeof positions === 'undefined') return 0;
+    var s = 0;
+    positions.filter(function (p) { return !p.closed && p.ticker; }).forEach(function (p) { s += (typeof calcPos === 'function') ? (calcPos(p).exitValue || 0) : 0; });
+    return s;
+  }
+  function riskFrozenPct() {
+    try {
+      var basis = (typeof peModeBasis === 'function') ? peModeBasis() : 'cost';
+      var pe = (typeof peThemeExposure === 'function') ? peThemeExposure(basis) : null;
+      var priv = pe ? (pe.total || 0) : 0, pub = _publicBookValue(), denom = pub + priv;
+      return denom > 0 ? priv / denom : 0;
+    } catch (e) { return 0; }
+  }
+  function _basisLabel() {
+    var b = (typeof peModeBasis === 'function') ? peModeBasis() : 'cost';
+    return b === 'market' ? 'SpaceX, Anduril, self-marked' : 'SpaceX, Anduril, at cost';
+  }
+
+  async function runReplayForWindow(win, statusEl, onDone) {
+    var weights = riskLiquidWeights(), tickers = Object.keys(weights);
+    if (!tickers.length) { if (statusEl) statusEl.textContent = 'No held positions to replay (add positions / fetch live prices first).'; return; }
+    var barsByTicker = {};
+    for (var i = 0; i < tickers.length; i++) {
+      var tk = tickers[i], cacheKey = windowCacheKey(win.id, tk), hit = _barsCache[cacheKey];
+      if (hit && hit.bars) { barsByTicker[tk] = hit.bars; continue; }
+      if (statusEl) statusEl.textContent = 'Fetching ' + win.label + ': ' + tk + ' (' + (i + 1) + '/' + tickers.length + ')…';
+      try {
+        var r = await fetchBarsWindow(tk, win.from, win.to);
+        barsByTicker[tk] = r.bars;
+        _barsCache[cacheKey] = { bars: r.bars, fetchedAt: Date.now() };
+        _saveOneBars(cacheKey, _barsCache[cacheKey]);
+      } catch (e) {
+        if (e.message === 'rate') { if (statusEl) statusEl.textContent = 'Rate-limited — partial fill saved. Click again to grab the rest.'; break; }
+        if (e.message === 'nokey') { if (statusEl) statusEl.textContent = 'Set your Polygon API key first (🔑 API Keys).'; return; }
+        /* 'err' = name had no history in this window; skip — coverage will reflect it */
+      }
+    }
+    var result = RiskLens.replayWindow(weights, barsByTicker, ms(win.from), ms(win.to));
+    var model = replayCardModel(result, { windowLabel: win.label, basisLabel: _basisLabel(), frozenPct: riskFrozenPct() });
+    if (statusEl) statusEl.textContent = '';
+    if (onDone) onDone(model);
+  }
+
+  function renderReplayCard(model) {
+    if (!model.hasData)
+      return '<div style="font-size:11px;color:var(--color-text-tertiary)">No replayable data for <strong>' + model.windowLabel + '</strong> yet (coverage ' + model.coveragePct.toFixed(0) + '%). The held names likely had no price history in this window.</div>';
+    var pos = model.returnPct >= 0;
+    var retColor = pos ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
+    var covColor = model.coverageWarn ? 'var(--color-text-danger, #ef4444)' : 'var(--color-text-tertiary)';
+    return '<div style="border:1px solid var(--color-border-tertiary);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--color-background-secondary)">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+        '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
+        '<svg width="120" height="28" viewBox="0 0 120 28" style="flex:0 0 auto"><path d="' + model.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="1.5"/></svg>' +
+      '</div>' +
+      '<div style="font-size:11px;margin-top:6px;color:var(--color-text-secondary)">Your book as it sits today would have ' +
+        '<strong style="color:' + retColor + '">' + (pos ? '+' : '') + model.returnPct.toFixed(1) + '%</strong> total, drawing down ' +
+        '<strong style="color:var(--color-text-danger, #ef4444)">' + model.drawdownPct.toFixed(1) + '%</strong>, on ' +
+        '<span style="color:' + covColor + '">' + model.coveragePct.toFixed(0) + '% of the liquid book</span>' + (model.coverageWarn ? ' ⚠ (low coverage — read with caution)' : '') + '.</div>' +
+      (model.excluded && model.excluded.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No price history in this window: ' + model.excluded.join(', ') + '.</div>' : '') +
+      (model.frozenLine ? '<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"><em>And ' + model.frozenLine + '</em></div>' : '') +
+    '</div>';
+  }
+
+  var STANDING_CAVEAT = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.4">Directional stress estimate from historical daily returns. Not a forecast or VaR. Inherits unstable correlations; excludes illiquid privates from the returns math.</div>';
+
+  function buildPanel() {
+    var section = document.createElement('div');
+    section.id = 'risk-replay-section';
+    section.style.cssText = 'max-width:900px;margin:24px auto;padding:16px 20px;border:1px solid var(--color-border-tertiary, #333);border-radius:10px;background:var(--color-background-secondary, #1a1a1a)';
+    var btns = STRESS_WINDOWS.map(function (w) {
+      return '<button class="btn btn-sm" data-win="' + w.id + '" title="' + w.stresses + '" style="font-size:10px;padding:4px 10px;margin:2px">Replay: ' + w.label + '</button>';
+    }).join('');
+    section.innerHTML =
+      '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary, #eee);margin-bottom:2px">Risk &amp; Stress Lens</div>' +
+      '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your current holdings through a real past stress window using actual daily returns (co-movement included, no model). Each button fetches that window\u2019s daily bars from Polygon (paced; partial fills cache and resume on re-click).</div>' +
+      '<div style="margin-bottom:4px">' + btns + '</div>' +
+      '<div id="risk-replay-status" style="font-size:10px;color:var(--color-text-tertiary);min-height:14px"></div>' +
+      '<div id="risk-replay-out"></div>' + STANDING_CAVEAT;
+    var statusEl = section.querySelector('#risk-replay-status');
+    var outEl = section.querySelector('#risk-replay-out');
+    section.querySelectorAll('button[data-win]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var win = STRESS_WINDOWS.filter(function (w) { return w.id === b.getAttribute('data-win'); })[0];
+        b.disabled = true;
+        runReplayForWindow(win, statusEl, function (model) {
+          outEl.insertAdjacentHTML('afterbegin', renderReplayCard(model));
+          b.disabled = false;
+        }).catch(function () { b.disabled = false; });
+      });
+    });
+    return section;
+  }
+
+  function init() {
+    _loadBarsCache();
+    if (document.getElementById('risk-replay-section')) return;
+    document.body.appendChild(buildPanel());
+  }
+  if (document.readyState === 'loading') W.addEventListener('DOMContentLoaded', init);
+  else init();
+
+  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskFrozenPct: riskFrozenPct };
+})(window);
+
+</script>
 </body>
 </html>
