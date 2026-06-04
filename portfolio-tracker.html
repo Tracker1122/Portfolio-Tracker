@@ -14782,7 +14782,7 @@ function _candPositionCountDelta() {
 // Evaluation tab's rotation paragraph, generalized for a mixed queue (any number of adds + trims, not
 // a single-ETF rotation). Every figure is computed from the per-name true-exposure deltas, the frozen
 // tax, and the position-count delta — nothing asserted.
-function _candMovedParagraph(nameMoves, tax, pos, directVia, adds) {
+function _candMovedParagraph(nameMoves, tax, pos, directVia, adds, themeCtx) {
   directVia = directVia || {};
   const D = n => fmtDollarWhole(Math.abs(n));
   // Direct trims vs adds, name by name, from the scenario's own direct/via deltas — NOT the netted
@@ -14822,9 +14822,37 @@ function _candMovedParagraph(nameMoves, tax, pos, directVia, adds) {
     if (adds.new > 1) ap.push(`${D(adds.new)} opens ${adds.newNames.length} name${adds.newNames.length === 1 ? '' : 's'} new to your book`);
     let sentence = `Of what you're adding: ${ap.join('; ')}.`;
     const deepening = adds.direct + adds.passive;
-    if (deepening > 1 && adds.new > 1) sentence += ` Deepening names already in your book raises your exposure to them; only the new names broaden it.`;
-    else if (deepening > 1) sentence += ` All of it deepens names already in your book — it raises existing exposure rather than broadening.`;
-    else if (adds.new > 1) sentence += ` All of it lands on names new to your book — it broadens rather than concentrates.`;
+    // Theme-concentration flag: does the scenario meaningfully raise a theme that is ALREADY a large
+    // block? Judged on themeCtx's clusters — the INCL-PRIVATE lens whenever private deals exist, so a
+    // name-level "broaden" claim can't hide that fresh tickers pile into an already-heavy theme.
+    let concFlag = null;
+    if (themeCtx && themeCtx.concAfter && themeCtx.concAfter.clusters && themeCtx.concBefore && themeCtx.concBefore.clusters) {
+      const bm = {}; themeCtx.concBefore.clusters.forEach(c => bm[c.label] = c.pct);
+      const risen = themeCtx.concAfter.clusters
+        .map(c => ({ label: c.label, after: c.pct, delta: c.pct - (bm[c.label] || 0) }))
+        .filter(c => c.delta >= 0.5 && c.after >= 15)
+        .sort((a, b) => b.after - a.after);
+      if (risen.length) {
+        const top = risen[0];
+        const isBiggest = themeCtx.concAfter.clusters[0] && themeCtx.concAfter.clusters[0].label === top.label;
+        const basisTag = themeCtx.privateIncluded
+          ? (themeCtx.toggleOn ? ' (counting your private deals at cost)' : ' (counting your private deals at cost — not shown in the table above, which is on the public basis)')
+          : '';
+        concFlag = { label: top.label, after: top.after, isBiggest, basisTag };
+      }
+    }
+    const concClause = (lead) => ` ${lead} at the theme level they pile into ${concFlag.label} — ${concFlag.isBiggest ? 'already your largest concentration' : 'already a heavy block'} at ${concFlag.after.toFixed(0)}%${concFlag.basisTag} — so they concentrate that theme rather than broaden the book.`;
+    if (deepening > 1 && adds.new > 1) {
+      sentence += concFlag
+        ? ` Deepening names already in your book raises your exposure to them;${concClause('and although the new names are fresh tickers,')}`
+        : ` Deepening names already in your book raises your exposure to them; only the new names broaden it.`;
+    } else if (deepening > 1) {
+      sentence += ` All of it deepens names already in your book — it raises existing exposure rather than broadening.`;
+    } else if (adds.new > 1) {
+      sentence += concFlag
+        ? concClause('These names are new to your book, but')
+        : ` All of it lands on names new to your book — it broadens rather than concentrates.`;
+    }
     parts.push(sentence);
   }
   // 4. Position-count effect.
@@ -14844,7 +14872,7 @@ function _candMovedParagraph(nameMoves, tax, pos, directVia, adds) {
 }
 
 // The boxed "What really moved" synthesis for the candidate scenario.
-function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) {
+function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds, themeCtx) {
   if (!nameMoves || !nameMoves.length) return '';
   const held = nameMoves.filter(r => r.before >= 1);
   const fresh = nameMoves.filter(r => r.before < 1);
@@ -14858,7 +14886,7 @@ function _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) {
   else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up held ones by ${fmtDollarWhole(Math.abs(heldNet))}.`;
   else if (Math.abs(freshNet) < 1) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already hold \u2014 no new exposure.`;
   else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
-  const para = _candMovedParagraph(nameMoves, tax, _candPositionCountDelta(), directVia, adds);
+  const para = _candMovedParagraph(nameMoves, tax, _candPositionCountDelta(), directVia, adds, themeCtx);
   const addsBits = [];
   if (adds) {
     if (adds.direct > 1) addsBits.push(`${fmtDollarWhole(adds.direct)} deepens held-direct`);
@@ -14899,6 +14927,7 @@ function candCompute() {
   const out = document.getElementById('cand-output'); if (!out) return;
   if (!_candQueue.length) { out.innerHTML = ''; _candScenario = null; return; }
   let before, after, clRows = [], ebBefore = 0, ebAfter = 0, nameRows = [], nameMoves = [], adds = null;
+  let _themeCtx = null;
   const adjustments = _candQueueAdjustments();
   // Per-name direct vs via-fund delta (canonical-keyed), so the summary can tell a genuine same-name
   // hand-back (you trim X directly AND a fund you're adding holds X) apart from simply deepening other
@@ -14942,6 +14971,16 @@ function candCompute() {
       else if (prior >= 1) { adds.passive += add; adds.passiveNames.push(disp); }
       else { adds.new += add; adds.newNames.push(disp); }
     });
+    // Theme-concentration lens for the narrative: ALWAYS incl-private (so tagged private deals count
+    // toward "is this theme already heavy?"), regardless of the display toggle. Reuse before/after when
+    // they already include private (toggle on); otherwise compute the incl-private view fresh.
+    const _allPe = (typeof peClusterAdjustments === 'function') ? peClusterAdjustments() : [];
+    let _cB = before, _cA = after;
+    if (_allPe.length && !peExposureMode) {
+      _cB = computeThemeClusters({ adjustments: _allPe });
+      _cA = computeThemeClusters({ adjustments: _allPe.concat(adjustments) });
+    }
+    _themeCtx = { concBefore: _cB, concAfter: _cA, privateIncluded: !!_allPe.length, toggleOn: !!peExposureMode };
   } catch (e) {
     out.innerHTML = `<div style="font-size:11px;color:var(--color-text-danger)">Couldn't compute the scenario: ${esc(e.message || 'error')}</div>`;
     _candScenario = null;
@@ -15033,7 +15072,7 @@ function candCompute() {
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     _candPeToggle +
     `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${ebBefore.toFixed(1)} → ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>` +
-    _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) +
+    _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds, _themeCtx) +
     glTable + taxTable + nameTable + clTable + slTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
@@ -15044,7 +15083,7 @@ function candCompute() {
     sig: _candScenarioSignature(),
     trades: _candQueue.map(_candTradeLabel),
     clRows, ebBefore, ebAfter, nameRows, sleeveRows, tax,
-    summary: _candMovedParagraph(nameMoves, tax, _pos, directVia, adds),
+    summary: _candMovedParagraph(nameMoves, tax, _pos, directVia, adds, _themeCtx),
     adds,
     posBefore: _pos.before, posAfter: _pos.after,
     perf: _perf
