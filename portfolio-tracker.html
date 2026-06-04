@@ -1847,6 +1847,12 @@
       <input class="modal-input" id="add-pe-stage" type="text" placeholder="e.g. Seed, Series A" style="width:200px">
     </div>
 
+    <div class="modal-field" style="margin-top:8px">
+      <label class="modal-label" title="Tags this private holding to a theme so it can be counted in concentration analysis (at cost). A private deal is direct, single-name exposure to that theme.">Theme (for concentration analysis)</label>
+      <select class="modal-input" id="add-pe-theme" style="width:240px"><option value="">— Untagged (invisible to concentration) —</option></select>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">Until tagged, this deal is excluded from every theme/concentration view.</div>
+    </div>
+
     <div style="font-size:9px;color:var(--color-text-tertiary);margin:10px 0 4px;text-transform:uppercase;letter-spacing:0.04em">Fees (all optional)</div>
     <div class="modal-field">
       <label class="modal-label" title="One-time fees paid at entry (legal, placement, deal). Sunk cost — reduces net gain now and permanently.">Up-front fees ($)</label>
@@ -17097,6 +17103,13 @@ function migrateThemeTags() {
   if (renamed > 0) {
     console.log(`Theme migration: renamed ${renamed} position theme tag(s) to canonical names.`);
   }
+  let renamedPe = 0;
+  if (typeof peDeals !== 'undefined' && Array.isArray(peDeals)) {
+    peDeals.forEach(d => {
+      if (d.theme && THEME_RENAMES[d.theme]) { d.theme = THEME_RENAMES[d.theme]; renamedPe++; }
+    });
+    if (renamedPe > 0) console.log(`Theme migration: renamed ${renamedPe} private-deal theme tag(s) to canonical names.`);
+  }
   return renamed;
 }
 
@@ -21083,6 +21096,8 @@ function renderPeDeals() {
     html += '<div style="font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">';
     html += esc(d.company || '(unnamed)');
     if (d.stage) html += ' <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400">· ' + esc(d.stage) + '</span>';
+    if (d.theme) html += ' <span style="font-size:9px;font-weight:600;color:var(--color-text-secondary);background:var(--color-background-tertiary);border-radius:3px;padding:1px 5px;margin-left:4px" title="Tagged for concentration analysis (counted at cost)">' + esc(canonicalThemeName(d.theme)) + '</span>';
+    else html += ' <span style="font-size:9px;color:var(--color-text-warning);font-weight:400;margin-left:4px" title="Untagged deals are invisible to every concentration view. Edit the deal to tag a theme.">· untagged</span>';
     html += '</div>';
     // Metrics grid (same shape as aggregate so layout doesn't jump when you add a 2nd deal)
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">';
@@ -21147,6 +21162,10 @@ function renderPeDeals() {
   html += '<div style="font-size:9px;color:var(--color-text-tertiary)">' + t.count + ' deals · ' + t.multiple.toFixed(2) + 'x ' + staleWarn + '</div>';
   html += addBtn;
   html += '</div>';
+  const _peUntagged = peDeals.filter(d => calcPeDeal(d) && !d.theme).length;
+  if (_peUntagged > 0) {
+    html += '<div style="grid-column:1/-1;margin-top:6px;font-size:9px;color:var(--color-text-warning)" title="Untagged deals are invisible to every concentration view. Edit each to tag a theme.">⚠ ' + _peUntagged + ' untagged deal' + (_peUntagged > 1 ? 's' : '') + ' — not counted in any concentration view.</div>';
+  }
   html += '</div>';
   el.innerHTML = html;
 }
@@ -21185,6 +21204,19 @@ function openAddPeDealModal(editId) {
   document.getElementById('add-pe-val-current').value = editing ? safe(editing.valuationCurrent) : '';
   document.getElementById('add-pe-valuation-date').value = editing ? safe(editing.lastValuationDate) : todayStr;
   document.getElementById('add-pe-stage').value = editing ? safe(editing.stage) : '';
+  // Theme dropdown — reuse the same THEMES vocabulary the positions/candidate forms use.
+  // Rebuild options each open (idempotent: clear back to the placeholder first), then select
+  // the deal's canonicalized theme if editing.
+  const themeSel = document.getElementById('add-pe-theme');
+  if (themeSel) {
+    themeSel.length = 1; // keep the placeholder option, drop any prior-built ones
+    Object.entries(THEMES).filter(([_, c]) => c.dropdown).forEach(([name]) => {
+      const o = document.createElement('option');
+      o.value = name; o.textContent = name;
+      themeSel.appendChild(o);
+    });
+    themeSel.value = editing ? safe(canonicalThemeName(editing.theme)) : '';
+  }
   document.getElementById('add-pe-fee-upfront').value = editing ? safe(editing.feeUpfront) : '';
   document.getElementById('add-pe-fee-maint').value = editing ? safe(editing.feeMaintenance) : '';
   document.getElementById('add-pe-fee-carry').value = editing ? safe(editing.carryPct) : '';
@@ -21247,6 +21279,8 @@ function confirmAddPeDeal() {
   const valCurStr = document.getElementById('add-pe-val-current').value;
   const valuationDate = document.getElementById('add-pe-valuation-date').value;
   const stage = document.getElementById('add-pe-stage').value.trim();
+  const themeRaw = (document.getElementById('add-pe-theme') || {}).value || '';
+  const theme = themeRaw ? canonicalThemeName(themeRaw) : '';
   const feeUpfrontStr = document.getElementById('add-pe-fee-upfront').value;
   const feeMaintStr = document.getElementById('add-pe-fee-maint').value;
   const carryStr = document.getElementById('add-pe-fee-carry').value;
@@ -21323,6 +21357,7 @@ function confirmAddPeDeal() {
     valuationCurrent: valCur !== null ? valCur : '',
     lastValuationDate: valuationDate || '',
     stage,
+    theme,
     feeUpfront: feeUpfront !== null ? feeUpfront : '',
     feeMaintenance: feeMaint !== null ? feeMaint : '',
     carryPct: carryPct !== null ? carryPct : '',
@@ -21964,6 +21999,7 @@ function convertPeDealToPublic(id) {
   pos.peIpoDate = ipoDate;
   pos.peIpoPrice = ipoPrice;
   pos.peCompany = deal.company || '';
+  if (deal.theme) pos.theme = canonicalThemeName(deal.theme); // carry the private tag onto the public position
   pos.peUpfrontFee = parseFloat(deal.feeUpfront) || 0;
   pos.peMaintenanceFee = parseFloat(deal.feeMaintenance) || 0;
   pos.peCarryPct = parseFloat(deal.carryPct) || 0;
