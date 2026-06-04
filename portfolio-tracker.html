@@ -17759,6 +17759,118 @@ function computeThemeClusters(hypo) {
   };
 }
 
+// ─────────────────────────────────────────────
+// PRIVATE-DEAL CONCENTRATION (at cost) — the "incl. private" additive layer.
+// Basis decision: tagged private deals count AT COST (amountInvested), matching the at-cost AUM
+// convention. Self-marks are deliberately NOT used here — at cost is conservative and verifiable,
+// and not every deal even has a current mark. Private deals are illiquid, single-name DIRECT
+// exposure (no look-through). These helpers are pure (no DOM) so the AI prompts can reuse them.
+// ─────────────────────────────────────────────
+
+// Per-theme private exposure at cost. Untagged deals are reported separately, never silently folded.
+function peThemeExposureAtCost() {
+  const byTheme = {}; let total = 0, untaggedCount = 0, untaggedCost = 0;
+  const deals = (typeof peDeals !== 'undefined' && Array.isArray(peDeals)) ? peDeals : [];
+  deals.forEach(d => {
+    const c = calcPeDeal(d);
+    if (!c) return;                 // no usable cost basis (no amount) — skip entirely
+    const cost = c.inv;             // AT COST — the basis decision
+    const theme = d.theme ? canonicalThemeName(d.theme) : '';
+    if (!theme) { untaggedCount++; untaggedCost += cost; return; }
+    if (!byTheme[theme]) byTheme[theme] = { cost: 0, deals: [] };
+    byTheme[theme].cost += cost;
+    byTheme[theme].deals.push({ company: d.company || '(unnamed)', cost });
+    total += cost;
+  });
+  return { byTheme, total, untaggedCount, untaggedCost };
+}
+
+// Map tagged private deals into computeThemeClusters() adjustments, at cost. Each deal is a synthetic
+// DIRECT name routed by themeTag — reusing the exact merge/routing logic the public clustering uses,
+// so the "incl. private" view never diverges from how the public book is bucketed. Synthetic ticker
+// is prefixed "PVT " + id so it normalizes to PVT…, which (being >5 chars) cannot collide with a real
+// holding's ticker key.
+function peClusterAdjustments() {
+  const adj = [];
+  const deals = (typeof peDeals !== 'undefined' && Array.isArray(peDeals)) ? peDeals : [];
+  deals.forEach(d => {
+    const c = calcPeDeal(d);
+    if (!c) return;
+    const theme = d.theme ? canonicalThemeName(d.theme) : '';
+    if (!theme) return;             // untagged stays invisible — by design
+    adj.push({
+      ticker: 'PVT ' + (d.id || d.company || Math.random().toString(36).slice(2)),
+      deltaDirect: c.inv,           // AT COST
+      themeTag: theme,
+      display: (d.company || 'Private') + ' (private)'
+    });
+  });
+  return adj;
+}
+
+// Build the additive "incl. private (at cost)" HTML block appended below the public-book clusters.
+// Reads the public-book result (pubData) WITHOUT mutating it; recomputes an all-in clustering via the
+// adjustments hook. Two bases are deliberately shown side by side and each is LABELED with its own
+// denominator, never graded against one band (the denominator lesson). Returns '' when there is no
+// private data to show.
+function peInclPrivateSectionHtml(pubData) {
+  const pe = peThemeExposureAtCost();
+  const fmtD = (n) => fmtDollarWhole(n);
+  // Nothing private at all → nothing to add.
+  if (pe.total <= 0 && pe.untaggedCount === 0) return '';
+
+  const untaggedNote = pe.untaggedCount > 0
+    ? `<div style="margin-top:8px;font-size:9px;color:var(--color-text-warning)">⚠ ${pe.untaggedCount} untagged private deal${pe.untaggedCount>1?'s':''} (${fmtD(pe.untaggedCost)} at cost) still excluded from this view — tag ${pe.untaggedCount>1?'them':'it'} on the Private Investments card to count ${pe.untaggedCount>1?'them':'it'}.</div>`
+    : '';
+
+  // Only untagged private deals exist → show just the nudge, no clustering.
+  if (pe.total <= 0) {
+    return `<div style="margin-top:14px;padding:10px 12px;border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md)">
+      <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.04em">Incl. private deals (at cost)</div>
+      ${untaggedNote}
+    </div>`;
+  }
+
+  let all;
+  try { all = computeThemeClusters({ adjustments: peClusterAdjustments() }); }
+  catch (e) { return untaggedNote ? `<div style="margin-top:10px">${untaggedNote}</div>` : ''; }
+
+  const pubByLabel = {}; pubData.clusters.forEach(c => { pubByLabel[c.label] = c; });
+  const affected = all.clusters.map(c => {
+    const p = pubByLabel[c.label];
+    return { label: c.label, pubPct: p ? p.pct : 0, hadPublic: !!p, allPct: c.pct, added: c.total - (p ? p.total : 0) };
+  }).filter(c => c.added > 0.5).sort((a, b) => b.allPct - a.allPct);
+
+  const rows = affected.map(c => {
+    const fromTxt = c.hadPublic
+      ? `${c.pubPct.toFixed(1)}% of public book`
+      : `not present in public book`;
+    return `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:5px">
+      <span style="font-size:11px;color:var(--color-text-primary)">${esc(c.label)}</span>
+      <span style="font-size:10px;color:var(--color-text-tertiary);text-align:right">${fromTxt} → <strong style="color:var(--color-text-warning)">${c.allPct.toFixed(1)}% of all-in book</strong> <span style="color:var(--color-text-tertiary)">(+${fmtD(c.added)} private)</span></span>
+    </div>`;
+  }).join('');
+
+  // Per-theme private deal detail (at cost), straight from the tagged deals.
+  const dealLines = Object.entries(pe.byTheme).sort((a,b) => b[1].cost - a[1].cost).map(([theme, info]) => {
+    const names = info.deals.sort((a,b)=>b.cost-a.cost).map(d => `${esc(d.company)} ${fmtD(d.cost)}`).join(', ');
+    return `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">${esc(theme)}: ${names}</div>`;
+  }).join('');
+
+  const betsLine = (pubData.effectiveBets && all.effectiveBets)
+    ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:8px">Effective independent bets: ${pubData.effectiveBets.toFixed(1)} → <strong>${all.effectiveBets.toFixed(1)}</strong> once private is folded in (lower = more concentrated).</div>`
+    : '';
+
+  return `<div style="margin-top:14px;padding:10px 12px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);background:var(--color-background-tertiary)">
+    <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.04em">Incl. private deals (at cost)</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin:4px 0 2px;line-height:1.5">Adds your tagged private holdings at cost (illiquid, single-name, self-marks excluded). The percentages above this box are shares of the <em>public book</em>; the all-in figures here are shares of a <em>larger denominator</em> (public + private). Read each against its own base — they are not the same scale.</div>
+    ${rows}
+    ${dealLines ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">${dealLines}</div>` : ''}
+    ${betsLine}
+    ${untaggedNote}
+  </div>`;
+}
+
 // Render the full Theme Universe tab.
 function renderThemeUniverse() {
   const el = document.getElementById('theme-universe-tab-content');
@@ -18123,6 +18235,7 @@ function renderThemeClusters() {
         </div>
       </details>` : ''}
     </div>`;
+  try { host.innerHTML += peInclPrivateSectionHtml(data); } catch (e) { /* additive only — never block the public panel */ }
 }
 
 // ─────────────────────────────────────────────
