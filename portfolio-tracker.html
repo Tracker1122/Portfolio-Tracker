@@ -1055,6 +1055,7 @@
     <button class="tab-btn active" onclick="switchTab('dashboard')">Home</button>
     <button class="tab-btn" onclick="switchTab('distribution')">True Exposure</button>
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
+    <button class="tab-btn" onclick="switchTab('risk')">Risk Review</button>
     <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
     <button class="tab-btn" onclick="switchTab('quality')">New Position Evaluation</button>
     <button class="tab-btn" onclick="switchTab('rebalance')">Holdings &amp; Tax</button>
@@ -1521,6 +1522,12 @@
     <div class="section-heading" style="margin-top:8px">Decision Scorecard</div>
     <div class="postsell-cards" id="postsell-cards"></div>
   </div><!-- end tab-postsell -->
+
+  <!-- Risk Review Tab -->
+  <div class="tab-panel" id="tab-risk">
+    <div class="section-heading">Risk Review</div>
+    <div id="risk-review-mount"></div>
+  </div><!-- end tab-risk -->
 
   <!-- Quality Review Tab -->
   <div class="tab-panel" id="tab-quality">
@@ -25177,10 +25184,12 @@ init();
   /* ---------- pure Tier-1 helpers ---------------------------------------- */
   function ms(iso) { return Date.parse(iso + 'T00:00:00Z'); }
   var STRESS_WINDOWS = [
-    { id: 'tech2022', label: '2022 Tech Drawdown', from: '2022-01-03', to: '2022-10-12', stresses: 'Rate shock, growth/tech derating' },
-    { id: 'covid', label: 'COVID Crash', from: '2020-02-19', to: '2020-03-23', stresses: 'Fast liquidity / everything selloff' },
-    { id: 'tariff25', label: '2025 Tariff Selloff', from: '2025-02-01', to: '2025-04-30', stresses: 'Policy/macro shock (verify dates)' },
-    { id: 'carry24', label: 'Aug-2024 Carry Unwind', from: '2024-08-01', to: '2024-08-07', stresses: 'Sharp vol spike' }
+    { id: 'tech2022', label: '2022 Tech Drawdown', from: '2022-01-03', to: '2022-10-12', stresses: 'Rate shock, growth/tech derating — your core risk' },
+    { id: 'tariff25', label: '2025 Tariff Shock', from: '2025-04-02', to: '2025-04-08', stresses: 'Fast policy/macro shock (Liberation Day → pre-pause low)' },
+    { id: 'carry24', label: 'Aug-2024 Carry Unwind', from: '2024-08-01', to: '2024-08-08', stresses: 'Vol spike / leverage unwind' },
+    { id: 'svb23', label: '2023 SVB / Regional Banks', from: '2023-03-08', to: '2023-03-13', stresses: 'Bank stress — a tech book may RISE here (informative)' },
+    { id: 'q4rate18', label: 'Q4-2018 Rate Scare', from: '2018-09-20', to: '2018-12-24', stresses: 'Powell hikes, growth selloff (2022 rhyme)' },
+    { id: 'covid', label: 'COVID Crash', from: '2020-02-19', to: '2020-03-23', stresses: 'Everything-selloff / liquidity' }
   ];
   function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
   var COVERAGE_WARN = 0.7;
@@ -25198,7 +25207,31 @@ init();
       returnPct: has ? result.totalReturn * 100 : null, drawdownPct: has ? result.maxDrawdown * 100 : null,
       coveragePct: cov * 100, coverageWarn: cov < COVERAGE_WARN, excluded: result ? (result.excluded || []) : [],
       sparkD: has ? sparklinePath(result.path, 120, 28) : '',
-      frozenLine: (opts.frozenPct > 0) ? '~' + (opts.frozenPct * 100).toFixed(0) + '% of your all-in book (' + (opts.basisLabel || 'self-marked privates') + ') is illiquid and cannot be sold during this drawdown.' : null };
+      frozenLine: (opts.frozenPct > 0) ? '~' + (opts.frozenPct * 100).toFixed(0) + '% of your all-in book (' + (opts.basisLabel || 'self-marked privates') + ') is illiquid and cannot be sold during this drawdown.' : null,
+      perName: opts.perName || [] };
+  }
+
+  // Per-name moves within a window: each included holding's price change and its
+  // weighted contribution (today's weight × move). Pure fn of already-fetched bars;
+  // does NOT touch the unit-tested replay core. Sorted biggest drag first.
+  function perNameMoves(weights, barsByTicker, included, startMs, endMs) {
+    if (!included || !included.length) return [];
+    var covered = included.reduce(function (s, k) { return s + (weights[k] || 0); }, 0);
+    if (covered <= 0) return [];
+    var rows = [];
+    for (var i = 0; i < included.length; i++) {
+      var k = included[i], bars = barsByTicker[k];
+      if (!bars || !bars.length) continue;
+      var inWin = bars.filter(function (b) { return b.t >= startMs && b.t <= endMs; });
+      if (inWin.length < 2) continue;
+      inWin.sort(function (a, b) { return a.t - b.t; });
+      var c0 = inWin[0].c, c1 = inWin[inWin.length - 1].c;
+      if (!(c0 > 0)) continue;
+      var ret = c1 / c0 - 1, w = (weights[k] || 0) / covered;
+      rows.push({ ticker: k, weight: w, ret: ret, contrib: w * ret });
+    }
+    rows.sort(function (a, b) { return a.contrib - b.contrib; });
+    return rows;
   }
 
   /* ---------- live-fetch + DOM glue (the only untested-from-here seam) ----- */
@@ -25284,7 +25317,8 @@ init();
       }
     }
     var result = RiskLens.replayWindow(weights, barsByTicker, ms(win.from), ms(win.to));
-    var model = replayCardModel(result, { windowLabel: win.label, basisLabel: _basisLabel(), frozenPct: riskFrozenPct() });
+    var perName = perNameMoves(weights, barsByTicker, result.included || [], ms(win.from), ms(win.to));
+    var model = replayCardModel(result, { windowLabel: win.label, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName });
     if (statusEl) statusEl.textContent = '';
     if (onDone) onDone(model);
   }
@@ -25295,6 +25329,31 @@ init();
     var pos = model.returnPct >= 0;
     var retColor = pos ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
     var covColor = model.coverageWarn ? 'var(--color-text-danger, #ef4444)' : 'var(--color-text-tertiary)';
+    var pn = model.perName || [], breakdown = '';
+    if (pn.length) {
+      var maxAbs = pn.reduce(function (m, r) { return Math.max(m, Math.abs(r.contrib)); }, 0) || 1;
+      var rowsHtml = pn.map(function (r) {
+        var neg = r.contrib < 0, c = neg ? 'var(--color-text-danger, #ef4444)' : 'var(--color-text-success, #22c55e)';
+        var halfPct = (Math.min(100, Math.abs(r.contrib) / maxAbs * 100) / 2).toFixed(1);
+        return '<div style="display:flex;align-items:center;gap:6px;font-size:10px;margin:2px 0">' +
+          '<span style="flex:0 0 50px;color:var(--color-text-secondary);font-weight:600">' + r.ticker + '</span>' +
+          '<span style="flex:0 0 36px;color:var(--color-text-tertiary);text-align:right">' + (r.weight * 100).toFixed(1) + '%</span>' +
+          '<span style="flex:0 0 52px;color:' + c + ';text-align:right">' + (r.ret >= 0 ? '+' : '') + (r.ret * 100).toFixed(1) + '%</span>' +
+          '<span style="flex:1 1 auto;height:9px;background:var(--color-background-tertiary,#2a2a2a);border-radius:2px;position:relative;overflow:hidden">' +
+            '<span style="position:absolute;top:0;bottom:0;width:1px;left:50%;background:var(--color-border-tertiary,#444)"></span>' +
+            '<span style="position:absolute;top:0;height:9px;' + (neg ? 'right:50%' : 'left:50%') + ';width:' + halfPct + '%;background:' + c + '"></span>' +
+          '</span>' +
+          '<span style="flex:0 0 50px;color:' + c + ';text-align:right">' + (r.contrib >= 0 ? '+' : '') + (r.contrib * 100).toFixed(2) + 'pt</span>' +
+        '</div>';
+      }).join('');
+      breakdown = '<details style="margin-top:7px"><summary style="font-size:10px;color:var(--color-text-info,#60a5fa);cursor:pointer">Per-name breakdown — what drove it</summary>' +
+        '<div style="margin-top:5px">' +
+          '<div style="display:flex;gap:6px;font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">' +
+            '<span style="flex:0 0 50px">Name</span><span style="flex:0 0 36px;text-align:right">Wt</span><span style="flex:0 0 52px;text-align:right">Move</span><span style="flex:1 1 auto;text-align:center">← drag · help →</span><span style="flex:0 0 50px;text-align:right">pts</span>' +
+          '</div>' + rowsHtml +
+          '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.4">Move = each name\u2019s price change across the window. Contribution (pts) \u2248 today\u2019s weight \u00d7 move \u2014 a single-period approximation, so it won\u2019t sum exactly to the compounded book figure above. Sorted worst drag first.</div>' +
+        '</div></details>';
+    }
     return '<div style="border:1px solid var(--color-border-tertiary);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--color-background-secondary)">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
@@ -25305,6 +25364,7 @@ init();
         '<strong style="color:var(--color-text-danger, #ef4444)">' + model.drawdownPct.toFixed(1) + '%</strong>, on ' +
         '<span style="color:' + covColor + '">' + model.coveragePct.toFixed(0) + '% of the liquid book</span>' + (model.coverageWarn ? ' ⚠ (low coverage — read with caution)' : '') + '.</div>' +
       (model.excluded && model.excluded.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No price history in this window: ' + model.excluded.join(', ') + '.</div>' : '') +
+      breakdown +
       (model.frozenLine ? '<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"><em>And ' + model.frozenLine + '</em></div>' : '') +
     '</div>';
   }
@@ -25314,7 +25374,7 @@ init();
   function buildPanel() {
     var section = document.createElement('div');
     section.id = 'risk-replay-section';
-    section.style.cssText = 'max-width:900px;margin:24px auto;padding:16px 20px;border:1px solid var(--color-border-tertiary, #333);border-radius:10px;background:var(--color-background-secondary, #1a1a1a)';
+    section.style.cssText = 'max-width:900px;margin:4px 0 16px;padding:16px 20px;border:1px solid var(--color-border-tertiary, #333);border-radius:10px;background:var(--color-background-secondary, #1a1a1a)';
     var btns = STRESS_WINDOWS.map(function (w) {
       return '<button class="btn btn-sm" data-win="' + w.id + '" title="' + w.stresses + '" style="font-size:10px;padding:4px 10px;margin:2px">Replay: ' + w.label + '</button>';
     }).join('');
@@ -25342,7 +25402,8 @@ init();
   function init() {
     _loadBarsCache();
     if (document.getElementById('risk-replay-section')) return;
-    document.body.appendChild(buildPanel());
+    var mount = document.getElementById('risk-review-mount') || document.body;
+    mount.appendChild(buildPanel());
   }
   if (document.readyState === 'loading') W.addEventListener('DOMContentLoaded', init);
   else init();
