@@ -25241,35 +25241,94 @@ init();
     return { path: path, totalReturn: cum - 1 };
   }
 
+  /* ---------- recovery (forward-looking) helpers ------------------------- */
+  // Horizons anchored at the window low (`to`): 6mo / 1Y / 2Y after the bottom.
+  // Each checkpoint reports the book's level vs its PRE-EVENT high (cum=1 at the
+  // window start). negative = still underwater; >=0 = back to where it was prior.
+  function _addMonths(msVal, n) { var d = new Date(msVal); d.setUTCMonth(d.getUTCMonth() + n); return d.getTime(); }
+  function _iso(msVal) { return new Date(msVal).toISOString().slice(0, 10); }
+  function _mergeBars(a, b) {
+    var seen = Object.create(null), out = [];
+    (a || []).concat(b || []).forEach(function (x) { if (x && !seen[x.t]) { seen[x.t] = 1; out.push(x); } });
+    out.sort(function (p, q) { return p.t - q.t; });
+    return out;
+  }
+  function _cumAtOrBefore(path, tMs) {
+    var found = null;
+    for (var i = 0; i < path.length; i++) { if (path[i].t <= tMs) found = { idx: i, cum: path[i].cum }; else break; }
+    return found;
+  }
+  var RECOVERY_HORIZONS = [{ label: '6mo', n: 6 }, { label: '1Y', n: 12 }, { label: '2Y', n: 24 }];
+  function recoveryReads(extPath, extBenchPath, windowEndMs, todayMs) {
+    if (!extPath || extPath.length < 2) return null;
+    var lastT = extPath[extPath.length - 1].t, SLACK = 7 * 86400000;
+    var cps = RECOVERY_HORIZONS.map(function (h) {
+      var tMs = _addMonths(windowEndMs, h.n);
+      if (tMs > todayMs) return { label: h.label, pending: true };            // checkpoint hasn't happened yet
+      var b = _cumAtOrBefore(extPath, tMs);
+      if (!b || tMs > lastT + SLACK) return { label: h.label, missing: true }; // past date but no data (partial fetch)
+      var vooPct = null;
+      if (extBenchPath && extBenchPath.length) { var v = _cumAtOrBefore(extBenchPath, tMs); if (v) vooPct = (v.cum - 1) * 100; }
+      return { label: h.label, idx: b.idx, bookPct: (b.cum - 1) * 100, recovered: b.cum >= 1 - 1e-9, vooPct: vooPct };
+    });
+    return { checkpoints: cps };
+  }
+
   function replayCardModel(result, opts) {
     opts = opts || {};
     var has = result && result.totalReturn != null, cov = result ? result.coverage : 0;
-    var bench = opts.benchmark || null;
+    var bench = opts.benchmark || null, rec = opts.recovery || null;
     var sparkD = '', benchSparkD = '', benchReturnPct = null, benchSpreadPct = null, troughDot = null;
+    var windowEndX = null, checkpointDots = [], recovery = null, recoveryIncomplete = false, recoveryCovDrop = false;
     if (has) {
-      // Shared y-range across book AND benchmark so the overlay heights are honestly comparable.
-      var bookYs = result.path.map(function (p) { return p.cum; });
-      var lo = Math.min.apply(null, bookYs), hi = Math.max.apply(null, bookYs);
+      // vs-Mkt number is always WINDOW-scoped (book − VOO over [from,to]).
       if (bench && bench.path && bench.path.length >= 2) {
-        var bYs = bench.path.map(function (p) { return p.cum; });
-        lo = Math.min(lo, Math.min.apply(null, bYs));
-        hi = Math.max(hi, Math.max.apply(null, bYs));
-        benchSparkD = sparklinePath(bench.path, 120, 28, lo, hi);
         benchReturnPct = bench.totalReturn * 100;
         benchSpreadPct = (result.totalReturn - bench.totalReturn) * 100;
       }
-      sparkD = sparklinePath(result.path, 120, 28, lo, hi);
-      // P2: trough dot, in the SAME 120×28 viewBox + shared scale as sparkD so it lands on the line.
-      var ti = troughIndex(result.path), nPts = result.path.length;
-      if (ti >= 0 && nPts > 1) {
-        var span = (hi - lo) || 1;
-        troughDot = { x: (ti / (nPts - 1)) * 120, y: 28 - ((result.path[ti].cum - lo) / span) * 28 };
+      // Use the extended (recovery) path for the GRAPH only when we have it, the window
+      // actually drew down, and forward coverage holds up. Else fall back to window-only.
+      var hadDD = result.maxDrawdown != null && result.maxDrawdown < -0.005;
+      var useExt = !!(rec && rec.extPath && rec.extPath.length >= 2 && hadDD && (rec.coverage == null || rec.coverage >= 0.6));
+      var graphPath = useExt ? rec.extPath : result.path;
+      var graphBench = useExt ? (rec.extBenchPath || null) : (bench ? bench.path : null);
+
+      var ys = graphPath.map(function (p) { return p.cum; });
+      var lo = Math.min.apply(null, ys), hi = Math.max.apply(null, ys);
+      if (graphBench && graphBench.length >= 2) {
+        var bys = graphBench.map(function (p) { return p.cum; });
+        lo = Math.min(lo, Math.min.apply(null, bys)); hi = Math.max(hi, Math.max.apply(null, bys));
+      }
+      var span = (hi - lo) || 1, n = graphPath.length;
+      sparkD = sparklinePath(graphPath, 120, 28, lo, hi);
+      if (graphBench && graphBench.length >= 2) benchSparkD = sparklinePath(graphBench, 120, 28, lo, hi);
+
+      // Trough dot — locate the WINDOW trough date on whichever path we're drawing.
+      var ti = troughIndex(result.path);
+      if (ti >= 0) {
+        var tb = _cumAtOrBefore(graphPath, result.path[ti].t);
+        if (tb) troughDot = { x: (tb.idx / (n - 1)) * 120, y: 28 - ((graphPath[tb.idx].cum - lo) / span) * 28 };
+      }
+
+      if (useExt) {
+        var we = _cumAtOrBefore(graphPath, rec.windowEndMs);
+        if (we) windowEndX = (we.idx / (n - 1)) * 120;
+        var rr = recoveryReads(graphPath, graphBench, rec.windowEndMs, rec.todayMs);
+        if (rr) {
+          recovery = rr.checkpoints;
+          rr.checkpoints.forEach(function (c) {
+            if (c.idx != null) checkpointDots.push({ x: (c.idx / (n - 1)) * 120, y: 28 - ((graphPath[c.idx].cum - lo) / span) * 28, recovered: c.recovered });
+          });
+        }
+        recoveryIncomplete = !!rec.incomplete;
+        recoveryCovDrop = (rec.coverage != null && cov > 0 && rec.coverage < cov - 0.05);
       }
     }
     return { windowLabel: opts.windowLabel || '', hasData: has,
       returnPct: has ? result.totalReturn * 100 : null, drawdownPct: has ? result.maxDrawdown * 100 : null,
       coveragePct: cov * 100, coverageWarn: cov < COVERAGE_WARN, excluded: result ? (result.excluded || []) : [],
       sparkD: sparkD, benchSparkD: benchSparkD, benchReturnPct: benchReturnPct, benchSpreadPct: benchSpreadPct, troughDot: troughDot,
+      windowEndX: windowEndX, checkpointDots: checkpointDots, recovery: recovery, recoveryIncomplete: recoveryIncomplete, recoveryCovDrop: recoveryCovDrop,
       frozenLine: (opts.frozenPct > 0) ? '~' + (opts.frozenPct * 100).toFixed(0) + '% of your all-in book (' + (opts.basisLabel || 'self-marked privates') + ') is illiquid and cannot be sold during this drawdown.' : null,
       perName: opts.perName || [] };
   }
@@ -25300,7 +25359,7 @@ init();
   /* ---------- live-fetch + DOM glue (the only untested-from-here seam) ----- */
   var _barsCache = {};
   function _loadBarsCache() {
-    try { _barsCache = {}; for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf('risk-replay-bars-v2:') === 0) _barsCache[k] = JSON.parse(localStorage.getItem(k)); } }
+    try { _barsCache = {}; for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && (k.indexOf('risk-replay-bars-v2:') === 0 || k.indexOf('risk-replay-recovery-v1:') === 0)) _barsCache[k] = JSON.parse(localStorage.getItem(k)); } }
     catch (e) { _barsCache = {}; }
   }
   function _saveOneBars(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
@@ -25398,7 +25457,56 @@ init();
       } catch (e) { benchmark = null; /* best-effort; book card still renders */ }
     }
 
-    var model = replayCardModel(result, { windowLabel: win.label, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark });
+    // Recovery (forward) data — bounded at to+2Y, best-effort, separate cache namespace
+    // so the window cache stays untouched. Only names WITH forward bars enter the extended
+    // replay (a name missing forward data would truncate the common date index, so it's
+    // excluded and reflected in extended coverage).
+    var recovery = null;
+    if (result.totalReturn != null && !rateLimited && result.maxDrawdown != null && result.maxDrawdown < -0.005) {
+      var included = result.included || [];
+      var toMs = ms(win.to), todayMs = Date.now();
+      var capMs = Math.min(todayMs, _addMonths(toMs, 24)), capISO = _iso(capMs);
+      if (capISO > win.to && included.length) {
+        var fullByTicker = {}, recIncomplete = false;
+        for (var ri = 0; ri < included.length; ri++) {
+          var rtk = included[ri], rkey = 'risk-replay-recovery-v1:' + win.id + ':' + rtk.toUpperCase();
+          var rhit = _barsCache[rkey], recBars = null;
+          if (rhit && rhit.bars) { recBars = rhit.bars; }
+          else {
+            if (statusEl) statusEl.textContent = 'Recovery ' + win.label + ': ' + rtk + ' (' + (ri + 1) + '/' + included.length + ')…';
+            try {
+              var rr2 = await fetchBarsWindow(rtk, win.to, capISO);
+              recBars = rr2.bars;
+              _barsCache[rkey] = { bars: recBars, fetchedAt: Date.now() };
+              _saveOneBars(rkey, _barsCache[rkey]);
+            } catch (e2) {
+              if (e2.message === 'rate') { recIncomplete = true; break; }
+              recIncomplete = true; /* this name has no forward data; it'll be excluded from the extended replay */
+            }
+          }
+          if (recBars && barsByTicker[rtk]) fullByTicker[rtk] = _mergeBars(barsByTicker[rtk], recBars);
+        }
+        var extResult = RiskLens.replayWindow(weights, fullByTicker, ms(win.from), capMs);
+        if (extResult.totalReturn != null) {
+          var extBench = null;
+          try {
+            var vrKey = 'risk-replay-recovery-v1:' + win.id + ':VOO', vrHit = _barsCache[vrKey], vooRec = null;
+            if (vrHit && vrHit.bars) { vooRec = vrHit.bars; }
+            else if (typeof vooBars !== 'undefined' && vooBars) {
+              if (statusEl) statusEl.textContent = 'Recovery ' + win.label + ': VOO…';
+              var vrr = await fetchBarsWindow('VOO', win.to, capISO);
+              vooRec = vrr.bars;
+              _barsCache[vrKey] = { bars: vooRec, fetchedAt: Date.now() };
+              _saveOneBars(vrKey, _barsCache[vrKey]);
+            }
+            if (typeof vooBars !== 'undefined' && vooBars && vooRec) extBench = benchmarkAligned(_mergeBars(vooBars, vooRec), extResult.path.map(function (p) { return p.t; }));
+          } catch (e3) { extBench = null; }
+          recovery = { extPath: extResult.path, extBenchPath: extBench ? extBench.path : null, windowEndMs: toMs, todayMs: todayMs, coverage: extResult.coverage, incomplete: recIncomplete };
+        }
+      }
+    }
+
+    var model = replayCardModel(result, { windowLabel: win.label, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery });
     if (statusEl) statusEl.textContent = '';
     if (onDone) onDone(model);
   }
@@ -25438,9 +25546,11 @@ init();
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
         '<svg width="120" height="28" viewBox="0 0 120 28" style="flex:0 0 auto">' +
+          (model.windowEndX != null ? '<line x1="' + model.windowEndX.toFixed(1) + '" y1="0" x2="' + model.windowEndX.toFixed(1) + '" y2="28" stroke="var(--color-text-tertiary, #888)" stroke-width="0.6" stroke-dasharray="2 2" stroke-opacity="0.5"/>' : '') +
           (model.benchSparkD ? '<path d="' + model.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1" stroke-opacity="0.75"/>' : '') +
           '<path d="' + model.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="1.5"/>' +
           (model.troughDot ? '<circle cx="' + model.troughDot.x.toFixed(1) + '" cy="' + model.troughDot.y.toFixed(1) + '" r="2.2" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.8"><title>Max drawdown ' + model.drawdownPct.toFixed(1) + '% — trough here</title></circle>' : '') +
+          (model.checkpointDots || []).map(function (d) { var c = d.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)'; return '<circle cx="' + d.x.toFixed(1) + '" cy="' + d.y.toFixed(1) + '" r="1.8" fill="' + c + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.6"/>'; }).join('') +
         '</svg>' +
       '</div>' +
       '<div style="font-size:11px;margin-top:6px;color:var(--color-text-secondary)">Your book as it sits today would have ' +
@@ -25452,6 +25562,22 @@ init();
           '<strong style="color:' + (model.benchReturnPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (model.benchReturnPct >= 0 ? '+' : '') + model.benchReturnPct.toFixed(1) + '%</strong>' +
           ' — your book ' + (model.benchSpreadPct >= 0 ? 'outperformed by +' + model.benchSpreadPct.toFixed(1) : 'lagged by ' + Math.abs(model.benchSpreadPct).toFixed(1)) + ' pts ' +
           '<span style="opacity:.75">(yellow line = VOO)</span></div>'
+        : '') +
+      (model.recovery ?
+        '<div style="font-size:10px;margin-top:3px;color:var(--color-text-tertiary)">Recovery to pre-event level (after the window low): ' +
+          model.recovery.map(function (c) {
+            if (c.pending) return c.label + ' <span style="opacity:.6">pending</span>';
+            if (c.missing) return c.label + ' \u2014';
+            var col = c.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
+            return c.label + ': <strong style="color:' + col + '">' + (c.bookPct >= 0 ? '+' : '') + c.bookPct.toFixed(1) + '%' + (c.recovered ? ' \u2713' : '') + '</strong>';
+          }).join(' \u00b7 ') +
+          (model.recoveryIncomplete ? ' <span style="color:var(--color-text-danger, #ef4444)">\u26a0 partial \u2014 click again</span>' : '') +
+          (model.recoveryCovDrop ? ' <span style="opacity:.7">(on reduced coverage)</span>' : '') +
+          ' <span style="opacity:.6">\u00b7 line runs through recovery; dashed = window end</span></div>' +
+          (model.recovery.some(function (c) { return c.vooPct != null; }) ?
+            '<div style="font-size:9px;margin-top:1px;color:var(--color-text-tertiary);opacity:.85">VOO, same points: ' +
+              model.recovery.map(function (c) { return (c.pending || c.missing || c.vooPct == null) ? c.label + ' \u2014' : c.label + ': ' + (c.vooPct >= 0 ? '+' : '') + c.vooPct.toFixed(1) + '%'; }).join(' \u00b7 ') +
+            '</div>' : '')
         : '') +
       (model.excluded && model.excluded.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No price history in this window: ' + model.excluded.join(', ') + '.</div>' : '') +
       breakdown +
@@ -25479,6 +25605,7 @@ init();
         '<th style="text-align:right;font-weight:600;padding:2px 6px">Max DD</th>' +
         '<th style="text-align:right;font-weight:600;padding:2px 6px">vs Mkt</th>' +
         '<th style="text-align:right;font-weight:600;padding:2px 6px">Cov</th>' +
+        '<th style="text-align:center;font-weight:600;padding:2px 6px">Rec 6m\u00b71y\u00b72y</th>' +
         '<th style="text-align:center;font-weight:600;padding:2px 0 2px 6px">Path</th>' +
       '</tr>';
     var rows = ids.map(function (id) {
@@ -25496,19 +25623,26 @@ init();
             (m.troughDot ? '<circle cx="' + m.troughDot.x.toFixed(1) + '" cy="' + m.troughDot.y.toFixed(1) + '" r="3" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="1"/>' : '') +
           '</svg>'
         : dash;
+      var recCell = m.recovery ? m.recovery.map(function (c) {
+        if (c.pending) return '<span style="opacity:.5">\u00b7</span>';
+        if (c.missing) return '<span style="opacity:.5">\u2013</span>';
+        var rc = c.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
+        return '<span style="color:' + rc + '">' + (c.bookPct >= 0 ? '+' : '') + c.bookPct.toFixed(0) + '</span>';
+      }).join('<span style="opacity:.4"> / </span>') : dash;
       return '<tr style="font-size:10px;border-top:1px solid var(--color-border-tertiary, #333)">' +
         '<td style="text-align:left;color:var(--color-text-secondary);padding:3px 6px 3px 0">' + label + (m.coverageWarn ? ' \u26a0' : '') + '</td>' +
         '<td style="text-align:right;padding:3px 6px;color:' + retColor + ';font-weight:600">' + (has ? (m.returnPct >= 0 ? '+' : '') + m.returnPct.toFixed(1) + '%' : dash) + '</td>' +
         '<td style="text-align:right;padding:3px 6px;color:var(--color-text-danger, #ef4444)">' + (has ? m.drawdownPct.toFixed(1) + '%' : dash) + '</td>' +
         '<td style="text-align:right;padding:3px 6px">' + spreadCell + '</td>' +
         '<td style="text-align:right;padding:3px 6px;color:' + covColor + '">' + m.coveragePct.toFixed(0) + '%</td>' +
+        '<td style="text-align:center;padding:3px 6px;font-size:9px;white-space:nowrap">' + recCell + '</td>' +
         '<td style="text-align:center;padding:3px 0 3px 6px">' + spark + '</td>' +
       '</tr>';
     }).join('');
     el.innerHTML =
       '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
-      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed (click a window above to add or refresh it). \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; yellow path = VOO.</div>' +
-      '<table style="border-collapse:collapse;width:100%;max-width:560px">' + header + rows + '</table>';
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed (click a window above to add or refresh it). \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; yellow path = VOO. \u201cRec\u201d = book level vs its pre-event high at 6mo / 1Y / 2Y after the window low (green = back to even or better; \u00b7 = not yet reached).</div>' +
+      '<table style="border-collapse:collapse;width:100%;max-width:640px">' + header + rows + '</table>';
   }
 
   function buildPanel() {
