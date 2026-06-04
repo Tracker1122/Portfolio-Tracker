@@ -2648,6 +2648,9 @@ function mkPos() {
     benchmarkAtBuy: null,         // ticker (e.g. "SMH") at the time of buy — sanity check against future map changes
     benchmarkPriceAtBuy: null,    // benchmark price on dateBought
     benchmarkPriceAtSell: null,   // benchmark price on sellDate (closed positions only)
+    // Provenance of the theme-benchmark anchor (parallel to spxBuySource): 'auto-close' / 'auto-nearby'
+    // / 'auto-live' / 'auto-failed'. Blank = set by Backfill or never anchored.
+    benchmarkAtBuySource: '', benchmarkAtBuyMatchedDate: null, benchmarkAtBuyFetching: false,
     // Capital source tracking — see Capital Deployed metric. Default 0 (treat as new capital).
     // User-supplied at time of purchase via the capital-modal.
     redeployedAmount: 0,
@@ -2960,10 +2963,17 @@ async function fetchSpxHistorical(dateStr) {
 // can tell an exact-day close from a nearest-trading-day fallback (weekend/holiday buys). Returns
 // { close, matchedDate (YYYY-MM-DD), exact }.
 async function fetchSpxCloseForDate(dateStr) {
+  return fetchCloseForDate('^GSPC', dateStr);
+}
+
+// Keyless close-on-date fetch for ANY ticker (S&P, SMH, ITA, …) via the same Yahoo chart endpoint
+// Refresh Prices uses. Reports WHICH date the close came from so the caller can tell an exact-day
+// close from a nearest-trading-day fallback. Returns { close, matchedDate (YYYY-MM-DD), exact }.
+async function fetchCloseForDate(ticker, dateStr) {
   const d = new Date(dateStr + 'T12:00:00Z');
   const period1 = Math.floor(d.getTime() / 1000);
   const period2 = period1 + 7 * 86400;
-  const url = `${PROXY_BASES[0]}/v8/finance/chart/%5EGSPC?interval=1d&period1=${period1}&period2=${period2}`;
+  const url = `${PROXY_BASES[0]}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${period1}&period2=${period2}`;
   const data = await yahooFetch(url);
   const result = data.chart.result[0];
   const closes = result.indicators.quote[0].close;
@@ -3012,6 +3022,58 @@ async function autoAnchorSpxBuy(posId) {
     pos.spxBuySource = 'auto-failed';   // leave spxBuy blank — never fabricate
   } finally {
     pos.spxBuyFetching = false;
+    if (typeof renderAll === 'function') renderAll();
+    scheduleSave();
+  }
+}
+
+// Auto-anchor an OPEN position's THEME benchmark (benchmarkAtBuy = the ETF, benchmarkPriceAtBuy = its
+// price on the buy date) so theme-alpha can compute and the divergence ⚠ clears. Mirrors the spxBuy
+// anchor: today's buy has no close yet → live price (flagged 'auto-live'); past buy fetches the close
+// (exact, or nearest-trading-day = 'auto-nearby'); failure leaves it blank (never fabricated). Closed
+// positions are never touched here — their anchor is owned by the deliberate re-measure flow.
+async function autoAnchorThemeBenchmark(posId) {
+  const pos = positions.find(p => p.id === posId);
+  if (!pos || pos.closed || !pos.dateBought || !pos.theme) return;
+  const tb = (typeof getThemeBenchmark === 'function') ? getThemeBenchmark(pos.theme) : null;
+  if (!tb) return; // theme has no benchmark (e.g. "Other") — nothing to anchor
+
+  pos.benchmarkAtBuyFetching = true;
+  if (typeof renderAll === 'function') renderAll();
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const buy = new Date(pos.dateBought + 'T00:00:00');
+
+  // Same-day (or defensively future) buy: no official close yet → current price for the benchmark ETF.
+  // Prefer the price Get Benchmarks already cached; otherwise fetch a live quote (keyless, Yahoo).
+  if (buy >= today) {
+    let live = (benchmarkPrices && typeof benchmarkPrices[tb] === 'number') ? benchmarkPrices[tb] : null;
+    if (live == null) { try { live = await fetchStockPrice(tb); } catch (e) { live = null; } }
+    if (live != null && isFinite(live)) {
+      pos.benchmarkAtBuy = tb;
+      pos.benchmarkPriceAtBuy = +live;
+      pos.benchmarkAtBuySource = 'auto-live';
+      pos.benchmarkAtBuyMatchedDate = null;
+    } else {
+      pos.benchmarkAtBuySource = 'auto-failed';
+    }
+    pos.benchmarkAtBuyFetching = false;
+    if (typeof renderAll === 'function') renderAll();
+    scheduleSave();
+    return;
+  }
+
+  // Past date: fetch the benchmark's close on the buy date.
+  try {
+    const { close, matchedDate, exact } = await fetchCloseForDate(tb, pos.dateBought);
+    pos.benchmarkAtBuy = tb;
+    pos.benchmarkPriceAtBuy = +close;
+    pos.benchmarkAtBuySource = exact ? 'auto-close' : 'auto-nearby';
+    pos.benchmarkAtBuyMatchedDate = exact ? null : matchedDate;
+  } catch (e) {
+    pos.benchmarkAtBuySource = 'auto-failed';   // leave anchor blank — never fabricate
+  } finally {
+    pos.benchmarkAtBuyFetching = false;
     if (typeof renderAll === 'function') renderAll();
     scheduleSave();
   }
@@ -4742,7 +4804,7 @@ function renderRow(pos) {
 
   return `
   <tr class="${isClosed ? 'closed-row' : ''}" data-id="${pos.id}">
-    <td style="white-space:nowrap"><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.ticker) || '<span class="dash">—</span>'}</span>${benchmarkDivergenceBadge(pos)}${peConvertedBadge(pos)}</td>
+    <td style="white-space:nowrap"><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.ticker) || '<span class="dash">—</span>'}</span>${benchmarkDivergenceBadge(pos)}${themeBenchSourceFlag(pos)}${peConvertedBadge(pos)}</td>
     <td><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.account) || '<span class="dash">—</span>'}</span></td>
     <td><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.dateBought) || '<span class="dash">—</span>'}</span></td>
     <td class="calc-cell held-cell" style="text-align:center;white-space:nowrap">${(() => {
@@ -6210,12 +6272,24 @@ function spxBuySourceFlag(pos) {
   return ''; // 'auto-close' and 'manual' are trusted
 }
 
+// Inline marker (next to the ticker) for how trustworthy the THEME benchmark anchor is. Loud only
+// for the approximate cases (nearby close / live intraday); silent for an exact close or a Backfill
+// value. The αsuffix distinguishes it from the S&P-at-buy flag, and a failed fetch falls through to
+// the existing divergence ⚠ (anchor stays empty).
+function themeBenchSourceFlag(pos) {
+  if (pos.benchmarkAtBuyFetching) return ` <span title="Fetching the ${esc(getThemeBenchmark(pos.theme) || 'theme')} benchmark close for ${esc(pos.dateBought || '')}\u2026" style="color:var(--color-text-tertiary)">\u27f3</span>`;
+  const src = pos.benchmarkAtBuySource;
+  if (src === 'auto-nearby') return ` <span title="\u2248 Theme benchmark (${esc(pos.benchmarkAtBuy || '')}) anchored to the close from ${esc(pos.benchmarkAtBuyMatchedDate || 'the nearest trading day')} \u2014 ${esc(pos.dateBought || '')} had no market close. Theme alpha is approximate." style="cursor:help;color:#f59e0b;font-weight:700">\u2248\u03b1</span>`;
+  if (src === 'auto-live') return ` <span title="Theme benchmark (${esc(pos.benchmarkAtBuy || '')}) anchored to its live intraday price \u2014 your buy date is today, no close yet. Re-run \u27f3 Backfill Theme Benchmarks after the close to lock the official price." style="cursor:help;color:#f59e0b;font-weight:700">\u229a\u03b1</span>`;
+  return '';
+}
+
 function benchmarkDivergenceBadge(pos) {
   const div = benchmarkDivergence(pos);
   if (!div) return '';
   let tip;
   if (div.missing) {
-    tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position has NO benchmark anchored — theme alpha can't be computed. Open the edit modal to set its benchmark.`;
+    tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position has NO benchmark anchored — theme alpha can't be computed. It anchors automatically when you save the position, or run ⟳ Backfill Theme Benchmarks. A same-day buy has no published close yet, so re-run after today's close.`;
   } else {
     tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position's theme-alpha was measured against ${div.usedBench}`
       + (div.closed
@@ -6238,7 +6312,12 @@ function renderDivergenceBanner() {
   const fmtList = arr => arr.map(({ p, d }) =>
     `<strong>${esc(p.ticker || '?')}</strong> (${esc(p.theme)}→${esc(d.themeBench)}, measured vs ${esc(d.usedBench)})`).join(', ');
   const parts = [];
-  if (openOnes.length) parts.push(`<div style="margin-top:4px"><strong>Open (${openOnes.length}):</strong> ${fmtList(openOnes)} — re-tag the theme, or it stays measured against the old benchmark.</div>`);
+  if (openOnes.length) {
+    const openMissing = openOnes.filter(x => x.d.missing);
+    const openMismatch = openOnes.filter(x => !x.d.missing);
+    if (openMissing.length) parts.push(`<div style="margin-top:4px"><strong>Open, no benchmark anchored (${openMissing.length}):</strong> ${fmtList(openMissing)} — re-save the position or run ⟳ Backfill Theme Benchmarks to anchor it (same-day buys: after today's close). The tag is fine.</div>`);
+    if (openMismatch.length) parts.push(`<div style="margin-top:4px"><strong>Open, tag/benchmark mismatch (${openMismatch.length}):</strong> ${fmtList(openMismatch)} — re-tag the theme, or it stays measured against the old benchmark.</div>`);
+  }
   if (closedOnes.length) parts.push(`<div style="margin-top:4px"><strong>Closed (${closedOnes.length}):</strong> ${fmtList(closedOnes)} — realized alpha is frozen against the old benchmark. Open the ✎ edit modal to re-measure, or leave as-is if the tag is just a thesis label.</div>`);
   el.innerHTML = `⚠ <strong>${flagged.length} position${flagged.length === 1 ? '' : 's'} where the theme tag and the benchmark used don't line up.</strong> The ⚠ next to each ticker marks them.` + parts.join('');
   el.style.display = 'block';
@@ -21944,6 +22023,7 @@ function confirmEditPosition() {
   const dateChanged = (p.dateBought || '') !== dateBought;
   const prevSpxBuy = (p.spxBuy === '' || p.spxBuy == null) ? '' : String(p.spxBuy);
   const prevSpxSource = p.spxBuySource || '';
+  const themeChanged = (p.theme || '') !== theme;
   p.ticker = ticker;
   p.account = account;
   p.dateBought = dateBought;
@@ -21973,15 +22053,25 @@ function confirmEditPosition() {
     }
   }
 
-  // If ticker or buy date changed, the frozen benchmark anchor (benchmarkAtBuy/benchmarkPriceAtBuy)
-  // may no longer match — the divergence detector will flag it on render so the user can re-measure.
-  // We deliberately do NOT silently rewrite those frozen measurements here.
+  // Theme-benchmark anchor (benchmarkAtBuy/benchmarkPriceAtBuy → theme alpha): for OPEN positions,
+  // (re)anchor automatically when there's no price for the current theme's benchmark, when the theme
+  // changed (different benchmark now), or when the buy date moved. CLOSED positions are never touched
+  // here — their anchor is frozen and owned by the deliberate re-measure flow.
+  let _reanchorBench = false;
+  if (!p.closed && dateBought) {
+    const _tb = (typeof getThemeBenchmark === 'function') ? getThemeBenchmark(theme) : null;
+    if (_tb) {
+      const _havePrice = (p.benchmarkAtBuy === _tb) && (p.benchmarkPriceAtBuy != null && p.benchmarkPriceAtBuy !== '');
+      if (!_havePrice || dateChanged || themeChanged) _reanchorBench = true;
+    }
+  }
 
   closeEditPositionModal();
   if (typeof renderAll === 'function') renderAll();
   if (typeof renderCapitalDeployed === 'function') renderCapitalDeployed();
   scheduleSave();
   if (_reanchorSpx && typeof autoAnchorSpxBuy === 'function') autoAnchorSpxBuy(p.id);
+  if (_reanchorBench && typeof autoAnchorThemeBenchmark === 'function') autoAnchorThemeBenchmark(p.id);
   if (typeof runSelfChecks === 'function') { try { runSelfChecks(); } catch (e) {} }
 
   // If the Capital Deployed overlay is open, refresh it
