@@ -8854,7 +8854,7 @@ let qrRotateChecked = new Set();
 // sim fields — no asserted facts. Describes (a) the held-vs-new split, (b) how little true exposure
 // actually drops on names the ETF hands back, (c) the position-count change, (d) the tax split and any
 // harvestable loss — then frames it as reshuffle-vs-reduce WITHOUT a verdict on whether to do it.
-function buildWhatReallyMovedParagraph(sim, etfTicker) {
+function buildWhatReallyMovedParagraph(sim, etfTicker, concFlag) {
   if (!sim || !Array.isArray(sim.rows)) return '';
   const held = sim.rows.filter(r => r.before > 0);
   const fresh = sim.rows.filter(r => r.before === 0);
@@ -8888,6 +8888,12 @@ function buildWhatReallyMovedParagraph(sim, etfTicker) {
     parts.push(`This rotation introduces no new exposure — it reshuffles ${D(heldNet)} among names you already held.`);
   } else {
     parts.push(`Net change across held and new names: ${heldNet + freshNet >= 0 ? '+' : '\u2212'}${D(heldNet + freshNet)}.`);
+  }
+  // 1b. Theme-concentration check: if that "new exposure" lands in a theme the user is already heavy
+  // in (incl. private at cost, regardless of the display toggle), it concentrates rather than
+  // diversifies — say so, so "new names" can't read as "broadening" when they pile into a heavy theme.
+  if (concFlag && freshNet > 0) {
+    parts.push(`At the theme level, though, that new exposure lands in ${concFlag.label} — ${concFlag.isBiggest ? 'already your largest concentration' : 'already a heavy block'} at ${concFlag.pct.toFixed(0)}%${peHeavyBasisTag(concFlag)} — so it concentrates that theme rather than diversifies, even though the names are new.`);
   }
   // 2. The hand-back / reshuffle point — the actual insight.
   if (reshuffleShare !== null && reshuffleShare >= 15) {
@@ -9108,8 +9114,10 @@ let qrRotUnit = 'pct';
 // Shared renderer for the rotation result table (proceeds + tax + before/after true exposure +
 // "what really moved" + sleeve impact). Used by BOTH the form panel and the saved card so they can
 // never show different numbers. `sim` is a qrSimulateRotation() result.
-function qrRotationSimHtml(sim, etfTicker) {
+function qrRotationSimHtml(sim, etfTicker, theme) {
   const netProceeds = sim.netProceeds;
+  // Heavy-theme flag for the candidate's theme (incl-private), to qualify "new exposure" in the prose.
+  const _concFlag = (typeof peThemeHeavyFlag === 'function') ? peThemeHeavyFlag(theme) : null;
   let taxNote;
   if (sim.estTax > 0) {
     taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains → ~${fmtDollarWhole(netProceeds)} net to reinvest`;
@@ -9152,7 +9160,7 @@ function qrRotationSimHtml(sim, etfTicker) {
       <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
       <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh>0?`, ${hiddenFresh} below table`:''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
       <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
-      <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${buildWhatReallyMovedParagraph(sim, etfTicker)}</div>
+      <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${buildWhatReallyMovedParagraph(sim, etfTicker, _concFlag)}</div>
     </div>`;
   })();
 
@@ -9322,7 +9330,7 @@ function qrRenderRotation() {
       const targetSleeve = (editCand && editCand.sleeve) || ((document.getElementById('qr-sleeve') || {}).value) || '(unassigned)';
       const buyOverride = parseFloat((document.getElementById('qr-buy-amount') || {}).value) || (editCand && editCand.buyAmount) || 0;
       const s = qrSimulateRotation(parsed, etfTicker, resolved, targetSleeve, buyOverride);
-      sim.innerHTML = qrRotationSimHtml(s, etfTicker);
+      sim.innerHTML = qrRotationSimHtml(s, etfTicker, (editCand && editCand.theme) || ((document.getElementById('qr-theme') || {}).value) || '');
     }
   }
   if (typeof renderQrPerfForm === 'function' && document.getElementById('qr-perf-form')) renderQrPerfForm();
@@ -9809,7 +9817,7 @@ function renderQrCardAnalysis(id) {
     if (resolved.length > 0) {
       const sim = qrSimulateRotation(parsed, etfTicker, resolved, c.sleeve || '(unassigned)', c.buyAmount > 0 ? +c.buyAmount : undefined);
       const sized = Array.isArray(c.rotateTrims) && c.rotateTrims.some(t => !((t.unit === 'pct' && +t.amount === 100 || !t.unit) && !t.lotId));
-      tableHtml = (sized ? `<div style="font-size:8px;color:var(--color-text-info);margin:6px 0 0">Sized / per-lot trims set in Edit are in effect — open Edit to adjust slices.</div>` : '') + qrRotationSimHtml(sim, etfTicker);
+      tableHtml = (sized ? `<div style="font-size:8px;color:var(--color-text-info);margin:6px 0 0">Sized / per-lot trims set in Edit are in effect — open Edit to adjust slices.</div>` : '') + qrRotationSimHtml(sim, etfTicker, c.theme || '');
     } else {
       tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above for a quick whole-position model, or open Edit for partial / per-lot trims into ${esc(etfTicker)} — your choice saves automatically and updates the observations.</div>`;
     }
@@ -17926,6 +17934,37 @@ function setPeExposureMode(on) {
 // Public/Incl-private toggle — so a public-basis export can legitimately carry AI commentary on private
 // concentration without contradiction. Returns '' when there are no tagged private deals. Light-theme
 // colors because the PDF renders on white.
+
+// Is the given theme ALREADY a heavy concentration on the INCL-PRIVATE basis (tagged private deals
+// folded at cost, regardless of the display toggle)? Returns the cluster label/pct/biggest flag when
+// the theme's cluster is >=15% of the all-in book, else null. Matches merged cluster labels (e.g. theme
+// "Semiconductors" inside "Semiconductors + AI Infrastructure"). Used to flag when a buy or rotation
+// piles "new" exposure into a theme the user is already concentrated in.
+function peThemeHeavyFlag(theme) {
+  if (!theme || typeof computeThemeClusters !== 'function') return null;
+  const t = canonicalThemeName(theme);
+  let cl;
+  try { cl = computeThemeClusters({ adjustments: (typeof peClusterAdjustments === 'function' ? peClusterAdjustments() : []) }); }
+  catch (e) { return null; }
+  if (!cl || !cl.clusters || !cl.clusters.length) return null;
+  const match = cl.clusters.find(c => c.label === t || (c.label.includes(' + ') && c.label.split(' + ').map(s => s.trim()).includes(t)));
+  if (!match || match.pct < 15) return null;
+  const peExp = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : { total: 0 };
+  return {
+    label: match.label, pct: match.pct,
+    isBiggest: !!(cl.clusters[0] && cl.clusters[0].label === match.label),
+    privateIncluded: peExp.total > 0, toggleOn: !!peExposureMode
+  };
+}
+
+// Trailing clause naming the basis for a heavy-theme flag.
+function peHeavyBasisTag(flag) {
+  if (!flag || !flag.privateIncluded) return '';
+  return flag.toggleOn
+    ? ' (counting your private deals at cost)'
+    : ' (counting your private deals at cost — not shown in the table above, which is on the public basis)';
+}
+
 function pePdfBasisNote() {
   const peExp = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : null;
   if (!peExp || peExp.total <= 0) return '';
