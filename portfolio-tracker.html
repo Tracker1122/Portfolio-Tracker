@@ -2558,6 +2558,7 @@ const DEFAULT_BENCHMARK_FEES = {
 };
 let trackRecordMatureOnly = false; // toggle: filter Track Record cards to mature positions only
 let industryAlphaMatureOnly = false; // toggle: filter Industry Intelligence/Spotlight theme alpha to mature open positions only
+let peExposureMode = false; // toggle: fold tagged private deals (AT COST) into the THEME-CLUSTER concentration views (move-together panel + buy-impact baseline). Concentration visibility ONLY — never alpha/performance. Default off = public book unchanged.
 
 // Book-exclusion state — a NON-DESTRUCTIVE view filter for the OPEN-book summary. Lets you "turn off"
 // part of the book (a directly-held ticker, an ETF, a theme, or a sleeve) so the summary recomputes
@@ -10065,8 +10066,12 @@ function qrBuyImpactHtml(type, ticker, theme, sleeve, parsedHoldings, buyAmount)
 
   let clRows = [], nameMoves = [];
   try {
-    const before = computeThemeClusters();
-    const after = computeThemeClusters({ adjustments });
+    // When the shared private-exposure toggle is on, fold tagged private deals (at cost) into BOTH
+    // the before and after baseline, so the buy's cluster delta is measured against the all-in book.
+    // Empty array (toggle off, or no tagged deals) makes computeThemeClusters identical to the no-arg call.
+    const _peAdj = (peExposureMode && typeof peClusterAdjustments === 'function') ? peClusterAdjustments() : [];
+    const before = computeThemeClusters({ adjustments: _peAdj });
+    const after = computeThemeClusters({ adjustments: _peAdj.concat(adjustments) });
     const bMap = {}, aMap = {};
     before.clusters.forEach(c => bMap[c.label] = c.pct); if (before.base && before.base.total > 0) bMap['Diversified base'] = before.base.pct;
     after.clusters.forEach(c => aMap[c.label] = c.pct); if (after.base && after.base.total > 0) aMap['Diversified base'] = after.base.pct;
@@ -10120,9 +10125,19 @@ function qrBuyImpactHtml(type, ticker, theme, sleeve, parsedHoldings, buyAmount)
 
   const sleeveLine = `<div style="font-size:9px;color:var(--color-text-secondary);margin-top:6px">Sleeve <strong style="color:var(--color-text-primary)">${esc(sl)}</strong>: ${slBp.toFixed(1)}% → ${slAp.toFixed(1)}% of your direct book (${slAp >= slBp ? '+' : ''}${(slAp - slBp).toFixed(1)}pp).</div>`;
 
+  // Baseline basis toggle (shared with the move-together panel). Only shown when there's tagged private
+  // to fold, and only alongside the cluster table it modifies.
+  const _peTagged = (typeof peThemeExposureAtCost === 'function') ? (peThemeExposureAtCost().total > 0) : false;
+  const _peToggleBuy = _peTagged ? `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:8px 0 2px">
+    <span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">Baseline:</span>
+    <button onclick="setPeExposureMode(false)" style="font-size:9px;padding:2px 9px;border-radius:11px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${!peExposureMode?'var(--color-text-info)':'transparent'};color:${!peExposureMode?'#000':'var(--color-text-tertiary)'}">Public</button>
+    <button onclick="setPeExposureMode(true)" title="Fold tagged private deals into the baseline at cost (illiquid, single-name, self-marks excluded)" style="font-size:9px;padding:2px 9px;border-radius:11px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${peExposureMode?'var(--color-text-warning)':'transparent'};color:${peExposureMode?'#000':'var(--color-text-tertiary)'}">Incl. private</button>
+    ${peExposureMode?'<span style="font-size:8px;color:var(--color-text-warning)">baseline incl. private at cost</span>':''}
+  </div>` : '';
+
   return `
     <div style="font-size:10px;color:var(--color-text-primary);line-height:1.5;margin-bottom:2px">${headline}</div>
-    ${clTable}
+    ${clTable ? _peToggleBuy + clTable : ''}
     ${deepBlock}
     ${freshNote}
     ${sleeveLine}
@@ -17825,62 +17840,34 @@ function peClusterAdjustments() {
 // adjustments hook. Two bases are deliberately shown side by side and each is LABELED with its own
 // denominator, never graded against one band (the denominator lesson). Returns '' when there is no
 // private data to show.
-function peInclPrivateSectionHtml(pubData) {
-  const pe = peThemeExposureAtCost();
+// Lean footer for the cluster panel. The TOGGLE now drives the actual re-clustering; this footer only
+// adds context: in incl-private mode it names the deals folded in; in public mode it points at the
+// toggle; either way it surfaces any untagged deals so the blindspot can't hide. (isOn = effective mode.)
+function peClusterFooterHtml(peExp, isOn) {
+  if (!peExp || (peExp.total <= 0 && peExp.untaggedCount === 0)) return '';
   const fmtD = (n) => fmtDollarWhole(n);
-  // Nothing private at all → nothing to add.
-  if (pe.total <= 0 && pe.untaggedCount === 0) return '';
-
-  const untaggedNote = pe.untaggedCount > 0
-    ? `<div style="margin-top:8px;font-size:9px;color:var(--color-text-warning)">⚠ ${pe.untaggedCount} untagged private deal${pe.untaggedCount>1?'s':''} (${fmtD(pe.untaggedCost)} at cost) still excluded from this view — tag ${pe.untaggedCount>1?'them':'it'} on the Private Investments card to count ${pe.untaggedCount>1?'them':'it'}.</div>`
-    : '';
-
-  // Only untagged private deals exist → show just the nudge, no clustering.
-  if (pe.total <= 0) {
-    return `<div style="margin-top:14px;padding:10px 12px;border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md)">
-      <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.04em">Incl. private deals (at cost)</div>
-      ${untaggedNote}
-    </div>`;
+  const parts = [];
+  if (isOn && peExp.total > 0) {
+    const detail = Object.entries(peExp.byTheme).sort((a,b)=>b[1].cost-a[1].cost).map(([t,info]) => {
+      const names = info.deals.slice().sort((a,b)=>b.cost-a.cost).map(d=>`${esc(d.company)} ${fmtD(d.cost)}`).join(', ');
+      return `${esc(t)}: ${names}`;
+    }).join(' · ');
+    parts.push(`<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;line-height:1.5">Private folded in at cost — ${detail}. <span style="color:var(--color-text-warning)">illiquid · single-name · self-marks excluded</span>. These cluster %s are now shares of the all-in book; switch to "Public book" to compare.</div>`);
+  } else if (!isOn && peExp.total > 0) {
+    parts.push(`<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px">${fmtD(peExp.total)} of tagged private deals are NOT in these clusters — switch to "Incl. private (cost)" above to fold them in.</div>`);
   }
+  if (peExp.untaggedCount > 0) {
+    parts.push(`<div style="font-size:9px;color:var(--color-text-warning);margin-top:4px">⚠ ${peExp.untaggedCount} untagged private deal${peExp.untaggedCount>1?'s':''} (${fmtD(peExp.untaggedCost)}) excluded from BOTH views — tag ${peExp.untaggedCount>1?'them':'it'} on the Private Investments card.</div>`);
+  }
+  return parts.join('');
+}
 
-  let all;
-  try { all = computeThemeClusters({ adjustments: peClusterAdjustments() }); }
-  catch (e) { return untaggedNote ? `<div style="margin-top:10px">${untaggedNote}</div>` : ''; }
-
-  const pubByLabel = {}; pubData.clusters.forEach(c => { pubByLabel[c.label] = c; });
-  const affected = all.clusters.map(c => {
-    const p = pubByLabel[c.label];
-    return { label: c.label, pubPct: p ? p.pct : 0, hadPublic: !!p, allPct: c.pct, added: c.total - (p ? p.total : 0) };
-  }).filter(c => c.added > 0.5).sort((a, b) => b.allPct - a.allPct);
-
-  const rows = affected.map(c => {
-    const fromTxt = c.hadPublic
-      ? `${c.pubPct.toFixed(1)}% of public book`
-      : `not present in public book`;
-    return `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:5px">
-      <span style="font-size:11px;color:var(--color-text-primary)">${esc(c.label)}</span>
-      <span style="font-size:10px;color:var(--color-text-tertiary);text-align:right">${fromTxt} → <strong style="color:var(--color-text-warning)">${c.allPct.toFixed(1)}% of all-in book</strong> <span style="color:var(--color-text-tertiary)">(+${fmtD(c.added)} private)</span></span>
-    </div>`;
-  }).join('');
-
-  // Per-theme private deal detail (at cost), straight from the tagged deals.
-  const dealLines = Object.entries(pe.byTheme).sort((a,b) => b[1].cost - a[1].cost).map(([theme, info]) => {
-    const names = info.deals.sort((a,b)=>b.cost-a.cost).map(d => `${esc(d.company)} ${fmtD(d.cost)}`).join(', ');
-    return `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">${esc(theme)}: ${names}</div>`;
-  }).join('');
-
-  const betsLine = (pubData.effectiveBets && all.effectiveBets)
-    ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:8px">Effective independent bets: ${pubData.effectiveBets.toFixed(1)} → <strong>${all.effectiveBets.toFixed(1)}</strong> once private is folded in (lower = more concentrated).</div>`
-    : '';
-
-  return `<div style="margin-top:14px;padding:10px 12px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);background:var(--color-background-tertiary)">
-    <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.04em">Incl. private deals (at cost)</div>
-    <div style="font-size:9px;color:var(--color-text-tertiary);margin:4px 0 2px;line-height:1.5">Adds your tagged private holdings at cost (illiquid, single-name, self-marks excluded). The percentages above this box are shares of the <em>public book</em>; the all-in figures here are shares of a <em>larger denominator</em> (public + private). Read each against its own base — they are not the same scale.</div>
-    ${rows}
-    ${dealLines ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">${dealLines}</div>` : ''}
-    ${betsLine}
-    ${untaggedNote}
-  </div>`;
+// Flip the shared private-exposure basis and re-render the two surfaces that respect it (the
+// move-together cluster panel and the live buy-impact). Concentration views only — never performance.
+function setPeExposureMode(on) {
+  peExposureMode = !!on;
+  try { if (document.getElementById('theme-diversification-analysis')) renderThemeClusters(); } catch (e) {}
+  try { if (document.getElementById('qr-buy-impact') && typeof qrRenderBuyImpact === 'function') qrRenderBuyImpact(); } catch (e) {}
 }
 
 // Render the full Theme Universe tab.
@@ -18116,7 +18103,15 @@ function renderThemeClusters() {
     if (label && label.includes(' + ')) { for (const part of label.split(' + ')) if (THEME_HINTS[part]) return THEME_HINTS[part]; }
     return null;
   };
-  const data = computeThemeClusters();
+  // Shared private-exposure basis: fold tagged private deals (at cost) into the clusters when the
+  // toggle is on. Off (default) = public book, byte-identical to before. The toggle only "engages"
+  // when there is tagged private to fold, so an empty toggle can never silently change the view.
+  const _peExp = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : { total: 0, untaggedCount: 0, untaggedCost: 0, byTheme: {} };
+  const _peCanToggle = _peExp.total > 0;
+  const _peOn = _peCanToggle && peExposureMode;
+  let data;
+  try { data = _peOn ? computeThemeClusters({ adjustments: peClusterAdjustments() }) : computeThemeClusters(); }
+  catch (e) { data = computeThemeClusters(); }
   if (!data.clusters.length && data.base.total === 0) {
     host.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No holdings to cluster yet.</div>`;
     return;
@@ -18151,6 +18146,13 @@ function renderThemeClusters() {
 
   // Theme options for the reassign dropdowns (all themes, plus an "auto" reset and a base option).
   const themeOptions = data.allThemes;
+  // Public ⇄ incl-private (at cost) basis toggle. Shown only when there is tagged private to fold.
+  const _peToggleHtml = _peCanToggle ? `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+    <span style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em">Basis:</span>
+    <button onclick="setPeExposureMode(false)" style="font-size:9px;padding:3px 11px;border-radius:12px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${!_peOn?'var(--color-text-info)':'transparent'};color:${!_peOn?'#000':'var(--color-text-tertiary)'};font-weight:${!_peOn?'600':'400'}">Public book</button>
+    <button onclick="setPeExposureMode(true)" title="Fold your tagged private deals into these clusters at cost (illiquid, single-name, self-marks excluded)" style="font-size:9px;padding:3px 11px;border-radius:12px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${_peOn?'var(--color-text-warning)':'transparent'};color:${_peOn?'#000':'var(--color-text-tertiary)'};font-weight:${_peOn?'600':'400'}">Incl. private (cost)</button>
+    ${_peOn?`<span style="font-size:9px;color:var(--color-text-warning)">all-in book · +${fmtDollarWhole(_peExp.total)} private at cost</span>`:''}
+  </div>` : '';
 
   // One name line inside a cluster: name, true $, the "why", and ⚠ + reassign control when editing.
   const nameLine = (n) => {
@@ -18188,6 +18190,7 @@ function renderThemeClusters() {
         <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">How your holdings move together</div>
         <button class="btn btn-sm" onclick="toggleClusterEdit()" style="font-size:9px">${clusterEditExpanded ? 'Done editing' : '✎ Reassign names'}</button>
       </div>
+      ${_peToggleHtml}
 
       <div style="background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:10px;font-size:11px;line-height:1.55;color:var(--color-text-primary)">
         ${biggest ? `Your biggest moves-together block is <strong style="color:${biggest.pct >= 25 ? '#fbbf24' : 'var(--color-text-primary)'}">${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong> of your book — that's the chunk of you that rises and falls as one bet.` : ''}
@@ -18247,7 +18250,7 @@ function renderThemeClusters() {
         </div>
       </details>` : ''}
     </div>`;
-  try { host.innerHTML += peInclPrivateSectionHtml(data); } catch (e) { /* additive only — never block the public panel */ }
+  try { host.innerHTML += peClusterFooterHtml(_peExp, _peOn); } catch (e) { /* additive only — never block the public panel */ }
 }
 
 // ─────────────────────────────────────────────
