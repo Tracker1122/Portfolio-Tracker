@@ -7114,6 +7114,7 @@ function qrCheckStage1() {
   }
   if (typeof renderQrOverlapInline === 'function') renderQrOverlapInline();
   if (typeof qrRenderBuyImpact === 'function') qrRenderBuyImpact();
+  if (typeof renderQrPerfForm === 'function' && document.getElementById('qr-perf-form')) renderQrPerfForm();
 }
 // Commit stage 1: save the candidate (so it's recorded even if you stop here) and reveal stage 2.
 function qrUnlockStage2() {
@@ -8379,6 +8380,7 @@ function renderQrForm() {
         </div>
       </div>
       <div id="qr-buy-impact" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:12px"></div>
+      <div id="qr-perf-form" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:12px"></div>
       ${stage1ExtraHtml}
       ${overlapHtml}
       ${stage2Html}
@@ -9269,6 +9271,7 @@ function qrRenderRotation() {
       sim.innerHTML = qrRotationSimHtml(s, etfTicker);
     }
   }
+  if (typeof renderQrPerfForm === 'function' && document.getElementById('qr-perf-form')) renderQrPerfForm();
 }
 
 // Repopulate the per-lot picker for whichever overlap holding is selected.
@@ -13911,6 +13914,82 @@ async function qrFetchPerf(id, force) {
   _qrPerfBusyId = null;
   saveCandPerf();
   renderQrPerf(id);
+}
+
+// ── Builder-form variant: same idea, but reads the LIVE form state (the ticker you're typing and the
+// trims you're staging) instead of a saved candidate, so you can sniff performance BEFORE saving.
+// Shares the _candPerf cache and the _qrPerfBusyId lock (sentinel '__form__') with the card version, so
+// the two never fetch concurrently and a ticker fetched in one is reused by the other.
+function qrFormPerfTickers() {
+  const out = [], seen = new Set();
+  const add = (d) => { const T = (d || '').toString().toUpperCase().trim(); if (T && !seen.has(T)) { seen.add(T); out.push(T); } };
+  const tk = ((typeof document !== 'undefined' ? (document.getElementById('qr-ticker') || {}) : {}).value || '').trim();
+  if (tk) add(tk);
+  if (typeof qrType !== 'undefined' && qrType === 'etf') {
+    if (typeof qrRotTrims !== 'undefined' && Array.isArray(qrRotTrims)) qrRotTrims.forEach(t => add(t.display || t.norm));
+    if (typeof qrRotateChecked !== 'undefined' && qrRotateChecked && qrRotateChecked.size) {
+      const byNorm = {};
+      (typeof positions !== 'undefined' ? positions : []).forEach(p => { if (p && p.ticker) { const n = qrNormTicker(p.ticker); if (!byNorm[n]) byNorm[n] = p.ticker.toUpperCase(); } });
+      qrRotateChecked.forEach(n => add(byNorm[n] || n));
+    }
+  }
+  return out;
+}
+
+// Render the live builder perf block into qr-perf-form. Display-only — shows whatever is cached and a
+// fetch button; it NEVER fetches on its own (so it can be re-run freely as you type/stage trims).
+function renderQrPerfForm() {
+  const host = document.getElementById('qr-perf-form');
+  if (!host) return;
+  const tickers = qrFormPerfTickers();
+  const busy = (_qrPerfBusyId === '__form__');
+  const btnLabel = busy ? 'fetching…' : 'refresh performance';
+  const candT = (((document.getElementById('qr-ticker') || {}).value) || '').trim().toUpperCase();
+  if (!tickers.length) {
+    host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Enter a ticker to fetch its recent performance${(typeof qrType !== 'undefined' && qrType === 'etf') ? ' (and any trims you stage below)' : ''} — same source as book-level performance.</div>`;
+    return;
+  }
+  const lines = tickers.map(t => {
+    const isCand = t.toUpperCase() === candT;
+    const tag = isCand ? '' : ' <span style="font-size:8px;color:var(--color-text-tertiary)">(trim target)</span>';
+    return `<div style="margin-top:2px">${qrPerfLineHtml(t, busy)}${tag}</div>`;
+  }).join('');
+  host.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+      <span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Recent market performance</span>
+      <span onclick="${busy ? '' : 'qrFetchPerfForm(true)'}" style="cursor:${busy ? 'default' : 'pointer'};color:var(--color-text-info);font-size:9px;text-decoration:${busy ? 'none' : 'underline'}" title="Pull trailing returns for this ticker${(typeof qrType !== 'undefined' && qrType === 'etf') ? ' and any staged trim targets' : ''} from Polygon — same source as book-level performance">↻ ${btnLabel}</span>
+    </div>
+    ${lines}
+    <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:4px;font-style:italic">Trailing price-only returns (excludes dividends), via Polygon — approximate, may be stale.</div>`;
+}
+
+// Manual fetch for the builder form (force=true from the button). Uses the live ticker + staged trims.
+async function qrFetchPerfForm(force) {
+  if (_qrPerfBusyId) return; // a card or form fetch is already running — one at a time
+  if (!polygonKey) loadPolygonKey();
+  const tickers = qrFormPerfTickers();
+  if (!tickers.length) { renderQrPerfForm(); return; }
+  const todo = force ? tickers : tickers.filter(t => { const p = _candPerf[t.toUpperCase()]; return !p || p.error; });
+  if (!todo.length) { renderQrPerfForm(); return; }
+  _qrPerfBusyId = '__form__';
+  renderQrPerfForm();
+  let rateLimited = false;
+  for (const t of todo) {
+    const T = t.toUpperCase();
+    if (rateLimited) { _candPerf[T] = { error: 'rate', fetchedAt: Date.now() }; continue; }
+    try {
+      const w = await fetchTickerWindows(T);
+      _candPerf[T] = { m1: w.m1, m3: w.m3, m6: w.m6, y1: w.y1, ytd: w.ytd, maxDrawdown: w.maxDrawdown, annVol: w.annVol, shortHist: w.shortHist, histDays: w.histDays, fetchedAt: w.fetchedAt };
+    } catch (e) {
+      const msg = (e && e.message) || 'err';
+      if (msg === 'rate') { rateLimited = true; _candPerf[T] = { error: 'rate', fetchedAt: Date.now() }; }
+      else _candPerf[T] = { error: msg === 'nokey' ? 'nokey' : 'err', fetchedAt: Date.now() };
+    }
+    await new Promise(r => setTimeout(r, 350));
+  }
+  _qrPerfBusyId = null;
+  saveCandPerf();
+  renderQrPerfForm();
 }
 
 function _candPillOn() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600'; }
