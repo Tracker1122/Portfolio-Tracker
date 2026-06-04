@@ -8867,115 +8867,151 @@ function buildWhatReallyMovedParagraph(sim, etfTicker) {
   return parts.join(' ');
 }
 
-function qrSimulateRotation(parsed, etfTicker, sellNormsSet, targetSleeveOverride) {
-  // Proceeds from selling the checked direct positions, plus the estimated tax on doing so.
-  // Tax = gain × the position's rate (ST/LT by holding period; IRA sheltered = 0). Losses don't
-  // generate tax here (matches the app's applyTaxToGain convention — no loss-harvest credit modeled).
-  let proceeds = 0, estTax = 0, taxableGain = 0, hasIRA = false, missingDate = false, anyLoss = false;
-  let shelteredProceeds = 0, taxableProceeds = 0;
-  positions.filter(p => !p.closed && p.ticker && sellNormsSet.has(qrNormTicker(p.ticker)))
-    .forEach(p => {
-      const c = calcPos(p);
-      const v = c.exitValue || 0;
-      proceeds += v;
-      const isIRA = (p.account||'').toLowerCase() === 'ira';
-      const rate = taxRateForOpen(p);
-      if (isIRA) { hasIRA = true; shelteredProceeds += v; }
-      else { taxableProceeds += v; }
-      if (!p.dateBought && !isIRA) missingDate = true;
-      if (c.gainLoss > 0) {
-        if (!isIRA) taxableGain += c.gainLoss;  // IRA gains aren't taxed at sale
-        estTax += c.gainLoss > 0 ? c.gainLoss * rate : 0; // rate is 0 for IRA anyway
-      } else if (c.gainLoss < 0 && !isIRA) {
-        anyLoss = true;
-      }
+// ── Sized rotation trims ───────────────────────────────────────────────────────────────────────
+// The rotation tool now trims SIZED slices (lot + amount + %/shares/$) instead of whole positions,
+// driven through the SAME engine as the theme-tab trim builder (_candTrimShares / _candResolveTrimTax)
+// so the two tools give identical share / proceeds / short-vs-long-term / IRA reads for the same trim.
+
+// A candidate's staged trims as RAW entries: [{ norm, display, lotId, unit, amount }]. Sized trims
+// (rotateTrims) are the source of truth; fall back to legacy rotateOut (a name set) as whole-position
+// trims so old saves and the saved-card quick-toggle keep working unchanged. displayMap (norm→ticker)
+// recovers the real ticker for the legacy fallback when a dotted symbol would otherwise be lost.
+function qrEffectiveRawTrims(c, displayMap) {
+  if (c && Array.isArray(c.rotateTrims) && c.rotateTrims.length) return c.rotateTrims;
+  const norms = (c && c.rotateOut) || [];
+  return norms.map(n => ({ norm: n, display: (displayMap && displayMap[n]) || n, lotId: '', unit: 'pct', amount: 100 }));
+}
+
+// Resolve raw staged trims into sized detail. Pure given current positions. Drops anything that
+// resolves to <= 0 shares or whose ticker has no open lots (stale after an edit/close).
+function qrResolveTrims(rawTrims) {
+  if (!Array.isArray(rawTrims)) return [];
+  const out = [];
+  rawTrims.forEach(t => {
+    const display = (t.display || t.norm || '').toString();
+    if (!display) return;
+    const T = display.toUpperCase();
+    const lots = _candTickerLots(T);
+    if (!lots.length) return;
+    const r = _candTrimShares(T, parseFloat(t.amount) || 0, t.unit || 'pct', t.lotId || '');
+    if (!(r.sh > 0)) return;
+    const tax = _candResolveTrimTax(T, t.lotId || '', r.sh);
+    // Per-lot proceeds + sleeve, mirroring _candResolveTrimTax's lot pick, so the sim can move the
+    // right dollars out of the right sleeve(s). proceeds derived per-lot == tax proceeds by construction.
+    let picks;
+    if (t.lotId) {
+      picks = lots.filter(p => String(p.id) === String(t.lotId)).map(p => ({ p, sh: Math.min(r.sh, parseFloat(p.shares) || 0) }));
+    } else {
+      const tot = lots.reduce((s, p) => s + (parseFloat(p.shares) || 0), 0);
+      picks = tot > 0 ? lots.map(p => ({ p, sh: r.sh * ((parseFloat(p.shares) || 0) / tot) })) : [];
+    }
+    const lotAlloc = picks.filter(x => x.sh > 0).map(x => {
+      const px = parseFloat(x.p.exitPrice) || 0;
+      return { sleeve: x.p.sleeve || '(unassigned)', proceeds: x.sh * px, sh: x.sh, account: x.p.account || '' };
     });
+    const proceeds = lotAlloc.reduce((s, a) => s + a.proceeds, 0);
+    out.push({
+      norm: t.norm || qrNormTicker(display), display, lotId: t.lotId || '', unit: t.unit || 'pct',
+      amount: parseFloat(t.amount) || 0, shares: r.sh, totalSh: r.totalSh, proceeds, tax, lotAlloc
+    });
+  });
+  return out;
+}
 
-  // BEFORE: current true exposure per affected name. AFTER: same, but with the sold positions'
-  // direct value removed AND the ETF position grown by `proceeds` (so its decomposition gives
-  // back the overlapping names proportionally). We model the ETF growth by adding, per ETF
-  // holding, proceeds * weight/100 to that name's "via funds" bucket.
-  const etfNorm = qrNormTicker(etfTicker);
-  const etfAlreadyHeld = indexFundHeldValue(etfTicker); // usually 0 (it's a candidate)
-  // Build the set of names we report on: the sold names + the ETF's holdings (the names that
-  // change). For each, compute before/after direct and via-funds.
+function qrSimulateRotation(parsed, etfTicker, trims, targetSleeveOverride) {
+  trims = Array.isArray(trims) ? trims : [];
+  // Aggregate proceeds + tax across all staged trims. Tax uses the theme-tab engine's frozen per-lot
+  // buckets, netted short-vs-long-term across the whole set (a loss in one bucket offsets a gain in
+  // the other before tax), then the active profile's ST/LT rates. IRA lots are sheltered (untaxed).
+  // No loss-harvest credit modeled (matches the rest of the app's at-sale convention).
+  let proceeds = 0, hasIRA = false, anyLoss = false, shelteredProceeds = 0, taxableProceeds = 0;
+  let stGain = 0, stLoss = 0, ltGain = 0, ltLoss = 0;
+  trims.forEach(t => {
+    proceeds += t.proceeds || 0;
+    const tx = t.tax || {};
+    stGain += tx.stGain || 0; stLoss += tx.stLoss || 0; ltGain += tx.ltGain || 0; ltLoss += tx.ltLoss || 0;
+    taxableProceeds += tx.taxableProceeds || 0; shelteredProceeds += tx.shelteredProceeds || 0;
+    if (tx.hasIRA) hasIRA = true; if (tx.anyLoss) anyLoss = true;
+  });
+  const _ST = (typeof TAX_RATE_ST === 'number') ? TAX_RATE_ST : 0.36;
+  const _LT = (typeof TAX_RATE_LT === 'number') ? TAX_RATE_LT : 0.27;
+  const netST = stGain - stLoss, netLT = ltGain - ltLoss;
+  let taxableST = 0, taxableLT = 0;
+  if (netST >= 0 && netLT >= 0) { taxableST = netST; taxableLT = netLT; }
+  else if (netST < 0 && netLT < 0) { /* overall loss — nothing taxable */ }
+  else { const comb = netST + netLT; if (comb > 0) { if (netST > 0) taxableST = comb; else taxableLT = comb; } }
+  const estTax = taxableST * _ST + taxableLT * _LT;
+  const taxableGain = Math.max(0, netST) + Math.max(0, netLT);
+  const netProceeds = proceeds - estTax;
+
+  // Trimmed dollars + shares per name (AFTER direct, and fully-sold detection).
+  const soldDollarsByNorm = {}, soldSharesByNorm = {};
+  trims.forEach(t => {
+    soldDollarsByNorm[t.norm] = (soldDollarsByNorm[t.norm] || 0) + (t.proceeds || 0);
+    soldSharesByNorm[t.norm] = (soldSharesByNorm[t.norm] || 0) + (t.shares || 0);
+  });
+  const soldNormSet = new Set(Object.keys(soldDollarsByNorm));
+
+  // BEFORE/AFTER true exposure per affected name. Trimmed names lose their trimmed DIRECT dollars
+  // (not the whole position). The ETF position grows by netProceeds and hands names back via
+  // look-through by weight.
   const affected = {};
-  const ensure = (tk) => { const k = qrNormTicker(tk); if (!affected[k]) affected[k] = { display: tk, dBefore:0, dAfter:0, fBefore:0, fAfter:0 }; return affected[k]; };
-
-  // Current direct values
+  const ensure = (tk) => { const k = qrNormTicker(tk); if (!affected[k]) affected[k] = { display: tk, dBefore: 0, dAfter: 0, fBefore: 0, fAfter: 0 }; return affected[k]; };
   positions.filter(p => !p.closed && p.ticker).forEach(p => {
     const k = qrNormTicker(p.ticker);
-    const v = calcPos(p).exitValue || 0;
-    // only track names that are either being sold or are in the ETF (others are unaffected)
-    // we'll filter later; for now record direct for sold names
-    if (sellNormsSet.has(k)) { const a = ensure(p.ticker); a.dBefore += v; a.dAfter += 0; }
+    if (!soldNormSet.has(k)) return;
+    const a = ensure(p.ticker); a.dBefore += calcPos(p).exitValue || 0;
   });
-  // Current via-funds (look-through) for each ETF holding + each sold name
-  const namesToCheck = new Set([...sellNormsSet]);
+  soldNormSet.forEach(k => { if (affected[k]) affected[k].dAfter = Math.max(0, affected[k].dBefore - (soldDollarsByNorm[k] || 0)); });
+
+  const namesToCheck = new Set([...soldNormSet]);
   parsed.forEach(h => namesToCheck.add(qrNormTicker(h.ticker)));
   namesToCheck.forEach(k => {
-    // find a display ticker
     const fromParsed = parsed.find(h => qrNormTicker(h.ticker) === k);
     const display = fromParsed ? fromParsed.ticker : (affected[k] ? affected[k].display : k);
     const a = ensure(display);
     const lts = qrIndexLookthrough(display);
-    const via = lts.reduce((s,l)=>s+l.indirectValue, 0);
-    a.fBefore += via;
-    a.fAfter += via; // funds unchanged except the new ETF money, added next
-    // direct before/after for names NOT in the sell set (unchanged direct)
-    if (!sellNormsSet.has(k)) {
-      const dv = positions.filter(p=>!p.closed&&p.ticker&&qrNormTicker(p.ticker)===k).reduce((s,p)=>s+(calcPos(p).exitValue||0),0);
+    const via = lts.reduce((s, l) => s + l.indirectValue, 0);
+    a.fBefore += via; a.fAfter += via;
+    if (!soldNormSet.has(k)) {
+      const dv = positions.filter(p => !p.closed && p.ticker && qrNormTicker(p.ticker) === k).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
       a.dBefore += dv; a.dAfter += dv;
     }
   });
-  // Add the new ETF money's decomposition to AFTER via-funds. Reinvest NET of tax (you sell,
-  // pay the tax, put what's left into the ETF) — the honest default for a taxable account.
-  const netProceeds = proceeds - estTax;
-  parsed.forEach(h => {
-    if (h.weight == null) return;
-    const a = ensure(h.ticker);
-    a.fAfter += netProceeds * (h.weight / 100);
-  });
+  parsed.forEach(h => { if (h.weight == null) return; const a = ensure(h.ticker); a.fAfter += netProceeds * (h.weight / 100); });
 
   const rows = Object.values(affected).map(a => ({
-    display: a.display,
-    before: a.dBefore + a.fBefore,
-    after: a.dAfter + a.fAfter,
-    dBefore: a.dBefore, dAfter: a.dAfter,
-    fBefore: a.fBefore, fAfter: a.fAfter,
+    display: a.display, before: a.dBefore + a.fBefore, after: a.dAfter + a.fAfter,
+    dBefore: a.dBefore, dAfter: a.dAfter, fBefore: a.fBefore, fAfter: a.fAfter,
     change: (a.dAfter + a.fAfter) - (a.dBefore + a.fBefore),
-  })).filter(r => r.before > 0 || r.after > 0).sort((x,y)=>y.before - x.before);
+  })).filter(r => r.before > 0 || r.after > 0).sort((x, y) => y.before - x.before);
 
-  // Position count change: lose the sold names, gain QQQ if not already held.
-  const posBefore = positions.filter(p=>!p.closed&&p.ticker).length;
-  const soldCount = positions.filter(p=>!p.closed&&p.ticker&&sellNormsSet.has(qrNormTicker(p.ticker))).length;
+  // Position count: a lot is removed only when its name is FULLY trimmed (trimmed shares >= open shares).
+  const posBefore = positions.filter(p => !p.closed && p.ticker).length;
+  const sharesByNorm = {};
+  positions.filter(p => !p.closed && p.ticker).forEach(p => { const k = qrNormTicker(p.ticker); sharesByNorm[k] = (sharesByNorm[k] || 0) + (parseFloat(p.shares) || 0); });
+  const fullySoldNorms = new Set([...soldNormSet].filter(k => (sharesByNorm[k] || 0) > 0 && (soldSharesByNorm[k] || 0) >= (sharesByNorm[k] || 0) - 1e-6));
+  let lotsRemoved = 0;
+  positions.filter(p => !p.closed && p.ticker).forEach(p => { if (fullySoldNorms.has(qrNormTicker(p.ticker))) lotsRemoved++; });
+  const etfAlreadyHeld = indexFundHeldValue(etfTicker);
   const gainEtf = etfAlreadyHeld > 0 ? 0 : 1;
-  const posAfter = posBefore - soldCount + gainEtf;
+  const posAfter = posBefore - lotsRemoved + gainEtf;
+  const soldCount = soldNormSet.size;       // # names being trimmed
+  const fullSoldCount = fullySoldNorms.size; // # names trimmed to zero
 
-  // ── Sleeve impact ── Sleeves organize your DIRECT book, so measure sleeve shifts on direct
-  // dollars (the VOO-embedded exposure isn't sleeve-assigned). Selling a position removes its
-  // value from its sleeve; the NET proceeds (after tax leaves the book) land in the sleeve the
-  // candidate ETF would join. Tax exits the portfolio entirely.
+  // Sleeve impact: remove each trim's per-lot proceeds from that lot's sleeve; net proceeds land in
+  // the candidate ETF's target sleeve. Tax exits the portfolio.
   const sleeveBefore = {}, sleeveAfter = {};
   positions.filter(p => !p.closed && p.ticker).forEach(p => {
-    const sl = p.sleeve || '(unassigned)';
-    const v = calcPos(p).exitValue || 0;
-    sleeveBefore[sl] = (sleeveBefore[sl]||0) + v;
-    sleeveAfter[sl]  = (sleeveAfter[sl]||0) + v;
+    const sl = p.sleeve || '(unassigned)'; const v = calcPos(p).exitValue || 0;
+    sleeveBefore[sl] = (sleeveBefore[sl] || 0) + v; sleeveAfter[sl] = (sleeveAfter[sl] || 0) + v;
   });
-  // Remove sold positions from their sleeves in the AFTER picture.
-  positions.filter(p => !p.closed && p.ticker && sellNormsSet.has(qrNormTicker(p.ticker))).forEach(p => {
-    const sl = p.sleeve || '(unassigned)';
-    sleeveAfter[sl] = (sleeveAfter[sl]||0) - (calcPos(p).exitValue || 0);
-  });
-  // Add net proceeds to the candidate ETF's target sleeve.
+  trims.forEach(t => (t.lotAlloc || []).forEach(a => { sleeveAfter[a.sleeve] = (sleeveAfter[a.sleeve] || 0) - a.proceeds; }));
   const targetSleeve = targetSleeveOverride || ((typeof document !== 'undefined' && document.getElementById('qr-sleeve')) ? document.getElementById('qr-sleeve').value : '') || '(unassigned)';
-  sleeveAfter[targetSleeve] = (sleeveAfter[targetSleeve]||0) + (proceeds - estTax);
-  const sleeveRows = Object.keys(sleeveBefore).map(sl => ({
-    sleeve: sl, before: sleeveBefore[sl]||0, after: sleeveAfter[sl]||0, change: (sleeveAfter[sl]||0) - (sleeveBefore[sl]||0)
-  })).filter(r => Math.abs(r.change) >= 1).sort((a,b)=>Math.abs(b.change)-Math.abs(a.change));
+  sleeveAfter[targetSleeve] = (sleeveAfter[targetSleeve] || 0) + netProceeds;
+  const sleeveRows = Object.keys(sleeveBefore).map(sl => ({ sleeve: sl, before: sleeveBefore[sl] || 0, after: sleeveAfter[sl] || 0, change: (sleeveAfter[sl] || 0) - (sleeveBefore[sl] || 0) })).filter(r => Math.abs(r.change) >= 1).sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
 
-  return { rows, proceeds, posBefore, posAfter, soldCount, estTax, taxableGain, hasIRA, missingDate, anyLoss, shelteredProceeds, taxableProceeds, sleeveRows, targetSleeve };
+  return { rows, proceeds, netProceeds, posBefore, posAfter, soldCount, fullSoldCount, lotsRemoved, estTax, taxableGain, hasIRA, missingDate: false, anyLoss, shelteredProceeds, taxableProceeds, sleeveRows, targetSleeve, trims };
 }
 
 // Render the rotation checklist + before/after table into #qr-rotation. Reads which direct
@@ -9007,140 +9043,280 @@ function acctTextTag(norm) {
   if (hasIRA) parts.push('IRA');
   return parts.length ? ' · ' + parts.join(' + ') : '';
 }
+// ── Live state for the form-panel rotation builder ──────────────────────────────────────────────
+// qrRotTrims is the live list of staged SIZED trims [{norm,display,lotId,unit,amount}] for the
+// candidate currently open in the form. It is mirrored onto the candidate's rotateTrims (source of
+// truth) + rotateOut (derived name set the AI/flags read) on every change. qrRotTrimsKey tracks which
+// candidate/ETF context the live list belongs to, so switching candidates re-seeds it.
+let qrRotTrims = [];
+let qrRotTrimsKey = null;
+let qrRotUnit = 'pct';
+
+// Shared renderer for the rotation result table (proceeds + tax + before/after true exposure +
+// "what really moved" + sleeve impact). Used by BOTH the form panel and the saved card so they can
+// never show different numbers. `sim` is a qrSimulateRotation() result.
+function qrRotationSimHtml(sim, etfTicker) {
+  const netProceeds = sim.netProceeds;
+  let taxNote;
+  if (sim.estTax > 0) {
+    taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains → ~${fmtDollarWhole(netProceeds)} net to reinvest`;
+    if (sim.shelteredProceeds > 0) taxNote += `. ${fmtDollarWhole(sim.shelteredProceeds)} of the sale is in your IRA — sold tax-free`;
+  } else if (sim.hasIRA && sim.taxableProceeds === 0) { taxNote = `no tax — the entire sale is in your IRA (sheltered)`; }
+  else if (sim.hasIRA) { taxNote = `no taxable gain on the ${fmtDollarWhole(sim.taxableProceeds)} taxable portion; ${fmtDollarWhole(sim.shelteredProceeds)} is IRA (tax-free)`; }
+  else if (sim.anyLoss) { taxNote = `no tax (sales at a loss)`; }
+  else { taxNote = `no taxable gain`; }
+
+  const body = sim.rows.slice(0, 15).map(r => {
+    const chg = Math.round(r.change);
+    const chgColor = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const tiny = Math.abs(chg) < 1000 && r.before > 5000 ? ' <span style="color:#fbbf24">← barely moves</span>' : '';
+    return `<tr>
+      <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
+      <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
+      <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
+      <td style="padding:3px 8px;text-align:right;color:${chgColor}">${(chg>=0?'+':'')+fmtDollarWhole(chg)}${tiny}</td>
+    </tr>`;
+  }).join('');
+
+  const trimWord = `${sim.soldCount} name${sim.soldCount === 1 ? '' : 's'}`;
+  const fullNote = sim.fullSoldCount > 0 ? ` (${sim.fullSoldCount} sold in full)` : ' (partial trims)';
+
+  const whatMoved = (() => {
+    const held = sim.rows.filter(r => r.before > 0);
+    const fresh = sim.rows.filter(r => r.before === 0);
+    const sumChg = arr => arr.reduce((s, r) => s + r.change, 0);
+    const heldNet = sumChg(held), freshNet = sumChg(fresh);
+    const hiddenFresh = Math.max(0, fresh.length - sim.rows.slice(0, 15).filter(r => r.before === 0).length);
+    const sgn = n => (n >= 0 ? '+' : '\u2212') + fmtDollarWhole(Math.abs(n));
+    const sells = sim.soldCount || 0;
+    let verdict;
+    if (heldNet < 0 && freshNet > 0) verdict = `Net: trims ${fmtDollarWhole(Math.abs(heldNet))} from names you held (mostly the ${sells} you\u2019re trimming) and adds ${fmtDollarWhole(Math.abs(freshNet))} in new ones.`;
+    else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up the ones you held by ${fmtDollarWhole(Math.abs(heldNet))}.`;
+    else if (freshNet === 0) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already held — no new exposure.`;
+    else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
+    return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
+      <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:5px">What really moved</div>
+      <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
+      <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh>0?`, ${hiddenFresh} below table`:''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
+      <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
+      <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${buildWhatReallyMovedParagraph(sim, etfTicker)}</div>
+    </div>`;
+  })();
+
+  const sleeveTable = sim.sleeveRows.length ? `
+    <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">Sleeve impact (your direct book)</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
+      <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+        <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Sleeve</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
+      </tr></thead><tbody>${sim.sleeveRows.map(r => {
+        const chg = Math.round(r.change);
+        const col = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+        const isTarget = r.sleeve === sim.targetSleeve;
+        return `<tr>
+          <td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.sleeve)}${isTarget?` <span style="color:var(--color-text-info);font-size:8px">← ${esc(etfTicker)} joins</span>`:''}</td>
+          <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
+          <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
+          <td style="padding:3px 8px;text-align:right;color:${col}">${(chg>=0?'+':'')+fmtDollarWhole(chg)}</td>
+        </tr>`;
+      }).join('')}</tbody></table></div>` : '';
+
+  return `
+    <div style="font-size:9px;color:var(--color-text-secondary);margin:8px 0 4px">Trimming ${fmtDollarWhole(sim.proceeds)} across ${trimWord}${fullNote} → buying ${esc(etfTicker)}. Positions: ${sim.posBefore} → ${sim.posAfter}.</div>
+    <div style="font-size:9px;margin:0 0 6px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
+      <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+        <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name (true exposure)</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
+      </tr></thead><tbody>${body}</tbody></table></div>
+    ${whatMoved}
+    ${sleeveTable}
+    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">For names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax. ` : ''}Rotating also shifts weight between sleeves (above). Approximate — fund weights drift; tax is an estimate from your active profile, not advice.</div>`;
+}
+
+// Mirror the live trim list onto the candidate (rotateTrims = source of truth; rotateOut = derived
+// name set the AI/flags consume) + keep the legacy global in sync + refresh the observation flags.
+function qrRotPersist(editCand) {
+  const norms = [...new Set(qrRotTrims.map(t => t.norm))];
+  if (editCand) {
+    editCand.rotateTrims = qrRotTrims.map(t => ({ norm: t.norm, display: t.display, lotId: t.lotId || '', unit: t.unit || 'pct', amount: t.amount }));
+    editCand.rotateOut = norms;
+    editCand.updatedAt = new Date().toISOString();
+    if (typeof scheduleSave === 'function') scheduleSave();
+    const fc = document.getElementById('qr-flags-' + editCand.id);
+    if (fc && typeof renderQualityFlags === 'function') fc.innerHTML = renderQualityFlags(editCand);
+  }
+  qrRotateChecked = new Set(norms); // saveQrCandidate still reads this on a brand-new candidate
+}
+
 function qrRenderRotation() {
   const host = document.getElementById('qr-rotation');
   if (!host) return;
   const { parsed, etfTicker, candidates } = qrRotationState;
-  if (!candidates.length) { host.innerHTML = ''; return; }
-  const checked = new Set();
-  const _editCand = (qrEditingId !== null && typeof qualityReviews !== 'undefined') ? qualityReviews.find(q => q.id === qrEditingId) : null;
-  const _domHasBoxes = candidates.some(c => document.getElementById('qr-rot-' + c.norm));
-  if (_domHasBoxes) {
-    // Checkboxes exist — read their current state (a real user toggle).
-    candidates.forEach(c => { const el = document.getElementById('qr-rot-' + c.norm); if (el && el.checked) checked.add(c.norm); });
-  } else if (_editCand && _editCand.rotateOut) {
-    // First render (no boxes yet) — seed from the persisted choice so it matches the saved intent.
-    _editCand.rotateOut.forEach(n => checked.add(n));
-  }
-  qrRotateChecked = checked; // live mirror (UI checkbox state)
-  // Persist immediately onto the candidate being edited so rotateOut is always current — the
-  // observations + AI + saved-card analysis all read rotateOut, so this keeps them in lockstep
-  // without depending on an explicit Save.
-  if (qrEditingId !== null && typeof qualityReviews !== 'undefined') {
-    const ec = qualityReviews.find(q => q.id === qrEditingId);
-    if (ec) { ec.rotateOut = [...checked]; ec.updatedAt = new Date().toISOString(); if (typeof scheduleSave === 'function') scheduleSave(); }
-  }
-  // Re-render the Checkable Observations so they reflect the new rotation intent. The flags live in
-  // qr-flags-<id>; the rotation control belongs to the candidate currently in qrRotationState's view.
-  (function(){
-    const cand = (qrEditingId !== null && typeof qualityReviews !== 'undefined') ? qualityReviews.find(q => q.id === qrEditingId) : null;
-    if (cand && typeof renderQualityFlags === 'function') {
-      const fc = document.getElementById('qr-flags-' + cand.id);
-      if (fc) fc.innerHTML = renderQualityFlags(cand);
-    }
-  })();
-  const checklist = candidates.map(c =>
-    `<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;font-size:10px;cursor:pointer;color:var(--color-text-secondary)">
-      <input type="checkbox" id="qr-rot-${c.norm}" ${checked.has(c.norm)?'checked':''} onchange="qrToggleRotation()" style="cursor:pointer">
-      ${esc(c.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(c.directValue)}</span>${acctTag(c.norm)}
-    </label>`).join('');
+  if (!candidates || !candidates.length) { host.innerHTML = ''; qrRotTrimsKey = null; return; }
+  const editCand = (qrEditingId !== null && typeof qualityReviews !== 'undefined') ? qualityReviews.find(q => q.id === qrEditingId) : null;
+  const key = editCand ? ('c' + editCand.id) : ('t' + etfTicker);
+  const validNorms = new Set(candidates.map(c => c.norm));
+  const dispMap = {}; candidates.forEach(c => { dispMap[c.norm] = c.display; });
 
-  let tableHtml = '';
-  if (checked.size > 0) {
-    const sim = qrSimulateRotation(parsed, etfTicker, checked);
-    const netProceeds = sim.proceeds - sim.estTax;
-    let taxNote;
-    if (sim.estTax > 0) {
-      taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains → ~${fmtDollarWhole(netProceeds)} net to reinvest`;
-      if (sim.shelteredProceeds > 0) taxNote += `. ${fmtDollarWhole(sim.shelteredProceeds)} of the sale is in your IRA — sold tax-free`;
-    } else if (sim.hasIRA && sim.taxableProceeds === 0) {
-      taxNote = `no tax — the entire sale is in your IRA (sheltered)`;
-    } else if (sim.hasIRA) {
-      taxNote = `no taxable gain on the ${fmtDollarWhole(sim.taxableProceeds)} taxable portion; ${fmtDollarWhole(sim.shelteredProceeds)} is IRA (tax-free)`;
-    } else if (sim.anyLoss) {
-      taxNote = `no tax (sales at a loss)`;
-    } else {
-      taxNote = `no taxable gain`;
-    }
-    const body = sim.rows.slice(0, 15).map(r => {
-      const chg = Math.round(r.change);
-      const chgColor = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-      const chgTxt = (chg>=0?'+':'') + fmtDollarWhole(chg);
-      const tiny = Math.abs(chg) < 1000 && r.before > 5000 ? ' <span style="color:#fbbf24">← barely moves</span>' : '';
-      return `<tr>
-        <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
-        <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
-        <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
-        <td style="padding:3px 8px;text-align:right;color:${chgColor}">${chgTxt}${tiny}</td>
-      </tr>`;
-    }).join('');
-    tableHtml = `
-      <div style="font-size:9px;color:var(--color-text-secondary);margin:8px 0 4px">Selling ${fmtDollarWhole(sim.proceeds)} across ${sim.soldCount} position(s) → buying ${esc(etfTicker)}. Positions: ${sim.posBefore} → ${sim.posAfter}.</div>
-      <div style="font-size:9px;margin:0 0 6px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
-        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
-          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name (true exposure)</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
-        </tr></thead><tbody>${body}</tbody></table></div>
-      ${(() => {
-        // "What really moved" — bucket the FULL sim.rows by whether you already held the name
-        // (before>0) vs brand-new exposure (before==0), summing per-name change. Computed from the
-        // same sim, so it covers names the 15-row table truncates.
-        const held = sim.rows.filter(r => r.before > 0);
-        const fresh = sim.rows.filter(r => r.before === 0);
-        const sumChg = arr => arr.reduce((s, r) => s + r.change, 0);
-        const heldNet = sumChg(held);
-        const freshNet = sumChg(fresh);
-        const hiddenFresh = Math.max(0, fresh.length - sim.rows.slice(0, 15).filter(r => r.before === 0).length);
-        const sgn = n => (n >= 0 ? '+' : '\u2212') + fmtDollarWhole(Math.abs(n));
-        // One-line read of the two labels, computed (not asserted). Describes the trade the numbers
-        // show: cut from names you held, added as new exposure — and flags when the "cut" is really
-        // just the sells reshuffling back via the ETF.
-        const cut = sumChg(held.filter(r => r.change < 0));
-        const sells = sim.soldCount || 0;
-        let verdict;
-        if (heldNet < 0 && freshNet > 0) verdict = `Net: trims ${fmtDollarWhole(Math.abs(heldNet))} from names you held (mostly the ${sells} you\u2019re selling) and adds ${fmtDollarWhole(Math.abs(freshNet))} in new ones.`;
-        else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up the ones you held by ${fmtDollarWhole(Math.abs(heldNet))}.`;
-        else if (freshNet === 0) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already held — no new exposure.`;
-        else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
-        return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
-          <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:5px">What really moved</div>
-          <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
-          <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh>0?`, ${hiddenFresh} below table`:''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
-          <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
-          <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${buildWhatReallyMovedParagraph(sim, etfTicker)}</div>
-        </div>`;
-      })()}
-      ${sim.sleeveRows.length ? `
-      <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">Sleeve impact (your direct book)</div>
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
-        <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
-          <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Sleeve</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
-          <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
-        </tr></thead><tbody>${sim.sleeveRows.map(r => {
-          const chg = Math.round(r.change);
-          const col = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-          const isTarget = r.sleeve === sim.targetSleeve;
-          return `<tr>
-            <td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.sleeve)}${isTarget?` <span style="color:var(--color-text-info);font-size:8px">← ${esc(etfTicker)} joins</span>`:''}</td>
-            <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
-            <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
-            <td style="padding:3px 8px;text-align:right;color:${col}">${(chg>=0?'+':'')+fmtDollarWhole(chg)}</td>
-          </tr>`;
-        }).join('')}</tbody></table></div>` : ''}
-      <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">The point: for names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal, not de-concentration. ` : ''}Rotating also shifts weight between sleeves (above) — selling moves dollars out of the sold names\u2019 sleeves into ${esc(etfTicker)}\u2019s sleeve. Approximate — fund weights drift, tax is an estimate from your active profile (not advice).</div>`;
+  if (qrRotTrimsKey !== key) {
+    // Context changed (different candidate/ETF) — seed the live list from the candidate's saved
+    // sized trims, falling back to legacy whole-position rotateOut, scoped to the overlap names.
+    const seed = editCand ? qrEffectiveRawTrims(editCand, dispMap) : [];
+    qrRotTrims = seed.filter(t => validNorms.has(t.norm)).map(t => ({ norm: t.norm, display: dispMap[t.norm] || t.display, lotId: t.lotId || '', unit: t.unit || 'pct', amount: t.amount }));
+    qrRotTrimsKey = key;
   } else {
-    tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above to model rotating them into ${esc(etfTicker)}.</div>`;
+    qrRotTrims = qrRotTrims.filter(t => validNorms.has(t.norm)); // drop names that left the overlap set
   }
-  host.innerHTML = `
-    <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">Hypothetical: rotate direct holdings → ${esc(etfTicker)}</div>
-    <div style="margin-bottom:2px">${checklist}</div>
-    ${tableHtml}`;
+  qrRotPersist(editCand);
+
+  // Build the shell once (so the builder inputs survive re-renders); then update the dynamic parts.
+  if (!document.getElementById('qr-rot-holding')) {
+    host.innerHTML = `
+      <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Hypothetical: rotate direct holdings → <span id="qr-rot-etf">${esc(etfTicker)}</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+        <select id="qr-rot-holding" onchange="qrRotOnHoldingPick()" class="modal-input" style="font-size:11px;padding:4px 8px;max-width:230px"></select>
+        <select id="qr-rot-lot" onchange="qrRotReadout()" class="modal-input" style="font-size:11px;padding:4px 8px;max-width:300px" title="Pick a specific tax lot for an exact gain / short-vs-long-term / IRA read, or leave on Whole position to trim across all lots pro-rata."><option value="">— Whole position (blended) —</option></select>
+        <input id="qr-rot-amt" type="number" oninput="qrRotReadout()" placeholder="Amount" class="modal-input" style="width:92px;font-size:11px;padding:4px 8px">
+        <span style="display:inline-flex;gap:4px">
+          <span id="qr-rot-unit-pct" onclick="qrRotSetUnit('pct')" style="${_candUnitOff()}">%</span>
+          <span id="qr-rot-unit-sh" onclick="qrRotSetUnit('sh')" style="${_candUnitOff()}">shares</span>
+          <span id="qr-rot-unit-usd" onclick="qrRotSetUnit('usd')" style="${_candUnitOff()}">$</span>
+        </span>
+        <button class="btn btn-sm" onclick="qrRotAddTrim()" style="font-size:11px">+ Add trim</button>
+      </div>
+      <div id="qr-rot-readout" style="font-size:10px;color:var(--color-text-tertiary);margin-top:5px;min-height:13px"></div>
+      <div id="qr-rot-staged" style="margin-top:6px"></div>
+      <div id="qr-rot-sim" style="margin-top:6px"></div>`;
+  }
+  const etfSpan = document.getElementById('qr-rot-etf'); if (etfSpan) etfSpan.textContent = etfTicker;
+
+  // Holding dropdown = the overlap candidate names (rotating a name the ETF doesn't hold isn't "into
+  // the overlap"). Preserve the current pick if it's still valid.
+  const hsel = document.getElementById('qr-rot-holding');
+  if (hsel) {
+    const cur = hsel.value;
+    hsel.innerHTML = '<option value="">— Pick a holding to trim —</option>' +
+      candidates.map(c => `<option value="${esc(c.display)}">${esc(c.display)} · ${fmtDollarWhole(c.directValue)}</option>`).join('');
+    hsel.value = (cur && candidates.some(c => c.display === cur)) ? cur : '';
+  }
+  qrRotPopulateLots();
+  qrRotSetUnit(qrRotUnit);
+
+  // Staged list.
+  const resolved = qrResolveTrims(qrRotTrims);
+  const staged = document.getElementById('qr-rot-staged');
+  if (staged) {
+    if (!qrRotTrims.length) {
+      staged.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No trims staged. Pick a holding, set an amount, and add one to model rotating it into ${esc(etfTicker)}.</div>`;
+    } else {
+      staged.innerHTML = qrRotTrims.map((t, i) => {
+        const r = resolved.find(x => x.norm === t.norm && (x.lotId || '') === (t.lotId || '') && x.amount === t.amount);
+        const scope = t.lotId ? 'one lot' : 'whole position';
+        const unitLabel = t.unit === 'pct' ? '%' : t.unit === 'sh' ? ' sh' : '$';
+        let detail = '';
+        if (r) {
+          const tx = r.tax; const gain = (tx.stGain + tx.ltGain) - (tx.stLoss + tx.ltLoss);
+          const term = (tx.ltGain + tx.ltLoss > 0 && tx.stGain + tx.stLoss === 0) ? 'LT' : (tx.stGain + tx.stLoss > 0 && tx.ltGain + tx.ltLoss === 0 ? 'ST' : 'mixed');
+          const gainTxt = tx.shelteredProceeds > 0 && tx.taxableProceeds <= 0 ? 'IRA — no tax'
+            : (Math.abs(gain) >= 1 ? `${gain >= 0 ? '+' : '\u2212'}${fmtDollarWhole(Math.abs(gain))} ${gain >= 0 ? 'gain' : 'loss'} (${term})` : 'no gain');
+          detail = ` → ${Math.round(r.shares * 100) / 100} sh · ${fmtDollarWhole(r.proceeds)} · ${gainTxt}`;
+        }
+        return `<div style="display:inline-flex;align-items:center;gap:6px;margin:0 6px 5px 0;padding:3px 8px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:12px;font-size:10px;color:var(--color-text-secondary)">
+          <strong style="color:var(--color-text-primary)">${esc(t.display)}</strong> ${t.unit === 'usd' ? '$' : ''}${t.amount}${t.unit === 'pct' ? '%' : t.unit === 'sh' ? ' sh' : ''} · ${scope}${detail}
+          <span onclick="qrRotRemoveTrim(${i})" title="Remove" style="cursor:pointer;color:var(--color-text-danger);font-weight:700;padding:0 2px">×</span>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // Simulation.
+  const sim = document.getElementById('qr-rot-sim');
+  if (sim) {
+    if (!resolved.length) {
+      sim.innerHTML = '';
+    } else {
+      const targetSleeve = (editCand && editCand.sleeve) || ((document.getElementById('qr-sleeve') || {}).value) || '(unassigned)';
+      const s = qrSimulateRotation(parsed, etfTicker, resolved, targetSleeve);
+      sim.innerHTML = qrRotationSimHtml(s, etfTicker);
+    }
+  }
 }
+
+// Repopulate the per-lot picker for whichever overlap holding is selected.
+function qrRotPopulateLots() {
+  const sel = document.getElementById('qr-rot-lot'); if (!sel) return;
+  const T = ((document.getElementById('qr-rot-holding') || {}).value || '').toUpperCase();
+  const cur = sel.value;
+  const lots = T ? _candTickerLots(T) : [];
+  sel.innerHTML = '<option value="">— Whole position (blended) —</option>' +
+    lots.map(p => `<option value="${esc(String(p.id))}">${esc(_candLotLabel(p))}</option>`).join('');
+  if (cur && lots.some(p => String(p.id) === cur)) sel.value = cur; else sel.value = '';
+}
+
+function qrRotOnHoldingPick() { qrRotPopulateLots(); qrRotReadout(); }
+
+function qrRotSetUnit(u) {
+  qrRotUnit = u;
+  [['pct', 'qr-rot-unit-pct'], ['sh', 'qr-rot-unit-sh'], ['usd', 'qr-rot-unit-usd']].forEach(([k, id]) => { const el = document.getElementById(id); if (el) el.style.cssText = (u === k) ? _candUnitOn() : _candUnitOff(); });
+  qrRotReadout();
+}
+
+// Live preview of the in-progress trim (this move alone; the staged total nets across all trims).
+function qrRotReadout() {
+  const el = document.getElementById('qr-rot-readout'); if (!el) return;
+  const T = ((document.getElementById('qr-rot-holding') || {}).value || '').toUpperCase();
+  const val = parseFloat((document.getElementById('qr-rot-amt') || {}).value) || 0;
+  const lotId = (document.getElementById('qr-rot-lot') || {}).value || '';
+  if (!T || val <= 0) { el.textContent = ''; return; }
+  const r = _candTrimShares(T, val, qrRotUnit, lotId);
+  if (!(r.sh > 0)) { el.textContent = ''; return; }
+  const scope = lotId ? 'this lot' : 'whole position';
+  let line = `\u2248 trim ${Math.round(r.sh * 100) / 100} sh (${(r.totalSh > 0 ? r.sh / r.totalSh * 100 : 0).toFixed(0)}% of ${Math.round(r.totalSh * 100) / 100} sh ${scope})${r.proceeds ? ' \u00b7 ~$' + Math.round(r.proceeds).toLocaleString() : ''}`;
+  const tx = _candResolveTrimTax(T, lotId, r.sh);
+  const gain = (tx.stGain + tx.ltGain) - (tx.stLoss + tx.ltLoss);
+  if (tx.shelteredProceeds > 0 && tx.taxableProceeds <= 0) line += ' \u00b7 IRA lot — no tax';
+  else if (Math.abs(gain) >= 1) {
+    const term = tx.ltGain + tx.ltLoss > 0 && tx.stGain + tx.stLoss === 0 ? 'LT' : (tx.stGain + tx.stLoss > 0 && tx.ltGain + tx.ltLoss === 0 ? 'ST' : 'mixed');
+    line += ` \u00b7 ${gain >= 0 ? '+' : '\u2212'}$${Math.round(Math.abs(gain)).toLocaleString()} ${gain >= 0 ? 'gain' : 'loss'} (${term})`;
+  }
+  el.textContent = line;
+}
+
+function qrRotAddTrim() {
+  const display = ((document.getElementById('qr-rot-holding') || {}).value || '').trim();
+  const amount = parseFloat((document.getElementById('qr-rot-amt') || {}).value) || 0;
+  const lotId = (document.getElementById('qr-rot-lot') || {}).value || '';
+  if (!display) { alert('Pick a holding to trim.'); return; }
+  if (!(amount > 0)) { alert('Enter an amount greater than zero.'); return; }
+  const T = display.toUpperCase();
+  if (qrRotUnit === 'usd') {
+    const lots0 = lotId ? _candTickerLots(T).filter(p => String(p.id) === String(lotId)) : _candTickerLots(T);
+    if (!lots0.some(p => (parseFloat(p.exitPrice) || 0) > 0)) { alert('No stored price for this lot — trim by % or shares instead.'); return; }
+  }
+  const r = _candTrimShares(T, amount, qrRotUnit, lotId);
+  if (!(r.sh > 0)) { alert('That amount resolves to zero shares for this holding/lot.'); return; }
+  const cand = (qrRotationState.candidates || []).find(c => c.display === display);
+  const norm = cand ? cand.norm : qrNormTicker(display);
+  // Replace an existing trim with the same name+lot rather than stacking duplicates.
+  const existing = qrRotTrims.findIndex(t => t.norm === norm && (t.lotId || '') === (lotId || ''));
+  const entry = { norm, display, lotId, unit: qrRotUnit, amount };
+  if (existing >= 0) qrRotTrims[existing] = entry; else qrRotTrims.push(entry);
+  const amtEl = document.getElementById('qr-rot-amt'); if (amtEl) amtEl.value = '';
+  qrRenderRotation();
+}
+
+function qrRotRemoveTrim(idx) {
+  if (idx >= 0 && idx < qrRotTrims.length) qrRotTrims.splice(idx, 1);
+  qrRenderRotation();
+}
+
+// Legacy entry point (old checkbox onchange) — now just a re-render.
+function qrToggleRotationLegacy() { qrRenderRotation(); }
 
 // Read the ETF holdings field, parse it, and show DIRECT overlaps with the book.
 function runQrHoldingsOverlap() {
@@ -9296,6 +9472,9 @@ function saveQrCandidate(keepForm) {
   // OUT into this ETF) so it survives save/reload — previously this lived only in the transient
   // qrRotateChecked Set and reverted on every re-render.
   const rotateOut = [...qrRotateChecked];
+  // SIZED rotation trims (lot + amount + %/shares/$) are the source of truth; rotateOut above is the
+  // derived name set the AI/flags read. Persist both so the builder restores exactly on reload.
+  const rotateTrims = Array.isArray(qrRotTrims) ? qrRotTrims.map(t => ({ norm: t.norm, display: t.display, lotId: t.lotId || '', unit: t.unit || 'pct', amount: t.amount })) : [];
 
   let savedId = qrEditingId;
   if (qrEditingId !== null) {
@@ -9304,6 +9483,7 @@ function saveQrCandidate(keepForm) {
       c.ticker = ticker; c.theme = theme; c.sleeve = sleeve; c.type = qrType; c.fields = fields;
       if (cachedHoldings) c.cachedHoldings = cachedHoldings;
       c.rotateOut = rotateOut;
+      c.rotateTrims = rotateTrims;
       c.updatedAt = new Date().toISOString();
     }
   } else {
@@ -9313,6 +9493,7 @@ function saveQrCandidate(keepForm) {
       type: qrType, ticker, theme, sleeve, fields,
       cachedHoldings: cachedHoldings || undefined,
       rotateOut,
+      rotateTrims,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
     });
   }
@@ -9331,6 +9512,7 @@ function editQrCandidate(id) {
   if (!c) return;
   qrEditingId = id;
   qrRotateChecked = new Set(c.rotateOut || []); // restore the saved rotation choice into the live set
+  qrRotTrims = []; qrRotTrimsKey = null;        // force the rotation builder to re-seed sized trims from this candidate
   qrType = c.type || 'stock';   // authoritative: lock the form to the candidate's own type FIRST
   qrStage2Unlocked = true;       // a saved candidate shows its full form
   setQrType(qrType);             // sync toggle styling + render (now guaranteed to match the data)
@@ -9459,16 +9641,23 @@ function toggleQrCardAnalysis(id) {
   else { panel.style.display = 'block'; if (btn) btn.textContent = '× Hide analysis'; renderQrCardAnalysis(id); }
 }
 
-// Toggle one rotated-out name for a saved candidate, persist, and re-render its analysis + flags.
-function qrCardToggleRotate(id, norm) {
+// Toggle one whole-position rotated-out name for a saved candidate, persist, and re-render.
+function qrCardToggleRotate(id, norm, display) {
   const c = qualityReviews.find(q => q.id === id);
   if (!c) return;
-  const set = new Set(c.rotateOut || []);
-  if (set.has(norm)) set.delete(norm); else set.add(norm);
-  c.rotateOut = [...set];
+  // Operate on rotateTrims (the source of truth): toggling ON stages a 100% whole-position trim;
+  // toggling OFF drops every trim for that name (including any sized/lot slices set in the form).
+  // rotateOut stays derived so the AI/flags keep reading a simple name set.
+  let trims = Array.isArray(c.rotateTrims) && c.rotateTrims.length
+    ? c.rotateTrims.slice()
+    : (c.rotateOut || []).map(n => ({ norm: n, display: n, lotId: '', unit: 'pct', amount: 100 }));
+  if (trims.some(t => t.norm === norm)) trims = trims.filter(t => t.norm !== norm);
+  else trims.push({ norm, display: display || norm, lotId: '', unit: 'pct', amount: 100 });
+  c.rotateTrims = trims;
+  c.rotateOut = [...new Set(trims.map(t => t.norm))];
   c.updatedAt = new Date().toISOString();
-  // If this candidate is also the one open in the form, keep the live set in sync.
-  if (qrEditingId === id) qrRotateChecked = new Set(c.rotateOut);
+  // If this candidate is also open in the form, force its builder to re-seed from the new trims.
+  if (qrEditingId === id) { qrRotateChecked = new Set(c.rotateOut); qrRotTrims = []; qrRotTrimsKey = null; }
   scheduleSave();
   renderQrCardAnalysis(id);
   const fc = document.getElementById('qr-flags-' + id);
@@ -9514,76 +9703,25 @@ function renderQrCardAnalysis(id) {
   const rotCandidates = overlaps.filter(o => o.yourDirectValue > 0)
     .map(o => ({ norm: qrNormTicker(o.ticker), display: o.ticker, directValue: o.yourDirectValue }));
   if (rotCandidates.length > 0) {
+    const dispMap = {}; rotCandidates.forEach(rc => { dispMap[rc.norm] = rc.display; });
     const checked = new Set(c.rotateOut || []);
+    // Card checkboxes are whole-position QUICK toggles. Partial / per-lot sizing is done in Edit (the
+    // form builder); the card reflects whatever is staged and routes tax through the same engine, so
+    // the two surfaces can't disagree.
     const checklist = rotCandidates.map(rc =>
       `<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;font-size:10px;cursor:pointer;color:var(--color-text-secondary)">
-        <input type="checkbox" ${checked.has(rc.norm)?'checked':''} onchange="qrCardToggleRotate('${id}','${escq(rc.norm)}')" style="cursor:pointer">
+        <input type="checkbox" ${checked.has(rc.norm)?'checked':''} onchange="qrCardToggleRotate('${id}','${escq(rc.norm)}','${escq(rc.display)}')" style="cursor:pointer">
         ${esc(rc.display)} <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(rc.directValue)}</span>${acctTag(rc.norm)}
       </label>`).join('');
 
-    let tableHtml = '';
-    if (checked.size > 0) {
-      const sim = qrSimulateRotation(parsed, etfTicker, checked, c.sleeve || '(unassigned)');
-      const netProceeds = sim.proceeds - sim.estTax;
-      let taxNote;
-      if (sim.estTax > 0) {
-        taxNote = `<span style="color:var(--color-text-danger)">~${fmtDollarWhole(sim.estTax)} est. tax</span> on ${fmtDollarWhole(sim.taxableGain)} of taxable gains → ~${fmtDollarWhole(netProceeds)} net to reinvest`;
-        if (sim.shelteredProceeds > 0) taxNote += `. ${fmtDollarWhole(sim.shelteredProceeds)} of the sale is in your IRA — sold tax-free`;
-      } else if (sim.hasIRA && sim.taxableProceeds === 0) { taxNote = `no tax — the entire sale is in your IRA (sheltered)`; }
-      else if (sim.hasIRA) { taxNote = `no taxable gain on the ${fmtDollarWhole(sim.taxableProceeds)} taxable portion; ${fmtDollarWhole(sim.shelteredProceeds)} is IRA (tax-free)`; }
-      else if (sim.anyLoss) { taxNote = `no tax (sales at a loss)`; }
-      else { taxNote = `no taxable gain`; }
-      const body = sim.rows.slice(0, 15).map(r => {
-        const chg = Math.round(r.change);
-        const chgColor = Math.abs(chg) < 500 ? 'var(--color-text-tertiary)' : chg > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-        const tiny = Math.abs(chg) < 1000 && r.before > 5000 ? ' <span style="color:#BA7517">← barely moves</span>' : '';
-        return `<tr>
-          <td style="padding:3px 8px;font-weight:600;color:var(--color-text-primary)">${esc(r.display)}</td>
-          <td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td>
-          <td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td>
-          <td style="padding:3px 8px;text-align:right;color:${chgColor}">${(chg>=0?'+':'')+fmtDollarWhole(chg)}${tiny}</td>
-        </tr>`;
-      }).join('');
-      tableHtml = `
-        <div style="font-size:9px;color:var(--color-text-secondary);margin:8px 0 4px">Selling ${fmtDollarWhole(sim.proceeds)} across ${sim.soldCount} position(s) → buying ${esc(etfTicker)}. Positions: ${sim.posBefore} → ${sim.posAfter}.</div>
-        <div style="font-size:9px;margin:0 0 6px;color:var(--color-text-secondary)">Tax: ${taxNote}.</div>
-        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
-          <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
-            <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name (true exposure)</th>
-            <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
-            <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
-            <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Change</th>
-          </tr></thead><tbody>${body}</tbody></table></div>
-        ${(() => {
-          // "What really moved" — bucket the FULL sim.rows (not just the 15 shown) by whether you
-          // already had exposure to that name before the rotation. before>0 = held it (directly or
-          // via funds); before==0 = brand-new exposure the ETF introduces. Sum the per-name change
-          // in each bucket. This is computed locally from the same sim, so it includes the rows the
-          // 15-row table truncates.
-          const held = sim.rows.filter(r => r.before > 0);
-          const fresh = sim.rows.filter(r => r.before === 0);
-          const sumChg = arr => arr.reduce((s, r) => s + r.change, 0);
-          const heldNet = sumChg(held);
-          const freshNet = sumChg(fresh);
-          const hiddenFresh = Math.max(0, fresh.length - sim.rows.slice(0, 15).filter(r => r.before === 0).length);
-          const sgn = n => (n >= 0 ? '+' : '\u2212') + fmtDollarWhole(Math.abs(n));
-          const sells = sim.soldCount || 0;
-          let verdict;
-          if (heldNet < 0 && freshNet > 0) verdict = `Net: trims ${fmtDollarWhole(Math.abs(heldNet))} from names you held (mostly the ${sells} you\u2019re selling) and adds ${fmtDollarWhole(Math.abs(freshNet))} in new ones.`;
-          else if (heldNet >= 0 && freshNet > 0) verdict = `Net: adds ${fmtDollarWhole(Math.abs(freshNet))} in new names and tops up the ones you held by ${fmtDollarWhole(Math.abs(heldNet))}.`;
-          else if (freshNet === 0) verdict = `Net: reshuffles ${fmtDollarWhole(Math.abs(heldNet))} among names you already held — no new exposure.`;
-          else verdict = `Net: ${sgn(heldNet + freshNet)} across both.`;
-          return `<div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
-            <div style="font-size:8px;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:5px">What really moved</div>
-            <div style="display:flex;justify-content:space-between;gap:10px"><span>Already held (${held.length})</span><strong style="color:${heldNet>=0?'var(--color-text-success)':'var(--color-text-danger)'}">${sgn(heldNet)}</strong></div>
-            <div style="display:flex;justify-content:space-between;gap:10px"><span>Brand-new (${fresh.length}${hiddenFresh>0?`, ${hiddenFresh} below table`:''})</span><strong style="color:var(--color-text-success)">${sgn(freshNet)}</strong></div>
-            <div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-secondary)">${verdict}</div>
-            <div style="margin-top:6px;font-size:10px;line-height:1.6;color:var(--color-text-primary)">${buildWhatReallyMovedParagraph(sim, etfTicker)}</div>
-          </div>`;
-        })()}
-        <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">For names ${esc(etfTicker)} also holds, your TRUE exposure barely drops — the ETF hands most of it back (net of tax), and VOO still holds them. ${sim.estTax > 0 ? `You\u2019d pay ~${fmtDollarWhole(sim.estTax)} in tax to mostly reshuffle the same exposure — worth it only if cutting position count / per-name control is the goal. ` : ''}Approximate; tax is an estimate (not advice).</div>`;
+    const resolved = qrResolveTrims(qrEffectiveRawTrims(c, dispMap));
+    let tableHtml;
+    if (resolved.length > 0) {
+      const sim = qrSimulateRotation(parsed, etfTicker, resolved, c.sleeve || '(unassigned)');
+      const sized = Array.isArray(c.rotateTrims) && c.rotateTrims.some(t => !((t.unit === 'pct' && +t.amount === 100 || !t.unit) && !t.lotId));
+      tableHtml = (sized ? `<div style="font-size:8px;color:var(--color-text-info);margin:6px 0 0">Sized / per-lot trims set in Edit are in effect — open Edit to adjust slices.</div>` : '') + qrRotationSimHtml(sim, etfTicker);
     } else {
-      tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above to model rotating them into ${esc(etfTicker)} — your choice saves automatically and updates the observations.</div>`;
+      tableHtml = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Check names above for a quick whole-position model, or open Edit for partial / per-lot trims into ${esc(etfTicker)} — your choice saves automatically and updates the observations.</div>`;
     }
     html += `<div style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:8px">
       <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">Hypothetical: rotate direct holdings → ${esc(etfTicker)}</div>
@@ -9872,15 +10010,17 @@ function buildQrAiPrompt(candidate) {
           const parsedH = (candidate.cachedHoldings && Array.isArray(candidate.cachedHoldings.parsed))
             ? candidate.cachedHoldings.parsed
             : (f.holdingsTop ? parseHoldings(f.holdingsTop).parsed : []);
-          const sellSet = new Set(rotating.map(o => qrNormTicker(o.ticker)));
-          if (parsedH.length && sellSet.size && typeof qrSimulateRotation === 'function') {
-            const sim = qrSimulateRotation(parsedH, (candidate.ticker || 'this ETF').toUpperCase(), sellSet, candidate.sleeve || '(unassigned)');
+          const dispMap = {}; overlaps.forEach(o => { dispMap[qrNormTicker(o.ticker)] = o.ticker; });
+          const resolved = (typeof qrResolveTrims === 'function') ? qrResolveTrims(qrEffectiveRawTrims(candidate, dispMap)) : [];
+          if (parsedH.length && resolved.length && typeof qrSimulateRotation === 'function') {
+            const sim = qrSimulateRotation(parsedH, (candidate.ticker || 'this ETF').toUpperCase(), resolved, candidate.sleeve || '(unassigned)');
+            const soldNorms = new Set(resolved.map(t => t.norm));
             const moved = (sim.rows || [])
-              .filter(r => sellSet.has(qrNormTicker(r.display)) || Math.abs(r.change) >= 1)
+              .filter(r => soldNorms.has(qrNormTicker(r.display)) || Math.abs(r.change) >= 1)
               .slice(0, 12)
               .map(r => `${r.display}: $${Math.round(r.before).toLocaleString()} → $${Math.round(r.after).toLocaleString()} (${(r.change>=0?'+':'')}$${Math.round(r.change).toLocaleString()})`);
             if (moved.length) {
-              computed.push(`PASS-THROUGH / TRUE-EXPOSURE arithmetic for the planned rotation (this is the number the user CAN trace — do not say it's untraced). Selling ${'$'+Math.round(sim.proceeds).toLocaleString()} across ${sim.soldCount} direct position(s) into ${(candidate.ticker||'the ETF').toUpperCase()}, est. tax ${'$'+Math.round(sim.estTax).toLocaleString()}. TRUE exposure per name, BEFORE → AFTER (direct + via-funds, incl. the exposure the ETF and VOO hand back): ${moved.join('; ')}. KEY READ: where a name's true exposure barely moves, rotating direct→ETF reshuffles rather than reduces it — quantify that rather than treating the net change as unknown.`);
+              computed.push(`PASS-THROUGH / TRUE-EXPOSURE arithmetic for the planned rotation (this is the number the user CAN trace — do not say it's untraced). Trimming ${'$'+Math.round(sim.proceeds).toLocaleString()} across ${sim.soldCount} direct name(s)${sim.fullSoldCount < sim.soldCount ? ' (some partial slices)' : ''} into ${(candidate.ticker||'the ETF').toUpperCase()}, est. tax ${'$'+Math.round(sim.estTax).toLocaleString()}. TRUE exposure per name, BEFORE → AFTER (direct + via-funds, incl. the exposure the ETF and VOO hand back): ${moved.join('; ')}. KEY READ: where a name's true exposure barely moves, rotating direct→ETF reshuffles rather than reduces it — quantify that rather than treating the net change as unknown.`);
             }
           }
         } catch (e) { /* pass-through is additive context only; never block the payload */ }
