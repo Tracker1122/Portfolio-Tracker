@@ -25199,10 +25199,12 @@ init();
   ];
   function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
   var COVERAGE_WARN = 0.7;
-  // VOO benchmark overlay color (P0). Bright green (#4ade40) — deliberately a lighter
-  // shade than the book's success-green (#22c55e) so the two stay distinguishable on
-  // up-windows (where the book line is also green). One knob, both renderers.
-  var BENCH_COLOR = 'var(--color-text-success-bright, #4ade40)';
+  // VOO benchmark overlay color (P0). BLUE (#60a5fa) — was bright green, but green was
+  // overloaded (book up-line + recovered dots + VOO all green → tangled left edge). Blue
+  // is chromatically distinct from both the red stress leg and any green, so the market
+  // reference reads as its own thing and the left-edge bunching clears up. One knob, both
+  // renderers (card + summary spark). Flip back to '#4ade40' to undo.
+  var BENCH_COLOR = 'var(--color-text-info, #60a5fa)';
   function sparklinePath(path, w, h, loIn, hiIn) {
     if (!path || path.length < 2) return '';
     var ys = path.map(function (p) { return p.cum; });
@@ -25296,7 +25298,7 @@ init();
     var has = result && result.totalReturn != null, cov = result ? result.coverage : 0;
     var bench = opts.benchmark || null, rec = opts.recovery || null;
     var sparkD = '', sparkDStress = '', sparkDRecovery = '', benchSparkD = '', benchReturnPct = null, benchSpreadPct = null, troughDot = null;
-    var windowEndX = null, breakevenY = null, checkpointDots = [], recovery = null, recoveryIncomplete = false, recoveryCovDrop = false;
+    var windowEndX = null, breakevenY = null, checkpointDots = [], recovery = null, recoveryIncomplete = false, recoveryCovDrop = false, junctions = null;
     if (has) {
       // vs-Mkt number is always WINDOW-scoped (book − VOO over [from,to]).
       if (bench && bench.path && bench.path.length >= 2) {
@@ -25349,11 +25351,26 @@ init();
         recoveryCovDrop = (rec.coverage != null && cov > 0 && rec.coverage < cov - 0.05);
       }
     }
+    // Junctions = the four points we mark on the chart (low · 6mo · 1Y · 2Y), each with
+    // book level, VOO level, and the spread (book − VOO), all on the same "vs pre-event
+    // level" basis. Built only for drawdown windows that actually got recovery checkpoints;
+    // up-windows (no recovery) fall back to the single window-vs-market line in the render.
+    // "low" reuses the window-scoped figures: book=returnPct, VOO=benchReturnPct (same
+    // numbers the chart's window-end point and the summary "vs Mkt" column already show).
+    if (has && recovery) {
+      junctions = [{ label: 'low', bookPct: result.totalReturn * 100, vooPct: benchReturnPct, spreadPct: benchSpreadPct }];
+      recovery.forEach(function (c) {
+        if (c.pending) { junctions.push({ label: c.label, pending: true }); return; }
+        if (c.missing) { junctions.push({ label: c.label, missing: true }); return; }
+        junctions.push({ label: c.label, bookPct: c.bookPct, vooPct: (c.vooPct != null ? c.vooPct : null),
+          spreadPct: (c.vooPct != null ? c.bookPct - c.vooPct : null), recovered: c.recovered });
+      });
+    }
     return { windowLabel: opts.windowLabel || '', dateRange: (opts.from && opts.to) ? fmtRange(opts.from, opts.to) : '', hasData: has,
       returnPct: has ? result.totalReturn * 100 : null, drawdownPct: has ? result.maxDrawdown * 100 : null,
       coveragePct: cov * 100, coverageWarn: cov < COVERAGE_WARN, excluded: result ? (result.excluded || []) : [],
       sparkD: sparkD, sparkDStress: sparkDStress, sparkDRecovery: sparkDRecovery, benchSparkD: benchSparkD, benchReturnPct: benchReturnPct, benchSpreadPct: benchSpreadPct, troughDot: troughDot,
-      windowEndX: windowEndX, breakevenY: breakevenY, checkpointDots: checkpointDots, recovery: recovery, recoveryIncomplete: recoveryIncomplete, recoveryCovDrop: recoveryCovDrop,
+      windowEndX: windowEndX, breakevenY: breakevenY, checkpointDots: checkpointDots, recovery: recovery, recoveryIncomplete: recoveryIncomplete, recoveryCovDrop: recoveryCovDrop, junctions: junctions,
       frozenLine: (opts.frozenPct > 0) ? '~' + (opts.frozenPct * 100).toFixed(0) + '% of your all-in book (' + (opts.basisLabel || 'self-marked privates') + ') is illiquid and cannot be sold during this drawdown.' : null,
       perName: opts.perName || [] };
   }
@@ -25536,6 +25553,47 @@ init();
     if (onDone) onDone(model);
   }
 
+  // Per-junction book-vs-VOO grid. Expresses the data that already exists (each
+  // checkpoint's bookPct/vooPct + the window-scoped low figures) as one aligned
+  // table: You / VOO / (You − VOO) across the four marked points low·6mo·1Y·2Y.
+  // Same basis for every column (level vs the pre-event high), so the columns are
+  // comparable left-to-right and the spread row is a clean apples-to-apples gap.
+  function renderJunctionTable(model) {
+    var J = model.junctions || [];
+    if (!J.length) return '';
+    var succ = 'var(--color-text-success, #22c55e)', dang = 'var(--color-text-danger, #ef4444)', tert = 'var(--color-text-tertiary, #888)';
+    var dim = '<span style="opacity:.45">\u00b7</span>', dash = '<span style="opacity:.6">\u2014</span>';
+    var head = '<tr style="font-size:9px;color:' + tert + '"><th style="text-align:left;padding:2px 8px 2px 0;font-weight:600"></th>' +
+      J.map(function (c) { return '<th style="text-align:right;padding:2px 7px;font-weight:600;color:' + tert + '">' + c.label + '</th>'; }).join('') + '</tr>';
+    var youCells = J.map(function (c) {
+      if (c.pending) return '<td style="text-align:right;padding:2px 7px">' + dim + '</td>';
+      if (c.missing || c.bookPct == null) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + (c.bookPct >= 0 ? succ : dang) + ';font-weight:600">' + (c.bookPct >= 0 ? '+' : '') + c.bookPct.toFixed(1) + '%' + (c.recovered ? ' \u2713' : '') + '</td>';
+    }).join('');
+    var vooCells = J.map(function (c) {
+      if (c.pending || c.vooPct == null) return '<td style="text-align:right;padding:2px 7px">' + (c.pending ? dim : dash) + '</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + tert + '">' + (c.vooPct >= 0 ? '+' : '') + c.vooPct.toFixed(1) + '%</td>';
+    }).join('');
+    var sprCells = J.map(function (c) {
+      if (c.pending) return '<td style="text-align:right;padding:2px 7px">' + dim + '</td>';
+      if (c.spreadPct == null) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + (c.spreadPct >= 0 ? succ : dang) + ';font-weight:600">' + (c.spreadPct >= 0 ? '+' : '') + c.spreadPct.toFixed(1) + '</td>';
+    }).join('');
+    function rowLabel(txt, swatch) { return '<td style="text-align:left;padding:2px 8px 2px 0;color:' + tert + ';white-space:nowrap">' + (swatch || '') + txt + '</td>'; }
+    var blueSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
+    var warn = (model.recoveryIncomplete ? ' <span style="color:' + dang + '">\u26a0 partial \u2014 click again</span>' : '') +
+               (model.recoveryCovDrop ? ' <span style="opacity:.7">(on reduced coverage)</span>' : '');
+    return '<div style="margin-top:7px">' +
+      '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">You vs market at each marked point \u2014 level vs your pre-event high (\u201clow\u201d = the window trough; spread in points).' + warn + '</div>' +
+      '<table style="border-collapse:collapse;font-size:10px">' + head +
+        '<tr>' + rowLabel('You') + youCells + '</tr>' +
+        '<tr>' + rowLabel('VOO', blueSwatch) + vooCells + '</tr>' +
+        '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel('You \u2212 VOO') + sprCells + '</tr>' +
+      '</table>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">chart: red = drawdown leg \u00b7 grey = recovery leg \u00b7 blue = VOO \u00b7 dotted = \u201ceven\u201d \u00b7 dashed = window low \u00b7 \u2713 = back to even-or-better</div>' +
+    '</div>';
+  }
+
   function renderReplayCard(model) {
     if (!model.hasData)
       return '<div style="font-size:11px;color:var(--color-text-tertiary)">No replayable data for <strong>' + model.windowLabel + '</strong> yet (coverage ' + model.coveragePct.toFixed(0) + '%). The held names likely had no price history in this window.</div>';
@@ -25575,21 +25633,21 @@ init();
       : '<path d="' + model.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="1.6" ' + nz + '/>';
     var beLine = (model.recovery && model.breakevenY != null)
       ? '<line x1="0" y1="' + model.breakevenY.toFixed(1) + '" x2="120" y2="' + model.breakevenY.toFixed(1) + '" stroke="var(--color-text-tertiary, #888)" stroke-width="0.7" stroke-dasharray="1.5 1.5" stroke-opacity="0.5" ' + nz + '/>' +
-        '<text x="118" y="' + (model.breakevenY - 1).toFixed(1) + '" text-anchor="end" font-size="3" fill="var(--color-text-tertiary, #888)" opacity="0.85">even</text>'
+        '<text x="118" y="' + (model.breakevenY - 1).toFixed(1) + '" text-anchor="end" font-size="2.4" fill="var(--color-text-tertiary, #888)" opacity="0.85">even</text>'
       : '';
     var divLine = (model.windowEndX != null)
-      ? '<line x1="' + model.windowEndX.toFixed(1) + '" y1="0" x2="' + model.windowEndX.toFixed(1) + '" y2="28" stroke="var(--color-text-tertiary, #888)" stroke-width="0.6" stroke-dasharray="2 2" stroke-opacity="0.55" ' + nz + '/>'
+      ? '<line x1="' + model.windowEndX.toFixed(1) + '" y1="0" x2="' + model.windowEndX.toFixed(1) + '" y2="28" stroke="var(--color-text-tertiary, #888)" stroke-width="0.5" stroke-dasharray="2 2" stroke-opacity="0.4" ' + nz + '/>'
       : '';
     var vooLine = model.benchSparkD ? '<path d="' + model.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1.3" stroke-opacity="0.9" ' + nz + '/>' : '';
-    var troughC = model.troughDot ? '<circle cx="' + model.troughDot.x.toFixed(1) + '" cy="' + model.troughDot.y.toFixed(1) + '" r="1.6" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.6" ' + nz + '><title>The low \u2014 max drawdown ' + model.drawdownPct.toFixed(1) + '%</title></circle>' : '';
+    var troughC = model.troughDot ? '<circle cx="' + model.troughDot.x.toFixed(1) + '" cy="' + model.troughDot.y.toFixed(1) + '" r="1.0" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.4" ' + nz + '><title>The low \u2014 max drawdown ' + model.drawdownPct.toFixed(1) + '%</title></circle>' : '';
     var cpC = (model.checkpointDots || []).map(function (d) {
       var c = d.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
-      return '<circle cx="' + d.x.toFixed(1) + '" cy="' + d.y.toFixed(1) + '" r="1.5" fill="' + c + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.5" ' + nz + '><title>' + d.label + ' after the low (' + d.date + '): ' + (d.bookPct >= 0 ? '+' : '') + d.bookPct.toFixed(1) + '% vs pre-event level' + (d.recovered ? ' \u2713 recovered' : '') + '</title></circle>';
+      return '<circle cx="' + d.x.toFixed(1) + '" cy="' + d.y.toFixed(1) + '" r="0.9" fill="' + c + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.4" ' + nz + '><title>' + d.label + ' after the low (' + d.date + '): ' + (d.bookPct >= 0 ? '+' : '') + d.bookPct.toFixed(1) + '% vs pre-event level' + (d.recovered ? ' \u2713 recovered' : '') + '</title></circle>';
     }).join('');
     var clampX = function (x) { return Math.max(7, Math.min(113, x)); };
     var xlabels = '';
-    if (model.windowEndX != null) xlabels += '<text x="' + clampX(model.windowEndX).toFixed(1) + '" y="32.6" text-anchor="middle" font-size="3" fill="var(--color-text-tertiary, #888)">low</text>';
-    (model.checkpointDots || []).forEach(function (d) { xlabels += '<text x="' + clampX(d.x).toFixed(1) + '" y="32.6" text-anchor="middle" font-size="3" fill="var(--color-text-tertiary, #888)">' + d.label + '</text>'; });
+    if (model.windowEndX != null) xlabels += '<text x="' + clampX(model.windowEndX).toFixed(1) + '" y="32.6" text-anchor="middle" font-size="2.4" fill="var(--color-text-tertiary, #888)">low</text>';
+    (model.checkpointDots || []).forEach(function (d) { xlabels += '<text x="' + clampX(d.x).toFixed(1) + '" y="32.6" text-anchor="middle" font-size="2.4" fill="var(--color-text-tertiary, #888)">' + d.label + '</text>'; });
     var chart = '<div style="width:100%;margin:8px 0 4px"><svg viewBox="0 0 120 34" width="100%" style="display:block;height:auto;overflow:visible">' +
       beLine + divLine + vooLine + bookLines + troughC + cpC + xlabels + '</svg></div>';
     return '<div style="border:1px solid var(--color-border-tertiary);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--color-background-secondary)">' +
@@ -25602,28 +25660,13 @@ init();
         '<strong style="color:' + retColor + '">' + (pos ? '+' : '') + model.returnPct.toFixed(1) + '%</strong> total, drawing down ' +
         '<strong style="color:var(--color-text-danger, #ef4444)">' + model.drawdownPct.toFixed(1) + '%</strong>, on ' +
         '<span style="color:' + covColor + '">' + model.coveragePct.toFixed(0) + '% of the liquid book</span>' + (model.coverageWarn ? ' ⚠ (low coverage — read with caution)' : '') + '.</div>' +
-      (model.benchReturnPct != null ?
-        '<div style="font-size:10px;margin-top:3px;color:var(--color-text-tertiary)">Market (VOO), same window: ' +
-          '<strong style="color:' + (model.benchReturnPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (model.benchReturnPct >= 0 ? '+' : '') + model.benchReturnPct.toFixed(1) + '%</strong>' +
-          ' — your book ' + (model.benchSpreadPct >= 0 ? 'outperformed by +' + model.benchSpreadPct.toFixed(1) : 'lagged by ' + Math.abs(model.benchSpreadPct).toFixed(1)) + ' pts ' +
-          '<span style="opacity:.75">(green line = VOO)</span></div>'
-        : '') +
-      (model.recovery ?
-        '<div style="font-size:10px;margin-top:3px;color:var(--color-text-tertiary)">Recovery to pre-event level (after the window low): ' +
-          model.recovery.map(function (c) {
-            if (c.pending) return c.label + ' <span style="opacity:.6">pending</span>';
-            if (c.missing) return c.label + ' \u2014';
-            var col = c.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
-            return c.label + ': <strong style="color:' + col + '">' + (c.bookPct >= 0 ? '+' : '') + c.bookPct.toFixed(1) + '%' + (c.recovered ? ' \u2713' : '') + '</strong>';
-          }).join(' \u00b7 ') +
-          (model.recoveryIncomplete ? ' <span style="color:var(--color-text-danger, #ef4444)">\u26a0 partial \u2014 click again</span>' : '') +
-          (model.recoveryCovDrop ? ' <span style="opacity:.7">(on reduced coverage)</span>' : '') +
-          ' <span style="opacity:.6">\u00b7 chart: red = drawdown, grey = recovery, dotted = pre-event \u201ceven\u201d line, dashed = window low</span></div>' +
-          (model.recovery.some(function (c) { return c.vooPct != null; }) ?
-            '<div style="font-size:9px;margin-top:1px;color:var(--color-text-tertiary);opacity:.85">VOO, same points: ' +
-              model.recovery.map(function (c) { return (c.pending || c.missing || c.vooPct == null) ? c.label + ' \u2014' : c.label + ': ' + (c.vooPct >= 0 ? '+' : '') + c.vooPct.toFixed(1) + '%'; }).join(' \u00b7 ') +
-            '</div>' : '')
-        : '') +
+      (model.junctions ? renderJunctionTable(model) :
+        (model.benchReturnPct != null ?
+          '<div style="font-size:10px;margin-top:5px;color:var(--color-text-tertiary)">Market (VOO), same window: ' +
+            '<strong style="color:' + (model.benchReturnPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (model.benchReturnPct >= 0 ? '+' : '') + model.benchReturnPct.toFixed(1) + '%</strong>' +
+            ' — your book ' + (model.benchSpreadPct >= 0 ? 'outperformed by +' + model.benchSpreadPct.toFixed(1) : 'lagged by ' + Math.abs(model.benchSpreadPct).toFixed(1)) + ' pts ' +
+            '<span style="opacity:.75">(blue line = VOO)</span></div>'
+          : '')) +
       (model.excluded && model.excluded.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No price history in this window: ' + model.excluded.join(', ') + '.</div>' : '') +
       breakdown +
       (model.frozenLine ? '<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"><em>And ' + model.frozenLine + '</em></div>' : '') +
@@ -25638,6 +25681,26 @@ init();
   // for stability as rows fill in. Reuses the model the cards already produce —
   // no extra fetch, no extra math.
   var _summaryRows = {};
+  // Single-card model (request 3): one card shown at a time, persisting until another
+  // window is chosen. _activeWinId tracks which one; _showCard renders it from the stored
+  // model (no re-fetch — clicking a summary row just re-renders from cache).
+  var _activeWinId = null;
+  function _highlightActive() {
+    var btns = document.querySelectorAll('#risk-replay-section button[data-win]');
+    for (var i = 0; i < btns.length; i++) {
+      var on = btns[i].getAttribute('data-win') === _activeWinId;
+      btns[i].style.boxShadow = on ? 'inset 0 0 0 1.5px var(--color-text-info, #60a5fa)' : '';
+    }
+  }
+  function _showCard(id) {
+    var entry = _summaryRows[id];
+    if (!entry) return;
+    _activeWinId = id;
+    var outEl = document.getElementById('risk-replay-out');
+    if (outEl) outEl.innerHTML = renderReplayCard(entry.model);
+    _highlightActive();
+    renderSummaryTable();
+  }
   function renderSummaryTable() {
     var el = document.getElementById('risk-replay-summary');
     if (!el) return;
@@ -25674,7 +25737,8 @@ init();
         var rc = c.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
         return '<span style="color:' + rc + '">' + (c.bookPct >= 0 ? '+' : '') + c.bookPct.toFixed(0) + '</span>';
       }).join('<span style="opacity:.4"> / </span>') : dash;
-      return '<tr style="font-size:10px;border-top:1px solid var(--color-border-tertiary, #333)">' +
+      var activeRow = (id === _activeWinId);
+      return '<tr data-show="' + id + '" title="Click to view this window" style="font-size:10px;border-top:1px solid var(--color-border-tertiary, #333);cursor:pointer;background:' + (activeRow ? 'var(--color-background-tertiary, #2a2a2a)' : 'transparent') + '">' +
         '<td style="text-align:left;padding:3px 6px 3px 0" title="' + (m.dateRange || '') + '"><span style="color:var(--color-text-secondary)">' + label + (m.coverageWarn ? ' \u26a0' : '') + '</span>' + (m.dateRange ? '<br><span style="font-size:8px;color:var(--color-text-tertiary)">' + m.dateRange + '</span>' : '') + '</td>' +
         '<td style="text-align:right;padding:3px 6px;color:' + retColor + ';font-weight:600">' + (has ? (m.returnPct >= 0 ? '+' : '') + m.returnPct.toFixed(1) + '%' : dash) + '</td>' +
         '<td style="text-align:right;padding:3px 6px;color:var(--color-text-danger, #ef4444)">' + (has ? m.drawdownPct.toFixed(1) + '%' : dash) + '</td>' +
@@ -25686,7 +25750,7 @@ init();
     }).join('');
     el.innerHTML =
       '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
-      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed (click a window above to add or refresh it). \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; green path = VOO. \u201cRec\u201d = book level vs its pre-event high at 6mo / 1Y / 2Y after the window low (green = back to even or better; \u00b7 = not yet reached).</div>' +
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed \u2014 click a window button to add or refresh it, or click a row to bring its chart back up. \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; blue path = VOO. \u201cRec\u201d = book level vs its pre-event high at 6mo / 1Y / 2Y after the window low (green = back to even or better; \u00b7 = not yet reached).</div>' +
       '<table style="border-collapse:collapse;width:100%;max-width:640px">' + header + rows + '</table>';
   }
 
@@ -25705,15 +25769,19 @@ init();
       '<div id="risk-replay-summary"></div>' +
       '<div id="risk-replay-out"></div>' + STANDING_CAVEAT;
     var statusEl = section.querySelector('#risk-replay-status');
-    var outEl = section.querySelector('#risk-replay-out');
+    var summaryEl = section.querySelector('#risk-replay-summary');
+    // Click a summary row to bring that window's chart back up (from cache, no re-fetch).
+    summaryEl.addEventListener('click', function (e) {
+      var tr = e.target && e.target.closest ? e.target.closest('tr[data-show]') : null;
+      if (tr) _showCard(tr.getAttribute('data-show'));
+    });
     section.querySelectorAll('button[data-win]').forEach(function (b) {
       b.addEventListener('click', function () {
         var win = STRESS_WINDOWS.filter(function (w) { return w.id === b.getAttribute('data-win'); })[0];
         b.disabled = true;
         runReplayForWindow(win, statusEl, function (model) {
-          outEl.insertAdjacentHTML('afterbegin', renderReplayCard(model));
           _summaryRows[win.id] = { label: win.label, model: model };
-          renderSummaryTable();
+          _showCard(win.id);   // one card, replaces whatever was shown; summary still accumulates every window
           b.disabled = false;
         }).catch(function () { b.disabled = false; });
       });
