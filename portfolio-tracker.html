@@ -1015,6 +1015,10 @@
   <input id="finnhub-key-input" class="modal-input" type="password" placeholder="Paste your Finnhub API key here" style="width:280px;font-size:11px;padding:4px 8px" oninput="saveFinnhubKey(this.value)" onchange="saveFinnhubKey(this.value)" onblur="saveFinnhubKey(this.value)">
   <a href="https://finnhub.io/register" target="_blank" rel="noopener" style="font-size:10px;color:var(--color-text-info)">Get free key at finnhub.io ↗</a>
   <span style="font-size:10px;color:var(--color-text-tertiary)">Free account · real-time US quotes</span>
+  <span style="flex-basis:100%;height:0"></span>
+  <span style="font-size:10px;color:var(--color-text-tertiary)">Bars Worker URL (Tiingo)</span>
+  <input id="bars-worker-input" class="modal-input" type="text" placeholder="https://your-worker.workers.dev" style="width:280px;font-size:11px;padding:4px 8px" oninput="saveBarsWorkerUrl(this.value)" onchange="saveBarsWorkerUrl(this.value)" onblur="saveBarsWorkerUrl(this.value)">
+  <span style="font-size:10px;color:var(--color-text-tertiary)">Cloudflare worker · deep history for stress replays</span>
 </div>
 
 <!-- Update Instructions -->
@@ -2523,6 +2527,7 @@ let finnhubKey = '';
 // Shape per ticker: { name, sector, description, marketCap, homepage, fetchedDate, userNote }
 let tickerInfo = {};
 let avWorkerUrl = ''; // Cloudflare worker base URL that proxies Alpha Vantage ETF_PROFILE (key stays server-side)
+let barsWorkerUrl = ''; // Cloudflare worker base URL that proxies Tiingo daily bars (deep free history + CORS) for the risk lens
 let aiWorkerUrl = ''; // Cloudflare worker base URL that proxies the Anthropic Messages API (key stays server-side; CORS fix)
 let saveTimeout = null;
 let cashBuckets = { Taxable: 0, IRA: 0 };
@@ -8211,6 +8216,13 @@ function saveAvWorkerUrl(u) {
   avWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
   try { localStorage.setItem('av_worker_url', avWorkerUrl); } catch(e) {}
 }
+function loadBarsWorkerUrl() {
+  try { const u = localStorage.getItem('bars_worker_url'); if (u) barsWorkerUrl = u; } catch(e) {}
+}
+function saveBarsWorkerUrl(u) {
+  barsWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
+  try { localStorage.setItem('bars_worker_url', barsWorkerUrl); } catch(e) {}
+}
 function loadAiWorkerUrl() {
   try { const u = localStorage.getItem('ai_worker_url'); if (u) aiWorkerUrl = u; } catch(e) {}
 }
@@ -12247,8 +12259,10 @@ function togglePolygonKey() {
   if (isHidden) {
     if (!polygonKey) loadPolygonKey();
     if (!finnhubKey) loadFinnhubKey();
+    if (!barsWorkerUrl) loadBarsWorkerUrl();
     if (polygonKey) document.getElementById('polygon-key-input').value = polygonKey;
     const fi = document.getElementById('finnhub-key-input'); if (fi && finnhubKey) fi.value = finnhubKey;
+    const bw = document.getElementById('bars-worker-input'); if (bw && barsWorkerUrl) bw.value = barsWorkerUrl;
   }
 }
 
@@ -24352,7 +24366,7 @@ function driveBuildBackupPayload() {
     // are deliberately NOT included in the downloadable Export file. To exclude a key from backups,
     // remove its entry ('polygon_api_key' / 'finnhub_api_key') from this list.
     _settings: (function(){
-      var keys = ['polygon_api_key','finnhub_api_key','av_worker_url','ai_worker_url',
+      var keys = ['polygon_api_key','finnhub_api_key','av_worker_url','ai_worker_url','bars_worker_url',
         'portfolio-index-lookthrough-v1','portfolio-cluster-overrides-v1',
         'portfolio-sector-map-v1','portfolio-sector-ai-mode',
         'trim-watch-thresholds-v1','portfolio-csv-mappings',
@@ -25168,7 +25182,7 @@ init();
     { id: 'tariff25', label: '2025 Tariff Selloff', from: '2025-02-01', to: '2025-04-30', stresses: 'Policy/macro shock (verify dates)' },
     { id: 'carry24', label: 'Aug-2024 Carry Unwind', from: '2024-08-01', to: '2024-08-07', stresses: 'Sharp vol spike' }
   ];
-  function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v1:' + windowId + ':' + ticker.toUpperCase(); }
+  function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
   var COVERAGE_WARN = 0.7;
   function sparklinePath(path, w, h) {
     if (!path || path.length < 2) return '';
@@ -25190,28 +25204,28 @@ init();
   /* ---------- live-fetch + DOM glue (the only untested-from-here seam) ----- */
   var _barsCache = {};
   function _loadBarsCache() {
-    try { _barsCache = {}; for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf('risk-replay-bars-v1:') === 0) _barsCache[k] = JSON.parse(localStorage.getItem(k)); } }
+    try { _barsCache = {}; for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf('risk-replay-bars-v2:') === 0) _barsCache[k] = JSON.parse(localStorage.getItem(k)); } }
     catch (e) { _barsCache = {}; }
   }
   function _saveOneBars(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
 
   async function fetchBarsWindow(ticker, fromISO, toISO) {
-    if (typeof polygonKey === 'undefined' || !polygonKey) { if (typeof loadPolygonKey === 'function') loadPolygonKey(); }
-    if (typeof polygonKey === 'undefined' || !polygonKey) throw new Error('nokey');
-    var gap = 400; // raise toward ~13000 if you hit 429s on the strict 5/min free tier
+    if (typeof barsWorkerUrl === 'undefined' || !barsWorkerUrl) { if (typeof loadBarsWorkerUrl === 'function') loadBarsWorkerUrl(); }
+    if (typeof barsWorkerUrl === 'undefined' || !barsWorkerUrl) throw new Error('noworker');
+    var gap = 600; // Tiingo via worker; ~50 symbols/hr on free tier, so pace politely + the worker edge-caches a day.
     if (typeof _lastPolyFetch === 'number') {
       var since = Date.now() - _lastPolyFetch;
       if (since < gap) await new Promise(function (r) { setTimeout(r, gap - since); });
       _lastPolyFetch = Date.now();
     }
     var t = ticker.toUpperCase();
-    var url = 'https://api.polygon.io/v2/aggs/ticker/' + t + '/range/1/day/' + fromISO + '/' + toISO + '?adjusted=true&sort=asc&limit=400&apiKey=' + encodeURIComponent(polygonKey);
-    var res = await fetch(url);
+    var url = barsWorkerUrl + '/bars?s=' + encodeURIComponent(t) + '&from=' + fromISO + '&to=' + toISO;
+    var res = await fetch(url, { headers: { 'Accept': 'application/json' } });
     if (res.status === 429) throw new Error('rate');
     if (!res.ok) throw new Error('err');
-    var data = await res.json(), raw = data.results;
-    if (!raw || raw.length < 2) throw new Error('err');
-    return { bars: raw.map(function (b) { return { t: b.t, c: b.c }; }) };
+    var data = await res.json(), raw = data.bars;
+    if (!raw || raw.length < 2) throw new Error('err'); // name had no history on Tiingo in this window
+    return { bars: raw }; // already [{t: UTC-midnight-ms, c: close}] — matches commonDateIndex contract
   }
 
   // Guard-3-correct weights: held instruments AS THEMSELVES (ETFs not looked
@@ -25264,7 +25278,9 @@ init();
       } catch (e) {
         if (e.message === 'rate') { if (statusEl) statusEl.textContent = 'Rate-limited — partial fill saved. Click again to grab the rest.'; break; }
         if (e.message === 'nokey') { if (statusEl) statusEl.textContent = 'Set your Polygon API key first (🔑 API Keys).'; return; }
-        /* 'err' = name had no history in this window; skip — coverage will reflect it */
+        if (e.message === 'noworker') { if (statusEl) statusEl.textContent = 'Set your Bars Worker URL first (🔑 API Keys panel) — the Cloudflare worker that proxies Tiingo history.'; return; }
+        if (e.message === 'forbidden') { if (statusEl) statusEl.textContent = 'Polygon returned 403 for ' + win.label + ' (' + win.from + ' → ' + win.to + '). This window is older than your Polygon plan reaches — the free tier only covers ~2 years of history. Pick a window inside the last ~2 years, upgrade your plan, or proxy a deep-history source. (This is NOT a problem with your holdings.)'; return; }
+        /* 'err' = name genuinely had no price history in this window; skip — coverage reflects it */
       }
     }
     var result = RiskLens.replayWindow(weights, barsByTicker, ms(win.from), ms(win.to));
@@ -25304,7 +25320,7 @@ init();
     }).join('');
     section.innerHTML =
       '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary, #eee);margin-bottom:2px">Risk &amp; Stress Lens</div>' +
-      '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your current holdings through a real past stress window using actual daily returns (co-movement included, no model). Each button fetches that window\u2019s daily bars from Polygon (paced; partial fills cache and resume on re-click).</div>' +
+      '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your current holdings through a real past stress window using actual daily returns (co-movement included, no model). Each button fetches that window\u2019s daily bars via your Tiingo worker (deep free history; partial fills cache and resume on re-click).</div>' +
       '<div style="margin-bottom:4px">' + btns + '</div>' +
       '<div id="risk-replay-status" style="font-size:10px;color:var(--color-text-tertiary);min-height:14px"></div>' +
       '<div id="risk-replay-out"></div>' + STANDING_CAVEAT;
