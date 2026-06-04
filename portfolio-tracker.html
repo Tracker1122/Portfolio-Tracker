@@ -22403,15 +22403,29 @@ function executeSell(id, sellNote, saleInfo) {
     pos.sellDate = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
   }
 
-  // Capture SPX at sell — use current spxLive. Required for "vs S&P" math on closed positions.
-  // Note: this captures *today's* SPX even if the sale was backdated. Documented limitation.
-  if (spxLive) {
-    pos.spxExit = spxLive.toFixed(2);
-  }
-
-  // Capture theme benchmark at sell — required for theme-alpha math.
-  if (pos.benchmarkAtBuy && benchmarkPrices[pos.benchmarkAtBuy]) {
-    pos.benchmarkPriceAtSell = benchmarkPrices[pos.benchmarkAtBuy];
+  // Capture S&P + theme-benchmark at sell. The app only holds TODAY's values in memory (spxLive /
+  // benchmarkPrices) — there's no historical by-date source — so these are valid anchors ONLY when the
+  // sale is recorded ON the sell date. For a BACKDATED sale, today's level is the wrong anchor and would
+  // skew the holding-period vs-S&P and theme-alpha math. (And note: an OPEN position's spxExit is
+  // continuously stamped to the live value, so it already holds today's number — leaving it untouched
+  // wouldn't fix anything; we must actively clear it.) On a backdated sale we therefore CLEAR both and
+  // let the user enter the real sell-date closes via "Edit closed position".
+  const _t = new Date();
+  const _today = `${_t.getFullYear()}-${String(_t.getMonth() + 1).padStart(2, '0')}-${String(_t.getDate()).padStart(2, '0')}`;
+  const _saleIsToday = (pos.sellDate === _today);
+  if (_saleIsToday) {
+    if (spxLive) pos.spxExit = spxLive.toFixed(2);
+    if (pos.benchmarkAtBuy && benchmarkPrices[pos.benchmarkAtBuy]) {
+      pos.benchmarkPriceAtSell = benchmarkPrices[pos.benchmarkAtBuy];
+    }
+  } else {
+    // Backdated: today's values are the wrong anchors for the sell date — clear, don't fabricate.
+    pos.spxExit = '';
+    if (pos.benchmarkPriceAtSell != null) delete pos.benchmarkPriceAtSell;
+    // Surface the gap so it isn't silent — fired after the re-render so it doesn't block it.
+    setTimeout(function () {
+      alert(`Sale backdated to ${pos.sellDate}. Today's S&P and theme-benchmark levels aren't the right anchors for that date, so they were left blank rather than stamped with a value that would skew the vs-S&P and theme-alpha math. Enter the ${pos.sellDate} closing S&P (and theme-benchmark) via "Edit closed position" for accurate figures.`);
+    }, 60);
   }
 
   if (sellNote) {
