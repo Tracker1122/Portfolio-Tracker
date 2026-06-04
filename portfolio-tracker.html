@@ -14520,20 +14520,18 @@ function candClearScenario() {
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
 }
 
-// Compute the BASIS-DEPENDENT parts of the staged scenario (independent bets + theme-cluster shift) at a
-// given private-deal basis: 'public' (private excluded), 'cost', or 'market'. Mirrors candCompute's own
-// before/after math exactly — the only thing that varies by basis is the private adjustment folded into
-// the baseline; the names table, tax, G/L and sleeve shift are basis-invariant, so they are NOT here.
+// Compute a staged move's cluster shift at a given private-deal basis ('public'|'cost'|'market'), using
+// the SAME engine path the live surfaces use: baseline = computeThemeClusters with private folded at the
+// basis; after = baseline + the move. `moveAdjustments` is the move's own cluster adjustments (the
+// scenario queue, or a sized buy). The ONLY thing that varies by basis is the private fold-in.
 // Returns { ebBefore, ebAfter, byLabel:{label:{bp,ap,d}} } or null on failure. Pure (reads globals).
-function _candScenarioClustersAtBasis(basis) {
-  if (typeof computeThemeClusters !== 'function' || typeof _candQueueAdjustments !== 'function') return null;
-  let adjustments;
-  try { adjustments = _candQueueAdjustments(); } catch (e) { return null; }
+function _clusterShiftAtBasis(moveAdjustments, basis) {
+  if (typeof computeThemeClusters !== 'function') return null;
   const peAdj = (basis === 'cost' || basis === 'market') ? peClusterAdjustments(basis) : [];
   let before, after;
   try {
     before = computeThemeClusters({ adjustments: peAdj });
-    after = computeThemeClusters({ adjustments: peAdj.concat(adjustments) });
+    after = computeThemeClusters({ adjustments: peAdj.concat(moveAdjustments || []) });
   } catch (e) { return null; }
   const bMap = {}, aMap = {};
   before.clusters.forEach(c => bMap[c.label] = c.pct); if (before.base && before.base.total > 0) bMap['Diversified base'] = before.base.pct;
@@ -14545,37 +14543,35 @@ function _candScenarioClustersAtBasis(basis) {
   return { ebBefore: before.effectiveBets, ebAfter: after.effectiveBets, byLabel };
 }
 
-// Build the dual-basis comparison block for the PDF: independent bets + theme-cluster shift at BOTH the
-// cost and self-marked bases, side by side, so a static export shows what the live toggle would show on
-// each setting. Only meaningful when tagged private deals exist (otherwise cost==market==public). Returns
-// '' otherwise. Light-theme colors (renders on white). esc2 is passed in from the export for escaping.
-function _candDualBasisPdfBlock(esc2) {
-  let tagged = false;
-  try { tagged = (typeof peThemeExposure === 'function') && peThemeExposure('cost').total > 0; } catch (e) { return ''; }
-  if (!tagged) return '';
-  const cost = _candScenarioClustersAtBasis('cost');
-  const mkt = _candScenarioClustersAtBasis('market');
+// Generic dual-basis comparison block for the PDF: a move's cluster shift at BOTH cost and self-marked
+// bases, side by side, so a static export shows what the live toggle would show on each setting. Shared
+// by the scenario export and the New-Position buy-impact export. `cost`/`mkt` are _clusterShiftAtBasis
+// results; opts = { title, intro, showEb }. Light-theme colors (renders on white). Returns '' if either
+// basis result is missing. Tagged-private guard is the CALLER's job (cost==market==public without it).
+function _dualBasisClusterBlockHtml(esc2, cost, mkt, opts) {
   if (!cost || !mkt) return '';
+  opts = opts || {};
   const fb = (typeof peThemeExposure === 'function') ? peThemeExposure('market') : null;
-  const fbNote = (fb && fb.fallbackCount > 0)
-    ? ` Self-marked totals include ${fb.fallbackCount} deal at cost (no current mark).`
-    : '';
-  // Union of themes that move materially on EITHER basis, ranked by the larger absolute move.
+  const fbNote = (fb && fb.fallbackCount > 0) ? ` Self-marked totals include ${fb.fallbackCount} deal at cost (no current mark).` : '';
   const labels = [...new Set([...Object.keys(cost.byLabel), ...Object.keys(mkt.byLabel)])]
     .filter(l => Math.abs((cost.byLabel[l] || {}).d || 0) >= 0.05 || Math.abs((mkt.byLabel[l] || {}).d || 0) >= 0.05)
     .sort((a, b) => Math.max(Math.abs((mkt.byLabel[b] || {}).d || 0), Math.abs((cost.byLabel[b] || {}).d || 0))
                   - Math.max(Math.abs((mkt.byLabel[a] || {}).d || 0), Math.abs((cost.byLabel[a] || {}).d || 0)))
     .slice(0, 12);
+  if (!labels.length) return ''; // nothing moves materially on either basis
   const cell = (o) => o ? `${o.bp.toFixed(1)}% → ${o.ap.toFixed(1)}% <span style="color:${o.d > 0 ? '#15803d' : o.d < 0 ? '#dc2626' : '#777'}">(${o.d >= 0 ? '+' : ''}${o.d.toFixed(1)}pp)</span>` : '—';
   const rows = labels.map(l => `<tr>
       <td style="padding:3px 8px;color:#111">${esc2(l)}</td>
       <td style="padding:3px 8px;text-align:right;color:#111;white-space:nowrap">${cell(cost.byLabel[l])}</td>
       <td style="padding:3px 8px;text-align:right;color:#111;white-space:nowrap">${cell(mkt.byLabel[l])}</td>
     </tr>`).join('');
+  const ebLine = opts.showEb
+    ? `<div style="font-size:11px;color:#111;margin-bottom:6px">Independent bets (lower = more concentrated) — <strong>at cost:</strong> ${cost.ebBefore.toFixed(1)} → ${cost.ebAfter.toFixed(1)} · <strong>at self-marked value:</strong> ${mkt.ebBefore.toFixed(1)} → ${mkt.ebAfter.toFixed(1)}.</div>`
+    : '';
   return `<div style="margin:6px 0 2px">
-    <div style="font-size:11px;font-weight:700;color:#111;margin-bottom:2px">Scenario concentration — cost vs self-marked basis</div>
-    <div style="font-size:11px;color:#444;line-height:1.5;margin-bottom:6px">The figures above use one basis (whichever the toggle was on at export). Here is the same staged scenario's concentration impact on BOTH private-deal bases, so you can see each. Only these two views differ by basis — the names moved, realized G/L, tax, and sleeve shift are identical on either basis and are shown once above.${esc2(fbNote)}</div>
-    <div style="font-size:11px;color:#111;margin-bottom:6px">Independent bets (lower = more concentrated) — <strong>at cost:</strong> ${cost.ebBefore.toFixed(1)} → ${cost.ebAfter.toFixed(1)} · <strong>at self-marked value:</strong> ${mkt.ebBefore.toFixed(1)} → ${mkt.ebAfter.toFixed(1)}.</div>
+    <div style="font-size:11px;font-weight:700;color:#111;margin-bottom:2px">${esc2(opts.title || 'Cost vs self-marked basis')}</div>
+    <div style="font-size:11px;color:#444;line-height:1.5;margin-bottom:6px">${esc2(opts.intro || '')}${esc2(fbNote)}</div>
+    ${ebLine}
     <table style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="border-bottom:1px solid #d4d4d8">
         <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:#777">Theme cluster</th>
@@ -14586,6 +14582,43 @@ function _candDualBasisPdfBlock(esc2) {
     <div style="font-size:10px;color:#777;font-style:italic;margin-top:5px">Each column is a share of its OWN all-in book (cost vs self-marked have different denominators) — compare a theme across the two columns, don't read one band against both. Self-marks are illiquid, single-name, possibly stale — the user's own estimate, not a market price.</div>
   </div>`;
 }
+
+// Scenario export's both-bases block (independent bets + cluster shift). '' when no tagged private deals.
+function _candDualBasisPdfBlock(esc2) {
+  let tagged = false;
+  try { tagged = (typeof peThemeExposure === 'function') && peThemeExposure('cost').total > 0; } catch (e) { return ''; }
+  if (!tagged) return '';
+  let moveAdj;
+  try { moveAdj = (typeof _candQueueAdjustments === 'function') ? _candQueueAdjustments() : []; } catch (e) { return ''; }
+  const cost = _clusterShiftAtBasis(moveAdj, 'cost');
+  const mkt = _clusterShiftAtBasis(moveAdj, 'market');
+  return _dualBasisClusterBlockHtml(esc2, cost, mkt, {
+    showEb: true,
+    title: 'Scenario concentration — cost vs self-marked basis',
+    intro: "The figures above use one basis (whichever the toggle was on at export). Here is the same staged scenario's concentration impact on BOTH private-deal bases, so you can see each. Only these two views differ by basis — the names moved, realized G/L, tax, and sleeve shift are identical on either basis and are shown once above."
+  });
+}
+
+// New-Position (buy-impact) export's both-bases block. Mirrors the scenario block but for a sized buy.
+// '' when there's no buy, no buy adjustments, or no tagged private deals. `parsed` = the ETF holdings.
+function qrBuyDualBasisPdfBlock(c, parsed, esc2) {
+  if (!c || !(+c.buyAmount > 0)) return '';
+  let tagged = false;
+  try { tagged = (typeof peThemeExposure === 'function') && peThemeExposure('cost').total > 0; } catch (e) { return ''; }
+  if (!tagged) return '';
+  if (typeof qrBuyAdjustments !== 'function') return '';
+  let moveAdj;
+  try { moveAdj = qrBuyAdjustments(c.type, c.ticker, c.theme, parsed || [], +c.buyAmount); } catch (e) { return ''; }
+  if (!moveAdj || !moveAdj.length) return ''; // e.g. an ETF with no parsed holdings — nothing to fold
+  const cost = _clusterShiftAtBasis(moveAdj, 'cost');
+  const mkt = _clusterShiftAtBasis(moveAdj, 'market');
+  return _dualBasisClusterBlockHtml(esc2, cost, mkt, {
+    showEb: false, // the on-screen buy-impact shows the cluster table, not an independent-bets line — match it
+    title: 'Buy impact — cost vs self-marked basis',
+    intro: 'The theme-cluster table above uses one basis (whichever the toggle was on at export). Here is the same buy\u2019s cluster impact on BOTH private-deal bases. Only the cluster percentages differ by basis — where the dollars land (deepened vs new names) and the sleeve shift are identical on either basis and are shown once above.'
+  });
+}
+
 
 // Export the staged scenario + AI review as a clean, light-themed printable document → the browser's
 // "Save as PDF" produces a shareable file for an advisor. No external library (works offline): we clone
@@ -14709,12 +14742,16 @@ function qrExportPdf(id) {
   // trims, via the rotation sim, incl. the fund give-back). No new math here. Renders only what applies;
   // if the candidate has neither a buy size nor trims there's no move to model, and the section says so.
   let impactHtml = '';
+  let buyDualBasisHtml = '';
   try {
     const parsed = (c.type === 'etf' && typeof qrCandidateParsedHoldings === 'function') ? (qrCandidateParsedHoldings(c) || []) : [];
     if ((+c.buyAmount > 0) && typeof qrBuyImpactHtml === 'function') {
       const bh = qrBuyImpactHtml(c.type, c.ticker, c.theme, c.sleeve, parsed, +c.buyAmount);
       if (bh) impactHtml += recolor(bh);
     }
+    // Both-bases comparison of the buy's cluster impact (cost vs self-marked), so the static export shows
+    // what the live toggle would show on each. '' unless there's a buy AND tagged private deals exist.
+    try { if (typeof qrBuyDualBasisPdfBlock === 'function') buyDualBasisHtml = qrBuyDualBasisPdfBlock(c, parsed, esc2); } catch (e) { /* additive only */ }
     if (Array.isArray(c.rotateTrims) && c.rotateTrims.length && typeof qrTrimPassThroughFact === 'function') {
       let overlaps = [];
       try {
@@ -14763,6 +14800,7 @@ function qrExportPdf(id) {
     `<h2>My inputs (checklist)</h2><div class="section">${inputsHtml}</div>` +
     `<h2>Portfolio context</h2><div class="section">${contextHtml}</div>` +
     `<h2>Projected impact (true exposure — direct + via funds)</h2><div class="section">${impactHtml}</div>` +
+    (buyDualBasisHtml ? `<h2>Both bases — cost &amp; self-marked</h2><div class="section">${buyDualBasisHtml}</div>` : '') +
     pePdfBasisNote() +
     `<h2>AI review — for / against / gaps</h2><div class="section">${aiHtml}</div>` +
     `</div></body></html>`;
@@ -19969,6 +20007,27 @@ function buildBookAiPrompt() {
     lines.push(`BASIS OF THE SCENARIO FIGURES BELOW: ${_scBasis}. These are the EXACT figures shown in this report's deterministic tables. When you discuss the scenario's independent-bets or theme-cluster numbers, cite THESE values and name this basis. Do NOT substitute the public-only or the cost-vs-self-marked standing-book figures for the scenario's — those are different denominators. If you mention any figure on a different basis, label it explicitly; never state two differently-based values for the same metric without saying which is which.`);
     sc.trades.forEach(t => lines.push(`- ${t}`));
     lines.push(`Independent bets (1/HHI over true-exposure clusters) under this scenario, on the basis named above: ${sc.ebBefore.toFixed(1)} → ${sc.ebAfter.toFixed(1)}.`);
+    // When tagged private deals exist, the SAME scenario reads very differently across bases, and the
+    // PUBLIC basis (which excludes the private concentration entirely) flatters the diversification
+    // benefit. Feed all three readings so the model can't oversell by quoting only the rosy one — and
+    // require it to name the all-in self-marked delta alongside the public one. The deterministic
+    // both-bases table in the report is the source of truth; this just lets the prose echo it honestly.
+    try {
+      const _peTagged = (typeof peThemeExposure === 'function') && peThemeExposure('cost').total > 0;
+      if (_peTagged && typeof _clusterShiftAtBasis === 'function' && typeof _candQueueAdjustments === 'function') {
+        const _mv = _candQueueAdjustments();
+        const _pub = _clusterShiftAtBasis(_mv, 'public');
+        const _cst = _clusterShiftAtBasis(_mv, 'cost');
+        const _mkt = _clusterShiftAtBasis(_mv, 'market');
+        if (_pub && _cst && _mkt) {
+          lines.push(`Independent bets for THIS SAME scenario at EACH private-deal basis (they differ because the denominator differs — same trades, different book):`);
+          lines.push(`  · PUBLIC book (tagged private excluded): ${_pub.ebBefore.toFixed(1)} → ${_pub.ebAfter.toFixed(1)}`);
+          lines.push(`  · ALL-IN at cost: ${_cst.ebBefore.toFixed(1)} → ${_cst.ebAfter.toFixed(1)}`);
+          lines.push(`  · ALL-IN at self-marked value: ${_mkt.ebBefore.toFixed(1)} → ${_mkt.ebAfter.toFixed(1)}`);
+          lines.push(`IMPORTANT — when you state whether this scenario reduces concentration, you MUST cite the PUBLIC and the ALL-IN SELF-MARKED readings together, in the same breath (e.g. "4.1→5.2 public, but 4.1→4.3 all-in self-marked"). The public lens EXCLUDES the user's tagged private-deal concentration, so the additions look diversifying there; on the all-in self-marked lens the same additions pile into a theme that is already the book's largest, so the independent-bets improvement is far smaller — sometimes negligible. Leading with only the public number overstates the diversification benefit. Give BOTH, and name the deflating one explicitly; do not let the rosy basis stand alone.`);
+        }
+      }
+    } catch (e) { /* additive only — never block the payload */ }
     if (sc.clRows && sc.clRows.length) {
       lines.push(`Theme-cluster shift (% of the true-exposure book — direct + look-through — on the basis named above):`);
       sc.clRows.forEach(r => lines.push(`  · ${r.label}: ${r.bp.toFixed(1)}% → ${r.ap.toFixed(1)}% (${r.d >= 0 ? '+' : ''}${r.d.toFixed(1)}pp)`));
