@@ -7113,6 +7113,7 @@ function qrCheckStage1() {
     btn.style.cursor = ready ? 'pointer' : 'not-allowed';
   }
   if (typeof renderQrOverlapInline === 'function') renderQrOverlapInline();
+  if (typeof qrRenderBuyImpact === 'function') qrRenderBuyImpact();
 }
 // Commit stage 1: save the candidate (so it's recorded even if you stop here) and reveal stage 2.
 function qrUnlockStage2() {
@@ -8267,6 +8268,7 @@ function renderQrForm() {
   const tickerVal = editing ? (editing.ticker || '') : '';
   const themeVal = editing ? (editing.theme || '') : '';
   const sleeveVal = editing ? (editing.sleeve || '') : '';
+  const buyVal = (editing && editing.buyAmount) ? editing.buyAmount : '';
 
   // Theme dropdown options (mirror position tagging)
   const themeOpts = ['<option value="">— Theme —</option>'].concat(
@@ -8306,7 +8308,7 @@ function renderQrForm() {
     const helpBtn = QR_EXPLAINERS[f.key] ? `<button type="button" onclick="showQrExplainer('${f.key}')" title="What is this & how to read it" style="margin-left:6px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;color:var(--color-text-info);font-size:9px;font-weight:700;cursor:pointer;vertical-align:middle">?</button>` : '';
     const locBtn = QR_LOCATIONS[f.key] ? `<button type="button" onclick="showQrLocation('${f.key}')" title="Where to find it in Schwab" style="margin-left:4px;width:14px;height:14px;line-height:13px;padding:0;border-radius:50%;border:1px solid var(--color-text-info);background:transparent;font-size:9px;cursor:pointer;vertical-align:middle">📍</button>` : '';
     if (isEtfHoldingsField(f)) {
-      const holdingsTextarea = `<textarea id="qr-f-${f.key}" rows="3" oninput="renderHoldingsPreview(); qrCheckStage1(); runQrHoldingsOverlap()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
+      const holdingsTextarea = `<textarea id="qr-f-${f.key}" rows="3" oninput="renderHoldingsPreview(); qrCheckStage1(); runQrHoldingsOverlap(); qrRenderBuyImpact()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;resize:vertical">${esc(val)}</textarea>`;
       const holdingsBlock = `<div style="margin-bottom:10px"><label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">${f.label}${helpBtn}${locBtn}</label>${holdingsTextarea}${hint}</div>`;
       return holdingsBlock + `
         <div style="margin:-4px 0 12px">
@@ -8371,7 +8373,12 @@ function renderQrForm() {
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Sleeve it would join</label>
           <select id="qr-sleeve" onchange="qrCheckStage1()" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:6px 8px;cursor:pointer">${sleeveOpts}</select>
         </div>
+        <div style="flex:1;min-width:130px">
+          <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">How much are you buying?</label>
+          <div style="display:flex;align-items:center;gap:4px"><span style="font-size:12px;color:var(--color-text-tertiary)">$</span><input id="qr-buy-amount" type="number" value="${esc(buyVal)}" oninput="qrRenderBuyImpact()" placeholder="e.g. 25000" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px"></div>
+        </div>
       </div>
+      <div id="qr-buy-impact" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:12px"></div>
       ${stage1ExtraHtml}
       ${overlapHtml}
       ${stage2Html}
@@ -8384,6 +8391,7 @@ function renderQrForm() {
   }
   qrCheckStage1();
   if (typeof renderQrOverlapInline === 'function') renderQrOverlapInline();
+  if (typeof qrRenderBuyImpact === 'function') qrRenderBuyImpact();
 }
 
 // Fill the inline computed-overlap block that sits above the overlap-judgment textarea. Surfaces the
@@ -9472,6 +9480,7 @@ function saveQrCandidate(keepForm) {
   // OUT into this ETF) so it survives save/reload — previously this lived only in the transient
   // qrRotateChecked Set and reverted on every re-render.
   const rotateOut = [...qrRotateChecked];
+  const buyAmountVal = parseFloat((document.getElementById('qr-buy-amount') || {}).value) || 0;
   // SIZED rotation trims (lot + amount + %/shares/$) are the source of truth; rotateOut above is the
   // derived name set the AI/flags read. Persist both so the builder restores exactly on reload.
   const rotateTrims = Array.isArray(qrRotTrims) ? qrRotTrims.map(t => ({ norm: t.norm, display: t.display, lotId: t.lotId || '', unit: t.unit || 'pct', amount: t.amount })) : [];
@@ -9484,6 +9493,7 @@ function saveQrCandidate(keepForm) {
       if (cachedHoldings) c.cachedHoldings = cachedHoldings;
       c.rotateOut = rotateOut;
       c.rotateTrims = rotateTrims;
+      c.buyAmount = buyAmountVal > 0 ? buyAmountVal : undefined;
       c.updatedAt = new Date().toISOString();
     }
   } else {
@@ -9494,6 +9504,7 @@ function saveQrCandidate(keepForm) {
       cachedHoldings: cachedHoldings || undefined,
       rotateOut,
       rotateTrims,
+      buyAmount: buyAmountVal > 0 ? buyAmountVal : undefined,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
     });
   }
@@ -9681,7 +9692,12 @@ function renderQrCardAnalysis(id) {
   const etfTicker = (c.ticker || 'this ETF').toUpperCase();
   let html = '';
 
-  // ── Overlap roll-up (reuses qrEtfOverlapSummary) ──
+  // ── Planned buy size (sized what-if), if one is saved ──
+  if (c.buyAmount > 0) {
+    const bi = qrBuyImpactHtml(c.type, c.ticker, c.theme, c.sleeve, parsed, +c.buyAmount);
+    if (bi) html += `<div style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:8px"><div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:5px">Buying ${fmtDollarWhole(+c.buyAmount)} of ${esc(etfTicker)} — true-exposure impact</div>${bi}</div>`;
+  }
+
   const sum = qrEtfOverlapSummary(parsed);
   if (sum.names.length > 0) {
     const verb = sum.overlapPct >= 40 ? 'largely compounds' : sum.overlapPct >= 20 ? 'partly compounds' : 'modestly adds to';
@@ -9941,6 +9957,162 @@ function qrTrackRecordContext(candidate) {
   return facts;
 }
 
+// ── "How much am I buying?" — sized buy impact ──────────────────────────────────────────────────
+// Mirrors the theme-tab Test-a-Candidate sized add: a stock buy is one direct add; an ETF buy spreads
+// across its pasted holdings by weight (look-through), with the uncovered remainder routed to the
+// candidate's theme. Returns the SAME `adjustments` shape the proven exposure engine
+// (computeThemeClusters / computeTrueExposure) consumes — so the buy's cluster + per-name math is
+// identical to the theme tab's, never a reimplementation.
+function qrBuyAdjustments(type, ticker, theme, parsedHoldings, buyAmount) {
+  if (!(buyAmount > 0)) return [];
+  const tk = (ticker || '').toUpperCase();
+  const adj = [];
+  if (type === 'etf') {
+    const holdings = (parsedHoldings || []).filter(h => h && h.weight != null);
+    holdings.forEach(h => adj.push({ ticker: h.ticker, deltaViaFunds: buyAmount * (h.weight / 100), display: h.ticker }));
+    const cov = Math.min(holdings.reduce((s, h) => s + h.weight, 0), 100);
+    const rem = buyAmount * (1 - cov / 100);
+    if (rem > 1) adj.push({ ticker: tk || 'ETF', deltaViaFunds: rem, themeTag: theme || null, display: (tk || 'ETF') + ' (rest)' });
+  } else {
+    adj.push({ ticker: tk, deltaDirect: buyAmount, themeTag: theme || null, display: tk });
+  }
+  return adj;
+}
+
+// Pure renderer for the buy-impact panel (shared by the live form and the saved card). Returns ''
+// when there's no amount, and a guidance note when an ETF buy has no holdings to decompose.
+function qrBuyImpactHtml(type, ticker, theme, sleeve, parsedHoldings, buyAmount) {
+  if (!(buyAmount > 0)) return '';
+  const tk = (ticker || (type === 'etf' ? 'this ETF' : 'this name')).toUpperCase();
+  const etfNoHoldings = (type === 'etf') && !((parsedHoldings || []).some(h => h && h.weight != null));
+  const adjustments = qrBuyAdjustments(type, ticker, theme, parsedHoldings, buyAmount);
+  if (etfNoHoldings || !adjustments.length) {
+    return `<div style="font-size:9px;color:#fbbf24;background:rgba(251,191,36,0.10);border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:7px 9px;line-height:1.5">Paste ${esc(tk)}\u2019s holdings (ticker + %weight) in the field below to decompose a ${fmtDollarWhole(buyAmount)} buy across the names it actually holds — without them the look-through can\u2019t be computed.</div>`;
+  }
+
+  let clRows = [], nameMoves = [];
+  try {
+    const before = computeThemeClusters();
+    const after = computeThemeClusters({ adjustments });
+    const bMap = {}, aMap = {};
+    before.clusters.forEach(c => bMap[c.label] = c.pct); if (before.base && before.base.total > 0) bMap['Diversified base'] = before.base.pct;
+    after.clusters.forEach(c => aMap[c.label] = c.pct); if (after.base && after.base.total > 0) aMap['Diversified base'] = after.base.pct;
+    const labels = [...new Set([...Object.keys(bMap), ...Object.keys(aMap)])];
+    clRows = labels.map(l => ({ label: l, bp: bMap[l] || 0, ap: aMap[l] || 0, d: (aMap[l] || 0) - (bMap[l] || 0) })).filter(r => Math.abs(r.d) >= 0.05).sort((x, y) => Math.abs(y.d) - Math.abs(x.d)).slice(0, 6);
+    const te = (computeTrueExposure() || {}).rows || [];
+    const teMap = {};
+    te.forEach(r => { teMap[r.key] = { display: r.display, before: r.total, after: r.total }; });
+    adjustments.forEach(a => { const k = qrCanonical(a.ticker).key; const d = (a.deltaDirect || 0) + (a.deltaViaFunds || 0); if (!teMap[k]) teMap[k] = { display: (a.display || a.ticker).toUpperCase(), before: 0, after: 0 }; teMap[k].after = Math.max(0, teMap[k].after + d); });
+    nameMoves = Object.values(teMap).map(r => ({ display: r.display, before: r.before, after: r.after, change: r.after - r.before })).filter(r => Math.abs(r.change) > 1).sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+  } catch (e) {
+    return `<div style="font-size:9px;color:var(--color-text-danger)">Couldn\u2019t compute the buy impact: ${esc(e.message || 'error')}</div>`;
+  }
+
+  // Where the dollars land: deepening names you already hold vs. genuinely new exposure.
+  const deepened = nameMoves.filter(r => r.before > 1 && r.change > 0).sort((a, b) => b.change - a.change);
+  const fresh = nameMoves.filter(r => r.before <= 1 && r.change > 0).sort((a, b) => b.change - a.change);
+  const deepenedTot = deepened.reduce((s, r) => s + r.change, 0);
+  const freshTot = fresh.reduce((s, r) => s + r.change, 0);
+  const pctOf = n => buyAmount > 0 ? Math.round(n / buyAmount * 100) : 0;
+
+  // Sleeve before → after (the candidate's sleeve gains the full buy; direct-book denominator).
+  const sl = sleeve || '(unassigned)';
+  const slBefore = {}; positions.filter(p => !p.closed && p.ticker).forEach(p => { const k = p.sleeve || '(unassigned)'; slBefore[k] = (slBefore[k] || 0) + (calcPos(p).exitValue || 0); });
+  const slAfter = { ...slBefore }; slAfter[sl] = (slAfter[sl] || 0) + buyAmount;
+  const bTot = Object.values(slBefore).reduce((s, v) => s + v, 0), aTot = Object.values(slAfter).reduce((s, v) => s + v, 0);
+  const slBp = bTot > 0 ? (slBefore[sl] || 0) / bTot * 100 : 0, slAp = aTot > 0 ? (slAfter[sl] || 0) / aTot * 100 : 0;
+
+  const headline = type === 'etf'
+    ? `Of this ${fmtDollarWhole(buyAmount)} buy, ~${fmtDollarWhole(deepenedTot)} (${pctOf(deepenedTot)}%) deepens names you already own; ~${fmtDollarWhole(freshTot)} (${pctOf(freshTot)}%) is genuinely new exposure.`
+    : `Buying ${fmtDollarWhole(buyAmount)} of ${esc(tk)} — ${deepened.length ? `you already hold it, so this deepens an existing position` : `a new name in your book`}.`;
+
+  const clTable = clRows.length ? `
+    <div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:8px 0 3px">True-exposure theme clusters (direct + look-through)</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">
+      <thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">
+        <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Cluster</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Δ</th>
+      </tr></thead><tbody>${clRows.map(r => { const col = r.d > 0 ? 'var(--color-text-success)' : r.d < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)'; return `<tr><td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.label)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${r.bp.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${r.ap.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:${col}">${r.d >= 0 ? '+' : ''}${r.d.toFixed(1)}pp</td></tr>`; }).join('')}</tbody></table></div>` : '';
+
+  const deepList = deepened.slice(0, 6).map(r => `${esc(r.display)} ${fmtDollarWhole(r.before)}→${fmtDollarWhole(r.after)} <span style="color:var(--color-text-danger)">(+${fmtDollarWhole(r.change)})</span>`).join(' · ');
+  const deepBlock = deepened.length ? `
+    <div style="margin-top:8px;padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #fbbf24;border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-primary)">
+      <div style="font-size:8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:4px">Deepens names you already hold (${deepened.length})</div>
+      ${deepList}
+    </div>` : '';
+
+  const freshNote = fresh.length ? `<div style="font-size:9px;color:var(--color-text-secondary);margin-top:6px">New exposure (${fresh.length}): ${fresh.slice(0, 6).map(r => `${esc(r.display)} +${fmtDollarWhole(r.change)}`).join(' · ')}${fresh.length > 6 ? ' …' : ''}</div>` : '';
+
+  const sleeveLine = `<div style="font-size:9px;color:var(--color-text-secondary);margin-top:6px">Sleeve <strong style="color:var(--color-text-primary)">${esc(sl)}</strong>: ${slBp.toFixed(1)}% → ${slAp.toFixed(1)}% of your direct book (${slAp >= slBp ? '+' : ''}${(slAp - slBp).toFixed(1)}pp).</div>`;
+
+  return `
+    <div style="font-size:10px;color:var(--color-text-primary);line-height:1.5;margin-bottom:2px">${headline}</div>
+    ${clTable}
+    ${deepBlock}
+    ${freshNote}
+    ${sleeveLine}
+    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">True exposure = your direct holdings + your look-through share inside funds you own (mostly VOO). ${type === 'etf' ? 'The buy is spread across the pasted holdings by weight; the uncovered remainder is bucketed to the candidate\u2019s theme. ' : ''}Computed locally from current values — nothing is executed. Approximate; fund weights drift.</div>`;
+}
+
+// Live render into the form's #qr-buy-impact, reading the working fields, and persist the amount onto
+// the candidate being edited so it survives reload + reaches the AI.
+function qrRenderBuyImpact() {
+  const host = document.getElementById('qr-buy-impact'); if (!host) return;
+  const amtEl = document.getElementById('qr-buy-amount');
+  const buyAmount = amtEl ? (parseFloat(amtEl.value) || 0) : 0;
+  if (qrEditingId !== null && typeof qualityReviews !== 'undefined') {
+    const ec = qualityReviews.find(q => q.id === qrEditingId);
+    if (ec) { ec.buyAmount = buyAmount > 0 ? buyAmount : undefined; ec.updatedAt = new Date().toISOString(); if (typeof scheduleSave === 'function') scheduleSave(); }
+  }
+  if (!(buyAmount > 0)) {
+    host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Enter a dollar amount to see how this buy reshapes your TRUE exposure — which theme clusters move, the names it deepens vs. the new exposure it adds, and your sleeve mix.</div>`;
+    return;
+  }
+  const type = qrType;
+  const ticker = ((document.getElementById('qr-ticker') || {}).value || '').trim();
+  const theme = (document.getElementById('qr-theme') || {}).value || '';
+  const sleeve = (document.getElementById('qr-sleeve') || {}).value || '';
+  let parsed = [];
+  if (type === 'etf') { const fe = document.getElementById('qr-f-holdingsTop'); parsed = fe ? (parseHoldings(fe.value).parsed || []) : []; }
+  host.innerHTML = qrBuyImpactHtml(type, ticker, theme, sleeve, parsed, buyAmount);
+}
+
+// Compact text facts for the candidate AI prompt — the planned buy size + where it lands.
+function qrBuyImpactFacts(candidate) {
+  const buyAmount = candidate && candidate.buyAmount ? +candidate.buyAmount : 0;
+  if (!(buyAmount > 0)) return null;
+  const type = candidate.type, tk = (candidate.ticker || '').toUpperCase(), theme = candidate.theme || '';
+  let parsed = [];
+  if (type === 'etf') parsed = qrCandidateParsedHoldings(candidate) || [];
+  const etfNoHoldings = (type === 'etf') && !(parsed.some(h => h && h.weight != null));
+  const adjustments = qrBuyAdjustments(type, tk, theme, parsed, buyAmount);
+  if (etfNoHoldings || !adjustments.length) return `PLANNED BUY SIZE: the user is contemplating buying ${'$' + Math.round(buyAmount).toLocaleString()} of ${tk}. (ETF holdings not provided, so the look-through into individual names can't be decomposed.)`;
+  try {
+    const te = (computeTrueExposure() || {}).rows || [];
+    const teMap = {}; te.forEach(r => { teMap[r.key] = { display: r.display, before: r.total, after: r.total }; });
+    adjustments.forEach(a => { const k = qrCanonical(a.ticker).key; const d = (a.deltaDirect || 0) + (a.deltaViaFunds || 0); if (!teMap[k]) teMap[k] = { display: (a.display || a.ticker).toUpperCase(), before: 0, after: 0 }; teMap[k].after = Math.max(0, teMap[k].after + d); });
+    const moves = Object.values(teMap).map(r => ({ display: r.display, before: r.before, after: r.after, change: r.after - r.before })).filter(r => Math.abs(r.change) > 1);
+    const deep = moves.filter(r => r.before > 1 && r.change > 0).sort((a, b) => b.change - a.change);
+    const fresh = moves.filter(r => r.before <= 1 && r.change > 0).sort((a, b) => b.change - a.change);
+    const deepTot = deep.reduce((s, r) => s + r.change, 0), freshTot = fresh.reduce((s, r) => s + r.change, 0);
+    const before = computeThemeClusters(), after = computeThemeClusters({ adjustments });
+    const bMap = {}; before.clusters.forEach(c => bMap[c.label] = c.pct);
+    const clMoves = after.clusters.map(c => ({ label: c.label, d: c.pct - (bMap[c.label] || 0), ap: c.pct })).filter(c => Math.abs(c.d) >= 0.1).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3);
+    const dollarPct = n => buyAmount > 0 ? Math.round(n / buyAmount * 100) : 0;
+    let s = `PLANNED BUY SIZE (the user CAN trace this — do not call it unknown): buying ${'$' + Math.round(buyAmount).toLocaleString()} of ${tk}. `;
+    if (type === 'etf') {
+      s += `Decomposed by look-through, ~$${Math.round(deepTot).toLocaleString()} (${dollarPct(deepTot)}%) DEEPENS names the user already owns (${deep.slice(0, 6).map(r => r.display).join(', ') || 'none'}); ~$${Math.round(freshTot).toLocaleString()} (${dollarPct(freshTot)}%) is new exposure. `;
+    } else {
+      s += deep.length ? `This deepens an existing position the user already holds. ` : `This is a new name in the book. `;
+    }
+    if (clMoves.length) s += `True-exposure theme clusters move: ${clMoves.map(c => `${c.label} →${c.ap.toFixed(1)}% (${c.d >= 0 ? '+' : ''}${c.d.toFixed(1)}pp)`).join('; ')}. `;
+    s += `Reason about whether sizing the buy here deepens an already-large concentration or adds genuine diversification — FROM these figures, as questions, not as a buy/sell instruction.`;
+    return s;
+  } catch (e) { return `PLANNED BUY SIZE: buying ${'$' + Math.round(buyAmount).toLocaleString()} of ${tk}.`; }
+}
+
 function buildQrAiPrompt(candidate) {
   const f = candidate.fields || {};
   const fields = QR_FIELDS[candidate.type] || [];
@@ -9950,6 +10122,8 @@ function buildQrAiPrompt(candidate) {
   const blank = fields.filter(fd => (f[fd.key]||'').toString().trim() === '').map(fd => fd.label).join(', ') || '(none)';
   // COMPUTED FACTS block
   let computed = [];
+  // Planned buy size (sized what-if): where the dollars land + the true-exposure cluster shift.
+  try { if (typeof qrBuyImpactFacts === 'function') { const bf = qrBuyImpactFacts(candidate); if (bf) computed.push(bf); } } catch (e) { /* additive only */ }
   if (candidate.theme) {
     const ex = qrThemeExposure(candidate.theme);
     if (ex) computed.push(`Current ${candidate.theme} exposure: ${ex.portfolioPct.toFixed(1)}% of active portfolio across ${ex.tickers.length} position(s)${ex.tickers.length?' ('+ex.tickers.map(t=>t.ticker).join(', ')+')':''}.`);
