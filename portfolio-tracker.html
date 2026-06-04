@@ -14520,6 +14520,73 @@ function candClearScenario() {
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
 }
 
+// Compute the BASIS-DEPENDENT parts of the staged scenario (independent bets + theme-cluster shift) at a
+// given private-deal basis: 'public' (private excluded), 'cost', or 'market'. Mirrors candCompute's own
+// before/after math exactly — the only thing that varies by basis is the private adjustment folded into
+// the baseline; the names table, tax, G/L and sleeve shift are basis-invariant, so they are NOT here.
+// Returns { ebBefore, ebAfter, byLabel:{label:{bp,ap,d}} } or null on failure. Pure (reads globals).
+function _candScenarioClustersAtBasis(basis) {
+  if (typeof computeThemeClusters !== 'function' || typeof _candQueueAdjustments !== 'function') return null;
+  let adjustments;
+  try { adjustments = _candQueueAdjustments(); } catch (e) { return null; }
+  const peAdj = (basis === 'cost' || basis === 'market') ? peClusterAdjustments(basis) : [];
+  let before, after;
+  try {
+    before = computeThemeClusters({ adjustments: peAdj });
+    after = computeThemeClusters({ adjustments: peAdj.concat(adjustments) });
+  } catch (e) { return null; }
+  const bMap = {}, aMap = {};
+  before.clusters.forEach(c => bMap[c.label] = c.pct); if (before.base && before.base.total > 0) bMap['Diversified base'] = before.base.pct;
+  after.clusters.forEach(c => aMap[c.label] = c.pct); if (after.base && after.base.total > 0) aMap['Diversified base'] = after.base.pct;
+  const byLabel = {};
+  [...new Set([...Object.keys(bMap), ...Object.keys(aMap)])].forEach(l => {
+    byLabel[l] = { bp: bMap[l] || 0, ap: aMap[l] || 0, d: (aMap[l] || 0) - (bMap[l] || 0) };
+  });
+  return { ebBefore: before.effectiveBets, ebAfter: after.effectiveBets, byLabel };
+}
+
+// Build the dual-basis comparison block for the PDF: independent bets + theme-cluster shift at BOTH the
+// cost and self-marked bases, side by side, so a static export shows what the live toggle would show on
+// each setting. Only meaningful when tagged private deals exist (otherwise cost==market==public). Returns
+// '' otherwise. Light-theme colors (renders on white). esc2 is passed in from the export for escaping.
+function _candDualBasisPdfBlock(esc2) {
+  let tagged = false;
+  try { tagged = (typeof peThemeExposure === 'function') && peThemeExposure('cost').total > 0; } catch (e) { return ''; }
+  if (!tagged) return '';
+  const cost = _candScenarioClustersAtBasis('cost');
+  const mkt = _candScenarioClustersAtBasis('market');
+  if (!cost || !mkt) return '';
+  const fb = (typeof peThemeExposure === 'function') ? peThemeExposure('market') : null;
+  const fbNote = (fb && fb.fallbackCount > 0)
+    ? ` Self-marked totals include ${fb.fallbackCount} deal at cost (no current mark).`
+    : '';
+  // Union of themes that move materially on EITHER basis, ranked by the larger absolute move.
+  const labels = [...new Set([...Object.keys(cost.byLabel), ...Object.keys(mkt.byLabel)])]
+    .filter(l => Math.abs((cost.byLabel[l] || {}).d || 0) >= 0.05 || Math.abs((mkt.byLabel[l] || {}).d || 0) >= 0.05)
+    .sort((a, b) => Math.max(Math.abs((mkt.byLabel[b] || {}).d || 0), Math.abs((cost.byLabel[b] || {}).d || 0))
+                  - Math.max(Math.abs((mkt.byLabel[a] || {}).d || 0), Math.abs((cost.byLabel[a] || {}).d || 0)))
+    .slice(0, 12);
+  const cell = (o) => o ? `${o.bp.toFixed(1)}% → ${o.ap.toFixed(1)}% <span style="color:${o.d > 0 ? '#15803d' : o.d < 0 ? '#dc2626' : '#777'}">(${o.d >= 0 ? '+' : ''}${o.d.toFixed(1)}pp)</span>` : '—';
+  const rows = labels.map(l => `<tr>
+      <td style="padding:3px 8px;color:#111">${esc2(l)}</td>
+      <td style="padding:3px 8px;text-align:right;color:#111;white-space:nowrap">${cell(cost.byLabel[l])}</td>
+      <td style="padding:3px 8px;text-align:right;color:#111;white-space:nowrap">${cell(mkt.byLabel[l])}</td>
+    </tr>`).join('');
+  return `<div style="margin:6px 0 2px">
+    <div style="font-size:11px;font-weight:700;color:#111;margin-bottom:2px">Scenario concentration — cost vs self-marked basis</div>
+    <div style="font-size:11px;color:#444;line-height:1.5;margin-bottom:6px">The figures above use one basis (whichever the toggle was on at export). Here is the same staged scenario's concentration impact on BOTH private-deal bases, so you can see each. Only these two views differ by basis — the names moved, realized G/L, tax, and sleeve shift are identical on either basis and are shown once above.${esc2(fbNote)}</div>
+    <div style="font-size:11px;color:#111;margin-bottom:6px">Independent bets (lower = more concentrated) — <strong>at cost:</strong> ${cost.ebBefore.toFixed(1)} → ${cost.ebAfter.toFixed(1)} · <strong>at self-marked value:</strong> ${mkt.ebBefore.toFixed(1)} → ${mkt.ebAfter.toFixed(1)}.</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr style="border-bottom:1px solid #d4d4d8">
+        <th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:#777">Theme cluster</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:#777">Incl. private (cost) · before → after</th>
+        <th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:#777">Incl. private (self-marked) · before → after</th>
+      </tr></thead><tbody>${rows}</tbody>
+    </table>
+    <div style="font-size:10px;color:#777;font-style:italic;margin-top:5px">Each column is a share of its OWN all-in book (cost vs self-marked have different denominators) — compare a theme across the two columns, don't read one band against both. Self-marks are illiquid, single-name, possibly stale — the user's own estimate, not a market price.</div>
+  </div>`;
+}
+
 // Export the staged scenario + AI review as a clean, light-themed printable document → the browser's
 // "Save as PDF" produces a shareable file for an advisor. No external library (works offline): we clone
 // the already-formatted on-screen summary, strip interactive controls, expand the collapsed detail,
@@ -14578,6 +14645,7 @@ function candExportPdf() {
     `<div class="note">Hypothetical. Figures are estimates from my own tracker — true-exposure look-through using fund weights I maintain, and a single-year tax estimate using my assumed rates. Not tax or investment advice.</div>` +
     `<h2>Staged scenario</h2><div class="section">${queueHtml}</div>` +
     `<h2>Scenario analysis</h2><div class="section">${outputHtml}</div>` +
+    (() => { try { const b = _candDualBasisPdfBlock(esc2); return b ? `<h2>Both bases — cost &amp; self-marked</h2><div class="section">${b}</div>` : ''; } catch (e) { return ''; } })() +
     pePdfBasisNote() +
     `<h2>AI review</h2><div class="section">${aiHtml}</div>` +
     `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting, harvested-loss and prior-year carryforward offsets; no $3,000 ordinary-income offset; losses not split by ST/LT character) — a CPA should confirm the actual figures.</div>` +
