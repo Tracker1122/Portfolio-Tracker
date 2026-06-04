@@ -10244,11 +10244,11 @@ function buildQrAiPrompt(candidate) {
         line += ` The user plans to KEEP ${keeping.map(o=>o.ticker).join(', ')} — for these, the ETF does compound existing direct exposure.`;
       }
       computed.push(line);
-      // Pass-through / true-exposure visibility: when the user intends to rotate names out, hand the
-      // AI the actual before/after true-exposure arithmetic the rotation tool computes — so it stops
-      // saying "the user hasn't traced the VOO overlap" and reasons from the real numbers. Fully
-      // defensive: any failure here must NOT break the rest of the payload.
-      if (rotating.length) {
+      // Pass-through / true-exposure visibility: whenever the user has staged trims to fund this buy
+      // (any holding now, not only overlap names), hand the AI the actual before/after true-exposure
+      // arithmetic the rotation tool computes — so it reasons from the real numbers instead of calling
+      // the rotation "untraced". Fully defensive: any failure here must NOT break the rest of the payload.
+      {
         try {
           const parsedH = (candidate.cachedHoldings && Array.isArray(candidate.cachedHoldings.parsed))
             ? candidate.cachedHoldings.parsed
@@ -10279,6 +10279,31 @@ function buildQrAiPrompt(candidate) {
       const g = Math.abs((parseFloat(f.navReturn1y)||0) - (parseFloat(f.priceReturn1y)||0));
       computed.push(`Tracking gap (|NAV return − market-price return|, 1-Yr): ${g.toFixed(2)} percentage points. Near-zero is healthy for a liquid ETF; a persistent gap suggests premium/discount or illiquidity. This is price-vs-NAV, NOT NAV-vs-index.`);
     }
+  }
+  // Trim pass-through for a STOCK candidate: same true-exposure arithmetic as the ETF rotation, with
+  // the buy modeled as a single 100%-weight holding (mirroring the builder). Additive + defensive.
+  if (candidate.type !== 'etf') {
+    try {
+      const dispMap = {};
+      if (Array.isArray(candidate.rotateTrims)) candidate.rotateTrims.forEach(t => { if (t && t.norm) dispMap[t.norm] = t.display || t.norm; });
+      const resolved = (typeof qrResolveTrims === 'function' && typeof qrEffectiveRawTrims === 'function')
+        ? qrResolveTrims(qrEffectiveRawTrims(candidate, dispMap)) : [];
+      if (resolved.length && typeof qrSimulateRotation === 'function') {
+        const buyT = (candidate.ticker || 'this name').toUpperCase();
+        const sim = qrSimulateRotation([{ ticker: buyT, weight: 100 }], buyT, resolved, candidate.sleeve || '(unassigned)', candidate.buyAmount > 0 ? +candidate.buyAmount : undefined);
+        const soldNorms = new Set(resolved.map(t => t.norm));
+        const moved = (sim.rows || [])
+          .filter(r => soldNorms.has(qrNormTicker(r.display)) || Math.abs(r.change) >= 1)
+          .slice(0, 12)
+          .map(r => `${r.display}: $${Math.round(r.before).toLocaleString()} → $${Math.round(r.after).toLocaleString()} (${(r.change >= 0 ? '+' : '')}$${Math.round(r.change).toLocaleString()})`);
+        if (moved.length) {
+          const cashTxt = (sim.buy > 0 && Math.abs(sim.buy - sim.netProceeds) >= 1)
+            ? ` The user intends to buy $${Math.round(sim.buy).toLocaleString()} of ${buyT}; the trims net $${Math.round(sim.netProceeds).toLocaleString()} after tax, so ${sim.freshCash > 1 ? `$${Math.round(sim.freshCash).toLocaleString()} of FRESH CASH is needed on top` : `$${Math.round(sim.leftover).toLocaleString()} is raised as cash beyond the buy`} — treat this funding gap as a fact to weigh, not a recommendation.`
+            : '';
+          computed.push(`PASS-THROUGH / TRUE-EXPOSURE arithmetic for the planned trims (this is the number the user CAN trace — do not say it's untraced). Trimming $${Math.round(sim.proceeds).toLocaleString()} across ${sim.soldCount} direct name(s)${sim.fullSoldCount < sim.soldCount ? ' (some partial slices)' : ''} to fund buying ${buyT}, est. tax $${Math.round(sim.estTax).toLocaleString()}.${cashTxt} TRUE exposure per name, BEFORE → AFTER (direct + via-funds, incl. any exposure you still hold via funds like VOO): ${moved.join('; ')}. KEY READ: trimming these to fund ${buyT} concentrates the book further into ${buyT}; where a trimmed name's true exposure barely moves because you still own it via funds, the trim mainly changes the direct slice, not your real exposure — quantify that rather than treating the change as total.`);
+        }
+      }
+    } catch (e) { /* pass-through is additive context only; never block the payload */ }
   }
   const computedBlock = computed.length ? computed.map(c=>`- ${c}`).join('\n') : '(none computed)';
 
