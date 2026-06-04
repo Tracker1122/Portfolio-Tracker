@@ -25199,9 +25199,10 @@ init();
   ];
   function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
   var COVERAGE_WARN = 0.7;
-  // VOO benchmark overlay color (P0). Amber — matches the app's existing #fbbf24 accents
-  // and reads against red/green book lines far better than the old gray. One knob, both renderers.
-  var BENCH_COLOR = 'var(--color-text-warning, #fbbf24)';
+  // VOO benchmark overlay color (P0). Bright green (#4ade40) — deliberately a lighter
+  // shade than the book's success-green (#22c55e) so the two stay distinguishable on
+  // up-windows (where the book line is also green). One knob, both renderers.
+  var BENCH_COLOR = 'var(--color-text-success-bright, #4ade40)';
   function sparklinePath(path, w, h, loIn, hiIn) {
     if (!path || path.length < 2) return '';
     var ys = path.map(function (p) { return p.cum; });
@@ -25547,7 +25548,7 @@ init();
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
         '<svg width="120" height="28" viewBox="0 0 120 28" style="flex:0 0 auto">' +
           (model.windowEndX != null ? '<line x1="' + model.windowEndX.toFixed(1) + '" y1="0" x2="' + model.windowEndX.toFixed(1) + '" y2="28" stroke="var(--color-text-tertiary, #888)" stroke-width="0.6" stroke-dasharray="2 2" stroke-opacity="0.5"/>' : '') +
-          (model.benchSparkD ? '<path d="' + model.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1" stroke-opacity="0.75"/>' : '') +
+          (model.benchSparkD ? '<path d="' + model.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1.2" stroke-opacity="0.9"/>' : '') +
           '<path d="' + model.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="1.5"/>' +
           (model.troughDot ? '<circle cx="' + model.troughDot.x.toFixed(1) + '" cy="' + model.troughDot.y.toFixed(1) + '" r="2.2" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.8"><title>Max drawdown ' + model.drawdownPct.toFixed(1) + '% — trough here</title></circle>' : '') +
           (model.checkpointDots || []).map(function (d) { var c = d.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)'; return '<circle cx="' + d.x.toFixed(1) + '" cy="' + d.y.toFixed(1) + '" r="1.8" fill="' + c + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.6"/>'; }).join('') +
@@ -25561,7 +25562,7 @@ init();
         '<div style="font-size:10px;margin-top:3px;color:var(--color-text-tertiary)">Market (VOO), same window: ' +
           '<strong style="color:' + (model.benchReturnPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (model.benchReturnPct >= 0 ? '+' : '') + model.benchReturnPct.toFixed(1) + '%</strong>' +
           ' — your book ' + (model.benchSpreadPct >= 0 ? 'outperformed by +' + model.benchSpreadPct.toFixed(1) : 'lagged by ' + Math.abs(model.benchSpreadPct).toFixed(1)) + ' pts ' +
-          '<span style="opacity:.75">(yellow line = VOO)</span></div>'
+          '<span style="opacity:.75">(green line = VOO)</span></div>'
         : '') +
       (model.recovery ?
         '<div style="font-size:10px;margin-top:3px;color:var(--color-text-tertiary)">Recovery to pre-event level (after the window low): ' +
@@ -25618,7 +25619,7 @@ init();
         : dash;
       var spark = (has && m.sparkD)
         ? '<svg width="64" height="16" viewBox="0 0 120 28" style="vertical-align:middle">' +
-            (m.benchSparkD ? '<path d="' + m.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1.5" stroke-opacity="0.7"/>' : '') +
+            (m.benchSparkD ? '<path d="' + m.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1.5" stroke-opacity="0.9"/>' : '') +
             '<path d="' + m.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="2"/>' +
             (m.troughDot ? '<circle cx="' + m.troughDot.x.toFixed(1) + '" cy="' + m.troughDot.y.toFixed(1) + '" r="3" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="1"/>' : '') +
           '</svg>'
@@ -25641,7 +25642,7 @@ init();
     }).join('');
     el.innerHTML =
       '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
-      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed (click a window above to add or refresh it). \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; yellow path = VOO. \u201cRec\u201d = book level vs its pre-event high at 6mo / 1Y / 2Y after the window low (green = back to even or better; \u00b7 = not yet reached).</div>' +
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed (click a window above to add or refresh it). \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; green path = VOO. \u201cRec\u201d = book level vs its pre-event high at 6mo / 1Y / 2Y after the window low (green = back to even or better; \u00b7 = not yet reached).</div>' +
       '<table style="border-collapse:collapse;width:100%;max-width:640px">' + header + rows + '</table>';
   }
 
