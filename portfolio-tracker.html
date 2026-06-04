@@ -14569,6 +14569,30 @@ function qrExportPdf(id) {
   if (perfEl && perfEl.innerHTML.trim()) contextHtml += cleanFrag(perfEl.innerHTML);
   if (!contextHtml.trim()) contextHtml = '<p class="note">No computed portfolio-context flags for this candidate (no theme tag, overlap, or fetched performance).</p>';
 
+  // ── Projected impact — true exposure (direct + via funds). Reuses the SAME engines the builder form
+  // and the AI use, so the numbers match: qrBuyImpactHtml (where a sized buy lands + the theme-cluster
+  // before→after table + sleeve shift) and qrTrimPassThroughFact (per-name BEFORE→AFTER for any staged
+  // trims, via the rotation sim, incl. the fund give-back). No new math here. Renders only what applies;
+  // if the candidate has neither a buy size nor trims there's no move to model, and the section says so.
+  let impactHtml = '';
+  try {
+    const parsed = (c.type === 'etf' && typeof qrCandidateParsedHoldings === 'function') ? (qrCandidateParsedHoldings(c) || []) : [];
+    if ((+c.buyAmount > 0) && typeof qrBuyImpactHtml === 'function') {
+      const bh = qrBuyImpactHtml(c.type, c.ticker, c.theme, c.sleeve, parsed, +c.buyAmount);
+      if (bh) impactHtml += recolor(bh);
+    }
+    if (Array.isArray(c.rotateTrims) && c.rotateTrims.length && typeof qrTrimPassThroughFact === 'function') {
+      let overlaps = [];
+      try {
+        if (c.cachedHoldings && Array.isArray(c.cachedHoldings.parsed)) overlaps = computeHoldingsOverlap(c.cachedHoldings.parsed);
+        else if (f.holdingsTop && typeof parseHoldings === 'function') overlaps = computeHoldingsOverlap(parseHoldings(f.holdingsTop).parsed);
+      } catch (e) { /* overlaps optional */ }
+      const tf = qrTrimPassThroughFact(c, overlaps);
+      if (tf) impactHtml += `<div class="impact-trims"><div class="impact-h">Trims — per-name true exposure, before → after</div><div class="ai">${esc2(tf)}</div></div>`;
+    }
+  } catch (e) { /* impact is additive context; never block the export */ }
+  if (!impactHtml.trim()) impactHtml = '<p class="note">No buy size or staged trims set on this candidate, so there is no projected move to model. Set a buy amount (and any trims to fund it) on the candidate, then re-export, and the before→after true-exposure shift will appear here.</p>';
+
   // ── AI review — opening analysis + any argue-back thread turns (mirrors candExportPdf's AI section).
   let aiHtml = '<p class="note">No AI review has been run for this candidate yet — run "Analyze with AI" first to include it.</p>';
   if (c.aiAnalysis) {
@@ -14596,6 +14620,7 @@ function qrExportPdf(id) {
     `.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}` +
     `.kv{margin:0 0 8px}.k{font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:#6b7280;margin-bottom:1px}.v{font-size:12px;color:#111;white-space:pre-wrap;line-height:1.45}` +
     `.ai{white-space:pre-wrap;font-size:12px;line-height:1.55;color:#111;margin:2px 0}.aiq{font-weight:600;font-size:12px;margin:14px 0 2px}` +
+    `.impact-trims{margin-top:12px}.impact-h{font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#6b7280;margin:0 0 3px}` +
     `table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}` +
     `</style></head><body><div class="doc">` +
     `<h1>${header}</h1>` +
@@ -14603,6 +14628,7 @@ function qrExportPdf(id) {
     `<div class="note">A pre-purchase pressure-test of a position I'm considering — not a decision or a recommendation. Figures are estimates from my own tracker (true-exposure look-through using fund weights I maintain; any recent performance is price-only, excludes dividends, via Polygon daily bars and may be stale). Not investment advice.</div>` +
     `<h2>My inputs (checklist)</h2><div class="section">${inputsHtml}</div>` +
     `<h2>Portfolio context</h2><div class="section">${contextHtml}</div>` +
+    `<h2>Projected impact (true exposure — direct + via funds)</h2><div class="section">${impactHtml}</div>` +
     `<h2>AI review — for / against / gaps</h2><div class="section">${aiHtml}</div>` +
     `</div></body></html>`;
 
