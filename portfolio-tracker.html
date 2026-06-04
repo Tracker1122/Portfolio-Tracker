@@ -25063,11 +25063,17 @@ init();
 /* ════════════════════════════════════════════════════════════════════════
    RISK & STRESS LENS — Tier 1 (Historical Scenario Replay)
    Injected block. Self-contained: pure math core + Tier-1 helpers + the
-   live-fetch/DOM glue + an auto-init that drops a panel at the bottom of the
-   page. Reuses the app's own globals (positions, calcPos, qrCanonical,
-   polygonKey, _lastPolyFetch, peModeBasis, peThemeExposure).
-   The math here was unit-tested (32 checks) outside the browser; the live
-   Polygon fetch + rendering can only be exercised in the deployed page.
+   live-fetch/DOM glue + an auto-init that mounts a panel into the Risk Review
+   tab (#risk-review-mount, falling back to document.body).
+   Reuses the app's own globals (positions, calcPos, qrCanonical,
+   _lastPolyFetch, peModeBasis, peThemeExposure) and the barsWorkerUrl /
+   loadBarsWorkerUrl pair for the Tiingo bars worker.
+   Daily bars are fetched via the Cloudflare→Tiingo worker (adjClose, deep
+   free history); the Polygon path was retired here — see handoff §1. Each
+   window also pulls VOO as a market-benchmark overlay (P0). A cross-window
+   summary table (P1) accumulates one row per replayed window.
+   The pure math core is unit-tested outside the browser; the live Tiingo
+   fetch + DOM rendering can only be exercised in the deployed page.
    ════════════════════════════════════════════════════════════════════════ */
 (function (W) {
   'use strict';
@@ -25344,10 +25350,8 @@ init();
         _saveOneBars(cacheKey, _barsCache[cacheKey]);
       } catch (e) {
         if (e.message === 'rate') { rateLimited = true; if (statusEl) statusEl.textContent = 'Rate-limited — partial fill saved. Click again to grab the rest.'; break; }
-        if (e.message === 'nokey') { if (statusEl) statusEl.textContent = 'Set your Polygon API key first (🔑 API Keys).'; return; }
         if (e.message === 'noworker') { if (statusEl) statusEl.textContent = 'Set your Bars Worker URL first (🔑 API Keys panel) — the Cloudflare worker that proxies Tiingo history.'; return; }
-        if (e.message === 'forbidden') { if (statusEl) statusEl.textContent = 'Polygon returned 403 for ' + win.label + ' (' + win.from + ' → ' + win.to + '). This window is older than your Polygon plan reaches — the free tier only covers ~2 years of history. Pick a window inside the last ~2 years, upgrade your plan, or proxy a deep-history source. (This is NOT a problem with your holdings.)'; return; }
-        /* 'err' = name genuinely had no price history in this window; skip — coverage reflects it */
+        /* 'err' = name genuinely had no price history in this window (fetchBarsWindow throws only 'noworker' | 'rate' | 'err'); skip — coverage reflects it */
       }
     }
     var result = RiskLens.replayWindow(weights, barsByTicker, ms(win.from), ms(win.to));
@@ -25433,6 +25437,54 @@ init();
 
   var STANDING_CAVEAT = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.4">Directional stress estimate from historical daily returns. Not a forecast or VaR. Inherits unstable correlations; excludes illiquid privates from the returns math.</div>';
 
+  /* ---------- P1: cross-window summary table ----------------------------- */
+  // Accumulates one row per window the user has replayed (keyed by win.id, so
+  // re-clicks upsert rather than duplicate). Rendered in STRESS_WINDOWS order
+  // for stability as rows fill in. Reuses the model the cards already produce —
+  // no extra fetch, no extra math.
+  var _summaryRows = {};
+  function renderSummaryTable() {
+    var el = document.getElementById('risk-replay-summary');
+    if (!el) return;
+    var ids = STRESS_WINDOWS.map(function (w) { return w.id; }).filter(function (id) { return _summaryRows[id]; });
+    if (!ids.length) { el.innerHTML = ''; return; }
+    var header =
+      '<tr style="font-size:9px;color:var(--color-text-tertiary)">' +
+        '<th style="text-align:left;font-weight:600;padding:2px 6px 2px 0">Window</th>' +
+        '<th style="text-align:right;font-weight:600;padding:2px 6px">Book</th>' +
+        '<th style="text-align:right;font-weight:600;padding:2px 6px">Max DD</th>' +
+        '<th style="text-align:right;font-weight:600;padding:2px 6px">vs Mkt</th>' +
+        '<th style="text-align:right;font-weight:600;padding:2px 6px">Cov</th>' +
+        '<th style="text-align:center;font-weight:600;padding:2px 0 2px 6px">Path</th>' +
+      '</tr>';
+    var rows = ids.map(function (id) {
+      var m = _summaryRows[id].model, label = _summaryRows[id].label, has = m.hasData;
+      var retColor = (has && m.returnPct >= 0) ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
+      var covColor = m.coverageWarn ? 'var(--color-text-danger, #ef4444)' : 'var(--color-text-tertiary)';
+      var dash = '<span style="color:var(--color-text-tertiary)">\u2014</span>';
+      var spreadCell = (m.benchSpreadPct != null)
+        ? '<span style="color:' + (m.benchSpreadPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (m.benchSpreadPct >= 0 ? '+' : '') + m.benchSpreadPct.toFixed(1) + '</span>'
+        : dash;
+      var spark = (has && m.sparkD)
+        ? '<svg width="64" height="16" viewBox="0 0 120 28" style="vertical-align:middle">' +
+            (m.benchSparkD ? '<path d="' + m.benchSparkD + '" fill="none" stroke="var(--color-text-tertiary, #888)" stroke-width="1.5" stroke-opacity="0.4"/>' : '') +
+            '<path d="' + m.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="2"/></svg>'
+        : dash;
+      return '<tr style="font-size:10px;border-top:1px solid var(--color-border-tertiary, #333)">' +
+        '<td style="text-align:left;color:var(--color-text-secondary);padding:3px 6px 3px 0">' + label + (m.coverageWarn ? ' \u26a0' : '') + '</td>' +
+        '<td style="text-align:right;padding:3px 6px;color:' + retColor + ';font-weight:600">' + (has ? (m.returnPct >= 0 ? '+' : '') + m.returnPct.toFixed(1) + '%' : dash) + '</td>' +
+        '<td style="text-align:right;padding:3px 6px;color:var(--color-text-danger, #ef4444)">' + (has ? m.drawdownPct.toFixed(1) + '%' : dash) + '</td>' +
+        '<td style="text-align:right;padding:3px 6px">' + spreadCell + '</td>' +
+        '<td style="text-align:right;padding:3px 6px;color:' + covColor + '">' + m.coveragePct.toFixed(0) + '%</td>' +
+        '<td style="text-align:center;padding:3px 0 3px 6px">' + spark + '</td>' +
+      '</tr>';
+    }).join('');
+    el.innerHTML =
+      '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed (click a window above to add or refresh it). \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; faint path = VOO.</div>' +
+      '<table style="border-collapse:collapse;width:100%;max-width:560px">' + header + rows + '</table>';
+  }
+
   function buildPanel() {
     var section = document.createElement('div');
     section.id = 'risk-replay-section';
@@ -25445,6 +25497,7 @@ init();
       '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your current holdings through a real past stress window using actual daily returns (co-movement included, no model). Each button fetches that window\u2019s daily bars via your Tiingo worker (deep free history; partial fills cache and resume on re-click).</div>' +
       '<div style="margin-bottom:4px">' + btns + '</div>' +
       '<div id="risk-replay-status" style="font-size:10px;color:var(--color-text-tertiary);min-height:14px"></div>' +
+      '<div id="risk-replay-summary"></div>' +
       '<div id="risk-replay-out"></div>' + STANDING_CAVEAT;
     var statusEl = section.querySelector('#risk-replay-status');
     var outEl = section.querySelector('#risk-replay-out');
@@ -25454,6 +25507,8 @@ init();
         b.disabled = true;
         runReplayForWindow(win, statusEl, function (model) {
           outEl.insertAdjacentHTML('afterbegin', renderReplayCard(model));
+          _summaryRows[win.id] = { label: win.label, model: model };
+          renderSummaryTable();
           b.disabled = false;
         }).catch(function () { b.disabled = false; });
       });
