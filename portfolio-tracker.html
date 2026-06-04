@@ -14546,6 +14546,7 @@ function candExportPdf() {
     `<div class="note">Hypothetical. Figures are estimates from my own tracker — true-exposure look-through using fund weights I maintain, and a single-year tax estimate using my assumed rates. Not tax or investment advice.</div>` +
     `<h2>Staged scenario</h2><div class="section">${queueHtml}</div>` +
     `<h2>Scenario analysis</h2><div class="section">${outputHtml}</div>` +
+    pePdfBasisNote() +
     `<h2>AI review</h2><div class="section">${aiHtml}</div>` +
     `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting, harvested-loss and prior-year carryforward offsets; no $3,000 ordinary-income offset; losses not split by ST/LT character) — a CPA should confirm the actual figures.</div>` +
     `</div></body></html>`;
@@ -14662,6 +14663,7 @@ function qrExportPdf(id) {
     `<h2>My inputs (checklist)</h2><div class="section">${inputsHtml}</div>` +
     `<h2>Portfolio context</h2><div class="section">${contextHtml}</div>` +
     `<h2>Projected impact (true exposure — direct + via funds)</h2><div class="section">${impactHtml}</div>` +
+    pePdfBasisNote() +
     `<h2>AI review — for / against / gaps</h2><div class="section">${aiHtml}</div>` +
     `</div></body></html>`;
 
@@ -17878,6 +17880,30 @@ function setPeExposureMode(on) {
   try { if (document.getElementById('theme-diversification-analysis')) renderThemeClusters(); } catch (e) {}
   try { if (document.getElementById('qr-buy-impact') && typeof qrRenderBuyImpact === 'function') qrRenderBuyImpact(); } catch (e) {}
   try { if (document.getElementById('cand-output') && typeof candCompute === 'function') candCompute(); } catch (e) {}
+}
+
+// Print-friendly callout for PDF exports. States which basis the displayed figures use, and reminds the
+// reader that the AI analysis ALWAYS accounts for tagged private deals (at cost) regardless of the
+// Public/Incl-private toggle — so a public-basis export can legitimately carry AI commentary on private
+// concentration without contradiction. Returns '' when there are no tagged private deals. Light-theme
+// colors because the PDF renders on white.
+function pePdfBasisNote() {
+  const peExp = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : null;
+  if (!peExp || peExp.total <= 0) return '';
+  const themes = Object.entries(peExp.byTheme).sort((a,b)=>b[1].cost-a[1].cost)
+    .map(([t,info]) => `${esc(t)} (${info.deals.map(d=>esc(d.company)).join(', ')})`).join('; ');
+  const onBasis = !!peExposureMode;
+  const basisWord = onBasis ? 'all-in' : 'public-book';
+  const basisGloss = onBasis ? 'private deals included at cost' : 'private deals excluded';
+  const tail = onBasis
+    ? 'Both the figures above and the AI analysis include your private deals.'
+    : 'So the AI analysis may reference private concentration that the figures above do not display — that is expected here, not a contradiction.';
+  const untag = peExp.untaggedCount > 0
+    ? ` (plus ${peExp.untaggedCount} untagged private deal${peExp.untaggedCount>1?'s':''} totaling ~$${Math.round(peExp.untaggedCost).toLocaleString()} that the AI does NOT see)`
+    : '';
+  return `<div style="margin:14px 0;padding:9px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;font-size:11px;line-height:1.55;color:#7c2d12">`
+    + `<strong>Private-deal basis.</strong> The exposure/cluster figures here are shown on the <strong>${basisWord}</strong> basis (${basisGloss}; the &quot;Incl. private&quot; toggle was ${onBasis?'ON':'OFF'} at export). The AI analysis <strong>always</strong> accounts for your tagged private deals at cost — ~$${Math.round(peExp.total).toLocaleString()} across ${themes}${untag} — regardless of that toggle. ${tail}`
+    + `</div>`;
 }
 
 // Render the full Theme Universe tab.
