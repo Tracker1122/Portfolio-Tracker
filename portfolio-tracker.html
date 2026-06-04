@@ -7098,11 +7098,17 @@ function qrCheckStage1() {
   const sl = document.getElementById('qr-sleeve');
   const panel = document.getElementById('qr-overlap-panel');
   if (panel && th) panel.innerHTML = renderQrOverlap(th.value, tk ? tk.value : '', sl ? sl.value : '');
-  // Keep the stock swap panel (sibling of the overlap panel) in sync with the buy ticker/sleeve.
-  if (qrType === 'stock' && document.getElementById('qr-stock-swap')) {
-    const newBuy = tk ? tk.value.trim().toUpperCase() : '';
-    if (qrNormTicker(newBuy) !== qrNormTicker(qrSwapState.buyTicker)) qrSwapState.sells = []; // buy target changed → reset sells
-    qrRenderStockSwap();
+  // Stock candidate: drive the SAME sized trim tool as the ETF side. Model the buy as a single
+  // 100%-weight holding so qrSimulateRotation puts the whole buy into that one name; candidates =
+  // every holding except the one being bought.
+  if (qrType === 'stock' && document.getElementById('qr-rotation')) {
+    const buyT = tk ? tk.value.trim().toUpperCase() : '';
+    qrRotationState = {
+      parsed: buyT ? [{ ticker: buyT, weight: 100 }] : [],
+      etfTicker: buyT,
+      candidates: (typeof qrAllHoldingCandidates === 'function') ? qrAllHoldingCandidates(qrNormTicker(buyT)) : []
+    };
+    if (typeof qrRenderRotation === 'function') qrRenderRotation();
   }
   const ready = tk && tk.value.trim() && th && th.value && sl && sl.value
     && (qrType !== 'etf' || (document.getElementById('qr-f-holdingsTop') || {}).value);
@@ -8282,7 +8288,7 @@ function renderQrForm() {
 
   // Live overlap context (auto-fires once the 3 identifying fields are set)
   const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal, sleeveVal)}</div>`
-    + (qrType === 'stock' ? `<div id="qr-stock-swap" style="margin-top:8px"></div>` : '');
+    + (qrType === 'stock' ? `<div id="qr-rotation" style="margin-top:8px;padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md)"></div>` : '');
 
   // Two-stage form. Stage 1 = identifying fields (ticker/theme/sleeve, + ETF holdings) and the
   // auto-firing exposure panel. Stage 2 = the rest of the qualitative fields + final save.
@@ -9178,6 +9184,22 @@ function qrRotPersist(editCand) {
   qrRotateChecked = new Set(norms); // saveQrCandidate still reads this on a brand-new candidate
 }
 
+// Build the trim-tool candidate list = EVERY open position (deduped by normalized ticker, direct
+// value summed), optionally excluding one norm (the name being bought — you don't trim what you're
+// buying). This replaces the old overlap-only scoping so any holding can be trimmed to fund the buy.
+// The rotation sim already handles trimming a name the candidate ETF doesn't hold (no look-through
+// give-back for it), so widening here needs no math change.
+function qrAllHoldingCandidates(excludeNorm) {
+  const byNorm = {};
+  (typeof positions !== 'undefined' ? positions : []).filter(p => p && !p.closed && p.ticker).forEach(p => {
+    const k = qrNormTicker(p.ticker);
+    if (excludeNorm && k === excludeNorm) return;
+    if (!byNorm[k]) byNorm[k] = { norm: k, display: p.ticker.toUpperCase(), directValue: 0 };
+    byNorm[k].directValue += calcPos(p).exitValue || 0;
+  });
+  return Object.values(byNorm).sort((a, b) => b.directValue - a.directValue);
+}
+
 function qrRenderRotation() {
   const host = document.getElementById('qr-rotation');
   if (!host) return;
@@ -9378,14 +9400,12 @@ function runQrHoldingsOverlap() {
     </div>`;
   }
 
-  // ── Rotation hypothetical: rotate direct overlap names INTO this ETF ──
-  // Candidates = names you hold DIRECTLY that this ETF also holds (rotating a name the ETF
-  // doesn't hold wouldn't be "into the overlap"). Populate state + a container; the interactive
-  // table renders via qrRenderRotation reading the checkboxes.
+  // ── Rotation hypothetical: trim ANY direct holding to fund buying this ETF ──
+  // Candidates = every open position (not just the ETF-overlap names) so you can fund the buy by
+  // trimming anything. The overlap notices above still flag where the ETF compounds existing
+  // exposure; the trim tool is the separate "how do I pay for it" lever.
   const etfTicker = ((document.getElementById('qr-ticker')||{}).value || 'this ETF').toUpperCase();
-  const rotCandidates = overlaps
-    .filter(o => o.yourDirectValue > 0)
-    .map(o => ({ norm: qrNormTicker(o.ticker), display: o.ticker, directValue: o.yourDirectValue }));
+  const rotCandidates = qrAllHoldingCandidates(qrNormTicker(etfTicker));
   qrRotationState = { parsed, etfTicker, candidates: rotCandidates };
   // Drop any rotation intent for names no longer in this candidate's overlap set (prevents stale
   // checks bleeding across candidates); keep checks that still apply.
@@ -10167,13 +10187,13 @@ function buildQrAiPrompt(candidate) {
     const _bits = [];
     const _cl = _perfLine(candidate.ticker, candidate.type === 'etf' ? 'Candidate fund' : 'Candidate');
     if (_cl) _bits.push(_cl);
-    if (candidate.type === 'etf' && typeof qrPerfTickers === 'function') {
+    if (typeof qrPerfTickers === 'function') {
       qrPerfTickers(candidate)
         .filter(t => t.toUpperCase() !== (candidate.ticker || '').toUpperCase())
         .forEach(t => { const l = _perfLine(t, 'Trim target'); if (l) _bits.push(l); });
     }
     if (_bits.length) {
-      computed.push(`RECENT MARKET PERFORMANCE (trailing PRICE returns from daily closes — price-only, EXCLUDES dividends; pulled live from Polygon and possibly stale by the time this is read; this is CONTEXT, not a signal to chase strength or avoid weakness): ${_bits.join(' ')}${candidate.type === 'etf' && _bits.length > 1 ? ' For a trim target, this is how the position you would be SELLING has performed lately — weigh trimming a recent winner (gives up momentum, may trigger gains) versus a recent loser (locks in the loss) against the rotation tax already computed above, not in isolation. Do not treat recent return as a reason to buy or sell on its own.' : ''}`);
+      computed.push(`RECENT MARKET PERFORMANCE (trailing PRICE returns from daily closes — price-only, EXCLUDES dividends; pulled live from Polygon and possibly stale by the time this is read; this is CONTEXT, not a signal to chase strength or avoid weakness): ${_bits.join(' ')}${_bits.length > 1 ? ' For a trim target, this is how the position you would be SELLING has performed lately — weigh trimming a recent winner (gives up momentum, may trigger gains) versus a recent loser (locks in the loss) against the rotation tax already computed above, not in isolation. Do not treat recent return as a reason to buy or sell on its own.' : ''}`);
     }
   } catch (e) { /* perf is additive context only; never block the payload */ }
 
@@ -13829,7 +13849,8 @@ function qrPerfTickers(c) {
   const out = [], seen = new Set();
   const add = (disp) => { const T = (disp || '').toString().toUpperCase().trim(); if (T && !seen.has(T)) { seen.add(T); out.push(T); } };
   if (c) add(c.ticker);
-  if (c && c.type === 'etf') {
+  // Staged trim targets (now available for stock candidates too, not just ETFs).
+  if (c) {
     if (Array.isArray(c.rotateTrims) && c.rotateTrims.length) {
       c.rotateTrims.forEach(t => add(t.display || t.norm));
     } else if (Array.isArray(c.rotateOut) && c.rotateOut.length) {
@@ -13925,13 +13946,12 @@ function qrFormPerfTickers() {
   const add = (d) => { const T = (d || '').toString().toUpperCase().trim(); if (T && !seen.has(T)) { seen.add(T); out.push(T); } };
   const tk = ((typeof document !== 'undefined' ? (document.getElementById('qr-ticker') || {}) : {}).value || '').trim();
   if (tk) add(tk);
-  if (typeof qrType !== 'undefined' && qrType === 'etf') {
-    if (typeof qrRotTrims !== 'undefined' && Array.isArray(qrRotTrims)) qrRotTrims.forEach(t => add(t.display || t.norm));
-    if (typeof qrRotateChecked !== 'undefined' && qrRotateChecked && qrRotateChecked.size) {
-      const byNorm = {};
-      (typeof positions !== 'undefined' ? positions : []).forEach(p => { if (p && p.ticker) { const n = qrNormTicker(p.ticker); if (!byNorm[n]) byNorm[n] = p.ticker.toUpperCase(); } });
-      qrRotateChecked.forEach(n => add(byNorm[n] || n));
-    }
+  // Staged trims (now available for stock candidates too, not just ETFs).
+  if (typeof qrRotTrims !== 'undefined' && Array.isArray(qrRotTrims)) qrRotTrims.forEach(t => add(t.display || t.norm));
+  if (typeof qrRotateChecked !== 'undefined' && qrRotateChecked && qrRotateChecked.size) {
+    const byNorm = {};
+    (typeof positions !== 'undefined' ? positions : []).forEach(p => { if (p && p.ticker) { const n = qrNormTicker(p.ticker); if (!byNorm[n]) byNorm[n] = p.ticker.toUpperCase(); } });
+    qrRotateChecked.forEach(n => add(byNorm[n] || n));
   }
   return out;
 }
@@ -13946,7 +13966,7 @@ function renderQrPerfForm() {
   const btnLabel = busy ? 'fetching…' : 'refresh performance';
   const candT = (((document.getElementById('qr-ticker') || {}).value) || '').trim().toUpperCase();
   if (!tickers.length) {
-    host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Enter a ticker to fetch its recent performance${(typeof qrType !== 'undefined' && qrType === 'etf') ? ' (and any trims you stage below)' : ''} — same source as book-level performance.</div>`;
+    host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">Enter a ticker to fetch its recent performance (and any trims you stage below) — same source as book-level performance.</div>`;
     return;
   }
   const lines = tickers.map(t => {
@@ -13957,7 +13977,7 @@ function renderQrPerfForm() {
   host.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
       <span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Recent market performance</span>
-      <span onclick="${busy ? '' : 'qrFetchPerfForm(true)'}" style="cursor:${busy ? 'default' : 'pointer'};color:var(--color-text-info);font-size:9px;text-decoration:${busy ? 'none' : 'underline'}" title="Pull trailing returns for this ticker${(typeof qrType !== 'undefined' && qrType === 'etf') ? ' and any staged trim targets' : ''} from Polygon — same source as book-level performance">↻ ${btnLabel}</span>
+      <span onclick="${busy ? '' : 'qrFetchPerfForm(true)'}" style="cursor:${busy ? 'default' : 'pointer'};color:var(--color-text-info);font-size:9px;text-decoration:${busy ? 'none' : 'underline'}" title="Pull trailing returns for this ticker and any staged trim targets from Polygon — same source as book-level performance">↻ ${btnLabel}</span>
     </div>
     ${lines}
     <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:4px;font-style:italic">Trailing price-only returns (excludes dividends), via Polygon — approximate, may be stale.</div>`;
