@@ -1853,7 +1853,7 @@
     </div>
 
     <div class="modal-field" style="margin-top:8px">
-      <label class="modal-label" title="Tags this private holding to a theme so it can be counted in concentration analysis (at cost). A private deal is direct, single-name exposure to that theme.">Theme (for concentration analysis)</label>
+      <label class="modal-label" title="Tags this private holding to a theme so it can be counted in concentration analysis (at cost or self-marked value). A private deal is direct, single-name exposure to that theme.">Theme (for concentration analysis)</label>
       <select class="modal-input" id="add-pe-theme" style="width:240px"><option value="">— Untagged (invisible to concentration) —</option></select>
       <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">Until tagged, this deal is excluded from every theme/concentration view.</div>
     </div>
@@ -2563,7 +2563,10 @@ const DEFAULT_BENCHMARK_FEES = {
 };
 let trackRecordMatureOnly = false; // toggle: filter Track Record cards to mature positions only
 let industryAlphaMatureOnly = false; // toggle: filter Industry Intelligence/Spotlight theme alpha to mature open positions only
-let peExposureMode = false; // toggle: fold tagged private deals (AT COST) into the THEME-CLUSTER concentration views (move-together panel + buy-impact baseline). Concentration visibility ONLY — never alpha/performance. Default off = public book unchanged.
+let peExposureMode = 'off'; // tri-state: 'off' | 'cost' | 'market'. Folds tagged private deals into the THEME-CLUSTER concentration views (move-together panel + buy-impact baseline) at the chosen basis. Concentration visibility ONLY — never alpha/performance. 'off' (default) = public book, byte-identical to before. 'market' = self-marked value (illiquid, possibly stale; deals with no current mark sit at cost). NOTE: legacy boolean callers are gone — read via peModeOn()/peModeBasis() helpers, never as a boolean.
+// Derived reads of the tri-state toggle. peModeOn() = is private folded in at all; peModeBasis() = which basis ('cost'|'market') is active when on (defaults 'cost'). Keeping these as the single source of truth means the off-path stays byte-identical: off → peModeOn() false → empty adjustments → engine length-guard short-circuit.
+function peModeOn() { return peExposureMode === 'cost' || peExposureMode === 'market'; }
+function peModeBasis() { return peExposureMode === 'market' ? 'market' : 'cost'; }
 
 // Book-exclusion state — a NON-DESTRUCTIVE view filter for the OPEN-book summary. Lets you "turn off"
 // part of the book (a directly-held ticker, an ETF, a theme, or a sleeve) so the summary recomputes
@@ -2632,13 +2635,6 @@ function mkPos() {
     ticker: '', account: '', dateBought: '',
     shares: '', pricePaid: '', exitPrice: '',
     sellDate: '', spxBuy: '', spxExit: '',
-    // Provenance of the vs-S&P anchor (spxBuy), so the row can flag a "less than true" value:
-    //   'manual'      = you typed it (trusted)
-    //   'auto-close'  = fetched the actual close on your buy date (true)
-    //   'auto-nearby' = buy date had no close (weekend/holiday); used the nearest trading day (see spxBuyMatchedDate)
-    //   'auto-live'   = buy date is today; no official close yet, so used the live intraday level
-    //   'auto-failed' = fetch failed; spxBuy left blank
-    spxBuySource: '', spxBuyMatchedDate: null, spxBuyFetching: false,
     feesAtSale: 0,                // fees/commission paid when SELLING (closed positions). Reduces net
                                   // proceeds and net realized gain only — NOT the gross gain or the
                                   // vs-S&P comparison (you'd pay fees buying the index too).
@@ -2648,9 +2644,6 @@ function mkPos() {
     benchmarkAtBuy: null,         // ticker (e.g. "SMH") at the time of buy — sanity check against future map changes
     benchmarkPriceAtBuy: null,    // benchmark price on dateBought
     benchmarkPriceAtSell: null,   // benchmark price on sellDate (closed positions only)
-    // Provenance of the theme-benchmark anchor (parallel to spxBuySource): 'auto-close' / 'auto-nearby'
-    // / 'auto-live' / 'auto-failed'. Blank = set by Backfill or never anchored.
-    benchmarkAtBuySource: '', benchmarkAtBuyMatchedDate: null, benchmarkAtBuyFetching: false,
     // Capital source tracking — see Capital Deployed metric. Default 0 (treat as new capital).
     // User-supplied at time of purchase via the capital-modal.
     redeployedAmount: 0,
@@ -2957,126 +2950,6 @@ async function fetchSpxHistorical(dateStr) {
   const first = closes.find(c => c !== null && c !== undefined);
   if (!first) throw new Error('No close data');
   return first;
-}
-
-// Like fetchSpxHistorical, but also reports WHICH date the close actually came from, so the caller
-// can tell an exact-day close from a nearest-trading-day fallback (weekend/holiday buys). Returns
-// { close, matchedDate (YYYY-MM-DD), exact }.
-async function fetchSpxCloseForDate(dateStr) {
-  return fetchCloseForDate('^GSPC', dateStr);
-}
-
-// Keyless close-on-date fetch for ANY ticker (S&P, SMH, ITA, …) via the same Yahoo chart endpoint
-// Refresh Prices uses. Reports WHICH date the close came from so the caller can tell an exact-day
-// close from a nearest-trading-day fallback. Returns { close, matchedDate (YYYY-MM-DD), exact }.
-async function fetchCloseForDate(ticker, dateStr) {
-  const d = new Date(dateStr + 'T12:00:00Z');
-  const period1 = Math.floor(d.getTime() / 1000);
-  const period2 = period1 + 7 * 86400;
-  const url = `${PROXY_BASES[0]}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${period1}&period2=${period2}`;
-  const data = await yahooFetch(url);
-  const result = data.chart.result[0];
-  const closes = result.indicators.quote[0].close;
-  const stamps = result.timestamp || [];
-  const idx = closes.findIndex(c => c !== null && c !== undefined);
-  if (idx < 0) throw new Error('No close data');
-  const ts = stamps[idx];
-  const matchedDate = (ts != null) ? new Date(ts * 1000).toISOString().slice(0, 10) : dateStr;
-  return { close: closes[idx], matchedDate, exact: matchedDate === dateStr };
-}
-
-// Auto-anchor a position's vs-S&P baseline (spxBuy) from its buy date, recording HOW true the value
-// is via spxBuySource. Today's buys can't have a close yet → live intraday level (flagged). Past
-// buys fetch the close; a weekend/holiday date resolves to the nearest trading day (flagged). On any
-// failure spxBuy stays blank (never fabricated). Only ever called for non-manual anchors.
-async function autoAnchorSpxBuy(posId) {
-  const pos = positions.find(p => p.id === posId);
-  if (!pos || pos.closed || !pos.dateBought) return;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const buy = new Date(pos.dateBought + 'T00:00:00');
-
-  // Same-day (or defensively future) buy: no official close exists yet → live intraday level.
-  if (buy >= today) {
-    if (spxLive) {
-      pos.spxBuy = spxLive.toFixed(2);
-      pos.spxBuySource = 'auto-live';
-      pos.spxBuyMatchedDate = null;
-    } else {
-      pos.spxBuySource = 'auto-failed';
-    }
-    pos.spxBuyFetching = false;
-    if (typeof renderAll === 'function') renderAll();
-    scheduleSave();
-    return;
-  }
-
-  // Past date: fetch the close and record whether it was exact or a nearest-trading-day fallback.
-  pos.spxBuyFetching = true;
-  if (typeof renderAll === 'function') renderAll();
-  try {
-    const { close, matchedDate, exact } = await fetchSpxCloseForDate(pos.dateBought);
-    pos.spxBuy = (+close).toFixed(2);
-    pos.spxBuySource = exact ? 'auto-close' : 'auto-nearby';
-    pos.spxBuyMatchedDate = exact ? null : matchedDate;
-  } catch (e) {
-    pos.spxBuySource = 'auto-failed';   // leave spxBuy blank — never fabricate
-  } finally {
-    pos.spxBuyFetching = false;
-    if (typeof renderAll === 'function') renderAll();
-    scheduleSave();
-  }
-}
-
-// Auto-anchor an OPEN position's THEME benchmark (benchmarkAtBuy = the ETF, benchmarkPriceAtBuy = its
-// price on the buy date) so theme-alpha can compute and the divergence ⚠ clears. Mirrors the spxBuy
-// anchor: today's buy has no close yet → live price (flagged 'auto-live'); past buy fetches the close
-// (exact, or nearest-trading-day = 'auto-nearby'); failure leaves it blank (never fabricated). Closed
-// positions are never touched here — their anchor is owned by the deliberate re-measure flow.
-async function autoAnchorThemeBenchmark(posId) {
-  const pos = positions.find(p => p.id === posId);
-  if (!pos || pos.closed || !pos.dateBought || !pos.theme) return;
-  const tb = (typeof getThemeBenchmark === 'function') ? getThemeBenchmark(pos.theme) : null;
-  if (!tb) return; // theme has no benchmark (e.g. "Other") — nothing to anchor
-
-  pos.benchmarkAtBuyFetching = true;
-  if (typeof renderAll === 'function') renderAll();
-
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const buy = new Date(pos.dateBought + 'T00:00:00');
-
-  // Same-day (or defensively future) buy: no official close yet → current price for the benchmark ETF.
-  // Prefer the price Get Benchmarks already cached; otherwise fetch a live quote (keyless, Yahoo).
-  if (buy >= today) {
-    let live = (benchmarkPrices && typeof benchmarkPrices[tb] === 'number') ? benchmarkPrices[tb] : null;
-    if (live == null) { try { live = await fetchStockPrice(tb); } catch (e) { live = null; } }
-    if (live != null && isFinite(live)) {
-      pos.benchmarkAtBuy = tb;
-      pos.benchmarkPriceAtBuy = +live;
-      pos.benchmarkAtBuySource = 'auto-live';
-      pos.benchmarkAtBuyMatchedDate = null;
-    } else {
-      pos.benchmarkAtBuySource = 'auto-failed';
-    }
-    pos.benchmarkAtBuyFetching = false;
-    if (typeof renderAll === 'function') renderAll();
-    scheduleSave();
-    return;
-  }
-
-  // Past date: fetch the benchmark's close on the buy date.
-  try {
-    const { close, matchedDate, exact } = await fetchCloseForDate(tb, pos.dateBought);
-    pos.benchmarkAtBuy = tb;
-    pos.benchmarkPriceAtBuy = +close;
-    pos.benchmarkAtBuySource = exact ? 'auto-close' : 'auto-nearby';
-    pos.benchmarkAtBuyMatchedDate = exact ? null : matchedDate;
-  } catch (e) {
-    pos.benchmarkAtBuySource = 'auto-failed';   // leave anchor blank — never fabricate
-  } finally {
-    pos.benchmarkAtBuyFetching = false;
-    if (typeof renderAll === 'function') renderAll();
-    scheduleSave();
-  }
 }
 
 async function fetchStockPrice(ticker) {
@@ -4804,7 +4677,7 @@ function renderRow(pos) {
 
   return `
   <tr class="${isClosed ? 'closed-row' : ''}" data-id="${pos.id}">
-    <td style="white-space:nowrap"><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.ticker) || '<span class="dash">—</span>'}</span>${benchmarkDivergenceBadge(pos)}${themeBenchSourceFlag(pos)}${peConvertedBadge(pos)}</td>
+    <td style="white-space:nowrap"><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.ticker) || '<span class="dash">—</span>'}</span>${benchmarkDivergenceBadge(pos)}${peConvertedBadge(pos)}</td>
     <td><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.account) || '<span class="dash">—</span>'}</span></td>
     <td><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.dateBought) || '<span class="dash">—</span>'}</span></td>
     <td class="calc-cell held-cell" style="text-align:center;white-space:nowrap">${(() => {
@@ -4818,7 +4691,7 @@ function renderRow(pos) {
     <td><span class="locked-cell" title="Edit via the ✎ button">${(pos.pricePaid===''||pos.pricePaid==null)?'<span class="dash">—</span>':fmtDollar(parseFloat(pos.pricePaid))}</span></td>
     <td><input class="cell-input price-input" type="number" step="any" min="0" placeholder="0.00" value="${esc(pos.exitPrice)}" onblur="setField(${pos.id},'exitPrice',this.value)"></td>
     <td><input class="cell-input date-input" type="text" placeholder="YYYY-MM-DD" value="${esc(pos.sellDate)}" onblur="handleDateBlur(${pos.id},'sellDate',this)" ${!isClosed?'disabled':''}></td>
-    <td style="white-space:nowrap"><input class="cell-input spx-input" type="number" step="any" min="0" placeholder="0.00" value="${esc(pos.spxBuy)}" onblur="setField(${pos.id},'spxBuy',this.value)">${spxBuySourceFlag(pos)}</td>
+    <td><input class="cell-input spx-input" type="number" step="any" min="0" placeholder="0.00" value="${esc(pos.spxBuy)}" onblur="setField(${pos.id},'spxBuy',this.value)"></td>
     <td><input class="cell-input spx-input" type="number" step="any" min="0" placeholder="${spxLive ? spxLive.toFixed(2) : 'e.g. 5728'}" value="${esc(pos.spxExit)}" onblur="setField(${pos.id},'spxExit',this.value)"></td>
     <td class="calc-cell">${c.invested > 0 ? fmtDollar(c.invested) : '<span class="dash">—</span>'}</td>
     <td class="calc-cell">${c.exitValue > 0 ? fmtDollar(c.exitValue) : '<span class="dash">—</span>'}</td>
@@ -6260,36 +6133,12 @@ function peConvertedBadge(pos) {
 }
 
 // Small inline marker for a position row when its tag and benchmark diverge. Empty string if fine.
-// Inline marker on the S&P-at-buy cell saying how trustworthy spxBuy is. Loud only for the "less
-// than true" cases (nearby close / live intraday / failed fetch); silent for an exact close or a
-// value you typed yourself.
-function spxBuySourceFlag(pos) {
-  if (pos.spxBuyFetching) return ` <span title="Fetching the S&P close for ${esc(pos.dateBought || '')}\u2026" style="color:var(--color-text-tertiary)">\u27f3</span>`;
-  const src = pos.spxBuySource;
-  if (src === 'auto-nearby') return ` <span title="\u2248 Approximate \u2014 ${esc(pos.dateBought || '')} had no market close (weekend/holiday), so this uses the close from ${esc(pos.spxBuyMatchedDate || 'the nearest trading day')}. Edit if you'd rather anchor to a different day." style="cursor:help;color:#f59e0b;font-weight:700">\u2248</span>`;
-  if (src === 'auto-live') return ` <span title="Live, not a close \u2014 your buy date is today, so there's no official S&P close yet. This is the current intraday level; it settles once you refresh after the close." style="cursor:help;color:#f59e0b;font-weight:700">\u229a</span>`;
-  if (src === 'auto-failed') return ` <span title="Couldn't auto-fetch the S&P for ${esc(pos.dateBought || 'this date')} \u2014 enter it manually to track vs the S&P." style="cursor:help;color:var(--color-text-danger);font-weight:700">!</span>`;
-  return ''; // 'auto-close' and 'manual' are trusted
-}
-
-// Inline marker (next to the ticker) for how trustworthy the THEME benchmark anchor is. Loud only
-// for the approximate cases (nearby close / live intraday); silent for an exact close or a Backfill
-// value. The αsuffix distinguishes it from the S&P-at-buy flag, and a failed fetch falls through to
-// the existing divergence ⚠ (anchor stays empty).
-function themeBenchSourceFlag(pos) {
-  if (pos.benchmarkAtBuyFetching) return ` <span title="Fetching the ${esc(getThemeBenchmark(pos.theme) || 'theme')} benchmark close for ${esc(pos.dateBought || '')}\u2026" style="color:var(--color-text-tertiary)">\u27f3</span>`;
-  const src = pos.benchmarkAtBuySource;
-  if (src === 'auto-nearby') return ` <span title="\u2248 Theme benchmark (${esc(pos.benchmarkAtBuy || '')}) anchored to the close from ${esc(pos.benchmarkAtBuyMatchedDate || 'the nearest trading day')} \u2014 ${esc(pos.dateBought || '')} had no market close. Theme alpha is approximate." style="cursor:help;color:#f59e0b;font-weight:700">\u2248\u03b1</span>`;
-  if (src === 'auto-live') return ` <span title="Theme benchmark (${esc(pos.benchmarkAtBuy || '')}) anchored to its live intraday price \u2014 your buy date is today, no close yet. Re-run \u27f3 Backfill Theme Benchmarks after the close to lock the official price." style="cursor:help;color:#f59e0b;font-weight:700">\u229a\u03b1</span>`;
-  return '';
-}
-
 function benchmarkDivergenceBadge(pos) {
   const div = benchmarkDivergence(pos);
   if (!div) return '';
   let tip;
   if (div.missing) {
-    tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position has NO benchmark anchored — theme alpha can't be computed. It anchors automatically when you save the position, or run ⟳ Backfill Theme Benchmarks. A same-day buy has no published close yet, so re-run after today's close.`;
+    tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position has NO benchmark anchored — theme alpha can't be computed. Open the edit modal to set its benchmark.`;
   } else {
     tip = `Theme "${pos.theme}" benchmarks to ${div.themeBench}, but this position's theme-alpha was measured against ${div.usedBench}`
       + (div.closed
@@ -6312,12 +6161,7 @@ function renderDivergenceBanner() {
   const fmtList = arr => arr.map(({ p, d }) =>
     `<strong>${esc(p.ticker || '?')}</strong> (${esc(p.theme)}→${esc(d.themeBench)}, measured vs ${esc(d.usedBench)})`).join(', ');
   const parts = [];
-  if (openOnes.length) {
-    const openMissing = openOnes.filter(x => x.d.missing);
-    const openMismatch = openOnes.filter(x => !x.d.missing);
-    if (openMissing.length) parts.push(`<div style="margin-top:4px"><strong>Open, no benchmark anchored (${openMissing.length}):</strong> ${fmtList(openMissing)} — re-save the position or run ⟳ Backfill Theme Benchmarks to anchor it (same-day buys: after today's close). The tag is fine.</div>`);
-    if (openMismatch.length) parts.push(`<div style="margin-top:4px"><strong>Open, tag/benchmark mismatch (${openMismatch.length}):</strong> ${fmtList(openMismatch)} — re-tag the theme, or it stays measured against the old benchmark.</div>`);
-  }
+  if (openOnes.length) parts.push(`<div style="margin-top:4px"><strong>Open (${openOnes.length}):</strong> ${fmtList(openOnes)} — re-tag the theme, or it stays measured against the old benchmark.</div>`);
   if (closedOnes.length) parts.push(`<div style="margin-top:4px"><strong>Closed (${closedOnes.length}):</strong> ${fmtList(closedOnes)} — realized alpha is frozen against the old benchmark. Open the ✎ edit modal to re-measure, or leave as-is if the tag is just a thesis label.</div>`);
   el.innerHTML = `⚠ <strong>${flagged.length} position${flagged.length === 1 ? '' : 's'} where the theme tag and the benchmark used don't line up.</strong> The ⚠ next to each ticker marks them.` + parts.join('');
   el.style.display = 'block';
@@ -10241,7 +10085,7 @@ function qrBuyImpactHtml(type, ticker, theme, sleeve, parsedHoldings, buyAmount)
     // When the shared private-exposure toggle is on, fold tagged private deals (at cost) into BOTH
     // the before and after baseline, so the buy's cluster delta is measured against the all-in book.
     // Empty array (toggle off, or no tagged deals) makes computeThemeClusters identical to the no-arg call.
-    const _peAdj = (peExposureMode && typeof peClusterAdjustments === 'function') ? peClusterAdjustments() : [];
+    const _peAdj = (peModeOn() && typeof peClusterAdjustments === 'function') ? peClusterAdjustments(peModeBasis()) : [];
     const before = computeThemeClusters({ adjustments: _peAdj });
     const after = computeThemeClusters({ adjustments: _peAdj.concat(adjustments) });
     const bMap = {}, aMap = {};
@@ -10299,13 +10143,8 @@ function qrBuyImpactHtml(type, ticker, theme, sleeve, parsedHoldings, buyAmount)
 
   // Baseline basis toggle (shared with the move-together panel). Only shown when there's tagged private
   // to fold, and only alongside the cluster table it modifies.
-  const _peTagged = (typeof peThemeExposureAtCost === 'function') ? (peThemeExposureAtCost().total > 0) : false;
-  const _peToggleBuy = _peTagged ? `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:8px 0 2px">
-    <span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">Baseline:</span>
-    <button onclick="setPeExposureMode(false)" style="font-size:9px;padding:2px 9px;border-radius:11px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${!peExposureMode?'var(--color-text-info)':'transparent'};color:${!peExposureMode?'#000':'var(--color-text-tertiary)'}">Public</button>
-    <button onclick="setPeExposureMode(true)" title="Fold tagged private deals into the baseline at cost (illiquid, single-name, self-marks excluded)" style="font-size:9px;padding:2px 9px;border-radius:11px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${peExposureMode?'var(--color-text-warning)':'transparent'};color:${peExposureMode?'#000':'var(--color-text-tertiary)'}">Incl. private</button>
-    ${peExposureMode?'<span style="font-size:8px;color:var(--color-text-warning)">baseline incl. private at cost</span>':''}
-  </div>` : '';
+  const _peTagged = (typeof peThemeExposure === 'function') ? (peThemeExposure('cost').total > 0) : false;
+  const _peToggleBuy = _peTagged ? peBasisToggleHtml({ compact: true, label: 'Baseline:' }) : '';
 
   return `
     <div style="font-size:10px;color:var(--color-text-primary);line-height:1.5;margin-bottom:2px">${headline}</div>
@@ -10432,15 +10271,27 @@ function buildQrAiPrompt(candidate) {
     const ex = qrThemeExposure(candidate.theme);
     if (ex) computed.push(`Current ${candidate.theme} exposure: ${ex.portfolioPct.toFixed(1)}% of active portfolio across ${ex.tickers.length} position(s)${ex.tickers.length?' ('+ex.tickers.map(t=>t.ticker).join(', ')+')':''}.`);
     // Private-deal overlap: if the candidate's theme matches tagged private holdings, surface them as a
-    // COMPUTED FACT so the eval weighs the buy against combined public+private concentration. AT COST,
-    // illiquid, single-name — labeled so the model never treats a private figure as market truth, and
-    // framed as "AT LEAST" since cost understates a marked-up deal. No mixed-basis % is fabricated.
+    // COMPUTED FACT so the eval weighs the buy against combined public+private concentration. Shown on
+    // BOTH bases — cost (conservative) AND self-marked value (the user's own illiquid estimate, possibly
+    // stale, cost-fallback for unmarked deals) — each labeled so the model never treats a self-mark as
+    // market truth. No mixed-basis % is fabricated; the public % above stays public-only.
     try {
-      const _pe = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : null;
-      const _slice = _pe && _pe.byTheme[canonicalThemeName(candidate.theme)];
-      if (_slice && _slice.cost > 0) {
-        const _names = _slice.deals.slice().sort((a,b)=>b.cost-a.cost).map(d=>`${d.company} ~$${Math.round(d.cost).toLocaleString()}`).join(', ');
-        computed.push(`PRIVATE OVERLAP — you ALSO hold ~$${Math.round(_slice.cost).toLocaleString()} of ${candidate.theme} PRIVATELY, at cost (${_names}): illiquid, single-name DIRECT exposure, NOT counted in the public "${candidate.theme} exposure" % above (that % is public positions only). This candidate would add to a theme where the user is ALREADY exposed publicly AND privately — a concentration decision, not just a quality one. The private figure is at cost (conservative — a marked-up deal could be larger), so combined ${candidate.theme} concentration is AT LEAST the public exposure PLUS ~$${Math.round(_slice.cost).toLocaleString()}; weigh the buy against that combined exposure, not the public slice alone.`);
+      const _peC = (typeof peThemeExposure === 'function') ? peThemeExposure('cost') : null;
+      const _peM = (typeof peThemeExposure === 'function') ? peThemeExposure('market') : null;
+      const _key = canonicalThemeName(candidate.theme);
+      const _sliceC = _peC && _peC.byTheme[_key];
+      const _sliceM = _peM && _peM.byTheme[_key];
+      if (_sliceC && _sliceC.cost > 0) {
+        const _names = _sliceC.deals.slice().sort((a,b)=>b.market-a.market).map(d=>{
+          const fb = !d.hasMark ? ', no current mark — held at cost' : '';
+          return `${d.company} (cost ~$${Math.round(d.cost).toLocaleString()}, self-marked ~$${Math.round(d.market).toLocaleString()}${fb})`;
+        }).join(', ');
+        const _costTot = Math.round(_sliceC.cost).toLocaleString();
+        const _mktTot = Math.round((_sliceM ? _sliceM.market : _sliceC.cost)).toLocaleString();
+        const _fbNote = (_sliceM && _sliceM.fallbackCount > 0)
+          ? ` (${_sliceM.fallbackCount} of these have no current mark and sit at cost inside the self-marked figure)`
+          : '';
+        computed.push(`PRIVATE OVERLAP — you ALSO hold ${candidate.theme} PRIVATELY: ~$${_costTot} AT COST, or ~$${_mktTot} AT SELF-MARKED VALUE${_fbNote} (${_names}). Illiquid, single-name DIRECT exposure, NOT counted in the public "${candidate.theme} exposure" % above (that % is public positions only). The self-marked figure is the user's OWN estimate on an illiquid position — no market price, possibly stale — so treat cost as the conservative floor and self-marked as an upper estimate, not a realizable value. This candidate would add to a theme where the user is ALREADY exposed publicly AND privately — a concentration decision, not just a quality one. Combined ${candidate.theme} concentration is the public exposure PLUS somewhere between ~$${_costTot} (cost) and ~$${_mktTot} (self-marked); weigh the buy against that combined range, not the public slice alone.`);
       }
     } catch (e) { /* additive only */ }
   }
@@ -15007,9 +14858,10 @@ function _candMovedParagraph(nameMoves, tax, pos, directVia, adds, themeCtx) {
       if (risen.length) {
         const top = risen[0];
         const isBiggest = themeCtx.concAfter.clusters[0] && themeCtx.concAfter.clusters[0].label === top.label;
-        const basisTag = themeCtx.privateIncluded
-          ? (themeCtx.toggleOn ? ' (counting your private deals at cost)' : ' (counting your private deals at cost — not shown in the table above, which is on the public basis)')
-          : '';
+        const basisTag = !themeCtx.privateIncluded ? ''
+          : themeCtx.displayBasis === 'cost' ? ' (counting your private deals at cost)'
+          : themeCtx.displayBasis === 'market' ? ' (counting your private deals at cost — the table above is on the self-marked basis, which is larger)'
+          : ' (counting your private deals at cost — not shown in the table above, which is on the public basis)';
         concFlag = { label: top.label, after: top.after, isBiggest, basisTag };
       }
     }
@@ -15111,7 +14963,7 @@ function candCompute() {
     directVia[k].directDelta += (a.deltaDirect || 0);
     directVia[k].viaDelta += (a.deltaViaFunds || 0);
   });
-  const _peAdj = (peExposureMode && typeof peClusterAdjustments === 'function') ? peClusterAdjustments() : [];
+  const _peAdj = (peModeOn() && typeof peClusterAdjustments === 'function') ? peClusterAdjustments(peModeBasis()) : [];
   try {
     before = computeThemeClusters({ adjustments: _peAdj });
     after = computeThemeClusters({ adjustments: _peAdj.concat(adjustments) });
@@ -15143,16 +14995,18 @@ function candCompute() {
       else if (prior >= 1) { adds.passive += add; adds.passiveNames.push(disp); }
       else { adds.new += add; adds.newNames.push(disp); }
     });
-    // Theme-concentration lens for the narrative: ALWAYS incl-private (so tagged private deals count
-    // toward "is this theme already heavy?"), regardless of the display toggle. Reuse before/after when
-    // they already include private (toggle on); otherwise compute the incl-private view fresh.
-    const _allPe = (typeof peClusterAdjustments === 'function') ? peClusterAdjustments() : [];
+    // Theme-concentration lens for the narrative: ALWAYS incl-private AT COST (so tagged private deals
+    // count toward "is this theme already heavy?"), regardless of the display toggle/basis. The displayed
+    // before/after may now be on the MARKET basis (toggle = market), so only reuse them when the toggle
+    // is on at COST — i.e. when before/after already equal the cost-incl-private lens. Otherwise (public
+    // OR market) recompute the cost lens fresh so the narrative basis never silently shifts to self-mark.
+    const _allPe = (typeof peClusterAdjustments === 'function') ? peClusterAdjustments('cost') : [];
     let _cB = before, _cA = after;
-    if (_allPe.length && !peExposureMode) {
+    if (_allPe.length && peExposureMode !== 'cost') {
       _cB = computeThemeClusters({ adjustments: _allPe });
       _cA = computeThemeClusters({ adjustments: _allPe.concat(adjustments) });
     }
-    _themeCtx = { concBefore: _cB, concAfter: _cA, privateIncluded: !!_allPe.length, toggleOn: !!peExposureMode };
+    _themeCtx = { concBefore: _cB, concAfter: _cA, privateIncluded: !!_allPe.length, toggleOn: peModeOn(), displayBasis: peExposureMode };
   } catch (e) {
     out.innerHTML = `<div style="font-size:11px;color:var(--color-text-danger)">Couldn't compute the scenario: ${esc(e.message || 'error')}</div>`;
     _candScenario = null;
@@ -15233,13 +15087,8 @@ function candCompute() {
     glTable = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Realized G/L <span style="text-transform:none;color:var(--color-text-tertiary)">(from the trims · vs your cost basis)</span></div>` + gls.join('');
   }
 
-  const _candPeTagged = (typeof peThemeExposureAtCost === 'function') ? (peThemeExposureAtCost().total > 0) : false;
-  const _candPeToggle = _candPeTagged ? `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:2px 0 6px">
-    <span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">Baseline:</span>
-    <button onclick="setPeExposureMode(false)" style="font-size:9px;padding:2px 9px;border-radius:11px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${!peExposureMode?'var(--color-text-info)':'transparent'};color:${!peExposureMode?'#000':'var(--color-text-tertiary)'}">Public</button>
-    <button onclick="setPeExposureMode(true)" title="Fold tagged private deals into the baseline at cost (illiquid, single-name, self-marks excluded)" style="font-size:9px;padding:2px 9px;border-radius:11px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${peExposureMode?'var(--color-text-warning)':'transparent'};color:${peExposureMode?'#000':'var(--color-text-tertiary)'}">Incl. private</button>
-    ${peExposureMode?'<span style="font-size:8px;color:var(--color-text-warning)">baseline incl. private at cost</span>':''}
-  </div>` : '';
+  const _candPeTagged = (typeof peThemeExposure === 'function') ? (peThemeExposure('cost').total > 0) : false;
+  const _candPeToggle = _candPeTagged ? peBasisToggleHtml({ compact: true, label: 'Baseline:' }) : '';
   out.innerHTML =
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     _candPeToggle +
@@ -18009,29 +17858,60 @@ function computeThemeClusters(hypo) {
 }
 
 // ─────────────────────────────────────────────
-// PRIVATE-DEAL CONCENTRATION (at cost) — the "incl. private" additive layer.
-// Basis decision: tagged private deals count AT COST (amountInvested), matching the at-cost AUM
-// convention. Self-marks are deliberately NOT used here — at cost is conservative and verifiable,
-// and not every deal even has a current mark. Private deals are illiquid, single-name DIRECT
-// exposure (no look-through). These helpers are pure (no DOM) so the AI prompts can reuse them.
+// PRIVATE-DEAL CONCENTRATION — the "incl. private" additive layer, now on EITHER basis.
+// Two bases, user-selectable: 'cost' (amountInvested — conservative, verifiable, matches the at-cost
+// AUM convention) and 'market' (calcPeDeal.currentValue — the user's SELF-MARK: illiquid, no real
+// market price, possibly stale, and FALLS BACK TO COST for any deal with no current per-share mark).
+// Because market is a mixed self-mark/cost basis, every place it surfaces must be labeled as such and
+// must disclose the cost-fallback count. Private deals are illiquid, single-name DIRECT exposure (no
+// look-through). These helpers are pure (no DOM) so the AI prompts can reuse them. peThemeExposure()
+// is the source of truth; peThemeExposureAtCost() is a back-compat shim over it (cost basis).
 // ─────────────────────────────────────────────
 
-// Per-theme private exposure at cost. Untagged deals are reported separately, never silently folded.
-function peThemeExposureAtCost() {
-  const byTheme = {}; let total = 0, untaggedCount = 0, untaggedCost = 0;
+// Basis-aware private-theme exposure. basis ∈ {'cost','market'}; anything else → 'cost'.
+//   'cost'   → calcPeDeal(d).inv (amountInvested)
+//   'market' → calcPeDeal(d).currentValue (self-mark where a current pps exists, else cost-fallback)
+// Returns per-theme { value, cost, market, deals[], markedCount, fallbackCount, fallbackValue } plus
+// book-level totals AND a marked/fallback split, so any label can say exactly how much is a real
+// self-mark vs. silently sitting at cost. `value` is the chosen basis; `cost`/`market` are always both
+// present so a caller can show both without recomputing. hasMark mirrors calcPeDeal's own fallback rule.
+function peThemeExposure(basis) {
+  basis = (basis === 'market') ? 'market' : 'cost';
+  const byTheme = {};
+  let total = 0, untaggedCount = 0, untaggedValue = 0;
+  let markedCount = 0, fallbackCount = 0, fallbackValue = 0;        // among TAGGED deals, market basis
+  let totalCost = 0, totalMarket = 0;                               // book-level, tagged, both bases
   const deals = (typeof peDeals !== 'undefined' && Array.isArray(peDeals)) ? peDeals : [];
   deals.forEach(d => {
     const c = calcPeDeal(d);
-    if (!c) return;                 // no usable cost basis (no amount) — skip entirely
-    const cost = c.inv;             // AT COST — the basis decision
+    if (!c) return;                  // no usable cost basis (no amount) — skip entirely
+    const hasMark = (c.shares != null && c.ppsCur > 0);            // matches calcPeDeal's currentValue rule
+    const value = (basis === 'market') ? c.currentValue : c.inv;
     const theme = d.theme ? canonicalThemeName(d.theme) : '';
-    if (!theme) { untaggedCount++; untaggedCost += cost; return; }
-    if (!byTheme[theme]) byTheme[theme] = { cost: 0, deals: [] };
-    byTheme[theme].cost += cost;
-    byTheme[theme].deals.push({ company: d.company || '(unnamed)', cost });
-    total += cost;
+    if (!theme) { untaggedCount++; untaggedValue += value; return; }
+    if (!byTheme[theme]) byTheme[theme] = { value: 0, cost: 0, market: 0, deals: [], markedCount: 0, fallbackCount: 0, fallbackValue: 0 };
+    const t = byTheme[theme];
+    t.value += value; t.cost += c.inv; t.market += c.currentValue;
+    t.deals.push({ company: d.company || '(unnamed)', value, cost: c.inv, market: c.currentValue, hasMark });
+    total += value; totalCost += c.inv; totalMarket += c.currentValue;
+    if (basis === 'market') {
+      if (hasMark) { markedCount++; t.markedCount++; }
+      else { fallbackCount++; fallbackValue += value; t.fallbackCount++; t.fallbackValue += value; }
+    }
   });
-  return { byTheme, total, untaggedCount, untaggedCost };
+  return { basis, byTheme, total, totalCost, totalMarket, untaggedCount, untaggedValue, markedCount, fallbackCount, fallbackValue };
+}
+
+// Back-compat shim: the ORIGINAL cost-basis shape { byTheme:{theme:{cost,deals:[{company,cost}]}},
+// total, untaggedCount, untaggedCost }. Delegates to peThemeExposure('cost') so cost numbers can never
+// drift from the basis-aware source. Existing callers that read .cost / .untaggedCost keep working.
+function peThemeExposureAtCost() {
+  const e = peThemeExposure('cost');
+  const byTheme = {};
+  Object.entries(e.byTheme).forEach(([t, info]) => {
+    byTheme[t] = { cost: info.cost, deals: info.deals.map(d => ({ company: d.company, cost: d.cost })) };
+  });
+  return { byTheme, total: e.total, untaggedCount: e.untaggedCount, untaggedCost: e.untaggedValue };
 }
 
 // Map tagged private deals into computeThemeClusters() adjustments, at cost. Each deal is a synthetic
@@ -18039,7 +17919,14 @@ function peThemeExposureAtCost() {
 // so the "incl. private" view never diverges from how the public book is bucketed. Synthetic ticker
 // is prefixed "PVT " + id so it normalizes to PVT…, which (being >5 chars) cannot collide with a real
 // holding's ticker key.
-function peClusterAdjustments() {
+// Map tagged private deals into computeThemeClusters() adjustments, at the given basis (default 'cost'
+// so legacy no-arg callers are unchanged). Each deal is a synthetic DIRECT name routed by themeTag —
+// reusing the exact merge/routing logic the public clustering uses, so the "incl. private" view never
+// diverges from how the public book is bucketed. Synthetic ticker is prefixed "PVT " + id so it
+// normalizes to PVT… which (being >5 chars) cannot collide with a real holding's ticker key. The
+// deltaDirect is the ONLY thing that changes between bases — the routing/merge path is identical.
+function peClusterAdjustments(basis) {
+  basis = (basis === 'market') ? 'market' : 'cost';
   const adj = [];
   const deals = (typeof peDeals !== 'undefined' && Array.isArray(peDeals)) ? peDeals : [];
   deals.forEach(d => {
@@ -18049,7 +17936,7 @@ function peClusterAdjustments() {
     if (!theme) return;             // untagged stays invisible — by design
     adj.push({
       ticker: 'PVT ' + (d.id || d.company || Math.random().toString(36).slice(2)),
-      deltaDirect: c.inv,           // AT COST
+      deltaDirect: (basis === 'market') ? c.currentValue : c.inv,
       themeTag: theme,
       display: (d.company || 'Private') + ' (private)'
     });
@@ -18063,35 +17950,84 @@ function peClusterAdjustments() {
 // denominator, never graded against one band (the denominator lesson). Returns '' when there is no
 // private data to show.
 // Lean footer for the cluster panel. The TOGGLE now drives the actual re-clustering; this footer only
-// adds context: in incl-private mode it names the deals folded in; in public mode it points at the
-// toggle; either way it surfaces any untagged deals so the blindspot can't hide. (isOn = effective mode.)
-function peClusterFooterHtml(peExp, isOn) {
+// adds context: in incl-private mode it names the deals folded in (at the live basis); in public mode
+// it points at the toggle; either way it surfaces any untagged deals so the blindspot can't hide.
+// (isOn = effective mode; basis = 'cost'|'market'.) Consumes the basis-aware peThemeExposure() shape:
+// per-deal .value, per-book .untaggedValue, and the market marked/fallback split.
+function peClusterFooterHtml(peExp, isOn, basis) {
   if (!peExp || (peExp.total <= 0 && peExp.untaggedCount === 0)) return '';
+  basis = (basis === 'market') ? 'market' : 'cost';
   const fmtD = (n) => fmtDollarWhole(n);
   const parts = [];
   if (isOn && peExp.total > 0) {
-    const detail = Object.entries(peExp.byTheme).sort((a,b)=>b[1].cost-a[1].cost).map(([t,info]) => {
-      const names = info.deals.slice().sort((a,b)=>b.cost-a.cost).map(d=>`${esc(d.company)} ${fmtD(d.cost)}`).join(', ');
+    const detail = Object.entries(peExp.byTheme).sort((a,b)=>b[1].value-a[1].value).map(([t,info]) => {
+      const names = info.deals.slice().sort((a,b)=>b.value-a.value).map(d=>{
+        const tag = (basis === 'market' && !d.hasMark) ? ' (at cost — no current mark)' : '';
+        return `${esc(d.company)} ${fmtD(d.value)}${tag}`;
+      }).join(', ');
       return `${esc(t)}: ${names}`;
     }).join(' · ');
-    parts.push(`<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;line-height:1.5">Private folded in at cost — ${detail}. <span style="color:var(--color-text-warning)">illiquid · single-name · self-marks excluded</span>. These cluster %s are now shares of the all-in book; switch to "Public book" to compare.</div>`);
+    if (basis === 'market') {
+      const split = peExp.fallbackCount > 0
+        ? ` ${peExp.markedCount} deal${peExp.markedCount === 1 ? '' : 's'} self-marked; ${peExp.fallbackCount} at cost (no current mark).`
+        : '';
+      parts.push(`<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;line-height:1.5">Private folded in at <strong>self-marked value</strong> — ${detail}. <span style="color:var(--color-text-warning)">self-marked · illiquid · no market price · possibly stale</span>.${split} These cluster %s are now shares of the all-in book; switch basis above to compare.</div>`);
+    } else {
+      parts.push(`<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;line-height:1.5">Private folded in at cost — ${detail}. <span style="color:var(--color-text-warning)">illiquid · single-name · self-marks excluded</span>. These cluster %s are now shares of the all-in book; switch basis above to compare.</div>`);
+    }
   } else if (!isOn && peExp.total > 0) {
-    parts.push(`<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px">${fmtD(peExp.total)} of tagged private deals are NOT in these clusters — switch to "Incl. private (cost)" above to fold them in.</div>`);
+    parts.push(`<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px">${fmtD(peExp.totalCost)} (at cost) of tagged private deals are NOT in these clusters — use the basis toggle above to fold them in at cost or self-marked value.</div>`);
   }
   if (peExp.untaggedCount > 0) {
-    parts.push(`<div style="font-size:9px;color:var(--color-text-warning);margin-top:4px">⚠ ${peExp.untaggedCount} untagged private deal${peExp.untaggedCount>1?'s':''} (${fmtD(peExp.untaggedCost)}) excluded from BOTH views — tag ${peExp.untaggedCount>1?'them':'it'} on the Private Investments card.</div>`);
+    parts.push(`<div style="font-size:9px;color:var(--color-text-warning);margin-top:4px">⚠ ${peExp.untaggedCount} untagged private deal${peExp.untaggedCount>1?'s':''} (${fmtD(peExp.untaggedValue)}) excluded from BOTH views — tag ${peExp.untaggedCount>1?'them':'it'} on the Private Investments card.</div>`);
   }
   return parts.join('');
 }
 
-// Flip the shared private-exposure basis and re-render the two surfaces that respect it (the
-// move-together cluster panel and the live buy-impact). Concentration views only — never performance.
-function setPeExposureMode(on) {
-  peExposureMode = !!on;
+// Set the shared private-exposure mode ('off' | 'cost' | 'market') and re-render the three surfaces
+// that respect it (move-together cluster panel, live buy-impact, scenario builder). Accepts the legacy
+// booleans too (true → 'cost', false → 'off') so any stray old caller degrades safely. Concentration
+// views only — never performance.
+function setPeExposureMode(mode) {
+  if (mode === true) mode = 'cost';
+  else if (mode === false) mode = 'off';
+  peExposureMode = (mode === 'cost' || mode === 'market') ? mode : 'off';
   try { if (document.getElementById('theme-diversification-analysis')) renderThemeClusters(); } catch (e) {}
   try { if (document.getElementById('qr-buy-impact') && typeof qrRenderBuyImpact === 'function') qrRenderBuyImpact(); } catch (e) {}
   try { if (document.getElementById('cand-output') && typeof candCompute === 'function') candCompute(); } catch (e) {}
 }
+
+// Shared 3-way basis control rendered on every surface that folds private in: Public / Incl. private
+// (cost) / Incl. private (market). Reads the global peExposureMode to highlight the active button.
+// Callers gate WHETHER to show it (only when ≥1 tagged private deal exists); this just builds the HTML.
+// The market button's title carries the self-mark caveat; the trailing note names the live basis.
+// `compact` shrinks padding/margins for the inline buy & scenario panels. `label` overrides the lead-in.
+function peBasisToggleHtml(opts) {
+  opts = opts || {};
+  const compact = !!opts.compact;
+  const label = opts.label || 'Basis:';
+  const pad = compact ? '2px 9px' : '3px 11px';
+  const rad = compact ? '11px' : '12px';
+  const mode = peExposureMode;
+  const btn = (m, text, title) => {
+    const active = mode === m;
+    const onColor = (m === 'off') ? 'var(--color-text-info)' : 'var(--color-text-warning)';
+    return `<button onclick="setPeExposureMode('${m}')"${title ? ` title="${esc(title)}"` : ''} style="font-size:9px;padding:${pad};border-radius:${rad};cursor:pointer;border:1px solid var(--color-border-tertiary);background:${active ? onColor : 'transparent'};color:${active ? '#000' : 'var(--color-text-tertiary)'};font-weight:${active ? '600' : '400'}">${text}</button>`;
+  };
+  const note = (mode === 'cost')
+    ? `<span style="font-size:8px;color:var(--color-text-warning)">incl. private at cost</span>`
+    : (mode === 'market')
+      ? `<span style="font-size:8px;color:var(--color-text-warning)">incl. private at self-marked value</span>`
+      : '';
+  return `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:${compact ? '8px 0 2px' : '0 0 8px'}">
+    <span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">${esc(label)}</span>
+    ${btn('off', 'Public', null)}
+    ${btn('cost', 'Incl. private (cost)', 'Fold tagged private deals into the baseline AT COST (conservative; illiquid, single-name).')}
+    ${btn('market', 'Incl. private (market)', 'Fold tagged private deals at SELF-MARKED value (illiquid, no market price, possibly stale; deals with no current mark sit at cost).')}
+    ${note}
+  </div>`;
+}
+
 
 // Print-friendly callout for PDF exports. States which basis the displayed figures use, and reminds the
 // reader that the AI analysis ALWAYS accounts for tagged private deals (at cost) regardless of the
@@ -18117,34 +18053,50 @@ function peThemeHeavyFlag(theme) {
   return {
     label: match.label, pct: match.pct,
     isBiggest: !!(cl.clusters[0] && cl.clusters[0].label === match.label),
-    privateIncluded: peExp.total > 0, toggleOn: !!peExposureMode
+    privateIncluded: peExp.total > 0, toggleOn: peModeOn(), displayBasis: peExposureMode
   };
 }
 
-// Trailing clause naming the basis for a heavy-theme flag.
+// Trailing clause naming the basis for a heavy-theme flag. The flag itself is ALWAYS computed at cost;
+// this clause reconciles it with whatever basis the table above is currently showing.
 function peHeavyBasisTag(flag) {
   if (!flag || !flag.privateIncluded) return '';
-  return flag.toggleOn
-    ? ' (counting your private deals at cost)'
-    : ' (counting your private deals at cost — not shown in the table above, which is on the public basis)';
+  if (flag.displayBasis === 'cost') return ' (counting your private deals at cost)';
+  if (flag.displayBasis === 'market') return ' (counting your private deals at cost — the table above is on the self-marked basis, which is larger)';
+  return ' (counting your private deals at cost — not shown in the table above, which is on the public basis)';
 }
 
 function pePdfBasisNote() {
-  const peExp = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : null;
-  if (!peExp || peExp.total <= 0) return '';
-  const themes = Object.entries(peExp.byTheme).sort((a,b)=>b[1].cost-a[1].cost)
+  const peCost = (typeof peThemeExposure === 'function') ? peThemeExposure('cost') : null;
+  if (!peCost || peCost.total <= 0) return '';
+  const peMkt = (typeof peThemeExposure === 'function') ? peThemeExposure('market') : null;
+  const themes = Object.entries(peCost.byTheme).sort((a,b)=>b[1].value-a[1].value)
     .map(([t,info]) => `${esc(t)} (${info.deals.map(d=>esc(d.company)).join(', ')})`).join('; ');
-  const onBasis = !!peExposureMode;
+  const mode = peExposureMode; // 'off' | 'cost' | 'market'
+  const onBasis = mode !== 'off';
   const basisWord = onBasis ? 'all-in' : 'public-book';
-  const basisGloss = onBasis ? 'private deals included at cost' : 'private deals excluded';
+  const basisGloss = mode === 'market'
+    ? 'private deals included at self-marked value (illiquid, no market price, possibly stale; deals with no current mark sit at cost)'
+    : mode === 'cost'
+      ? 'private deals included at cost'
+      : 'private deals excluded';
+  // Self-marked total + the marked/fallback split, so the print reader sees how much of "market" is a
+  // real self-mark vs. cost-fallback. Both bases are reported because the AI now reads both.
+  const mktTotal = peMkt ? Math.round(peMkt.total).toLocaleString() : null;
+  const split = (peMkt && peMkt.fallbackCount > 0)
+    ? ` (of which ${peMkt.markedCount} self-marked and ${peMkt.fallbackCount} at cost — no current mark)`
+    : '';
   const tail = onBasis
     ? 'Both the figures above and the AI analysis include your private deals.'
     : 'So the AI analysis may reference private concentration that the figures above do not display — that is expected here, not a contradiction.';
-  const untag = peExp.untaggedCount > 0
-    ? ` (plus ${peExp.untaggedCount} untagged private deal${peExp.untaggedCount>1?'s':''} totaling ~$${Math.round(peExp.untaggedCost).toLocaleString()} that the AI does NOT see)`
+  const untag = peCost.untaggedCount > 0
+    ? ` (plus ${peCost.untaggedCount} untagged private deal${peCost.untaggedCount>1?'s':''} totaling ~$${Math.round(peCost.untaggedValue).toLocaleString()} at cost that the AI does NOT see)`
     : '';
+  const aiBasisLine = mktTotal
+    ? `The AI analysis <strong>always</strong> accounts for your tagged private deals on <strong>both</strong> bases — ~$${Math.round(peCost.total).toLocaleString()} at cost and ~$${mktTotal} at self-marked value${split} across ${themes}${untag} — regardless of the toggle. Self-marks are illiquid, single-name, and possibly stale; treat them as your own estimate, not a market price.`
+    : `The AI analysis <strong>always</strong> accounts for your tagged private deals at cost — ~$${Math.round(peCost.total).toLocaleString()} across ${themes}${untag} — regardless of the toggle.`;
   return `<div style="margin:14px 0;padding:9px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;font-size:11px;line-height:1.55;color:#7c2d12">`
-    + `<strong>Private-deal basis.</strong> The exposure/cluster figures here are shown on the <strong>${basisWord}</strong> basis (${basisGloss}; the &quot;Incl. private&quot; toggle was ${onBasis?'ON':'OFF'} at export). The AI analysis <strong>always</strong> accounts for your tagged private deals at cost — ~$${Math.round(peExp.total).toLocaleString()} across ${themes}${untag} — regardless of that toggle. ${tail}`
+    + `<strong>Private-deal basis.</strong> The exposure/cluster figures here are shown on the <strong>${basisWord}</strong> basis (${basisGloss}; the &quot;Basis&quot; toggle was set to <strong>${mode === 'off' ? 'Public' : mode === 'cost' ? 'Incl. private (cost)' : 'Incl. private (market)'}</strong> at export). ${aiBasisLine} ${tail}`
     + `</div>`;
 }
 
@@ -18381,14 +18333,16 @@ function renderThemeClusters() {
     if (label && label.includes(' + ')) { for (const part of label.split(' + ')) if (THEME_HINTS[part]) return THEME_HINTS[part]; }
     return null;
   };
-  // Shared private-exposure basis: fold tagged private deals (at cost) into the clusters when the
-  // toggle is on. Off (default) = public book, byte-identical to before. The toggle only "engages"
+  // Shared private-exposure basis: fold tagged private deals into the clusters when the toggle is on,
+  // at the selected basis (cost or self-marked market). Off (default) = public book, byte-identical to
+  // before (empty adjustments hit the engine's length-guard short-circuit). The toggle only "engages"
   // when there is tagged private to fold, so an empty toggle can never silently change the view.
-  const _peExp = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : { total: 0, untaggedCount: 0, untaggedCost: 0, byTheme: {} };
+  const _basis = peModeBasis();
+  const _peExp = (typeof peThemeExposure === 'function') ? peThemeExposure(_basis) : { total: 0, totalCost: 0, totalMarket: 0, untaggedCount: 0, untaggedValue: 0, byTheme: {}, markedCount: 0, fallbackCount: 0, fallbackValue: 0 };
   const _peCanToggle = _peExp.total > 0;
-  const _peOn = _peCanToggle && peExposureMode;
+  const _peOn = _peCanToggle && peModeOn();
   let data;
-  try { data = _peOn ? computeThemeClusters({ adjustments: peClusterAdjustments() }) : computeThemeClusters(); }
+  try { data = _peOn ? computeThemeClusters({ adjustments: peClusterAdjustments(_basis) }) : computeThemeClusters(); }
   catch (e) { data = computeThemeClusters(); }
   if (!data.clusters.length && data.base.total === 0) {
     host.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No holdings to cluster yet.</div>`;
@@ -18424,13 +18378,21 @@ function renderThemeClusters() {
 
   // Theme options for the reassign dropdowns (all themes, plus an "auto" reset and a base option).
   const themeOptions = data.allThemes;
-  // Public ⇄ incl-private (at cost) basis toggle. Shown only when there is tagged private to fold.
-  const _peToggleHtml = _peCanToggle ? `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-    <span style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em">Basis:</span>
-    <button onclick="setPeExposureMode(false)" style="font-size:9px;padding:3px 11px;border-radius:12px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${!_peOn?'var(--color-text-info)':'transparent'};color:${!_peOn?'#000':'var(--color-text-tertiary)'};font-weight:${!_peOn?'600':'400'}">Public book</button>
-    <button onclick="setPeExposureMode(true)" title="Fold your tagged private deals into these clusters at cost (illiquid, single-name, self-marks excluded)" style="font-size:9px;padding:3px 11px;border-radius:12px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${_peOn?'var(--color-text-warning)':'transparent'};color:${_peOn?'#000':'var(--color-text-tertiary)'};font-weight:${_peOn?'600':'400'}">Incl. private (cost)</button>
-    ${_peOn?`<span style="font-size:9px;color:var(--color-text-warning)">all-in book · +${fmtDollarWhole(_peExp.total)} private at cost</span>`:''}
-  </div>` : '';
+  // Public / Incl. private (cost) / Incl. private (market) basis toggle. Shown only when there is
+  // tagged private to fold. The all-in summary names the live basis and, on market, the marked vs
+  // cost-fallback split so a self-mark is never presented as market truth.
+  const _allInLabel = !_peOn ? '' : (() => {
+    if (_basis === 'market') {
+      const fb = _peExp.fallbackCount > 0
+        ? ` (${_peExp.markedCount} self-marked · ${_peExp.fallbackCount} at cost — no current mark)`
+        : ' (self-marked)';
+      return `<span style="font-size:9px;color:var(--color-text-warning)">all-in book · +${fmtDollarWhole(_peExp.total)} private at self-marked value${fb}</span>`;
+    }
+    return `<span style="font-size:9px;color:var(--color-text-warning)">all-in book · +${fmtDollarWhole(_peExp.total)} private at cost</span>`;
+  })();
+  const _peToggleHtml = _peCanToggle
+    ? `<div style="margin-bottom:8px">${peBasisToggleHtml({ label: 'Basis:' })}${_allInLabel ? `<div style="margin-top:3px">${_allInLabel}</div>` : ''}</div>`
+    : '';
 
   // One name line inside a cluster: name, true $, the "why", and ⚠ + reassign control when editing.
   const nameLine = (n) => {
@@ -18528,7 +18490,7 @@ function renderThemeClusters() {
         </div>
       </details>` : ''}
     </div>`;
-  try { host.innerHTML += peClusterFooterHtml(_peExp, _peOn); } catch (e) { /* additive only — never block the public panel */ }
+  try { host.innerHTML += peClusterFooterHtml(_peExp, _peOn, _basis); } catch (e) { /* additive only — never block the public panel */ }
 }
 
 // ─────────────────────────────────────────────
@@ -19762,45 +19724,62 @@ function buildBookAiPrompt() {
       aum.push(`WHOLE-BOOK CONTEXT — assets under management (live values; this frames everything below). All-in total $${Math.round(a.allIn).toLocaleString()}, made up of:`);
       aum.push(`- Managed positions (the actively-picked sleeve): $${Math.round(a.managed).toLocaleString()} (~${p(a.managed)}% of all-in).`);
       aum.push(`- Passive core — VOO (broad S&P 500 index fund; the user treats this as a DIVERSIFIED BASE, not an active bet): $${Math.round(a.voo).toLocaleString()} (~${p(a.voo)}% of all-in).`);
-      if (a.peCount) aum.push(`- Private deals (${a.peCount} direct private investment${a.peCount > 1 ? 's' : ''}; illiquid; counted AT COST, not a self-marked valuation): $${Math.round(a.pe).toLocaleString()} (~${p(a.pe)}% of all-in).`);
+      if (a.peCount) aum.push(`- Private deals (${a.peCount} direct private investment${a.peCount > 1 ? 's' : ''}; illiquid): $${Math.round(a.pe).toLocaleString()} AT COST (~${p(a.pe)}% of all-in). This AUM line is deliberately at cost; the PRIVATE-DEAL CONCENTRATION block below additionally gives the self-marked value.`);
       aum.push(`Account split of the public book: liquid taxable $${Math.round(a.liquidTaxable).toLocaleString()}; tax-sheltered IRA $${Math.round(a.iraSheltered).toLocaleString()}. (IRA gains are untaxed; taxable lots carry LT/ST tax on sale.)`);
-      aum.push(`HOW TO USE THIS FRAME: the theme/sector percentages below are shares of the PUBLIC book's TRUE EXPOSURE (managed direct positions + the user's look-through share inside funds they hold, including VOO); VOO's untagged remainder is the "diversified base" line. Your tagged private deals ARE now broken out per theme in a separate "PRIVATE-DEAL CONCENTRATION" block (at cost) — an ADDITIVE layer, NOT folded into the public percentages. The public theme percentages stay shares of the public book; where a private or all-in figure is given, each is LABELED with its own base. Use each figure against its stated base — do not mix the two denominators, and do not invent your own all-in recomputation of the public percentages.`);
+      aum.push(`HOW TO USE THIS FRAME: the theme/sector percentages below are shares of the PUBLIC book's TRUE EXPOSURE (managed direct positions + the user's look-through share inside funds they hold, including VOO); VOO's untagged remainder is the "diversified base" line. Your tagged private deals ARE now broken out per theme in a separate "PRIVATE-DEAL CONCENTRATION" block on BOTH a cost basis AND a self-marked-value basis — an ADDITIVE layer, NOT folded into the public percentages. The public theme percentages stay shares of the public book; where a private or all-in figure is given, each is LABELED with its own base (public / all-in-cost / all-in-self-marked). Use each figure against its stated base — do not mix denominators, do not invent your own all-in recomputation of the public percentages, and treat self-marks as the user's own illiquid estimates, not market prices.`);
       lines.push(aum.join('\n'));
     }
   } catch (e) {}
 
-  // --- Private-deal concentration (at cost; additive layer with its OWN denominator) ---
+  // --- Private-deal concentration (BOTH bases; additive layer with its OWN denominator) ---
   // Reuses the SAME helpers/engine as the on-screen "incl. private" panel, so the AI reads identical
-  // numbers to what the user sees. Public percentages are never recomputed; private is at cost, labeled
-  // illiquid/single-name; untagged deals are reported as a gap, never silently themed.
+  // numbers to what the user sees. Public percentages are never recomputed. Private is shown on BOTH
+  // the cost basis (conservative, verifiable) AND the self-marked market basis (illiquid, no market
+  // price, possibly stale, cost-fallback for unmarked deals) — each labeled, so the model reasons about
+  // both without mixing denominators. Untagged deals are reported as a gap, never silently themed.
   try {
-    const peExp = (typeof peThemeExposureAtCost === 'function') ? peThemeExposureAtCost() : null;
-    if (peExp && (peExp.total > 0 || peExp.untaggedCount > 0)) {
+    const peCost = (typeof peThemeExposure === 'function') ? peThemeExposure('cost') : null;
+    const peMkt  = (typeof peThemeExposure === 'function') ? peThemeExposure('market') : null;
+    if (peCost && (peCost.total > 0 || peCost.untaggedCount > 0)) {
       const pl = [];
-      pl.push(`PRIVATE-DEAL CONCENTRATION (counted AT COST — conservative; self-marks excluded; illiquid, single-name DIRECT holdings; a marked-up deal could exceed the cost shown). ADDITIVE layer: it does NOT change the public theme percentages elsewhere in this frame.`);
-      if (peExp.total > 0) {
-        let allIn = null;
-        try { allIn = computeThemeClusters({ adjustments: peClusterAdjustments() }); } catch (e) {}
+      const mktNote = (peMkt && peMkt.fallbackCount > 0)
+        ? ` Of the self-marked total, ${peMkt.markedCount} deal(s) carry a current self-mark and ${peMkt.fallbackCount} have NO current mark and therefore sit at cost inside the "market" figure.`
+        : '';
+      pl.push(`PRIVATE-DEAL CONCENTRATION — shown on TWO bases, each labeled; do NOT mix them with each other or with the public percentages. (1) AT COST: ~$${Math.round(peCost.total).toLocaleString()} (conservative, verifiable). (2) AT SELF-MARKED VALUE: ~$${peMkt ? Math.round(peMkt.total).toLocaleString() : Math.round(peCost.total).toLocaleString()} — these are the USER'S OWN marks on illiquid, single-name, privately-held positions: no public market price, possibly stale, and a self-mark is an estimate, NOT a realizable value.${mktNote} ADDITIVE layer: neither figure changes the public theme percentages elsewhere in this frame.`);
+      if (peCost.total > 0) {
+        let allInCost = null, allInMkt = null;
+        try { allInCost = computeThemeClusters({ adjustments: peClusterAdjustments('cost') }); } catch (e) {}
+        try { allInMkt  = computeThemeClusters({ adjustments: peClusterAdjustments('market') }); } catch (e) {}
         const pubByLabel = {};
         if (clusters && clusters.clusters) clusters.clusters.forEach(c => { pubByLabel[c.label] = c; });
-        if (allIn && allIn.clusters) {
-          allIn.clusters.forEach(c => {
+        const mktByLabel = {};
+        if (allInMkt && allInMkt.clusters) allInMkt.clusters.forEach(c => { mktByLabel[c.label] = c; });
+        if (allInCost && allInCost.clusters) {
+          allInCost.clusters.forEach(c => {
             const p = pubByLabel[c.label];
-            const added = c.total - (p ? p.total : 0);
-            if (added <= 0.5) return; // theme not affected by private
+            const addedCost = c.total - (p ? p.total : 0);
+            if (addedCost <= 0.5) return; // theme not affected by private
             const pubTxt = p ? `${p.pct.toFixed(1)}% of the public book` : `absent from the public book`;
-            pl.push(`- ${c.label}: ${pubTxt}; counting ~$${Math.round(added).toLocaleString()} of private deals at cost, ~${c.pct.toFixed(1)}% of the ALL-IN book (public + private). Two different bases — read each against its own.`);
+            const m = mktByLabel[c.label];
+            const mktTxt = m
+              ? ` AT SELF-MARKED VALUE: ~$${Math.round(m.total - (p ? p.total : 0)).toLocaleString()} private added, ~${m.pct.toFixed(1)}% of the all-in (public + self-marked) book.`
+              : '';
+            pl.push(`- ${c.label}: ${pubTxt}. AT COST: ~$${Math.round(addedCost).toLocaleString()} private added, ~${c.pct.toFixed(1)}% of the all-in (public + cost) book.${mktTxt} Three different denominators (public / all-in-cost / all-in-self-marked) — read each % against its own base; do not combine.`);
           });
         }
         // Raw per-theme deal names (independent of any cluster merging), so the holdings are always explicit.
-        Object.entries(peExp.byTheme).sort((a,b)=>b[1].cost-a[1].cost).forEach(([theme, info]) => {
-          const names = info.deals.slice().sort((a,b)=>b.cost-a.cost).map(d=>`${d.company} ~$${Math.round(d.cost).toLocaleString()}`).join(', ');
-          pl.push(`  · ${theme} (private, at cost): ${names}.`);
+        // Each deal shows cost AND self-mark; cost-fallback deals (no current mark) are flagged.
+        Object.entries(peCost.byTheme).sort((a,b)=>b[1].value-a[1].value).forEach(([theme, info]) => {
+          const names = info.deals.slice().sort((a,b)=>b.market-a.market).map(d=>{
+            const sameOrFb = !d.hasMark ? ' — no current mark, held at cost' : '';
+            return `${d.company} (cost ~$${Math.round(d.cost).toLocaleString()}, self-marked ~$${Math.round(d.market).toLocaleString()}${sameOrFb})`;
+          }).join(', ');
+          pl.push(`  · ${theme} (private): ${names}.`);
         });
-        pl.push(`Effective independent bets, public vs once private is folded in: ${(clusters && clusters.effectiveBets || 0).toFixed(1)} → ${(allIn && allIn.effectiveBets || 0).toFixed(1)} (lower = more concentrated).`);
+        pl.push(`Effective independent bets — public ${(clusters && clusters.effectiveBets || 0).toFixed(1)} → all-in at cost ${(allInCost && allInCost.effectiveBets || 0).toFixed(1)} → all-in at self-marked value ${(allInMkt && allInMkt.effectiveBets || 0).toFixed(1)} (lower = more concentrated). The self-marked lens concentrates the book more wherever a deal has marked up.`);
       }
-      if (peExp.untaggedCount > 0) {
-        pl.push(`NOTE: ${peExp.untaggedCount} private deal(s) totaling ~$${Math.round(peExp.untaggedCost).toLocaleString()} at cost are UNTAGGED and excluded here — true private concentration may be higher than shown. Treat the private picture as incomplete; do not guess their themes.`);
+      if (peCost.untaggedCount > 0) {
+        pl.push(`NOTE: ${peCost.untaggedCount} private deal(s) totaling ~$${Math.round(peCost.untaggedValue).toLocaleString()} at cost are UNTAGGED and excluded from BOTH bases here — true private concentration may be higher than shown on either. Treat the private picture as incomplete; do not guess their themes.`);
       }
       lines.push(pl.join('\n'));
     }
@@ -22021,9 +22000,6 @@ function confirmEditPosition() {
   // ── Apply ──
   const tickerChanged = (p.ticker || '').toUpperCase() !== ticker;
   const dateChanged = (p.dateBought || '') !== dateBought;
-  const prevSpxBuy = (p.spxBuy === '' || p.spxBuy == null) ? '' : String(p.spxBuy);
-  const prevSpxSource = p.spxBuySource || '';
-  const themeChanged = (p.theme || '') !== theme;
   p.ticker = ticker;
   p.account = account;
   p.dateBought = dateBought;
@@ -22036,42 +22012,14 @@ function confirmEditPosition() {
   p.redeployedAmount = redeployed;
   if (typeof coercePositionNumerics === 'function') coercePositionNumerics(p);
 
-  // vs-S&P anchor (spxBuy) provenance + auto-fetch decision:
-  //  - typed a NEW value in the field → trust it (manual)
-  //  - blank → fetch the close for the buy date
-  //  - a stale AUTO value left from a different buy date → clear and re-fetch
-  //  - an existing manual value, or unchanged date → leave it alone
-  let _reanchorSpx = false;
-  const _typedNewSpx = (spxBuyStr !== '' && spxBuyStr != null && String(spxBuyStr) !== prevSpxBuy);
-  if (_typedNewSpx) {
-    p.spxBuySource = 'manual'; p.spxBuyMatchedDate = null;
-  } else if (dateBought) {
-    if (spxBuy === '') {
-      _reanchorSpx = true;
-    } else if (dateChanged && prevSpxSource && prevSpxSource !== 'manual') {
-      p.spxBuy = ''; p.spxBuySource = ''; p.spxBuyMatchedDate = null; _reanchorSpx = true;
-    }
-  }
-
-  // Theme-benchmark anchor (benchmarkAtBuy/benchmarkPriceAtBuy → theme alpha): for OPEN positions,
-  // (re)anchor automatically when there's no price for the current theme's benchmark, when the theme
-  // changed (different benchmark now), or when the buy date moved. CLOSED positions are never touched
-  // here — their anchor is frozen and owned by the deliberate re-measure flow.
-  let _reanchorBench = false;
-  if (!p.closed && dateBought) {
-    const _tb = (typeof getThemeBenchmark === 'function') ? getThemeBenchmark(theme) : null;
-    if (_tb) {
-      const _havePrice = (p.benchmarkAtBuy === _tb) && (p.benchmarkPriceAtBuy != null && p.benchmarkPriceAtBuy !== '');
-      if (!_havePrice || dateChanged || themeChanged) _reanchorBench = true;
-    }
-  }
+  // If ticker or buy date changed, the frozen benchmark anchor (benchmarkAtBuy/benchmarkPriceAtBuy)
+  // may no longer match — the divergence detector will flag it on render so the user can re-measure.
+  // We deliberately do NOT silently rewrite those frozen measurements here.
 
   closeEditPositionModal();
   if (typeof renderAll === 'function') renderAll();
   if (typeof renderCapitalDeployed === 'function') renderCapitalDeployed();
   scheduleSave();
-  if (_reanchorSpx && typeof autoAnchorSpxBuy === 'function') autoAnchorSpxBuy(p.id);
-  if (_reanchorBench && typeof autoAnchorThemeBenchmark === 'function') autoAnchorThemeBenchmark(p.id);
   if (typeof runSelfChecks === 'function') { try { runSelfChecks(); } catch (e) {} }
 
   // If the Capital Deployed overlay is open, refresh it
@@ -22604,8 +22552,6 @@ function setField(id, field, value) {
   const pos = positions.find(p => p.id === id);
   if (!pos) return;
   pos[field] = value;
-  // Typing the S&P-at-buy directly = a trusted manual anchor; clears any "less than true" flag.
-  if (field === 'spxBuy') { pos.spxBuySource = (value !== '' && value != null) ? 'manual' : ''; pos.spxBuyMatchedDate = null; }
   if (!pos.closed && spxLive && field !== 'spxExit' && !['sleeve','theme','notes','account'].includes(field)) {
     pos.spxExit = spxLive.toFixed(2);
   }
