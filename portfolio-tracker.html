@@ -9589,6 +9589,7 @@ function renderQrSavedList() {
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
         ${rows || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No fields filled.</div>'}
         <div id="qr-flags-${c.id}" style="margin-top:10px">${renderQualityFlags(c)}</div>
+        <div id="qr-perf-${c.id}" style="margin-top:10px"></div>
         <div style="margin-top:10px"><button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">✎ Edit candidate</button></div>
         ${c.type === 'etf' ? `<button id="qr-analysis-btn-${c.id}" class="btn btn-sm" onclick="toggleQrCardAnalysis('${c.id}')" style="font-size:10px;margin-top:10px">🔍 View analysis (overlap + rotation)</button>
         <div id="qr-analysis-${c.id}" style="margin-top:10px;display:none"></div>` : ''}
@@ -9604,6 +9605,7 @@ function renderQrSavedList() {
   // repopulate any candidate that has a live thread OR an old cached analysis so reopening a card
   // shows its conversation again (and lets the user resume challenging it).
   qualityReviews.forEach(c => {
+    renderQrPerf(c.id);
     if (Array.isArray(c.aiThread) && c.aiThread.length) {
       renderQrAiThread(c.id);
     } else if (c.aiAnalysis) {
@@ -10146,6 +10148,32 @@ function buildQrAiPrompt(candidate) {
     const ex = qrThemeExposure(candidate.theme);
     if (ex) computed.push(`Current ${candidate.theme} exposure: ${ex.portfolioPct.toFixed(1)}% of active portfolio across ${ex.tickers.length} position(s)${ex.tickers.length?' ('+ex.tickers.map(t=>t.ticker).join(', ')+')':''}.`);
   }
+  // Recent market performance for the candidate (and, for an ETF, the rotate-out trim targets),
+  // pulled live via fetchTickerWindows into the shared _candPerf cache — the SAME plumbing as
+  // book-level performance. Framing/context only, NOT a buy/sell signal. Fully defensive: any failure
+  // here must NOT break the payload.
+  try {
+    const _pf = v => (v == null || isNaN(v)) ? 'n/a' : ((v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) + '%');
+    const _perfLine = (tk, label) => {
+      const p = (typeof _candPerf !== 'undefined') ? _candPerf[(tk || '').toUpperCase()] : null;
+      if (!p || p.error) return null;
+      const dd = (p.maxDrawdown != null) ? `, max drawdown ${p.maxDrawdown.toFixed(0)}% over the window` : '';
+      const sh = p.shortHist ? ' [under ~1yr of history — the 1Y figure spans less than a full year, not a clean 1Y return]' : '';
+      return `${label} ${(tk || '').toUpperCase()}: 1M ${_pf(p.m1)}, 3M ${_pf(p.m3)}, 6M ${_pf(p.m6)}, YTD ${_pf(p.ytd)}, 1Y ${_pf(p.y1)}${dd}${sh}.`;
+    };
+    const _bits = [];
+    const _cl = _perfLine(candidate.ticker, candidate.type === 'etf' ? 'Candidate fund' : 'Candidate');
+    if (_cl) _bits.push(_cl);
+    if (candidate.type === 'etf' && typeof qrPerfTickers === 'function') {
+      qrPerfTickers(candidate)
+        .filter(t => t.toUpperCase() !== (candidate.ticker || '').toUpperCase())
+        .forEach(t => { const l = _perfLine(t, 'Trim target'); if (l) _bits.push(l); });
+    }
+    if (_bits.length) {
+      computed.push(`RECENT MARKET PERFORMANCE (trailing PRICE returns from daily closes — price-only, EXCLUDES dividends; pulled live from Polygon and possibly stale by the time this is read; this is CONTEXT, not a signal to chase strength or avoid weakness): ${_bits.join(' ')}${candidate.type === 'etf' && _bits.length > 1 ? ' For a trim target, this is how the position you would be SELLING has performed lately — weigh trimming a recent winner (gives up momentum, may trigger gains) versus a recent loser (locks in the loss) against the rotation tax already computed above, not in isolation. Do not treat recent return as a reason to buy or sell on its own.' : ''}`);
+    }
+  } catch (e) { /* perf is additive context only; never block the payload */ }
+
   // Index look-through: this candidate (or its holdings) may already be owned indirectly via
   // index funds the user holds (VOO etc.) — surfacing the hidden/compounded exposure.
   if (candidate.type !== 'etf' && candidate.ticker) {
@@ -10431,7 +10459,11 @@ async function runQrAiAnalysis(id) {
   if (!c) return;
   const out = document.getElementById('qr-ai-' + id);
   if (!out) return;
-  out.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Generating for/against/gaps analysis…</div>`;
+  out.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Fetching recent performance, then generating for/against/gaps analysis…</div>`;
+
+  // Auto gap-fill live performance for the candidate (and any ETF rotate-out trim targets) so the
+  // prompt carries it. Best-effort: never let a perf fetch failure block the analysis.
+  try { if (typeof qrFetchPerf === 'function') await qrFetchPerf(id, false); } catch (e) { /* proceed without perf */ }
 
   const prompt = buildQrAiPrompt(c);
   let analysisText = '';
@@ -13774,6 +13806,111 @@ function _candPerfLineHtml(ticker) {
   const dd = (p.maxDrawdown != null) ? `<span style="color:var(--color-text-tertiary)"> · maxDD ${p.maxDrawdown.toFixed(0)}%</span>` : '';
   const oneY = p.shortHist ? `${_candFmtPctHtml(p.y1)}<span style="color:#fbbf24">*</span>` : _candFmtPctHtml(p.y1);
   return `<div style="font-size:8px;color:var(--color-text-secondary);margin-top:1px">1M ${_candFmtPctHtml(p.m1)} · 3M ${_candFmtPctHtml(p.m3)} · 1Y ${oneY}${dd} <span style="color:var(--color-text-tertiary)">(${_candPerfAgeStr(p.fetchedAt)})</span></div>`;
+}
+
+// ─────────────────────────────────────────────
+// New Position Evaluation — live performance for the candidate (and, for an ETF candidate, the
+// rotate-out trim targets), reusing the SAME plumbing as book-level performance: fetchTickerWindows
+// (one Polygon range call per ticker) into the shared _candPerf cache. Manual refresh button on the
+// card + an auto gap-fill when the AI runs. Sequential 350ms-spaced calls that stop early and flag
+// the rest if Polygon rate-limits — identical handling to the scenario panel's candFetchPerf.
+// ─────────────────────────────────────────────
+let _qrPerfBusyId = null;  // id of the candidate currently fetching (one at a time, to respect the rate limit)
+
+// The tickers we fetch performance for on a QR candidate: the candidate ticker, plus — for an ETF
+// candidate — each name marked to rotate out (the trim targets). We use the DISPLAY ticker, never the
+// normalized form, because qrNormTicker strips dots (BRK.B -> BRKB) and Polygon needs the real symbol.
+// rotateTrims carries .display (qrCardToggleRotate always writes it); fall back to mapping rotateOut
+// norms onto the user's own position tickers. Deduped, uppercased.
+function qrPerfTickers(c) {
+  const out = [], seen = new Set();
+  const add = (disp) => { const T = (disp || '').toString().toUpperCase().trim(); if (T && !seen.has(T)) { seen.add(T); out.push(T); } };
+  if (c) add(c.ticker);
+  if (c && c.type === 'etf') {
+    if (Array.isArray(c.rotateTrims) && c.rotateTrims.length) {
+      c.rotateTrims.forEach(t => add(t.display || t.norm));
+    } else if (Array.isArray(c.rotateOut) && c.rotateOut.length) {
+      const byNorm = {};
+      (typeof positions !== 'undefined' ? positions : []).forEach(p => { if (p && p.ticker) { const n = qrNormTicker(p.ticker); if (!byNorm[n]) byNorm[n] = p.ticker.toUpperCase(); } });
+      c.rotateOut.forEach(n => add(byNorm[n] || n));
+    }
+  }
+  return out;
+}
+
+// One compact performance line for a QR ticker (or a status note if it failed / is loading). Mirrors
+// the scenario panel's _candPerfLineHtml but takes an explicit busy flag so it doesn't cross-talk with
+// the scenario panel's _candPerfBusy state. Reads the shared _candPerf cache.
+function qrPerfLineHtml(ticker, busy) {
+  const T = (ticker || '').toUpperCase();
+  const p = _candPerf[T];
+  if (busy && !p) return `<span style="font-size:9px;color:var(--color-text-tertiary)">fetching ${esc(T)}…</span>`;
+  if (!p) return `<span style="font-size:9px;color:var(--color-text-primary);font-weight:600">${esc(T)}</span> <span style="font-size:8px;color:var(--color-text-tertiary)">— not fetched yet</span>`;
+  if (p.error === 'nokey') return `<span style="font-size:9px;color:var(--color-text-primary);font-weight:600">${esc(T)}</span> <span style="font-size:8px;color:var(--color-text-tertiary)">— add a Polygon key to fetch performance</span>`;
+  if (p.error === 'rate') return `<span style="font-size:9px;color:var(--color-text-primary);font-weight:600">${esc(T)}</span> <span style="font-size:8px;color:#fbbf24">— Polygon rate-limited, refresh again shortly</span>`;
+  if (p.error) return `<span style="font-size:9px;color:var(--color-text-primary);font-weight:600">${esc(T)}</span> <span style="font-size:8px;color:var(--color-text-tertiary)">— no performance data</span>`;
+  const dd = (p.maxDrawdown != null) ? ` <span style="color:var(--color-text-tertiary)">· maxDD ${p.maxDrawdown.toFixed(0)}%</span>` : '';
+  const oneY = p.shortHist ? `${_candFmtPctHtml(p.y1)}<span style="color:#fbbf24" title="under ~1yr of history — the 1Y figure spans less than a full year">*</span>` : _candFmtPctHtml(p.y1);
+  return `<span style="font-size:9px;color:var(--color-text-primary);font-weight:600">${esc(T)}</span> <span style="font-size:9px;color:var(--color-text-secondary)">1M ${_candFmtPctHtml(p.m1)} · 3M ${_candFmtPctHtml(p.m3)} · 6M ${_candFmtPctHtml(p.m6)} · YTD ${_candFmtPctHtml(p.ytd)} · 1Y ${oneY}${dd} <span style="color:var(--color-text-tertiary)">(${_candPerfAgeStr(p.fetchedAt)})</span></span>`;
+}
+
+// Render the performance block + refresh control into qr-perf-<id>. Always renders (shows the button
+// even before anything is fetched); the lines fill in as data lands.
+function renderQrPerf(id) {
+  const host = document.getElementById('qr-perf-' + id);
+  if (!host) return;
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) { host.innerHTML = ''; return; }
+  const tickers = qrPerfTickers(c);
+  const busy = (_qrPerfBusyId === id);
+  const btnLabel = busy ? 'fetching…' : 'refresh performance';
+  const lines = tickers.map(t => {
+    const isCand = t.toUpperCase() === (c.ticker || '').toUpperCase();
+    const tag = isCand ? '' : ' <span style="font-size:8px;color:var(--color-text-tertiary)">(trim target)</span>';
+    return `<div style="margin-top:2px">${qrPerfLineHtml(t, busy)}${tag}</div>`;
+  }).join('');
+  host.innerHTML = `
+    <div style="border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:8px 10px;background:var(--color-background-tertiary)">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+        <span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Recent market performance</span>
+        <span onclick="${busy ? '' : `qrFetchPerf('${escq(id)}', true)`}" style="cursor:${busy ? 'default' : 'pointer'};color:var(--color-text-info);font-size:9px;text-decoration:${busy ? 'none' : 'underline'}" title="Pull trailing returns for the candidate${c.type === 'etf' ? ' and any rotate-out trim targets' : ''} from Polygon — same source as book-level performance">↻ ${btnLabel}</span>
+      </div>
+      ${lines || '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No ticker to fetch.</div>'}
+      <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:4px;font-style:italic">Trailing price-only returns (excludes dividends), via Polygon — approximate, may be stale.${c.type === 'etf' ? ' Trim targets are the names checked to rotate out.' : ''}</div>
+    </div>`;
+}
+
+// Fetch performance for a QR candidate's tickers. force=false only fills gaps/retries errors (used by
+// the AI auto-fill); force=true re-pulls everything (the manual button). Writes into the shared
+// _candPerf cache so a ticker already fetched in the scenario panel is reused here and vice-versa.
+async function qrFetchPerf(id, force) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) return;
+  if (_qrPerfBusyId) return; // a fetch is already running — one at a time to be polite to the free tier
+  if (!polygonKey) loadPolygonKey();
+  const tickers = qrPerfTickers(c);
+  if (!tickers.length) { renderQrPerf(id); return; }
+  const todo = force ? tickers : tickers.filter(t => { const p = _candPerf[t.toUpperCase()]; return !p || p.error; });
+  if (!todo.length) { renderQrPerf(id); return; }
+  _qrPerfBusyId = id;
+  renderQrPerf(id);
+  let rateLimited = false;
+  for (const t of todo) {
+    const T = t.toUpperCase();
+    if (rateLimited) { _candPerf[T] = { error: 'rate', fetchedAt: Date.now() }; continue; }
+    try {
+      const w = await fetchTickerWindows(T);
+      _candPerf[T] = { m1: w.m1, m3: w.m3, m6: w.m6, y1: w.y1, ytd: w.ytd, maxDrawdown: w.maxDrawdown, annVol: w.annVol, shortHist: w.shortHist, histDays: w.histDays, fetchedAt: w.fetchedAt };
+    } catch (e) {
+      const msg = (e && e.message) || 'err';
+      if (msg === 'rate') { rateLimited = true; _candPerf[T] = { error: 'rate', fetchedAt: Date.now() }; }
+      else _candPerf[T] = { error: msg === 'nokey' ? 'nokey' : 'err', fetchedAt: Date.now() };
+    }
+    await new Promise(r => setTimeout(r, 350));
+  }
+  _qrPerfBusyId = null;
+  saveCandPerf();
+  renderQrPerf(id);
 }
 
 function _candPillOn() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600'; }
