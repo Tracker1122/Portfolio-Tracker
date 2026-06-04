@@ -25193,20 +25193,54 @@ init();
   ];
   function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
   var COVERAGE_WARN = 0.7;
-  function sparklinePath(path, w, h) {
+  function sparklinePath(path, w, h, loIn, hiIn) {
     if (!path || path.length < 2) return '';
-    var ys = path.map(function (p) { return p.cum; }), lo = Math.min.apply(null, ys), hi = Math.max.apply(null, ys);
+    var ys = path.map(function (p) { return p.cum; });
+    var lo = (loIn != null ? loIn : Math.min.apply(null, ys)), hi = (hiIn != null ? hiIn : Math.max.apply(null, ys));
     var span = (hi - lo) || 1, n = path.length, d = '';
     for (var i = 0; i < n; i++) { var x = (i / (n - 1)) * w, y = h - ((path[i].cum - lo) / span) * h; d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; }
     return d.trim();
   }
+  // P0 benchmark: VOO's cum path computed on the BOOK's own date index (same
+  // Tiingo source → t's match exactly, no alignment trap). closeOn carries cum
+  // forward if a date is somehow missing on VOO. Pure fn; touches no replay core.
+  function benchmarkAligned(vooBars, bookDates) {
+    if (!vooBars || vooBars.length < 2 || !bookDates || bookDates.length < 2) return null;
+    var path = [], cum = 1, prev = null, any = false;
+    for (var i = 0; i < bookDates.length; i++) {
+      var c = closeOn(vooBars, bookDates[i]);
+      if (c == null || !(c > 0)) { path.push({ t: bookDates[i], cum: cum }); continue; }
+      if (prev != null) { cum *= c / prev; any = true; }
+      prev = c;
+      path.push({ t: bookDates[i], cum: cum });
+    }
+    if (!any) return null;
+    return { path: path, totalReturn: cum - 1 };
+  }
+
   function replayCardModel(result, opts) {
     opts = opts || {};
     var has = result && result.totalReturn != null, cov = result ? result.coverage : 0;
+    var bench = opts.benchmark || null;
+    var sparkD = '', benchSparkD = '', benchReturnPct = null, benchSpreadPct = null;
+    if (has) {
+      // Shared y-range across book AND benchmark so the overlay heights are honestly comparable.
+      var bookYs = result.path.map(function (p) { return p.cum; });
+      var lo = Math.min.apply(null, bookYs), hi = Math.max.apply(null, bookYs);
+      if (bench && bench.path && bench.path.length >= 2) {
+        var bYs = bench.path.map(function (p) { return p.cum; });
+        lo = Math.min(lo, Math.min.apply(null, bYs));
+        hi = Math.max(hi, Math.max.apply(null, bYs));
+        benchSparkD = sparklinePath(bench.path, 120, 28, lo, hi);
+        benchReturnPct = bench.totalReturn * 100;
+        benchSpreadPct = (result.totalReturn - bench.totalReturn) * 100;
+      }
+      sparkD = sparklinePath(result.path, 120, 28, lo, hi);
+    }
     return { windowLabel: opts.windowLabel || '', hasData: has,
       returnPct: has ? result.totalReturn * 100 : null, drawdownPct: has ? result.maxDrawdown * 100 : null,
       coveragePct: cov * 100, coverageWarn: cov < COVERAGE_WARN, excluded: result ? (result.excluded || []) : [],
-      sparkD: has ? sparklinePath(result.path, 120, 28) : '',
+      sparkD: sparkD, benchSparkD: benchSparkD, benchReturnPct: benchReturnPct, benchSpreadPct: benchSpreadPct,
       frozenLine: (opts.frozenPct > 0) ? '~' + (opts.frozenPct * 100).toFixed(0) + '% of your all-in book (' + (opts.basisLabel || 'self-marked privates') + ') is illiquid and cannot be sold during this drawdown.' : null,
       perName: opts.perName || [] };
   }
@@ -25298,7 +25332,7 @@ init();
   async function runReplayForWindow(win, statusEl, onDone) {
     var weights = riskLiquidWeights(), tickers = Object.keys(weights);
     if (!tickers.length) { if (statusEl) statusEl.textContent = 'No held positions to replay (add positions / fetch live prices first).'; return; }
-    var barsByTicker = {};
+    var barsByTicker = {}, rateLimited = false;
     for (var i = 0; i < tickers.length; i++) {
       var tk = tickers[i], cacheKey = windowCacheKey(win.id, tk), hit = _barsCache[cacheKey];
       if (hit && hit.bars) { barsByTicker[tk] = hit.bars; continue; }
@@ -25309,7 +25343,7 @@ init();
         _barsCache[cacheKey] = { bars: r.bars, fetchedAt: Date.now() };
         _saveOneBars(cacheKey, _barsCache[cacheKey]);
       } catch (e) {
-        if (e.message === 'rate') { if (statusEl) statusEl.textContent = 'Rate-limited — partial fill saved. Click again to grab the rest.'; break; }
+        if (e.message === 'rate') { rateLimited = true; if (statusEl) statusEl.textContent = 'Rate-limited — partial fill saved. Click again to grab the rest.'; break; }
         if (e.message === 'nokey') { if (statusEl) statusEl.textContent = 'Set your Polygon API key first (🔑 API Keys).'; return; }
         if (e.message === 'noworker') { if (statusEl) statusEl.textContent = 'Set your Bars Worker URL first (🔑 API Keys panel) — the Cloudflare worker that proxies Tiingo history.'; return; }
         if (e.message === 'forbidden') { if (statusEl) statusEl.textContent = 'Polygon returned 403 for ' + win.label + ' (' + win.from + ' → ' + win.to + '). This window is older than your Polygon plan reaches — the free tier only covers ~2 years of history. Pick a window inside the last ~2 years, upgrade your plan, or proxy a deep-history source. (This is NOT a problem with your holdings.)'; return; }
@@ -25318,7 +25352,26 @@ init();
     }
     var result = RiskLens.replayWindow(weights, barsByTicker, ms(win.from), ms(win.to));
     var perName = perNameMoves(weights, barsByTicker, result.included || [], ms(win.from), ms(win.to));
-    var model = replayCardModel(result, { windowLabel: win.label, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName });
+
+    // P0 — VOO benchmark overlay. Explicit fetch (holdings-independent), best-effort:
+    // a VOO miss/rate-limit must never block the book card. Reuses cache if VOO is held.
+    var benchmark = null;
+    if (result.totalReturn != null && !rateLimited) {
+      try {
+        var vooKey = windowCacheKey(win.id, 'VOO'), vooBars;
+        if (_barsCache[vooKey] && _barsCache[vooKey].bars) { vooBars = _barsCache[vooKey].bars; }
+        else {
+          if (statusEl) statusEl.textContent = 'Fetching ' + win.label + ': VOO (market benchmark)…';
+          var vr = await fetchBarsWindow('VOO', win.from, win.to);
+          vooBars = vr.bars;
+          _barsCache[vooKey] = { bars: vooBars, fetchedAt: Date.now() };
+          _saveOneBars(vooKey, _barsCache[vooKey]);
+        }
+        benchmark = benchmarkAligned(vooBars, result.path.map(function (p) { return p.t; }));
+      } catch (e) { benchmark = null; /* best-effort; book card still renders */ }
+    }
+
+    var model = replayCardModel(result, { windowLabel: win.label, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark });
     if (statusEl) statusEl.textContent = '';
     if (onDone) onDone(model);
   }
@@ -25357,12 +25410,21 @@ init();
     return '<div style="border:1px solid var(--color-border-tertiary);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--color-background-secondary)">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
-        '<svg width="120" height="28" viewBox="0 0 120 28" style="flex:0 0 auto"><path d="' + model.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="1.5"/></svg>' +
+        '<svg width="120" height="28" viewBox="0 0 120 28" style="flex:0 0 auto">' +
+          (model.benchSparkD ? '<path d="' + model.benchSparkD + '" fill="none" stroke="var(--color-text-tertiary, #888)" stroke-width="1" stroke-opacity="0.45"/>' : '') +
+          '<path d="' + model.sparkD + '" fill="none" stroke="' + retColor + '" stroke-width="1.5"/>' +
+        '</svg>' +
       '</div>' +
       '<div style="font-size:11px;margin-top:6px;color:var(--color-text-secondary)">Your book as it sits today would have ' +
         '<strong style="color:' + retColor + '">' + (pos ? '+' : '') + model.returnPct.toFixed(1) + '%</strong> total, drawing down ' +
         '<strong style="color:var(--color-text-danger, #ef4444)">' + model.drawdownPct.toFixed(1) + '%</strong>, on ' +
         '<span style="color:' + covColor + '">' + model.coveragePct.toFixed(0) + '% of the liquid book</span>' + (model.coverageWarn ? ' ⚠ (low coverage — read with caution)' : '') + '.</div>' +
+      (model.benchReturnPct != null ?
+        '<div style="font-size:10px;margin-top:3px;color:var(--color-text-tertiary)">Market (VOO), same window: ' +
+          '<strong style="color:' + (model.benchReturnPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (model.benchReturnPct >= 0 ? '+' : '') + model.benchReturnPct.toFixed(1) + '%</strong>' +
+          ' — your book ' + (model.benchSpreadPct >= 0 ? 'outperformed by +' + model.benchSpreadPct.toFixed(1) : 'lagged by ' + Math.abs(model.benchSpreadPct).toFixed(1)) + ' pts ' +
+          '<span style="opacity:.75">(faint line = VOO)</span></div>'
+        : '') +
       (model.excluded && model.excluded.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No price history in this window: ' + model.excluded.join(', ') + '.</div>' : '') +
       breakdown +
       (model.frozenLine ? '<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"><em>And ' + model.frozenLine + '</em></div>' : '') +
