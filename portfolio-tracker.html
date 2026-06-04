@@ -8378,6 +8378,7 @@ function renderQrForm() {
         <div style="flex:1;min-width:120px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Ticker</label>
           <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="qrCheckStage1()" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
+          <div style="margin-top:3px"><a href="#" onclick="qrOpenAnalysis(event)" title="Opens the ${qrType === 'etf' ? 'fund' : 'company'} overview on stockanalysis.com (free, no login) — a handy reference while you fill this out" style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">↗ View ${qrType === 'etf' ? 'fund' : 'stock'} on stockanalysis.com</a></div>
         </div>
         <div style="flex:1;min-width:140px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Theme</label>
@@ -8646,6 +8647,23 @@ function qrOpenHoldingsSource(ev) {
   const tkEl = document.getElementById('qr-ticker');
   const tk = tkEl ? (tkEl.value || '').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '') : '';
   const url = tk ? `https://stockanalysis.com/etf/${encodeURIComponent(tk)}/holdings/` : 'https://stockanalysis.com/etf/';
+  window.open(url, '_blank', 'noopener');
+}
+
+// Open this candidate's OVERVIEW page on stockanalysis.com (free, no login) — the company/fund page
+// with price, description, statements and ratios — so the actual stock or ETF is one click away while
+// filling out the checklist. Sibling to qrOpenHoldingsSource (which opens the ETF's holdings TABLE);
+// this opens the overview, so both links are useful side by side. Stock vs ETF path follows the current
+// form mode (qrType — a global the type toggle keeps current). Reads the live ticker so it tracks what's
+// typed; dotted tickers (e.g. BRK.B) are preserved, since stockanalysis uses the dotted form.
+function qrOpenAnalysis(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  const tkEl = document.getElementById('qr-ticker');
+  const tk = tkEl ? (tkEl.value || '').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '') : '';
+  const base = (typeof qrType !== 'undefined' && qrType === 'etf')
+    ? 'https://stockanalysis.com/etf/'
+    : 'https://stockanalysis.com/stocks/';
+  const url = tk ? `${base}${encodeURIComponent(tk)}/` : base;
   window.open(url, '_blank', 'noopener');
 }
 
