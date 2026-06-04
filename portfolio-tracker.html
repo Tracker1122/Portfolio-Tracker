@@ -1706,6 +1706,11 @@
       <div id="edit-pos-cost-hint" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
     </div>
     <div class="modal-field">
+      <label class="modal-label" title="S&P 500 index value on the buy date (the index level, e.g. ~7340 today — not VOO's share price). Anchors the vs-S&P comparison: spxReturn = (current S&P − this) ÷ this. For a same-day buy the row's auto-fetch can't pull a closed value yet, so enter today's S&P here.">S&P 500 at purchase</label>
+      <input class="modal-input" id="edit-pos-spxbuy" type="number" min="0" step="any" placeholder="e.g. 7340" style="width:160px">
+      <div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">S&P 500 index level the day you bought — required to track this position vs the S&P. Blank = not yet benchmarked (the ⚠ on the row).</div>
+    </div>
+    <div class="modal-field">
       <label class="modal-label">Industry / theme</label>
       <select class="modal-input" id="edit-pos-theme" style="width:200px;cursor:pointer"></select>
     </div>
@@ -21750,6 +21755,10 @@ function openEditPositionModal(posId) {
   document.getElementById('edit-pos-date').value = p.dateBought || '';
   document.getElementById('edit-pos-shares').value = (p.shares === '' || p.shares == null) ? '' : p.shares;
   document.getElementById('edit-pos-price').value = (p.pricePaid === '' || p.pricePaid == null) ? '' : p.pricePaid;
+  const spxBuyInput = document.getElementById('edit-pos-spxbuy');
+  spxBuyInput.value = (p.spxBuy === '' || p.spxBuy == null) ? '' : p.spxBuy;
+  // Show the current S&P as the placeholder — for a same-day buy that's the value to enter.
+  spxBuyInput.placeholder = spxLive ? spxLive.toFixed(2) : 'e.g. 7340';
   document.getElementById('edit-pos-notes').value = p.notes || '';
 
   // Theme select — same option set as the inline row (THEMES with dropdown:true)
@@ -21806,6 +21815,7 @@ function confirmEditPosition() {
   const dateBought = (document.getElementById('edit-pos-date').value || '').trim();
   const sharesStr = document.getElementById('edit-pos-shares').value;
   const priceStr = document.getElementById('edit-pos-price').value;
+  const spxBuyStr = document.getElementById('edit-pos-spxbuy').value;
   const theme = document.getElementById('edit-pos-theme').value;
   const sleeve = document.getElementById('edit-pos-sleeve').value;
   const notes = document.getElementById('edit-pos-notes').value;
@@ -21831,6 +21841,11 @@ function confirmEditPosition() {
     price = parseFloat(priceStr);
     if (isNaN(price) || price < 0) return showErr('Price must be 0 or greater (or blank).');
   }
+  let spxBuy = '';
+  if (spxBuyStr !== '' && spxBuyStr != null) {
+    spxBuy = parseFloat(spxBuyStr);
+    if (isNaN(spxBuy) || spxBuy < 0) return showErr('S&P 500 at purchase must be 0 or greater (or blank).');
+  }
 
   // Redeployment (existing advanced field) — validate against the NEW shares/price total
   const redeployStr = document.getElementById('edit-pos-redeployed').value;
@@ -21852,6 +21867,7 @@ function confirmEditPosition() {
   p.dateBought = dateBought;
   p.shares = shares;
   p.pricePaid = price;
+  p.spxBuy = spxBuy;
   p.theme = theme;
   p.sleeve = sleeve;
   p.notes = notes;
