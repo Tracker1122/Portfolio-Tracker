@@ -14908,9 +14908,10 @@ function candCompute() {
     directVia[k].directDelta += (a.deltaDirect || 0);
     directVia[k].viaDelta += (a.deltaViaFunds || 0);
   });
+  const _peAdj = (peExposureMode && typeof peClusterAdjustments === 'function') ? peClusterAdjustments() : [];
   try {
-    before = computeThemeClusters();
-    after = computeThemeClusters({ adjustments });
+    before = computeThemeClusters({ adjustments: _peAdj });
+    after = computeThemeClusters({ adjustments: _peAdj.concat(adjustments) });
     ebBefore = before.effectiveBets; ebAfter = after.effectiveBets;
     const bMap = {}, aMap = {};
     before.clusters.forEach(c => bMap[c.label] = c.pct); if (before.base && before.base.total > 0) bMap['Diversified base'] = before.base.pct;
@@ -15019,8 +15020,16 @@ function candCompute() {
     glTable = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Realized G/L <span style="text-transform:none;color:var(--color-text-tertiary)">(from the trims · vs your cost basis)</span></div>` + gls.join('');
   }
 
+  const _candPeTagged = (typeof peThemeExposureAtCost === 'function') ? (peThemeExposureAtCost().total > 0) : false;
+  const _candPeToggle = _candPeTagged ? `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:2px 0 6px">
+    <span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">Baseline:</span>
+    <button onclick="setPeExposureMode(false)" style="font-size:9px;padding:2px 9px;border-radius:11px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${!peExposureMode?'var(--color-text-info)':'transparent'};color:${!peExposureMode?'#000':'var(--color-text-tertiary)'}">Public</button>
+    <button onclick="setPeExposureMode(true)" title="Fold tagged private deals into the baseline at cost (illiquid, single-name, self-marks excluded)" style="font-size:9px;padding:2px 9px;border-radius:11px;cursor:pointer;border:1px solid var(--color-border-tertiary);background:${peExposureMode?'var(--color-text-warning)':'transparent'};color:${peExposureMode?'#000':'var(--color-text-tertiary)'}">Incl. private</button>
+    ${peExposureMode?'<span style="font-size:8px;color:var(--color-text-warning)">baseline incl. private at cost</span>':''}
+  </div>` : '';
   out.innerHTML =
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
+    _candPeToggle +
     `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${ebBefore.toFixed(1)} → ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>` +
     _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds) +
     glTable + taxTable + nameTable + clTable + slTable +
@@ -17868,6 +17877,7 @@ function setPeExposureMode(on) {
   peExposureMode = !!on;
   try { if (document.getElementById('theme-diversification-analysis')) renderThemeClusters(); } catch (e) {}
   try { if (document.getElementById('qr-buy-impact') && typeof qrRenderBuyImpact === 'function') qrRenderBuyImpact(); } catch (e) {}
+  try { if (document.getElementById('cand-output') && typeof candCompute === 'function') candCompute(); } catch (e) {}
 }
 
 // Render the full Theme Universe tab.
