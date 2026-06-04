@@ -25563,6 +25563,13 @@ init();
     if (Math.abs(spread) < 0.05) return 'dead even with the market';
     return (spread >= 0 ? 'ahead of the market by ' : 'behind the market by ') + Math.abs(spread).toFixed(1) + ' pts';
   }
+  // Spread (book − VOO, in pts) as a clause, optionally tagged with the junction label,
+  // so the VOO comparison can be carried at every point in the trajectory.
+  function _gapPhrase(spread, label) {
+    var at = label ? ' at ' + label : '';
+    if (Math.abs(spread) < 0.05) return (label ? 'even' + at : 'even with the market');
+    return Math.abs(spread).toFixed(1) + ' pts ' + (spread >= 0 ? 'ahead' : 'behind') + at;
+  }
   function replaySummaryText(model) {
     if (!model.hasData) return '';
     var range = model.dateRange ? ' (' + model.dateRange + ')' : '';
@@ -25572,27 +25579,26 @@ init();
       if (model.drawdownPct != null && low.bookPct != null && model.drawdownPct < low.bookPct - 0.5) lowStr += ' (dipping ' + Math.abs(model.drawdownPct).toFixed(1) + '% at its worst)';
       if (low.vooPct != null) lowStr += ' against VOO\u2019s ' + _pctSigned(low.vooPct) + ' \u2014 ' + _leadLag(low.spreadPct);
       s.push(lowStr + '.');
-      var firstRec = null, lastAvail = null, pending = [];
+      // Forward checkpoints: walk them carrying the VOO gap at EACH point (that's the
+      // story — the spread goes from behind at the low to ahead later), then land on the
+      // latest checkpoint's absolute book-vs-VOO so the size of the lead is explicit.
+      var fwd = [], pending = [];
       for (var i = 1; i < J.length; i++) {
         var c = J[i];
         if (c.pending) { pending.push(c.label); continue; }
         if (c.missing || c.bookPct == null) continue;
-        if (c.recovered && !firstRec) firstRec = c;
-        lastAvail = c;
+        fwd.push(c);
       }
-      if (lastAvail) {
-        var arc;
-        if (firstRec) {
-          arc = 'It was back to even within ' + firstRec.label + ' of the bottom';
-          if (lastAvail !== firstRec) {
-            arc += ', and by ' + lastAvail.label + ' stood ' + _pctSigned(lastAvail.bookPct);
-            if (lastAvail.vooPct != null) arc += ' \u2014 ' + _leadLag(lastAvail.spreadPct);
-          }
-        } else {
-          arc = 'It was still ' + Math.abs(lastAvail.bookPct).toFixed(1) + '% below its pre-event level at ' + lastAvail.label;
-          if (lastAvail.vooPct != null) arc += ' (' + _leadLag(lastAvail.spreadPct) + ')';
-        }
-        s.push(arc + '.');
+      var fwdGaps = fwd.filter(function (c) { return c.spreadPct != null; });
+      if (fwdGaps.length) {
+        var last = fwd[fwd.length - 1];
+        var phrases = fwdGaps.map(function (c) { return _gapPhrase(c.spreadPct, c.label); });
+        var sent = (phrases.length > 1) ? ('Versus VOO it went from ' + phrases.join(' to ')) : ('Versus VOO it was ' + phrases[0]);
+        if (last.vooPct != null) sent += ', ending at ' + _pctSigned(last.bookPct) + ' against VOO\u2019s ' + _pctSigned(last.vooPct);
+        s.push(sent + '.');
+      } else if (fwd.length) {
+        var lf = fwd[fwd.length - 1];
+        s.push('By ' + lf.label + ' the book stood ' + _pctSigned(lf.bookPct) + ' (no market data to compare past the window).');
       }
       if (pending.length) s.push('The ' + pending.join(' and ') + ' checkpoint' + (pending.length > 1 ? 's haven\u2019t' : ' hasn\u2019t') + ' come around yet.');
     } else {
