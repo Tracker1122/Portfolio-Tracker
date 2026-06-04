@@ -7172,8 +7172,15 @@ function qrThemeExposure(theme) {
 function qrSleeveExposure(sleeve) {
   if (!sleeve) return null;
   const open = positions.filter(p => !p.closed && p.ticker && p.sleeve === sleeve);
+  // Sleeve fill is judged against the WHOLE portfolio incl. the VOO passive core, because the
+  // SLEEVE_TARGETS bands are calibrated against that all-in base — the sleeves are a minority of
+  // the book and VOO is the diversified remainder. (On an active-only base the sleeves sum to
+  // 100% but the bands cap at ~55%, so they'd be unsatisfiable.) Matches the home Strategy
+  // Allocation card and its overlay.
+  const _sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+  const _spValue = _sp ? (_sp.price > 0 ? _sp.currentValue : _sp.totalInvested) : 0;
   const totalPortfolio = positions.filter(p => !p.closed && p.ticker)
-    .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+    .reduce((s, p) => s + (calcPos(p).exitValue || 0), 0) + _spValue;
   if (open.length === 0) return { sleeve, total: 0, tickers: [], portfolioPct: 0 };
   const byTicker = {};
   open.forEach(p => { const v = calcPos(p).exitValue || 0; byTicker[p.ticker] = (byTicker[p.ticker] || 0) + v; });
@@ -8551,10 +8558,10 @@ function renderQrOverlap(theme, tickerArg, sleeveArg) {
       let accent, bg, weight, lead, ctx;
       const overMax = tgt && sp > tgt.max;
       const inRange = tgt && sp >= tgt.min && sp <= tgt.max;
-      if (overMax) { accent = '#ef4444'; bg = 'rgba(239,68,68,0.10)'; weight = '700'; lead = `⚠ ${esc(sleeveName)} is already ${sp.toFixed(1)}% of your active book — above its ${tgt.min}–${tgt.max}% target.`; ctx = `Adding here pushes a sleeve that's already over its intended ceiling. Worth a deliberate reason.`; }
-      else if (inRange) { accent = '#fbbf24'; bg = 'rgba(251,191,36,0.10)'; weight = '700'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your active book — inside its ${tgt.min}–${tgt.max}% target.`; ctx = `Room is limited; adding here uses up the sleeve's remaining budget.`; }
-      else if (tgt) { accent = 'var(--color-border-tertiary)'; bg = 'var(--color-background-tertiary)'; weight = '400'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your active book — below its ${tgt.min}–${tgt.max}% target.`; ctx = `This sleeve has headroom; adding here moves toward its target weight.`; }
-      else { accent = 'var(--color-border-tertiary)'; bg = 'var(--color-background-tertiary)'; weight = '400'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your active book.`; ctx = ''; }
+      if (overMax) { accent = '#ef4444'; bg = 'rgba(239,68,68,0.10)'; weight = '700'; lead = `⚠ ${esc(sleeveName)} is already ${sp.toFixed(1)}% of your portfolio incl. VOO — above its ${tgt.min}–${tgt.max}% target.`; ctx = `Adding here pushes a sleeve that's already over its intended ceiling. Worth a deliberate reason.`; }
+      else if (inRange) { accent = '#fbbf24'; bg = 'rgba(251,191,36,0.10)'; weight = '700'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your portfolio incl. VOO — inside its ${tgt.min}–${tgt.max}% target.`; ctx = `Room is limited; adding here uses up the sleeve's remaining budget.`; }
+      else if (tgt) { accent = 'var(--color-border-tertiary)'; bg = 'var(--color-background-tertiary)'; weight = '400'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your portfolio incl. VOO — below its ${tgt.min}–${tgt.max}% target.`; ctx = `This sleeve has headroom; adding here moves toward its target weight.`; }
+      else { accent = 'var(--color-border-tertiary)'; bg = 'var(--color-background-tertiary)'; weight = '400'; lead = `${esc(sleeveName)} is ${sp.toFixed(1)}% of your portfolio incl. VOO.`; ctx = ''; }
       const sTk = sx.tickers.length ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">Sleeve holdings: ${sx.tickers.map(t => `${esc(t.ticker)} ${fmtDollarWhole(t.value)}`).join(' · ')}.</div>` : '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No current holdings in this sleeve — this would be its first.</div>';
       sleeveHtml = `<div style="font-size:10px;color:var(--color-text-secondary);padding:9px 11px;background:${bg};border:1px solid ${accent};border-left:3px solid ${accent};border-radius:var(--border-radius-md);line-height:1.55;margin-top:6px">
         <div style="font-weight:${weight};color:var(--color-text-primary);margin-bottom:3px">${lead}</div>
