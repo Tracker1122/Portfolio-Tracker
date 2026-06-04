@@ -9589,11 +9589,11 @@ function renderQrSavedList() {
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
         ${rows || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No fields filled.</div>'}
         <div id="qr-flags-${c.id}" style="margin-top:10px">${renderQualityFlags(c)}</div>
+        <div style="margin-top:10px"><button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">✎ Edit candidate</button></div>
         ${c.type === 'etf' ? `<button id="qr-analysis-btn-${c.id}" class="btn btn-sm" onclick="toggleQrCardAnalysis('${c.id}')" style="font-size:10px;margin-top:10px">🔍 View analysis (overlap + rotation)</button>
         <div id="qr-analysis-${c.id}" style="margin-top:10px;display:none"></div>` : ''}
         <div id="qr-ai-${c.id}" style="margin-top:10px"></div>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">Edit</button>
           <button class="btn btn-sm" onclick="startQrAiAnalysis('${c.id}')" style="font-size:10px">⚖ Analyze with AI (for / against / gaps)</button>
           <button class="btn btn-sm" onclick="deleteQrCandidate('${c.id}')" style="font-size:10px;color:var(--color-text-danger)">Delete</button>
         </div>
