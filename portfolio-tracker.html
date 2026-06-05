@@ -8434,7 +8434,14 @@ function renderQrForm() {
   const stage1ExtraHtml = (qrType === 'etf')
     ? fields.filter(isEtfHoldingsField).map(renderField).join('')
     : '';
-  const stage2FieldsHtml = fields.filter(f => !isEtfHoldingsField(f)).map(f => f.key === 'overlapNote' ? renderOverlapField(f) : renderField(f)).join('');
+  // Surface the overlap verdict FIRST — above all the fundamentals. It's the "does this just
+  // repackage what I already own?" gate, and buried at the end of the long field list it got lost.
+  // (Stocks have no overlapNote field, so `find` returns undefined and nothing extra renders.)
+  const stage2Fields = fields.filter(f => !isEtfHoldingsField(f));
+  const overlapField = stage2Fields.find(f => f.key === 'overlapNote');
+  const stage2FieldsHtml =
+    (overlapField ? renderOverlapField(overlapField) : '') +
+    stage2Fields.filter(f => f.key !== 'overlapNote').map(renderField).join('');
 
   const stage2Html = stage2 ? `
       <div style="margin-top:12px">${stage2FieldsHtml}</div>
