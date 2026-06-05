@@ -1557,6 +1557,7 @@
     <!-- renderCandidatePanel() mounts here (keeps its own internal heading/intro); ID preserved so -->
     <!-- renderCandidatePanel / candCompute / candStageFromDiscovery keep finding it by string. ── -->
     <div id="theme-candidate-panel" style="margin-top:18px"></div>
+    <div id="theme-ai-review" style="margin-top:18px"></div>
 
   </div><!-- end tab-evaltrade -->
 
@@ -5750,7 +5751,7 @@ function switchTab(name) {
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
   if (name === 'rebalance') { safeRender('renderRebalance', renderRebalance); if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
-  if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); }
+  if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
   if (name === 'trends') safeRender('renderTrends', renderTrends);
   if (name === 'themes') safeRender('renderThemeUniverse', renderThemeUniverse);
@@ -8370,8 +8371,7 @@ function renderQrForm() {
   ).join('');
 
   // Live overlap context (auto-fires once the 3 identifying fields are set)
-  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal, sleeveVal)}</div>`
-    + (qrType === 'stock' ? `<div id="qr-rotation" style="margin-top:8px;padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md)"></div>` : '');
+  const overlapHtml = `<div id="qr-overlap-panel">${renderQrOverlap(themeVal, tickerVal, sleeveVal)}</div>`;
 
   // Two-stage form. Stage 1 = identifying fields (ticker/theme/sleeve, + ETF holdings) and the
   // auto-firing exposure panel. Stage 2 = the rest of the qualitative fields + final save.
@@ -9528,9 +9528,6 @@ function runQrHoldingsOverlap() {
   // checks bleeding across candidates); keep checks that still apply.
   const validNorms = new Set(rotCandidates.map(c => c.norm));
   qrRotateChecked = new Set([...qrRotateChecked].filter(n => validNorms.has(n)));
-  if (rotCandidates.length > 0) {
-    html += `<div id="qr-rotation" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:8px"></div>`;
-  }
 
   if (overlaps.length > 0) {
     const rows = overlaps.map(o => {
@@ -9808,7 +9805,6 @@ function renderQrSavedList() {
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="qrStageAsBuy('${c.id}')" style="font-size:10px;border-color:var(--color-text-info);color:var(--color-text-info)" title="Add this candidate as a buy in the trade queue below — with its amount, theme, sleeve, and any paired rotation trims — then see the combined impact. If no buy amount is set, it drops into the staging form for you to size.">⊕ Stage as buy →</button>
           <button class="btn btn-sm" onclick="startQrAiAnalysis('${c.id}')" style="font-size:10px">⚖ Analyze with AI (for / against / gaps)</button>
-          <button class="btn btn-sm" onclick="qrExportPdf('${c.id}')" style="font-size:10px" title="Export this candidate's inputs, portfolio context, and AI review as a PDF to share with an advisor">⤓ Export PDF</button>
           <button class="btn btn-sm" onclick="deleteQrCandidate('${c.id}')" style="font-size:10px;color:var(--color-text-danger)">Delete</button>
         </div>
       </div>
@@ -10289,7 +10285,6 @@ function qrBuyImpactHtml(type, ticker, theme, sleeve, parsedHoldings, buyAmount)
 
   return `
     <div style="font-size:10px;color:var(--color-text-primary);line-height:1.5;margin-bottom:2px">${headline}</div>
-    ${clTable ? _peToggleBuy + clTable : ''}
     ${deepBlock}
     ${freshNote}
     ${sleeveLine}
@@ -14398,7 +14393,6 @@ function _candShellHtml() {
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-sm" onclick="candAddToQueue()" style="font-size:11px">+ Add trim</button>
       <button class="btn btn-sm" onclick="candClearScenario()" style="font-size:11px">Clear trade</button>
-      <button class="btn btn-sm" onclick="candExportPdf()" style="font-size:11px" title="Export this scenario summary and the AI review as a PDF to share with an advisor">⤓ Export PDF</button>
     </div>
     <div id="cand-queue" style="margin-top:8px"></div>
     <div id="cand-output" style="margin-top:12px"></div>
@@ -14426,9 +14420,15 @@ function renderCandidatePanel() {
       byTicker[t].shares += parseFloat(p.shares) || 0;
       byTicker[t].value += calcPos(p).exitValue || 0;
     });
+    // Staged buys are part of the hypothetical book → trimmable too. A ticker you already own keeps its
+    // real-holding (lot/tax) entry, annotated with any staged add; a freshly-staged buy you DON'T own
+    // shows as a "staged buy" entry whose trim dials the staged amount down (no lots to sell).
+    const stagedAmt = {};
+    _candQueue.forEach(q => { if ((q.kind === 'stock' || q.kind === 'etf') && q.ticker) { const t = q.ticker.toUpperCase(); stagedAmt[t] = (stagedAmt[t] || 0) + (parseFloat(q.amount) || 0); } });
     const cur = hold.value;
-    hold.innerHTML = '<option value="">— Pick a holding —</option>' +
-      Object.keys(byTicker).sort().map(t => `<option value="${esc(t)}">${esc(t)} · ${Math.round(byTicker[t].shares * 100) / 100} sh · ${fmtDollarWhole(byTicker[t].value)}${byTicker[t].theme ? ' · ' + esc(byTicker[t].theme) : ''}</option>`).join('');
+    const realOpts = Object.keys(byTicker).sort().map(t => `<option value="${esc(t)}">${esc(t)} · ${Math.round(byTicker[t].shares * 100) / 100} sh · ${fmtDollarWhole(byTicker[t].value)}${byTicker[t].theme ? ' · ' + esc(byTicker[t].theme) : ''}${stagedAmt[t] ? ' · +' + fmtDollarWhole(stagedAmt[t]) + ' staged' : ''}</option>`).join('');
+    const stagedOpts = Object.keys(stagedAmt).filter(t => !byTicker[t]).sort().map(t => `<option value="${esc(t)}">${esc(t)} · ${fmtDollarWhole(stagedAmt[t])} staged buy</option>`).join('');
+    hold.innerHTML = '<option value="">— Pick a holding —</option>' + realOpts + stagedOpts;
     if (cur) hold.value = cur;
   }
   candPopulateLots();
@@ -14464,6 +14464,12 @@ function _candDirectBook() {
 }
 function _candTickerLots(T) {
   return positions.filter(p => !p.closed && p.ticker && p.ticker.toUpperCase() === T);
+}
+// Index in _candQueue of a staged BUY (stock/ETF) for this ticker, or -1. Staged buys are part of the
+// hypothetical book and can be trimmed (dialed down) even though no real lots exist to sell yet.
+function _candStagedBuyIndex(T) {
+  const t = (T || '').toUpperCase().trim();
+  return _candQueue.findIndex(q => (q.kind === 'stock' || q.kind === 'etf') && (q.ticker || '').toUpperCase() === t);
 }
 function _candTrimShares(T, val, unit, lotId) {
   // When a specific lot is chosen, the % / share / $ amount is scoped to THAT lot's shares and price.
@@ -14628,6 +14634,11 @@ function candPopulateLots() {
 }
 function candOnHoldingPick() {
   candPopulateLots();
+  // A staged buy has no shares/lots — nudge the unit off "shares" so the user trims it by % or $.
+  const T = ((document.getElementById('cand-holding') || {}).value || '').toUpperCase();
+  if (T && _candTickerLots(T).length === 0 && _candStagedBuyIndex(T) !== -1 && _candTrimUnit === 'sh' && typeof candSetTrimUnit === 'function') {
+    candSetTrimUnit('usd');
+  }
   candReadout();
 }
 
@@ -14645,6 +14656,16 @@ function candReadout() {
     const val = parseFloat((document.getElementById('cand-trim-amt') || {}).value) || 0;
     const lotId = (document.getElementById('cand-lot') || {}).value || '';
     if (!T || val <= 0) { el.textContent = ''; return; }
+    // Staged buy (no real lots): preview the dial-down rather than a share/tax trim.
+    if (_candTickerLots(T).length === 0 && _candStagedBuyIndex(T) !== -1) {
+      if (_candTrimUnit === 'sh') { el.textContent = 'staged buy — trim by % or $ (no shares yet)'; return; }
+      const item = _candQueue[_candStagedBuyIndex(T)];
+      const curAmt = parseFloat(item.amount) || 0;
+      const cut = _candTrimUnit === 'pct' ? curAmt * (val / 100) : val;
+      const next = Math.max(0, curAmt - cut);
+      el.textContent = `staged buy — dial $${Math.round(curAmt).toLocaleString()} → $${Math.round(next).toLocaleString()}${next <= 0 ? ' (removes it)' : ''}`;
+      return;
+    }
     const r = _candTrimShares(T, val, _candTrimUnit, lotId);
     if (r.sh <= 0) { el.textContent = ''; return; }
     const scope = lotId ? 'this lot' : 'whole position';
@@ -14692,6 +14713,27 @@ function candAddToQueue() {
     const lotId = (document.getElementById('cand-lot') || {}).value || '';
     if (!T) { alert('Pick a holding to trim.'); return; }
     if (val <= 0) { alert('Enter how much to trim.'); return; }
+    // STAGED-BUY TRIM — a ticker you don't own yet (no real lots): there are no shares to sell, so dial
+    // the staged buy's amount down instead of creating a trim item. % = % of the staged amount; $ =
+    // dollars off; shares is not meaningful here. ETF weights are unchanged — only the dollar size scales.
+    if (_candTickerLots(T).length === 0) {
+      const si = _candStagedBuyIndex(T);
+      if (si === -1) { alert('Computed trim is zero shares.'); return; }
+      const item = _candQueue[si];
+      const curAmt = parseFloat(item.amount) || 0;
+      let cut = 0;
+      if (_candTrimUnit === 'pct') cut = curAmt * (val / 100);
+      else if (_candTrimUnit === 'usd') cut = val;
+      else { alert('That\u2019s a staged buy with no shares yet — trim it by % or $ (not shares).'); return; }
+      const next = Math.max(0, Math.round((curAmt - cut) * 100) / 100);
+      if (next <= 0) _candQueue.splice(si, 1); else item.amount = next;
+      const amtEl0 = document.getElementById('cand-trim-amt'); if (amtEl0) amtEl0.value = '';
+      const lotSel0 = document.getElementById('cand-lot'); if (lotSel0) lotSel0.value = '';
+      candReadout(); candRenderQueue();
+      if (_candQueue.length) candCompute(); else candClearScenario();
+      saveCandQueue();
+      return;
+    }
     if (_candTrimUnit === 'usd') { const lots0 = lotId ? _candTickerLots(T).filter(p => String(p.id) === String(lotId)) : _candTickerLots(T); let hasPx = false; for (const p of lots0) { if ((parseFloat(p.exitPrice) || 0) > 0) { hasPx = true; break; } } if (!hasPx) { alert('No stored price for this lot — trim by % or shares instead.'); return; } }
     const r = _candTrimShares(T, val, _candTrimUnit, lotId);
     if (r.sh <= 0) { alert('Computed trim is zero shares.'); return; }
@@ -15514,7 +15556,7 @@ function candCompute() {
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     _candPeToggle +
     _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds, _themeCtx) +
-    glTable + taxTable + nameTable + _candThemeConcSection(adds, _themeCtx, ebBefore, ebAfter) + clTable + slTable +
+    nameTable + _candThemeConcSection(adds, _themeCtx, ebBefore, ebAfter) + clTable + slTable + glTable + taxTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
   const _pos = _candPositionCountDelta();
@@ -18684,12 +18726,10 @@ function renderThemeUniverse() {
     </details>
     <div id="theme-sector-panel" style="margin-top:18px"></div>
     <div id="theme-discovery" style="margin-top:18px"></div>
-    <div id="theme-ai-review" style="margin-top:18px"></div>
   `;
   renderSectorPanel();
   renderThemeClusters();
   renderThemeDiscovery();
-  renderThemeAiReview();
   renderBenchmarkFeesEditor();
 }
 
