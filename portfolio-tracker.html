@@ -10651,6 +10651,104 @@ function aiErrorMessage(err) {
   }
 }
 
+// Streaming call to the AI worker — the single transport every AI analysis/argue turn now uses.
+// The worker proxies Anthropic's Messages API with stream:true and pipes the SSE straight back, so
+// bytes start arriving within ~1s and a long generation can't trip Cloudflare's ~100s edge timeout
+// (the old HTTP 524). We read the SSE here, accumulate the text, and pull usage + stop_reason from the
+// message_start / message_delta events. Returns { text (trimmed, non-empty), usage:{input_tokens,
+// output_tokens}|null, stopReason }. THROWS THE SAME classified errors the old non-streaming path did
+// (err.aiKind / err.httpStatus), so every caller's existing try/catch keeps working unchanged.
+// onDelta(textSoFar) (optional) fires as deltas arrive, for live rendering.
+// Back-compat: if the worker responds with JSON instead of a stream (i.e. not yet redeployed), this
+// transparently reads the old { content, usage, stop_reason } shape — so the page never hard-breaks.
+async function aiWorkerCall(prompt, onDelta) {
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  let resp;
+  try {
+    resp = await fetch(aiWorkerUrl + '/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify({ prompt, stream: true })
+    });
+  } catch (netErr) {
+    const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
+  }
+
+  const ctype = (resp.headers.get('content-type') || '').toLowerCase();
+  const isStream = !!(resp.body && resp.ok && ctype.indexOf('text/event-stream') !== -1);
+
+  // Non-stream path: an error response, or an old (not-yet-redeployed) worker returning plain JSON.
+  if (!isStream) {
+    let data = {};
+    try { data = await resp.json(); } catch (_) { /* non-JSON body; handled below via status */ }
+    if (!resp.ok || (data && data.error)) {
+      const errObj = (data && typeof data.error === 'object') ? data.error : null;
+      const msg = errObj ? (errObj.message || '') : (typeof (data && data.error) === 'string' ? data.error : '');
+      const type = errObj ? (errObj.type || '') : '';
+      const e = new Error(msg || ('HTTP ' + resp.status));
+      e.aiKind = classifyAiError(resp.status, type, msg); e.httpStatus = resp.status; throw e;
+    }
+    const t = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if (!t) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
+    return { text: t, usage: (data && data.usage) ? data.usage : null, stopReason: data.stop_reason || null };
+  }
+
+  // Stream path: read Anthropic SSE line-by-line.
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', text = '', stopReason = null, inTok = null, outTok = null, streamErr = null;
+  const handleEvent = (jsonStr) => {
+    let ev; try { ev = JSON.parse(jsonStr); } catch (_) { return; }
+    switch (ev.type) {
+      case 'message_start':
+        if (ev.message && ev.message.usage && typeof ev.message.usage.input_tokens === 'number') inTok = ev.message.usage.input_tokens;
+        break;
+      case 'content_block_delta':
+        if (ev.delta && ev.delta.type === 'text_delta' && typeof ev.delta.text === 'string') {
+          text += ev.delta.text;
+          if (typeof onDelta === 'function') { try { onDelta(text); } catch (_) {} }
+        }
+        break;
+      case 'message_delta':
+        if (ev.delta && ev.delta.stop_reason) stopReason = ev.delta.stop_reason;
+        if (ev.usage && typeof ev.usage.output_tokens === 'number') outTok = ev.usage.output_tokens;
+        break;
+      case 'error':
+        streamErr = ev.error || { message: 'stream error' };
+        break;
+      default: break; // ping / content_block_start / content_block_stop / message_stop
+    }
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, nl).replace(/\r$/, '');
+        buf = buf.slice(nl + 1);
+        if (line.indexOf('data:') === 0) handleEvent(line.slice(5).trim());
+      }
+    }
+    const last = buf.trim();
+    if (last.indexOf('data:') === 0) handleEvent(last.slice(5).trim());
+  } catch (readErr) {
+    // Connection dropped mid-stream — a network blip, or the kind of timeout we're trying to defeat.
+    const e = new Error(readErr.message || 'stream interrupted'); e.aiKind = 'network'; throw e;
+  }
+
+  if (streamErr) {
+    const e = new Error(streamErr.message || 'stream error');
+    e.aiKind = classifyAiError(resp.status || 200, streamErr.type || '', streamErr.message || '');
+    e.httpStatus = resp.status; throw e;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
+  const usage = (typeof inTok === 'number' || typeof outTok === 'number') ? { input_tokens: inTok, output_tokens: outTok } : null;
+  return { text: trimmed, usage, stopReason };
+}
+
 // Stage 2: call the model, render the summary + the interactive "where's this wrong?" friction.
 async function runQrAiAnalysis(id) {
   const c = qualityReviews.find(q => q.id === id);
@@ -10674,41 +10772,17 @@ async function runQrAiAnalysis(id) {
     return;
   }
   try {
-    let resp;
-    try {
-      resp = await fetch(aiWorkerUrl + '/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
-      });
-    } catch (netErr) {
-      // fetch() itself rejected — never reached the worker (DNS, CORS, offline, bad URL).
-      const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
-    }
-
-    let data = {};
-    try { data = await resp.json(); } catch (_) { /* non-JSON body; handled below via status */ }
-
-    // Anthropic returns its error as { error: { type, message } }, passed through by the worker.
-    // The worker's own guard errors are { error: "string" }. Capture status + type to classify.
-    if (!resp.ok || data.error) {
-      const errObj = (data && typeof data.error === 'object') ? data.error : null;
-      const msg = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
-      const type = errObj ? (errObj.type || '') : '';
-      const e = new Error(msg || ('HTTP ' + resp.status));
-      e.aiKind = classifyAiError(resp.status, type, msg);
-      e.httpStatus = resp.status;
-      throw e;
-    }
-
-    analysisText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-    if (!analysisText) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
-    // Anthropic sets stop_reason='max_tokens' when output hit the worker's MAX_TOKENS cap
-    // (i.e. the analysis was cut off mid-thought). Surface this rather than showing a
-    // silently-truncated response. The worker passes the raw API JSON through, so it's here.
-    var aiTruncated = (data.stop_reason === 'max_tokens');
-    // Hoist usage out of the try-scoped `data` so the thread-seed code below can read it.
-    var aiUsage = (data && data.usage) ? data.usage : null;
+    // Stream the analysis in (worker proxies Anthropic SSE), live-previewing the text as it lands,
+    // so a long generation can't trip Cloudflare's ~100s edge timeout.
+    let _lastPaint = 0;
+    const onDelta = (t) => {
+      const now = Date.now(); if (now - _lastPaint < 60) return; _lastPaint = now;
+      out.innerHTML = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.55;color:var(--color-text-primary);padding:8px">' + esc(t) + '<span style="opacity:.45">▌</span></div>';
+    };
+    const _r = await aiWorkerCall(prompt, onDelta);
+    analysisText = _r.text; // already trimmed + non-empty-checked in the helper
+    var aiTruncated = (_r.stopReason === 'max_tokens');
+    var aiUsage = _r.usage || null;
   } catch (err) {
     const info = aiErrorMessage(err);
     out.innerHTML = `<div style="border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:${info.color};line-height:1.5">
@@ -10823,37 +10897,20 @@ async function qrAiChallenge(id) {
   renderQrAiThread(id, { pending: true });
 
   try {
-    let resp;
-    try {
-      resp = await fetch(aiWorkerUrl + '/', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
-      });
-    } catch (netErr) {
-      const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
-    }
-    let data = {};
-    try { data = await resp.json(); } catch (_) {}
-    if (!resp.ok || data.error) {
-      const errObj = (data && typeof data.error === 'object') ? data.error : null;
-      const m = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
-      const type = errObj ? (errObj.type || '') : '';
-      const e = new Error(m || ('HTTP ' + resp.status));
-      e.aiKind = classifyAiError(resp.status, type, m); e.httpStatus = resp.status; throw e;
-    }
-    const replyText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-    if (!replyText) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
-    const trunc = (data.stop_reason === 'max_tokens');
-    const measured = !!(data && data.usage && typeof data.usage.input_tokens === 'number');
+    const _r = await aiWorkerCall(prompt); // streamed; throws classified errors like the old path
+    const replyText = _r.text;
+    const trunc = (_r.stopReason === 'max_tokens');
+    const _u = _r.usage;
+    const measured = !!(_u && typeof _u.input_tokens === 'number');
     // If the worker returned real usage, correct the user turn's input tokens to the measured value.
     if (measured) {
       const lastUser = [...c.aiThread].reverse().find(t => t.role === 'user');
-      if (lastUser) { lastUser.inTok = data.usage.input_tokens; lastUser.measured = true; }
+      if (lastUser) { lastUser.inTok = _u.input_tokens; lastUser.measured = true; }
     }
     c.aiThread.push({
       role: 'ai', text: replyText, at: new Date().toISOString(), truncated: trunc,
       inTok: 0, // input was accounted on the user turn (the resend); avoid double-counting
-      outTok: measured ? data.usage.output_tokens : qrAiEstTokens(replyText),
+      outTok: (measured && typeof _u.output_tokens === 'number') ? _u.output_tokens : qrAiEstTokens(replyText),
       measured
     });
     scheduleSave();
@@ -20233,30 +20290,18 @@ async function runBookAiReview() {
   }
 
   try {
-    let resp;
-    try {
-      resp = await fetch(aiWorkerUrl + '/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
-    } catch (netErr) {
-      const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
-    }
-    let data = {};
-    try { data = await resp.json(); } catch (_) {}
-    if (!resp.ok || data.error) {
-      const errObj = (data && typeof data.error === 'object') ? data.error : null;
-      const msg = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
-      const type = errObj ? (errObj.type || '') : '';
-      const e = new Error(msg || ('HTTP ' + resp.status));
-      e.aiKind = classifyAiError(resp.status, type, msg);
-      e.httpStatus = resp.status;
-      throw e;
-    }
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-    if (!text) { const e = new Error('Empty response from model'); e.aiKind = 'empty'; throw e; }
-    const usage = (data && data.usage) ? data.usage : null;
+    let _lastPaint = 0;
+    const onDelta = (t) => {
+      const now = Date.now(); if (now - _lastPaint < 60) return; _lastPaint = now;
+      out.innerHTML = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary);padding:8px">' + esc(t) + '<span style="opacity:.45">▌</span></div>';
+    };
+    const _r = await aiWorkerCall(prompt, onDelta); // streamed; can't trip the ~100s edge timeout
+    const text = _r.text;
+    const usage = _r.usage;
     bookAiReview = {
       text,
       at: new Date().toISOString(),
-      truncated: (data.stop_reason === 'max_tokens'),
+      truncated: (_r.stopReason === 'max_tokens'),
       inTok: (usage && typeof usage.input_tokens === 'number') ? usage.input_tokens : qrAiEstTokens(prompt),
       outTok: (usage && typeof usage.output_tokens === 'number') ? usage.output_tokens : qrAiEstTokens(text),
       measured: !!(usage && typeof usage.input_tokens === 'number'),
@@ -20430,20 +20475,9 @@ async function runBookAiChallenge() {
 
   const prompt = buildBookThreadPrompt(msg);
   try {
-    let resp;
-    try {
-      resp = await fetch(aiWorkerUrl + '/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
-    } catch (netErr) { const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e; }
-    let data = {};
-    try { data = await resp.json(); } catch (_) {}
-    if (!resp.ok || data.error) {
-      const errObj = (data && typeof data.error === 'object') ? data.error : null;
-      const m = errObj ? (errObj.message || '') : (typeof data.error === 'string' ? data.error : '');
-      const e = new Error(m || ('HTTP ' + resp.status)); e.aiKind = classifyAiError(resp.status, errObj ? errObj.type : '', m); e.httpStatus = resp.status; throw e;
-    }
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-    if (!text) { const e = new Error('Empty response'); e.aiKind = 'empty'; throw e; }
-    const usage = (data && data.usage) ? data.usage : null;
+    const _r = await aiWorkerCall(prompt); // streamed; classified errors as before
+    const text = _r.text;
+    const usage = _r.usage;
     r.thread.push({
       role: 'ai', text,
       inTok: (usage && typeof usage.input_tokens === 'number') ? usage.input_tokens : qrAiEstTokens(prompt),
