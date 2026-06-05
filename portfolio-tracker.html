@@ -5531,6 +5531,9 @@ function renderThemeIntel() {
 
   el.innerHTML = `
     ${rollupBanner}
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);border-left:3px solid #60a5fa">
+      <strong style="color:var(--color-text-secondary)">Intent basis.</strong> These rows are organized by the themes you tagged, with each thematic ETF counted as the bet you made (all of SMH = your semis bet). It answers <em>"how did the themes I chose do?"</em> — a stock-picking scorecard. For your real name-by-name exposure — every fund decomposed to its holdings, reconciled to your whole book with the broad-index tail shown — see <strong style="color:var(--color-text-secondary)">"How your holdings move together"</strong> below; that's the canonical concentration view. The two won't match name-for-name by design: one is what you meant to own, the other is what you literally own.
+    </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
       <div style="font-size:11px;color:var(--color-text-tertiary)">Click a row to expand · sorted by ${sortKey === 'truePct' ? 'true exposure' : sortKey}</div>
       ${matToggle}
@@ -5538,7 +5541,7 @@ function renderThemeIntel() {
     <div style="position:sticky;top:0;z-index:20;background:var(--color-background-primary);display:grid;grid-template-columns:1.6fr 0.6fr 0.6fr 0.6fr 0.6fr 0.8fr 3.6fr;gap:0;font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;padding:8px 10px 6px;border-bottom:0.5px solid var(--color-border-secondary)">
       ${hdr('theme', 'Theme &amp; positions', '', 'left')}
       ${hdr('alloc', 'Allocation', '% of active sleeve', 'right')}
-      ${hdr('truePct', 'True exposure', '% of portfolio · incl. pass-through', 'right')}
+      ${hdr('truePct', 'True exposure', '% of book · intent basis', 'right')}
       ${hdr('incidental', 'Incidental', '% via funds only · pass-through', 'right')}
       ${hdr('alpha', 'Dollar alpha', 'vs SPX', 'right')}
       <div style="text-align:center">Stock-picking<div style="font-size:8px;text-transform:none;letter-spacing:0;opacity:0.7">$ vs theme · how many beating</div></div>
@@ -18186,21 +18189,48 @@ function computeThemeClusters(hypo) {
 
   const ranked = Object.values(clusters).map(c => ({
     ...c,
-    pct: totalBook > 0 ? (c.total / totalBook) * 100 : 0,
     names: c.names.sort((a, b) => b.total - a.total)
   })).sort((a, b) => b.total - a.total);
 
-  // Headline metrics: biggest block %, and effective independent bets (1/HHI over clusters+base,
-  // treating base as one diversified lump). HHI on the share-of-book of each block.
-  const blocks = [...ranked.map(c => c.pct / 100)];
-  if (base.total > 0) blocks.push(base.total / totalBook);
-  const hhi = blocks.reduce((s, x) => s + x * x, 0);
+  // Reconcile to the FULL book (managed sleeve incl. fund FACE values + VOO core + cash), not just the
+  // part we could decompose into names. The gap between the full book and the named rows is the
+  // "untracked tail": VOO's holdings beyond its pasted top names, plus each decomposed ETF's tail.
+  // That tail is broadly diversified (hundreds of small names), so it joins the diversified base.
+  // Hypotheticals (scenario buys, private-deal folds) add real capital through their adjustment deltas,
+  // so the book grows with them and the tail stays invariant (a stock buy doesn't change VOO's tail).
+  let _cash = 0;
+  try { if (typeof cashBuckets !== 'undefined' && cashBuckets) _cash = Object.values(cashBuckets).reduce((s, v) => s + (parseFloat(v) || 0), 0); } catch (e) {}
+  const _sleeve = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const _voo = (typeof indexFundHeldValue === 'function') ? indexFundHeldValue('VOO') : 0;
+  let _hypoAdd = 0;
+  if (hypo && Array.isArray(hypo.adjustments)) hypo.adjustments.forEach(a => { _hypoAdd += (a.deltaDirect || 0) + (a.deltaViaFunds || 0); });
+  const fullBook = _sleeve + _voo + _cash + _hypoAdd;
+  const tail = Math.max(0, fullBook - totalBook); // undecomposable broad-market remainder (VOO tail + ETF tails)
+  const denom = fullBook > 0 ? fullBook : totalBook;
+
+  ranked.forEach(c => { c.pct = denom > 0 ? (c.total / denom) * 100 : 0; });
+
+  // Effective independent bets, over the WHOLE book. Each theme cluster is one co-moving block (its
+  // names rise and fall together — that's one bet). The diversified base is NOT one block: it's the
+  // broad-index tail plus scattered themeless large-caps — hundreds of names that don't co-move — so it
+  // enters HHI as many tiny individual contributions (the tail, broadly spread, is ~0). Lumping it as a
+  // single block would falsely read your most-diversified money as your single biggest concentration.
+  const baseDisplayTotal = base.total + tail; // named themeless names + untracked broad-index tail
+  let hhi = ranked.reduce((s, c) => s + Math.pow(c.total / denom, 2), 0);
+  hhi += base.names.reduce((s, n) => s + Math.pow(n.total / denom, 2), 0); // themeless names, counted individually
+  // (tail intentionally contributes ~0 — it's diversified across hundreds of broad-index names)
   const effectiveBets = hhi > 0 ? 1 / hhi : 0;
 
   return {
-    totalBook,
+    totalBook,                 // named, decomposable rows only (kept for internal material-floor checks)
+    fullBook, tail,            // full reconciled book + the undecomposable broad-market remainder
     clusters: ranked,
-    base: { total: base.total, pct: totalBook > 0 ? (base.total / totalBook) * 100 : 0, names: base.names.sort((a, b) => b.total - a.total) },
+    base: {
+      total: baseDisplayTotal,                                   // themeless names + untracked tail (the whole diversified block)
+      pct: denom > 0 ? (baseDisplayTotal / denom) * 100 : 0,
+      namedTotal: base.total, tail,                              // split, for transparency
+      names: base.names.sort((a, b) => b.total - a.total)        // only the NAMED themeless portion is enumerable
+    },
     biggest: ranked[0] || null,
     effectiveBets,
     allThemes: Object.keys(themeBench).sort() // for the override UI in stage 2
@@ -18784,7 +18814,7 @@ function renderThemeClusters() {
 
       <div style="background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:10px;font-size:11px;line-height:1.55;color:var(--color-text-primary)">
         ${biggest ? `Your biggest moves-together block is <strong style="color:${biggest.pct >= 25 ? '#fbbf24' : 'var(--color-text-primary)'}">${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong> of your book — that's the chunk of you that rises and falls as one bet.` : ''}
-        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">Across all blocks, your portfolio behaves like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} independent bets</strong> (lower = more concentrated). That count already includes your ${data.base.pct.toFixed(1)}% diversified base (your broad-index tail) as one of those blocks — the spread-out one, not a concentrated bet.</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">On your whole book you behave like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} independent bets</strong> (lower = more concentrated). Your ${data.base.pct.toFixed(1)}% diversified base (VOO's broad holdings + fund tails) isn't a bet — it's hundreds of small positions, and holding that much of it is exactly what makes the count this high. The concentration lives in the themed blocks above it.</div>
       </div>
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
@@ -18831,7 +18861,7 @@ function renderThemeClusters() {
       ${data.base.total > 0 ? `
       <details style="border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:7px 10px;margin-bottom:6px;opacity:0.85">
         <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:10px;list-style:none">
-          <span style="font-size:11px;color:var(--color-text-secondary)">Diversified base <span style="font-size:9px;color:var(--color-text-tertiary)">${data.base.names.length} broad-index names · not a bet</span></span>
+          <span style="font-size:11px;color:var(--color-text-secondary)">Diversified base <span style="font-size:9px;color:var(--color-text-tertiary)">${data.base.names.length} themeless name${data.base.names.length === 1 ? '' : 's'} + VOO/fund tails · not a bet</span></span>
           <span style="font-size:11px;color:var(--color-text-tertiary)">${data.base.pct.toFixed(1)}% · ${fmtD(data.base.total)}</span>
         </summary>
         <div style="margin-top:5px;padding-top:4px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-tertiary)">
