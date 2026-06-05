@@ -3575,22 +3575,22 @@ function renderTaxProfilePanel() {
 function computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate) {
   const grossTax = ltGains * ltRate + stGains * stRate;
 
-  // 1) within-category netting (a residual may be negative = net loss in that category)
-  let netST = stGains - harvestedST;
-  let netLT = ltGains - harvestedLT;
+  // 1) within-category residuals (PRE cross-net; negative = a net loss in that category).
+  //    Callers display these as "net ST / net LT".
+  const netST = stGains - harvestedST;
+  const netLT = ltGains - harvestedLT;
 
-  // 2) cross-net a residual loss in one category against a residual gain in the other
-  if (netST > 0 && netLT < 0) {
-    const applied = Math.min(netST, -netLT);
-    netST -= applied; netLT += applied;
-  } else if (netLT > 0 && netST < 0) {
-    const applied = Math.min(netLT, -netST);
-    netLT -= applied; netST += applied;
-  }
+  // 2) cross-net a residual loss in one category against a residual gain in the other,
+  //    yielding the amount actually taxed in each bucket.
+  let tST = netST, tLT = netLT;
+  if (tST > 0 && tLT < 0) { const a = Math.min(tST, -tLT); tST -= a; tLT += a; }
+  else if (tLT > 0 && tST < 0) { const a = Math.min(tLT, -tST); tLT -= a; tST += a; }
+  const taxableST = Math.max(0, tST);
+  const taxableLT = Math.max(0, tLT);
 
-  const netBill = Math.max(0, netST) * stRate + Math.max(0, netLT) * ltRate;
+  const netBill = taxableST * stRate + taxableLT * ltRate;
   const taxSaved = Math.max(0, grossTax - netBill);
-  return { grossTax, netBill, taxSaved };
+  return { grossTax, netBill, taxSaved, netST, netLT, taxableST, taxableLT };
 }
 
 // ─── Tax implications: holding-period view + sell-now-vs-wait + year summary ───
@@ -8771,17 +8771,29 @@ let qrSwapState = { buyTicker: '', sells: [] }; // sells = array of normalized t
 
 function qrSimulateStockSwap(buyTicker, sellNormsSet) {
   let proceeds = 0, estTax = 0, taxableGain = 0, hasIRA = false, missingDate = false, anyLoss = false;
+  let stGain = 0, stLoss = 0, ltGain = 0, ltLoss = 0;
   let shelteredProceeds = 0, taxableProceeds = 0;
   positions.filter(p => !p.closed && p.ticker && sellNormsSet.has(qrNormTicker(p.ticker)))
     .forEach(p => {
       const c = calcPos(p); const v = c.exitValue || 0; proceeds += v;
       const isIRA = (p.account||'').toLowerCase() === 'ira';
-      const rate = taxRateForOpen(p);
       if (isIRA) { hasIRA = true; shelteredProceeds += v; } else { taxableProceeds += v; }
       if (!p.dateBought && !isIRA) missingDate = true;
-      if (c.gainLoss > 0) { if (!isIRA) taxableGain += c.gainLoss; estTax += c.gainLoss * rate; }
-      else if (c.gainLoss < 0 && !isIRA) anyLoss = true;
+      if (!isIRA) {
+        const buy = p.dateBought ? new Date(p.dateBought) : null;
+        const days = (buy && !isNaN(buy)) ? Math.floor((Date.now() - buy) / 86400000) : null;
+        const isLT = days !== null && days > 365; // missing date → ST (matches taxRateForOpen)
+        if (c.gainLoss >= 0) { isLT ? ltGain += c.gainLoss : stGain += c.gainLoss; }
+        else { isLT ? ltLoss += -c.gainLoss : stLoss += -c.gainLoss; anyLoss = true; }
+      }
     });
+  // ST/LT netting via the single shared helper (computeHarvestOffset) — same convention as
+  // qrSimulateRotation / simulateQueue / the realized ledger. No outside-gain harvest credit.
+  const _ST = (typeof TAX_RATE_ST === 'number') ? TAX_RATE_ST : 0.36;
+  const _LT = (typeof TAX_RATE_LT === 'number') ? TAX_RATE_LT : 0.27;
+  const { netBill, netST, netLT } = computeHarvestOffset(ltGain, stGain, stLoss, ltLoss, _LT, _ST);
+  estTax = netBill;
+  taxableGain = Math.max(0, netST) + Math.max(0, netLT);
   const netProceeds = proceeds - estTax;
 
   const buyNorm = qrNormTicker(buyTicker);
@@ -9045,12 +9057,7 @@ function qrSimulateRotation(parsed, etfTicker, trims, targetSleeveOverride, buyO
   });
   const _ST = (typeof TAX_RATE_ST === 'number') ? TAX_RATE_ST : 0.36;
   const _LT = (typeof TAX_RATE_LT === 'number') ? TAX_RATE_LT : 0.27;
-  const netST = stGain - stLoss, netLT = ltGain - ltLoss;
-  let taxableST = 0, taxableLT = 0;
-  if (netST >= 0 && netLT >= 0) { taxableST = netST; taxableLT = netLT; }
-  else if (netST < 0 && netLT < 0) { /* overall loss — nothing taxable */ }
-  else { const comb = netST + netLT; if (comb > 0) { if (netST > 0) taxableST = comb; else taxableLT = comb; } }
-  const estTax = taxableST * _ST + taxableLT * _LT;
+  const { netBill: estTax, netST, netLT } = computeHarvestOffset(ltGain, stGain, stLoss, ltLoss, _LT, _ST);
   const taxableGain = Math.max(0, netST) + Math.max(0, netLT);
   const netProceeds = proceeds - estTax;
   // The ACTUAL purchase into the candidate ETF. If a buy amount is supplied, the trims FUND it and we
@@ -13916,8 +13923,7 @@ function simulateQueue(trades) {
       if (isIRA) { hasIRA = true; shelteredProceeds += proceeds; }
       else {
         taxableProceeds += proceeds;
-        if (gain > 0) { taxableGain += gain; estTax += gain * rate; }
-        else if (gain < 0) { anyLoss = true; lossSaleTickers.add(qrNormTicker(lot.ticker)); }
+        if (gain < 0) { anyLoss = true; lossSaleTickers.add(qrNormTicker(lot.ticker)); }
         if (isLT) { if (gain >= 0) ltGain += gain; else ltLoss += -gain; }
         else { if (gain >= 0) stGain += gain; else stLoss += -gain; }
       }
@@ -13955,12 +13961,11 @@ function simulateQueue(trades) {
   // cross-year capital-loss carryforward is noted in the UI but not modeled here.
   const _ST = (typeof TAX_RATE_ST === 'number') ? TAX_RATE_ST : 0.36;
   const _LT = (typeof TAX_RATE_LT === 'number') ? TAX_RATE_LT : 0.27;
-  const netST = stGain - stLoss, netLT = ltGain - ltLoss;
-  let taxableST = 0, taxableLT = 0;
-  if (netST >= 0 && netLT >= 0) { taxableST = netST; taxableLT = netLT; }
-  else if (netST < 0 && netLT < 0) { /* overall loss — nothing taxable */ }
-  else { const combined = netST + netLT; if (combined > 0) { if (netST > 0) taxableST = combined; else taxableLT = combined; } }
-  const totalTax = taxableST * _ST + taxableLT * _LT;
+  // Single source of truth for ST/LT netting (see computeHarvestOffset). estTax / taxableGain are the
+  // NETTED figures — same convention as qrSimulateRotation / qrSimulateStockSwap / the realized ledger.
+  const { netBill: totalTax, netST, netLT, taxableST, taxableLT } = computeHarvestOffset(ltGain, stGain, stLoss, ltLoss, _LT, _ST);
+  estTax = totalTax;
+  taxableGain = Math.max(0, netST) + Math.max(0, netLT);
   const netRealized = netST + netLT;
   // Wash sale: a taxable loss sale of a name that's also bought back in this same queue.
   const washSale = [...lossSaleTickers].filter(tk => buyTickers.has(tk));
@@ -14470,12 +14475,7 @@ function _candScenarioTax() {
   });
   const hasTrim = _candQueue.some(tr => tr.kind === 'trim');
   if (!hasTrim) return null;
-  const netST = stGain - stLoss, netLT = ltGain - ltLoss;
-  let taxableST = 0, taxableLT = 0;
-  if (netST >= 0 && netLT >= 0) { taxableST = netST; taxableLT = netLT; }
-  else if (netST < 0 && netLT < 0) { /* overall loss — nothing taxable */ }
-  else { const combined = netST + netLT; if (combined > 0) { if (netST > 0) taxableST = combined; else taxableLT = combined; } }
-  const totalTax = taxableST * _ST + taxableLT * _LT;
+  const { netBill: totalTax, netST, netLT, taxableST, taxableLT } = computeHarvestOffset(ltGain, stGain, stLoss, ltLoss, _LT, _ST);
   const washSale = [...lossTickers].filter(tk => buyTickers.has(tk));
   const waitLT = allLots
     .filter(l => !l.isIRA && !l.isLT && l.gain > 0 && l.daysToLT != null && (_ST - _LT) > 0)
