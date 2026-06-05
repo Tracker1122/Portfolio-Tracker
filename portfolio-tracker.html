@@ -14694,6 +14694,37 @@ function qrBuyDualBasisPdfBlock(c, parsed, esc2) {
 }
 
 
+// Shared: build the "Risk review — historical stress test" PDF section from whatever Risk Review
+// currently has open, so the chart(s) the user is looking at travel into the shareable report. Used by
+// BOTH candExportPdf (Theme Level Review) and qrExportPdf (New Position Evaluation). `cleanFn` is the
+// caller's own fragment-cleaner (strips controls, forces <details> open, recolors dark accents for white
+// paper); `esc2` its HTML escaper. Includes the EVENT (actual-book) chart always, and the HYPOTHETICAL-
+// scenario chart when one is in use. The card colors are var(--color-…), which resolve against each
+// export's light :root. Returns a short note when nothing is open. Defensive: failure yields a note, not
+// a broken export.
+function riskReviewPdfSection(cleanFn, esc2) {
+  try {
+    if (!(typeof window !== 'undefined' && window._riskReplay && typeof window._riskReplay.riskReviewReportHtml === 'function')) return '';
+    const r = window._riskReplay.riskReviewReportHtml();
+    if (!r || !r.active) {
+      return '<p class="note">No stress window was open in Risk Review when this was exported. Open one in the Risk &amp; Stress Lens (and tick \u201cfold in staged scenario\u201d if you want the hypothetical), then re-export to include the chart(s) here.</p>';
+    }
+    const parts = [];
+    parts.push(`<p class="note" style="font-style:normal;color:#444;margin:0 0 8px">Replays my current holdings through the <strong>${esc2(r.windowLabel || r.windowId)}</strong>${r.dateRange ? ' (' + esc2(r.dateRange) + ')' : ''}${r.stresses ? ' — ' + esc2(r.stresses) : ''} using actual daily returns. How the book <em>would</em> have moved through that past period — not a forecast, an expected return, or a recommendation.</p>`);
+    if (r.eventHtml) parts.push(`<div style="page-break-inside:avoid;margin:6px 0">${cleanFn(r.eventHtml)}</div>`);
+    if (r.hasHypothetical && r.hypoHtml) {
+      parts.push(`<div style="font-size:11px;font-weight:700;color:#374151;margin:14px 0 4px">With the staged what-if scenario folded in</div>`);
+      parts.push(`<p class="note" style="margin:0 0 6px">The hypothetical reflects my single staged scenario queue (shared across tabs); it may not be exactly the position evaluated elsewhere in this report. The card compares the hypothetical book against my actual book over the same window — each measured against its own pre-event high.</p>`);
+      parts.push(`<div style="page-break-inside:avoid;margin:6px 0">${cleanFn(r.hypoHtml)}</div>`);
+    } else {
+      parts.push(`<p class="note" style="margin:6px 0 0">No hypothetical scenario was folded into this window at export time — only the actual-book stress path is shown.</p>`);
+    }
+    return parts.join('');
+  } catch (e) {
+    return '<p class="note">Risk review charts could not be included (an error occurred building them); the rest of the report is unaffected.</p>';
+  }
+}
+
 // Export the staged scenario + AI review as a clean, light-themed printable document → the browser's
 // "Save as PDF" produces a shareable file for an advisor. No external library (works offline): we clone
 // the already-formatted on-screen summary, strip interactive controls, expand the collapsed detail,
@@ -14754,6 +14785,7 @@ function candExportPdf() {
     `<h2>Scenario analysis</h2><div class="section">${outputHtml}</div>` +
     (() => { try { const b = _candDualBasisPdfBlock(esc2); return b ? `<h2>Both bases — cost &amp; self-marked</h2><div class="section">${b}</div>` : ''; } catch (e) { return ''; } })() +
     pePdfBasisNote() +
+    `<h2>Risk review — historical stress test</h2><div>${(() => { try { return riskReviewPdfSection(cleanFrag, esc2); } catch (e) { return ''; } })()}</div>` +
     `<h2>AI review</h2><div class="section">${aiHtml}</div>` +
     `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting, harvested-loss and prior-year carryforward offsets; no $3,000 ordinary-income offset; losses not split by ST/LT character) — a CPA should confirm the actual figures.</div>` +
     `</div></body></html>`;
@@ -14876,6 +14908,7 @@ function qrExportPdf(id) {
     `<h2>Projected impact (true exposure — direct + via funds)</h2><div class="section">${impactHtml}</div>` +
     (buyDualBasisHtml ? `<h2>Both bases — cost &amp; self-marked</h2><div class="section">${buyDualBasisHtml}</div>` : '') +
     pePdfBasisNote() +
+    `<h2>Risk review — historical stress test</h2><div>${(() => { try { return riskReviewPdfSection(cleanFrag, esc2); } catch (e) { return ''; } })()}</div>` +
     `<h2>AI review — for / against / gaps</h2><div class="section">${aiHtml}</div>` +
     `</div></body></html>`;
 
@@ -26238,7 +26271,37 @@ init();
     } catch (e) { return { active: false }; }
   }
 
-  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext };
+  // Print-ready HTML of what Risk Review currently has open, for the PDF exports in Theme Level Review
+  // and New Position Evaluation. Renders the SAME card(s) the user sees (chart + tables + summary) via
+  // renderReplayCard: the EVENT (actual-book) card for the active window always, plus the HYPOTHETICAL-
+  // scenario card when one has been run for that window. Pure — reads cached models, renders, never
+  // fetches. Returns {active:false} when no window has been opened. Card HTML uses var(--color-…)
+  // throughout, so the exporters' light :root recolors it for white paper with no extra work.
+  function riskReviewReportHtml() {
+    try {
+      if (!_activeRowKey) return { active: false };
+      var winId = _winIdOf(_activeRowKey);
+      var win = STRESS_WINDOWS.filter(function (w) { return w.id === winId; })[0] || null;
+      var curEntry = _summaryRows[winId];
+      var hypoEntry = _summaryRows[winId + '::hypo'];
+      var curModel = (curEntry && curEntry.model && curEntry.model.hasData) ? curEntry.model : null;
+      var hypoModel = (hypoEntry && hypoEntry.model && hypoEntry.model.hasData) ? hypoEntry.model : null;
+      if (!curModel && !hypoModel) return { active: false };
+      var ref = curModel || hypoModel;
+      return {
+        active: true,
+        windowId: winId,
+        windowLabel: ref.windowLabel || (win ? win.label : '') || '',
+        dateRange: ref.dateRange || '',
+        stresses: win ? (win.stresses || '') : '',
+        hasHypothetical: !!hypoModel,
+        eventHtml: curModel ? renderReplayCard(curModel) : '',
+        hypoHtml: hypoModel ? renderReplayCard(hypoModel) : ''
+      };
+    } catch (e) { return { active: false }; }
+  }
+
+  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext, riskReviewReportHtml: riskReviewReportHtml };
 })(window);
 
 </script>
