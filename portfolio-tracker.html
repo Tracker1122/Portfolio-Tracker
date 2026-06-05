@@ -9682,6 +9682,15 @@ function saveQrCandidate(keepForm) {
   }
   renderQrForm();
   renderQrSavedList();
+  if (!keepForm) {
+    // Update/Done: bring the user down to the Saved Candidates list (incl. its heading) where the
+    // candidate they just saved now lives, so the next step (open it → Add to trade) is in view.
+    setTimeout(() => {
+      const list = document.getElementById('qr-saved-list');
+      const target = (list && list.previousElementSibling) || list;
+      if (target && target.scrollIntoView) { try { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }
+    }, 60);
+  }
 }
 
 // ── Handoff: stage a saved checklist candidate as a BUY in the shared scenario queue. ──
@@ -9752,8 +9761,11 @@ function qrStageAsBuy(id) {
   if (typeof saveCandQueue === 'function') saveCandQueue();
   if (typeof candFetchPerf === 'function') candFetchPerf();
 
-  const panel = document.getElementById('theme-candidate-panel');
-  if (panel && panel.scrollIntoView) { try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {} }
+  // Shift the user down to the build-a-trade section so the staged buy + combined impact are in view.
+  setTimeout(() => {
+    const panel = document.getElementById('theme-candidate-panel');
+    if (panel && panel.scrollIntoView) { try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }
+  }, 60);
 }
 
 function editQrCandidate(id) {
