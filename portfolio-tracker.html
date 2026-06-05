@@ -1057,7 +1057,7 @@
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
     <button class="tab-btn" onclick="switchTab('risk')">Risk Review</button>
     <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
-    <button class="tab-btn" onclick="switchTab('quality')">New Position Evaluation</button>
+    <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
     <button class="tab-btn" onclick="switchTab('rebalance')">Holdings &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
@@ -1530,7 +1530,10 @@
   </div><!-- end tab-risk -->
 
   <!-- Quality Review Tab -->
-  <div class="tab-panel" id="tab-quality">
+  <div class="tab-panel" id="tab-evaltrade">
+
+    <!-- ── Mode 1: Checklist (single candidate) — relocated from the old New Position Evaluation tab ── -->
+    <div class="section-heading">Checklist — evaluate a single candidate</div>
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 14px;padding:0 2px;line-height:1.5;max-width:760px">
       A structured pre-purchase checklist — it gives you the questions a disciplined buyer asks and organizes your answers, so every candidate runs the same gauntlet your existing positions are judged against. Field hints tell you where on Schwab to find each number and what a good/bad value looks like. After saving, each candidate gets <strong>checkable observations</strong> (computed facts, no recommendation) and an optional <strong>AI for/against/gaps analysis</strong> that argues both sides and never concludes — you weigh it. For ETFs it can fetch real holdings and flag overlap with names you hold directly. <strong>It does not score or recommend.</strong>
     </div>
@@ -1546,7 +1549,16 @@
 
     <div class="section-heading">Saved Candidates</div>
     <div id="qr-saved-list" style="margin-top:8px"></div>
-  </div><!-- end tab-quality -->
+
+    <!-- ── Divider ── -->
+    <div style="border-top:1px solid var(--color-border-secondary);margin:32px 0 0"></div>
+
+    <!-- ── Mode 2: Sized what-if scenario — relocated from the Theme Level Review tab. -->
+    <!-- renderCandidatePanel() mounts here (keeps its own internal heading/intro); ID preserved so -->
+    <!-- renderCandidatePanel / candCompute / candStageFromDiscovery keep finding it by string. ── -->
+    <div id="theme-candidate-panel" style="margin-top:18px"></div>
+
+  </div><!-- end tab-evaltrade -->
 
   <!-- Trends Tab -->
   <div class="tab-panel" id="tab-trends">
@@ -5738,7 +5750,7 @@ function switchTab(name) {
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
   if (name === 'rebalance') { safeRender('renderRebalance', renderRebalance); if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
-  if (name === 'quality') safeRender('renderQualityTab', renderQualityTab);
+  if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
   if (name === 'trends') safeRender('renderTrends', renderTrends);
   if (name === 'themes') safeRender('renderThemeUniverse', renderThemeUniverse);
@@ -9670,7 +9682,7 @@ function editQrCandidate(id) {
   qrType = c.type || 'stock';   // authoritative: lock the form to the candidate's own type FIRST
   qrStage2Unlocked = true;       // a saved candidate shows its full form
   setQrType(qrType);             // sync toggle styling + render (now guaranteed to match the data)
-  document.getElementById('tab-quality').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.getElementById('tab-evaltrade').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function deleteQrCandidate(id) {
@@ -15292,6 +15304,9 @@ function candToggleTaxDetail(open) { _candTaxDetailOpen = !!open; }
 function candStageFromDiscovery(ticker, theme) {
   const T = (ticker || '').toUpperCase().trim();
   if (!T) return;
+  // The candidate panel now lives in the "Evaluate a Trade" tab. Switch there first so the staging
+  // form is rendered + visible before we fill it (switchTab re-renders renderCandidatePanel).
+  if (typeof switchTab === 'function') switchTab('evaltrade');
   if (typeof candSetMode === 'function') candSetMode('stock');
   const tEl = document.getElementById('cand-ticker'); if (tEl) tEl.value = T;
   const thEl = document.getElementById('cand-theme');
@@ -18618,13 +18633,11 @@ function renderThemeUniverse() {
     </details>
     <div id="theme-sector-panel" style="margin-top:18px"></div>
     <div id="theme-discovery" style="margin-top:18px"></div>
-    <div id="theme-candidate-panel" style="margin-top:18px"></div>
     <div id="theme-ai-review" style="margin-top:18px"></div>
   `;
   renderSectorPanel();
   renderThemeClusters();
   renderThemeDiscovery();
-  renderCandidatePanel();
   renderThemeAiReview();
   renderBenchmarkFeesEditor();
 }
@@ -26605,7 +26618,7 @@ init();
     }
     _refreshHypoStatus();
     _mountCrossTabBtn('tab-themes');
-    _mountCrossTabBtn('tab-quality');
+    _mountCrossTabBtn('tab-evaltrade');
   }
   if (document.readyState === 'loading') W.addEventListener('DOMContentLoaded', init);
   else init();
@@ -26615,7 +26628,7 @@ init();
   // buttons re-mount if their panels were re-rendered.
   function onShow(name) {
     _mountCrossTabBtn('tab-themes');
-    _mountCrossTabBtn('tab-quality');
+    _mountCrossTabBtn('tab-evaltrade');
     if (name === 'risk') _refreshHypoStatus();
   }
 
