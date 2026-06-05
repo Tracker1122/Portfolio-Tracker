@@ -3567,14 +3567,12 @@ function renderTaxProfilePanel() {
 // routed every loss to ST gains first and so overstated the harvest's value
 // whenever LT losses sat alongside ST gains.
 //
-// `untypedLoss` (optional) is character-less loss — i.e. prior-year carryforward,
-// whose ST/LT character we do NOT track (see computeLossCarryforward). It's applied
-// LAST, against any remaining ST gain first then LT (taxpayer-favorable). This is a
-// real and disclosed simplification: a carryforward's true character is ignored.
-// We also still ignore the $3k/yr ordinary-income offset inside this function.
+// Scope: this is a single-year calculation. Prior-year loss carryforward and the
+// $3,000 ordinary-income offset are not modeled here (or anywhere) — each year
+// stands alone. See the ledger UI note.
 //
 // Returns { grossTax, netBill, taxSaved } — taxSaved is the real value of the harvest.
-function computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate, untypedLoss = 0) {
+function computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate) {
   const grossTax = ltGains * ltRate + stGains * stRate;
 
   // 1) within-category netting (a residual may be negative = net loss in that category)
@@ -3589,11 +3587,6 @@ function computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate
     const applied = Math.min(netLT, -netST);
     netLT -= applied; netST += applied;
   }
-
-  // 3) untyped carryforward losses: remaining ST gain first, then LT gain
-  let blob = Math.max(0, untypedLoss);
-  if (blob > 0 && netST > 0) { const a = Math.min(blob, netST); netST -= a; blob -= a; }
-  if (blob > 0 && netLT > 0) { const a = Math.min(blob, netLT); netLT -= a; blob -= a; }
 
   const netBill = Math.max(0, netST) * stRate + Math.max(0, netLT) * ltRate;
   const taxSaved = Math.max(0, grossTax - netBill);
@@ -3732,8 +3725,7 @@ const _realizedYearSel = { inline: null, modal: null };
 
 // Build the realized-gains data for a given year ('all' or a number).
 // Returns { rows, ltGains, stGains, harvested, ltTax, stTax, netBill }.
-// Raw realized figures for a year (rows + this year's own gains/losses) — NO carryforward, NO net bill.
-// Kept separate so computeLossCarryforward can walk prior years without recursing into buildRealizedData.
+// Raw realized figures for a year (rows + this year's own gains/losses) — NO net bill.
 function _rawRealizedYear(year) {
   const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
   const rows = [];
@@ -3760,42 +3752,17 @@ function _rawRealizedYear(year) {
   return { rows, ltGains, stGains, harvested, harvestedST, harvestedLT };
 }
 
-// Capital-loss carryforward available going INTO `intoYear`, walking every prior year with realized
-// activity. Each year: prior carryforward + this year's losses offset this year's gains; if a net
-// capital loss remains, $3,000 goes against ordinary income and the rest carries forward (indefinitely).
-// Simplification (matches the ledger): losses aren't split by ST/LT character. 'all' → no carryforward.
-function computeLossCarryforward(intoYear) {
-  if (intoYear === 'all' || !Number.isFinite(intoYear)) return 0;
-  const priorYears = detectRealizedYears().filter(y => y < intoYear).sort((a, b) => a - b);
-  let carry = 0;
-  priorYears.forEach(Y => {
-    const r = _rawRealizedYear(Y);
-    const net = (r.ltGains + r.stGains) - r.harvested - carry; // gains minus this-year losses minus carried losses
-    carry = net >= 0 ? 0 : Math.max(0, (-net) - 3000);
-  });
-  return carry;
-}
-
-// Returns { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill,
-//           carryIn, carryforwardTaxSaved, netBillNoCarry }.
+// Returns { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill }.
+// Net bill is THIS YEAR ONLY: prior-year loss carryforward and the $3,000 ordinary-income
+// offset are intentionally not modeled — each year stands alone (see UI note). This keeps the
+// ledger a clean "what did these trades generate" estimate rather than a multi-year tax projection.
 function buildRealizedData(year) {
   const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
   const { rows, ltGains, stGains, harvested, harvestedST, harvestedLT } = _rawRealizedYear(year);
-  const carryIn = computeLossCarryforward(year); // prior-year loss carryforward into this year
   const ltTax = ltGains * ltRate;
   const stTax = stGains * stRate;
-  // Carryforward acts as extra available losses this year. It's character-less (we don't track
-  // a carryforward's ST/LT split), so it's passed as the untypedLoss tail — applied after this
-  // year's own ST/LT losses net within category. netBillNoCarry is this year's harvest only;
-  // the gap to netBill is the carryforward's value.
-  const base = computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate);
-  const withCarry = computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate, carryIn);
-  const grossTax = base.grossTax;
-  const harvestOffset = base.taxSaved;                 // this year's harvesting, against this year's gains
-  const netBillNoCarry = base.netBill;
-  const netBill = withCarry.netBill;                   // after carryforward too
-  const carryforwardTaxSaved = Math.max(0, netBillNoCarry - netBill);
-  return { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill, carryIn, carryforwardTaxSaved, netBillNoCarry };
+  const { grossTax, netBill, taxSaved: harvestOffset } = computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate);
+  return { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill };
 }
 
 // Render the full ledger (summary + year selector + itemized table) into a mount element.
@@ -3824,8 +3791,8 @@ function renderRealizedLedger(mountId, mountKey) {
       <div class="eff-block"><span class="eff-label">LT gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.ltGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.ltTax)} @ ${(ltRate*100).toFixed(0)}%</span></div>
       <div class="eff-block"><span class="eff-label">ST gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.stGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.stTax)} @ ${(stRate*100).toFixed(0)}%</span></div>
       <div class="eff-block"><span class="eff-label">Losses harvested</span><span class="eff-value" style="font-size:14px;color:var(--color-text-success)">${fmtDollarWhole(data.harvested)}</span><span class="eff-breakdown">saves ~${fmtDollarWhole(data.harvestOffset)} in tax</span></div>
-      <div class="eff-block"><span class="eff-label">Est. net bill</span><span class="eff-value" style="font-size:14px;color:${data.netBill>0?'var(--color-text-danger)':'var(--color-text-success)'}">${fmtDollarWhole(data.netBill)}</span><span class="eff-breakdown">${data.carryIn > 0 ? 'after harvest + carryforward' : 'after harvest offset'}</span></div>
-    </div>${data.carryIn > 0 ? `<div style="font-size:10px;color:var(--color-text-tertiary);margin:-8px 0 12px">Includes ${fmtDollarWhole(data.carryIn)} capital-loss carryforward from prior years${data.carryforwardTaxSaved > 0 ? ` — saves ~${fmtDollarWhole(data.carryforwardTaxSaved)} this year` : ''}.</div>` : ''}<div style="font-size:9px;color:var(--color-text-tertiary);margin:-4px 0 12px;line-height:1.5">Netting: this year's harvested losses are matched to gains of the same holding period first (ST vs ST, LT vs LT), then cross-applied — IRS Schedule&nbsp;D order. Simplifications: a prior-year carryforward's own ST/LT character isn't tracked (it's applied to ST gains first), and the $3,000 ordinary-income offset isn't applied to this year's bill. A CPA should confirm.</div>`;
+      <div class="eff-block"><span class="eff-label">Est. net bill</span><span class="eff-value" style="font-size:14px;color:${data.netBill>0?'var(--color-text-danger)':'var(--color-text-success)'}">${fmtDollarWhole(data.netBill)}</span><span class="eff-breakdown">after harvest offset · this year only</span></div>
+    </div><div style="font-size:9px;color:var(--color-text-tertiary);margin:-4px 0 12px;line-height:1.5">Netting: harvested losses are matched to gains of the same holding period first (ST vs ST, LT vs LT), then cross-applied — IRS Schedule&nbsp;D order. Net bill is <strong>this year only</strong>: prior-year loss carryforward and the $3,000 ordinary-income offset aren't modeled, so a heavy-loss year may read higher here than your real bill. A CPA should confirm.</div>`;
 
   // Itemized table
   let tableRows = '';
@@ -14531,7 +14498,7 @@ function _candScenarioTax() {
   try { if (typeof buildRealizedData === 'function') { const rd = buildRealizedData(ytdYear); ytd = { ltGains: rd.ltGains || 0, stGains: rd.stGains || 0, harvested: rd.harvested || 0, netBill: rd.netBill || 0, carry: rd.carryIn || 0, year: ytdYear, available: true }; } } catch (e) { /* no ledger — fall back to standalone */ }
   const _hbill = (lt, st, harv) => { const nST = Math.max(0, st - harv); const rem = Math.max(0, harv - st); const nLT = Math.max(0, lt - rem); return { bill: nST * _ST + nLT * _LT, taxedST: nST, taxedLT: nLT }; };
   const aloneR = _hbill(scLTgains, scSTgains, scLosses);
-  // YTD net bill already includes carryforward (buildRealizedData folds it); the combined must too.
+  // YTD net bill is single-year (no carryforward); the combined figure is too.
   const combinedR = _hbill(ytd.ltGains + scLTgains, ytd.stGains + scSTgains, ytd.harvested + ytd.carry + scLosses);
   const scenarioTax = aloneR.bill;                       // the scenario in isolation
   const combinedNetBill = combinedR.bill;
@@ -14917,7 +14884,7 @@ function candExportPdf() {
     pePdfBasisNote() +
     `<h2>Risk review — historical stress test</h2><div>${(() => { try { return riskReviewPdfSection(cleanFrag, esc2); } catch (e) { return ''; } })()}</div>` +
     `<h2>AI review</h2><div class="section">${aiHtml}</div>` +
-    `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting within holding period then cross-applied; harvested-loss and prior-year carryforward offsets; carryforward character not tracked; no $3,000 ordinary-income offset on the current-year bill) — a CPA should confirm the actual figures.</div>` +
+    `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting within holding period then cross-applied; harvested-loss offsets; single-year only — no prior-year carryforward or $3,000 ordinary-income offset) — a CPA should confirm the actual figures.</div>` +
     `</div></body></html>`;
 
   const w = window.open('', '_blank');
