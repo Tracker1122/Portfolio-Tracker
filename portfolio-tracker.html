@@ -25822,9 +25822,15 @@ init();
       var fwdGaps = fwd.filter(function (c) { return c.spreadPct != null; });
       if (fwdGaps.length) {
         var last = fwd[fwd.length - 1];
-        var phrases = fwdGaps.map(function (c) { return _gapPhrase(c.spreadPct, c.label); });
-        var sent = (phrases.length > 1) ? ('Versus VOO it went from ' + phrases.join(' to ')) : ('Versus VOO it was ' + phrases[0]);
-        if (last.vooPct != null) sent += ', ending at ' + _pctSigned(last.bookPct) + ' against VOO\u2019s ' + _pctSigned(last.vooPct);
+        var gFirst = fwdGaps[0], gLast = fwdGaps[fwdGaps.length - 1];
+        var allAhead = fwdGaps.every(function (c) { return c.spreadPct >= -0.05; });
+        var allBehind = fwdGaps.every(function (c) { return c.spreadPct <= 0.05; });
+        var tail = (last.vooPct != null) ? ', ending ' + _pctSigned(last.bookPct) + ' against VOO\u2019s ' + _pctSigned(last.vooPct) : '';
+        var sent;
+        if (fwdGaps.length === 1) sent = 'Versus VOO it was ' + _gapPhrase(gFirst.spreadPct, gFirst.label) + tail;
+        else if (allAhead) sent = 'Versus VOO it stayed ahead the whole way \u2014 from ' + Math.abs(gFirst.spreadPct).toFixed(1) + ' pts at ' + gFirst.label + ' to ' + Math.abs(gLast.spreadPct).toFixed(1) + ' pts ahead by ' + gLast.label + tail;
+        else if (allBehind) sent = 'Versus VOO it trailed the whole way \u2014 from ' + Math.abs(gFirst.spreadPct).toFixed(1) + ' pts at ' + gFirst.label + ' to ' + Math.abs(gLast.spreadPct).toFixed(1) + ' pts behind by ' + gLast.label + tail;
+        else sent = 'Versus VOO it went from ' + _gapPhrase(gFirst.spreadPct, gFirst.label) + ' to ' + _gapPhrase(gLast.spreadPct, gLast.label) + tail;
         s.push(sent + '.');
       } else if (fwd.length) {
         var lf = fwd[fwd.length - 1];
@@ -25995,12 +26001,12 @@ init();
   function _dp(x) { return (x >= 0 ? '+' : '') + x.toFixed(1); }
   function _holistic(ds) {
     var eps = 0.05, maxAbs = Math.max.apply(null, ds.map(function (d) { return Math.abs(d); }));
-    if (maxAbs < 0.5) return 'So the scenario barely moves the sleeve at any of the marked points.';
+    if (maxAbs < 0.5) return 'So the trades barely move the sleeve at any waypoint.';
     var first = ds[0], last = ds[ds.length - 1];
     var pos = ds.every(function (d) { return d >= -eps; }), neg = ds.every(function (d) { return d <= eps; });
     function rng() { var a = ds.map(function (d) { return Math.abs(d); }); return Math.min.apply(null, a).toFixed(1) + '\u2013' + Math.max.apply(null, a).toFixed(1); }
-    if (pos && !neg) return 'So the scenario keeps the sleeve higher at every marked point (by ' + rng() + ' pts).';
-    if (neg && !pos) return 'So the scenario leaves the sleeve lower at every marked point (by ' + rng() + ' pts).';
+    if (pos && !neg) return 'So the trades keep the sleeve higher at every waypoint (by ' + rng() + ' pts).';
+    if (neg && !pos) return 'So the trades leave the sleeve lower at every waypoint (by ' + rng() + ' pts).';
     if (first < -eps && last > eps) return 'So it digs a deeper hole at the low but ends higher \u2014 a more volatile path that finishes ahead here.';
     if (first > eps && last < -eps) return 'So it cushions the drop early but finishes lower than your current sleeve.';
     return 'So the effect is mixed across the points \u2014 read the \u0394 row above point by point.';
@@ -26016,34 +26022,29 @@ init();
     });
     if (!pts.length) return '';
     var first = pts[0], last = pts[pts.length - 1], s = [];
-    // Point 1: the low (or earliest available), with absolutes + drawdown framing.
+    // Low / earliest point: the depth effect, stated as the change (not a level recital).
     if (first.label === 'low') {
-      if (Math.abs(first.d) < 0.05) s.push('At the low the scenario barely moves the bottom (both about ' + first.c.toFixed(1) + '%).');
-      else s.push('At the low the sleeve bottoms at ' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ' \u2014 ' + Math.abs(first.d).toFixed(1) + ' pts ' + (first.d > 0 ? 'shallower' : 'deeper') + '.');
+      if (Math.abs(first.d) < 0.05) s.push('At the low the trades barely move the bottom (both about ' + first.c.toFixed(1) + '%).');
+      else s.push('At the low the trades make the drop ' + Math.abs(first.d).toFixed(1) + ' pts ' + (first.d > 0 ? 'shallower' : 'deeper') + ' (' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ').');
     } else {
       s.push('At ' + first.label + ' the sleeve sits ' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ' (' + _dp(first.d) + ' pts).');
     }
-    // Point 2..n: the gap at each subsequent marked point, as a trajectory, ending on absolutes.
-    var fwd = pts.slice(1);
-    if (fwd.length) {
-      var legs = fwd.map(function (p) { return (Math.abs(p.d) < 0.05 ? 'even' : _dp(p.d)) + ' at ' + p.label; });
-      for (var k = legs.length - 1; k >= 0; k--) { if (Math.abs(fwd[k].d) >= 0.05) { legs[k] = _dp(fwd[k].d) + ' pts at ' + fwd[k].label; break; } }
-      var joined = legs.join(', ').replace(/, ([^,]*)$/, ' and $1');
-      s.push('Versus your current sleeve it then runs ' + joined + ' (ending ' + _pctSigned(last.h) + ' vs ' + _pctSigned(last.c) + ').');
-    }
-    // Holistic pattern across all points.
-    if (pts.length >= 2) s.push(_holistic(pts.map(function (p) { return p.d; })));
-    // VOO gap shift at the last point.
-    if (last.vh != null && last.vc != null) {
-      var gH = last.h - last.vh, gC = last.c - last.vc;
-      if (Math.abs(gH - gC) >= 0.05) {
-        var ph = Math.abs(gH) < 0.05 ? 'even with VOO' : (Math.abs(gH).toFixed(1) + ' pts ' + (gH >= 0 ? 'ahead' : 'behind'));
-        var pc = Math.abs(gC) < 0.05 ? 'even' : (Math.abs(gC).toFixed(1) + ' ' + (gC >= 0 ? 'ahead' : 'behind'));
-        s.push('Against VOO at ' + last.label + ' that moves you from ' + pc + ' to ' + ph + '.');
-      }
+    // One holistic statement across the rest (the ladder + table carry the per-point detail), plus where it lands.
+    if (pts.length >= 2) s.push(_holistic(pts.map(function (p) { return p.d; })).replace(/\.$/, '') + ', ending ' + _pctSigned(last.h) + ' vs ' + _pctSigned(last.c) + '.');
+    // The headline this paragraph used to omit: at the BOOK level the same trades barely register.
+    var bookDs = [];
+    _JUNCTION_ORDER.forEach(function (l) {
+      var h = hp[l], c = cp[l];
+      if (h && c && h.blendedPct != null && c.blendedPct != null && !h.pending && !c.pending && !h.missing && !c.missing)
+        bookDs.push(h.blendedPct - c.blendedPct);
+    });
+    if (bookDs.length) {
+      var blo = Math.min.apply(null, bookDs), bhi = Math.max.apply(null, bookDs);
+      var bRange = (Math.abs(bhi - blo) < 0.05) ? (_dp(blo) + ' pts') : (_dp(blo) + ' to ' + _dp(bhi) + ' pts');
+      s.push('At the book level, though, the same trades move it only ' + bRange + ' \u2014 your VOO core is most of the book and dilutes anything you change in the picks.');
     }
     return '<div style="font-size:10.5px;line-height:1.55;margin-top:8px;padding-top:7px;border-top:1px solid var(--color-border-tertiary, #333);color:var(--color-text-secondary)">' +
-      '<strong style="color:var(--color-text-info, #60a5fa)">What the scenario changes:</strong> ' + s.join(' ') + '</div>';
+      '<strong style="color:var(--color-text-primary)">What the trades change:</strong> ' + s.join(' ') + '</div>';
   }
 
   // Discrete recovery ladder (replaces the continuous line for drawdown windows). One panel per
