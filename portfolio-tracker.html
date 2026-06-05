@@ -10282,7 +10282,7 @@ function qrTrimPassThroughFact(candidate, overlaps) {
 // plain-text COMPUTED-FACTS block, so the two AI analyses (Theme Level Review + New Position Evaluation)
 // know which historical stress event the user is examining and whether a hypothetical scenario is folded
 // into it. Returns '' when no card is open (so the prompt is unchanged when there's nothing to add).
-// Every figure is a PAST return replayed through current holdings — how the book WOULD have moved in that
+// Every figure is a PAST return replayed through the active sleeve (the VOO core is folded in for the blended tier) — how it WOULD have moved in that
 // window, never a forecast or signal; the block says so, mirroring the existing performance discipline.
 // Fully defensive: any failure yields ''.
 function riskReviewAiFacts() {
@@ -10292,9 +10292,9 @@ function riskReviewAiFacts() {
     if (!c || !c.active) return '';
     const sgn = v => (v == null) ? 'n/a' : ((v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) + '%');
     const L = [];
-    L.push(`RISK REVIEW — WHAT THE USER IS CURRENTLY LOOKING AT (read-only context from the Risk & Stress Lens tab the user has open). This replays the user's CURRENT holdings through a REAL PAST stress window using actual daily returns (co-movement included, no model) — it is how the book WOULD have moved through that historical period, NOT a forecast, an expected return, or a buy/sell signal. Treat it as the book's PAST behavior in that window only; do NOT extrapolate it forward and do NOT turn it into a recommendation to act.`);
+    L.push(`RISK REVIEW — WHAT THE USER IS CURRENTLY LOOKING AT (read-only context from the Risk & Stress Lens tab the user has open). This replays the user's ACTIVE SLEEVE (their direct equity picks, BEFORE the VOO passive core) through a REAL PAST stress window using actual daily returns (co-movement included, no model) — it is how that series WOULD have moved through that historical period, NOT a forecast, an expected return, or a buy/sell signal. Treat it as past behavior in that window only; do NOT extrapolate it forward and do NOT turn it into a recommendation to act.`);
     L.push(`Window being viewed: ${c.windowLabel || c.windowId}${c.dateRange ? ' (' + c.dateRange + ')' : ''}${c.stresses ? ' — what it stresses: ' + c.stresses : ''}.`);
-    L.push(`Displayed book: ${c.isHypothetical ? 'the HYPOTHETICAL book (current holdings + the staged what-if scenario folded in)' : "the user's ACTUAL current book (no scenario folded in)"}.`);
+    L.push(`Displayed series: ${c.isHypothetical ? 'the HYPOTHETICAL active sleeve (direct picks + the staged what-if scenario folded in; the VOO passive core is NOT in this series)' : "the user's ACTIVE SLEEVE — direct equity picks only, BEFORE the VOO passive core (no scenario folded in)"}.`);
     let jline = '';
     if (c.junctions && c.junctions.length) {
       jline = c.junctions.map(j => {
@@ -10305,10 +10305,14 @@ function riskReviewAiFacts() {
         return p;
       }).join('; ');
     }
-    L.push(`Book vs VOO at each marked point (portfolio level, not per-name; measured vs the pre-event high — "low" = the window trough, then 6mo/1Y/2Y into the recovery): ${jline || ('at the low ' + sgn(c.bookReturnPct) + (c.benchReturnPct != null ? ' vs VOO ' + sgn(c.benchReturnPct) : ''))}.`);
-    if (c.drawdownPct != null) L.push(`Worst intra-window drawdown on the displayed book: ${sgn(c.drawdownPct)}.`);
+    L.push(`Active sleeve vs VOO at each marked point (sleeve level, not per-name; measured vs the pre-event high — "low" = the window trough, then 6mo/1Y/2Y into the recovery): ${jline || ('at the low ' + sgn(c.bookReturnPct) + (c.benchReturnPct != null ? ' vs VOO ' + sgn(c.benchReturnPct) : ''))}.`);
+    if (!c.isHypothetical && c.junctions && c.junctions.length) {
+      const bj = c.junctions.filter(j => j.blendedPct != null);
+      if (bj.length) L.push(`BLENDED LIQUID BOOK at each marked point (the active sleeve with the user's VOO passive core folded back in at its real book weight, replayed by the SAME engine): ${bj.map(j => j.label + ' ' + sgn(j.blendedPct)).join('; ')}. THIS is the whole-liquid-book figure; the sleeve numbers above EXCLUDE the VOO core, so do NOT call the sleeve drawdown the "portfolio" or "book" drawdown — the core materially cushions it.`);
+    }
+    if (c.drawdownPct != null) L.push(`Worst intra-window drawdown on the ${c.isHypothetical ? 'hypothetical sleeve' : 'active sleeve'}: ${sgn(c.drawdownPct)}.`);
     if (c.frozen) L.push(`Liquidity note shown on the card: ${c.frozen}`);
-    L.push(`Coverage of this replay: ${c.coveragePct != null ? c.coveragePct.toFixed(0) + '% of the liquid book' : 'unknown'}${c.coverageWarn ? ' — LOW coverage, so read these figures loosely' : ''}.`);
+    L.push(`Coverage of this replay: ${c.coveragePct != null ? c.coveragePct.toFixed(0) + '% of the active sleeve' : 'unknown'}${c.coverageWarn ? ' — LOW coverage, so read these figures loosely' : ''}.`);
     if (c.isHypothetical) {
       if (c.scenarioNote) L.push(`The staged scenario folded in: ${c.scenarioNote}`);
       else if (c.moveCount) L.push(`The staged scenario folded in: ${c.moveCount} move(s)${(c.newTickers && c.newTickers.length) ? ', new name(s): ' + c.newTickers.join(', ') : ''}.`);
@@ -14767,11 +14771,11 @@ function riskReviewPdfSection(cleanFn, esc2) {
       return '<p class="note">No stress window was open in Risk Review when this was exported. Open one in the Risk &amp; Stress Lens (and tick \u201cfold in staged scenario\u201d if you want the hypothetical), then re-export to include the chart(s) here.</p>';
     }
     const parts = [];
-    parts.push(`<p class="note" style="font-style:normal;color:#444;margin:0 0 8px">Replays my current holdings through the <strong>${esc2(r.windowLabel || r.windowId)}</strong>${r.dateRange ? ' (' + esc2(r.dateRange) + ')' : ''}${r.stresses ? ' — ' + esc2(r.stresses) : ''} using actual daily returns. How the book <em>would</em> have moved through that past period — not a forecast, an expected return, or a recommendation.</p>`);
+    parts.push(`<p class="note" style="font-style:normal;color:#444;margin:0 0 8px">Replays my active sleeve — my direct equity picks, before my VOO passive core — through the <strong>${esc2(r.windowLabel || r.windowId)}</strong>${r.dateRange ? ' (' + esc2(r.dateRange) + ')' : ''}${r.stresses ? ' — ' + esc2(r.stresses) : ''} using actual daily returns. How that series <em>would</em> have moved through that past period — not a forecast, an expected return, or a recommendation. The card's table also folds my VOO core back in as a blended liquid-book row.</p>`);
     if (r.eventHtml) parts.push(`<div style="page-break-inside:avoid;margin:6px 0">${cleanFn(r.eventHtml)}</div>`);
     if (r.hasHypothetical && r.hypoHtml) {
       parts.push(`<div style="font-size:11px;font-weight:700;color:#374151;margin:14px 0 4px">With the staged what-if scenario folded in</div>`);
-      parts.push(`<p class="note" style="margin:0 0 6px">The hypothetical reflects my single staged scenario queue (shared across tabs); it may not be exactly the position evaluated elsewhere in this report. The card compares the hypothetical book against my actual book over the same window — each measured against its own pre-event high.</p>`);
+      parts.push(`<p class="note" style="margin:0 0 6px">The hypothetical reflects my single staged scenario queue (shared across tabs); it may not be exactly the position evaluated elsewhere in this report. The card compares the hypothetical sleeve against my actual sleeve over the same window — each measured against its own pre-event high.</p>`);
       parts.push(`<div style="page-break-inside:avoid;margin:6px 0">${cleanFn(r.hypoHtml)}</div>`);
     } else {
       parts.push(`<p class="note" style="margin:6px 0 0">No hypothetical scenario was folded into this window at export time — only the actual-book stress path is shown.</p>`);
@@ -26253,7 +26257,7 @@ init();
     }).join('');
     section.innerHTML =
       '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary, #eee);margin-bottom:2px">Risk &amp; Stress Lens</div>' +
-      '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your current holdings through a real past stress window using actual daily returns (co-movement included, no model). Each button fetches that window\u2019s daily bars via your Tiingo worker (deep free history; partial fills cache and resume on re-click).</div>' +
+      '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your active sleeve through a real past stress window using actual daily returns (co-movement included, no model), then folds your VOO core back in as a blended liquid-book row. Each button fetches that window\u2019s daily bars via your Tiingo worker (deep free history; partial fills cache and resume on re-click).</div>' +
       '<div id="risk-hypo-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px;font-size:10px">' +
         '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--color-text-secondary)"><input type="checkbox" id="risk-hypo-toggle" style="cursor:pointer"> Fold in staged scenario</label>' +
         '<span id="risk-hypo-status" style="color:var(--color-text-tertiary)"></span>' +
@@ -26309,6 +26313,7 @@ init();
       if (c.pending) { o.pending = true; return o; }
       if (c.missing || c.bookPct == null) { o.missing = true; return o; }
       o.bookPct = c.bookPct;
+      if (c.blendedPct != null) o.blendedPct = c.blendedPct;
       if (c.vooPct != null) o.vooPct = c.vooPct;
       if (c.spreadPct != null) o.spreadPct = c.spreadPct;
       if (c.recovered) o.recovered = true;
