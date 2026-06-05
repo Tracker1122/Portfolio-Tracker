@@ -25686,6 +25686,105 @@ init();
     '</div>';
   }
 
+  // Normalize a model's junctions into a label→point map (low/6mo/1Y/2Y). Falls back to the
+  // window-end ("low") figures when a book never drew down (no recovery checkpoints).
+  function _bookPoints(m) {
+    if (!m || !m.hasData) return {};
+    var out = {};
+    if (m.junctions && m.junctions.length) { m.junctions.forEach(function (c) { out[c.label] = c; }); return out; }
+    out.low = { label: 'low', bookPct: m.returnPct, vooPct: m.benchReturnPct, spreadPct: m.benchSpreadPct };
+    return out;
+  }
+  var _JUNCTION_ORDER = ['low', '6mo', '1Y', '2Y'];
+
+  // Book-vs-book values table for a hypothetical card: Hypothetical / Current / Δ scenario,
+  // plus VOO for market context, at each marked point. Δ = hypothetical − current, in points
+  // (positive = the scenario leaves the book higher at that point). This is where you read the
+  // difference between the two charts directly.
+  function renderCompareJunctionTable(model) {
+    var cur = model.compare; if (!cur) return '';
+    var hp = _bookPoints(model), cp = _bookPoints(cur);
+    var labels = _JUNCTION_ORDER.filter(function (l) { return hp[l] || cp[l]; });
+    if (!labels.length) return '';
+    var succ = 'var(--color-text-success, #22c55e)', dang = 'var(--color-text-danger, #ef4444)', tert = 'var(--color-text-tertiary, #888)';
+    var dash = '<span style="opacity:.6">\u2014</span>', dim = '<span style="opacity:.45">\u00b7</span>';
+    function bookCell(pt) {
+      if (!pt) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
+      if (pt.pending) return '<td style="text-align:right;padding:2px 7px">' + dim + '</td>';
+      if (pt.missing || pt.bookPct == null) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + (pt.bookPct >= 0 ? succ : dang) + ';font-weight:600">' + (pt.bookPct >= 0 ? '+' : '') + pt.bookPct.toFixed(1) + '%' + (pt.recovered ? ' \u2713' : '') + '</td>';
+    }
+    function deltaCell(h, c) {
+      if (!h || !c || h.bookPct == null || c.bookPct == null || h.pending || c.pending || h.missing || c.missing)
+        return '<td style="text-align:right;padding:2px 7px">' + dim + '</td>';
+      var d = h.bookPct - c.bookPct;
+      if (Math.abs(d) < 0.05) return '<td style="text-align:right;padding:2px 7px;color:' + tert + '">0.0</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + (d >= 0 ? succ : dang) + ';font-weight:600">' + (d >= 0 ? '+' : '') + d.toFixed(1) + '</td>';
+    }
+    function vooCell(h, c) {
+      var v = (h && h.vooPct != null) ? h.vooPct : ((c && c.vooPct != null) ? c.vooPct : null);
+      if (v == null) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + tert + '">' + (v >= 0 ? '+' : '') + v.toFixed(1) + '%</td>';
+    }
+    var head = '<tr style="font-size:9px;color:' + tert + '"><th style="text-align:left;padding:2px 8px 2px 0;font-weight:600"></th>' +
+      labels.map(function (l) { return '<th style="text-align:right;padding:2px 7px;font-weight:600;color:' + tert + '">' + l + '</th>'; }).join('') + '</tr>';
+    function rowLabel(txt, color) { return '<td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:' + (color || tert) + '">' + txt + '</td>'; }
+    var blueSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
+    return '<div style="margin-top:7px">' +
+      '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">Book vs book at each marked point \u2014 level vs the pre-event high. \u201c\u0394 scenario\u201d = hypothetical \u2212 current, in points.</div>' +
+      '<table style="border-collapse:collapse;font-size:10px">' + head +
+        '<tr><td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:var(--color-text-info, #60a5fa)">Hypothetical</td>' + labels.map(function (l) { return bookCell(hp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel('Current', 'var(--color-text-secondary)') + labels.map(function (l) { return bookCell(cp[l]); }).join('') + '</tr>' +
+        '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel('\u0394 scenario') + labels.map(function (l) { return deltaCell(hp[l], cp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel(blueSwatch + 'VOO') + labels.map(function (l) { return vooCell(hp[l], cp[l]); }).join('') + '</tr>' +
+      '</table>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">Chart above is the hypothetical book. Untick \u201cfold in\u201d to see the actual-book chart.</div>' +
+    '</div>';
+  }
+
+  // Explicit plain-English diff between the actual book and the book-with-scenario, for the
+  // marked points. States the drawdown-depth change at the low and the level change at the
+  // latest checkpoint present in BOTH books, plus how the VOO gap shifts there. Factual
+  // (shallower/deeper, higher/lower), no value judgement.
+  function renderScenarioDiffText(model) {
+    var cur = model.compare; if (!cur) return '';
+    var hp = _bookPoints(model), cp = _bookPoints(cur), tert = 'var(--color-text-tertiary, #888)';
+    function depthWord(d) { return d > 0 ? 'shallower' : 'deeper'; }   // d = hypo − cur at the low; higher (less negative) = shallower
+    function moveWord(d) { return d > 0 ? 'higher' : 'lower'; }
+    var s = [];
+    // Low: drawdown depth
+    if (hp.low && cp.low && hp.low.bookPct != null && cp.low.bookPct != null) {
+      var dLow = hp.low.bookPct - cp.low.bookPct;
+      if (Math.abs(dLow) < 0.05) s.push('At the low the scenario barely moves the bottom (both about ' + cp.low.bookPct.toFixed(1) + '%).');
+      else s.push('At the low the book bottoms at ' + (hp.low.bookPct >= 0 ? '+' : '') + hp.low.bookPct.toFixed(1) + '% instead of ' + (cp.low.bookPct >= 0 ? '+' : '') + cp.low.bookPct.toFixed(1) + '% \u2014 ' + Math.abs(dLow).toFixed(1) + ' pts ' + depthWord(dLow) + '.');
+    }
+    // Latest checkpoint present in BOTH (prefer 2Y, then 1Y, then 6mo)
+    var lastL = null;
+    for (var i = _JUNCTION_ORDER.length - 1; i >= 1; i--) {
+      var l = _JUNCTION_ORDER[i], h = hp[l], c = cp[l];
+      if (h && c && !h.pending && !c.pending && !h.missing && !c.missing && h.bookPct != null && c.bookPct != null) { lastL = l; break; }
+    }
+    if (lastL) {
+      var H = hp[lastL], C = cp[lastL], dEnd = H.bookPct - C.bookPct;
+      var endStr = 'By ' + lastL + ' it ends at ' + (H.bookPct >= 0 ? '+' : '') + H.bookPct.toFixed(1) + '% versus ' + (C.bookPct >= 0 ? '+' : '') + C.bookPct.toFixed(1) + '% without the scenario';
+      endStr += (Math.abs(dEnd) < 0.05) ? ' \u2014 essentially unchanged' : ' \u2014 ' + Math.abs(dEnd).toFixed(1) + ' pts ' + moveWord(dEnd);
+      endStr += '.';
+      s.push(endStr);
+      // VOO gap shift at the same point
+      if (H.vooPct != null && C.vooPct != null) {
+        var gH = H.bookPct - H.vooPct, gC = C.bookPct - C.vooPct, dGap = gH - gC;
+        if (Math.abs(dGap) >= 0.05) {
+          var gapPhraseH = (Math.abs(gH) < 0.05) ? 'even with VOO' : (Math.abs(gH).toFixed(1) + ' pts ' + (gH >= 0 ? 'ahead' : 'behind'));
+          var gapPhraseC = (Math.abs(gC) < 0.05) ? 'even' : (Math.abs(gC).toFixed(1) + ' ' + (gC >= 0 ? 'ahead' : 'behind'));
+          s.push('Against VOO at ' + lastL + ' that takes you from ' + gapPhraseC + ' to ' + gapPhraseH + '.');
+        }
+      }
+    }
+    if (!s.length) return '';
+    return '<div style="font-size:10.5px;line-height:1.55;margin-top:8px;padding-top:7px;border-top:1px solid var(--color-border-tertiary, #333);color:var(--color-text-secondary)">' +
+      '<strong style="color:var(--color-text-info, #60a5fa)">What the scenario changes:</strong> ' + s.join(' ') + '</div>';
+  }
+
   function renderReplayCard(model) {
     if (!model.hasData)
       return '<div style="font-size:11px;color:var(--color-text-tertiary)">No replayable data for <strong>' + model.windowLabel + '</strong> yet (coverage ' + model.coveragePct.toFixed(0) + '%). The held names likely had no price history in this window.</div>';
@@ -25749,13 +25848,15 @@ init();
       (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical book</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
       replaySummaryText(model) +
       chart +
-      (model.junctions ? renderJunctionTable(model) :
-        (model.benchReturnPct != null ?
-          '<div style="font-size:10px;margin-top:5px;color:var(--color-text-tertiary)">Market (VOO), same window: ' +
-            '<strong style="color:' + (model.benchReturnPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (model.benchReturnPct >= 0 ? '+' : '') + model.benchReturnPct.toFixed(1) + '%</strong>' +
-            ' — your book ' + (model.benchSpreadPct >= 0 ? 'outperformed by +' + model.benchSpreadPct.toFixed(1) : 'lagged by ' + Math.abs(model.benchSpreadPct).toFixed(1)) + ' pts ' +
-            '<span style="opacity:.75">(blue line = VOO)</span></div>'
-          : '')) +
+      (model.compare
+        ? renderCompareJunctionTable(model) + renderScenarioDiffText(model)
+        : (model.junctions ? renderJunctionTable(model) :
+          (model.benchReturnPct != null ?
+            '<div style="font-size:10px;margin-top:5px;color:var(--color-text-tertiary)">Market (VOO), same window: ' +
+              '<strong style="color:' + (model.benchReturnPct >= 0 ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)') + '">' + (model.benchReturnPct >= 0 ? '+' : '') + model.benchReturnPct.toFixed(1) + '%</strong>' +
+              ' — your book ' + (model.benchSpreadPct >= 0 ? 'outperformed by +' + model.benchSpreadPct.toFixed(1) : 'lagged by ' + Math.abs(model.benchSpreadPct).toFixed(1)) + ' pts ' +
+              '<span style="opacity:.75">(blue line = VOO)</span></div>'
+            : ''))) +
       (model.excluded && model.excluded.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No price history in this window: ' + model.excluded.join(', ') + '.</div>' : '') +
       breakdown +
       (model.frozenLine ? '<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"><em>And ' + model.frozenLine + '</em></div>' : '') +
@@ -25872,28 +25973,53 @@ init();
     var cb = document.getElementById('risk-hypo-toggle'); if (cb) cb.checked = _hypoMode;
     _refreshHypoStatus();
   }
-  // Replay one window in the current mode (actual book, or hypothetical if the toggle is on
-  // and a scenario is staged). Finds its own button so callers (button click, toggle, the
-  // cross-tab jump) can all route through here.
-  function _runWindow(winId) {
+  // Promise wrapper around runReplayForWindow — resolves with the model (or null if none
+  // was produced, e.g. no positions / worker URL missing).
+  function _replayModel(win, opts) {
+    var statusEl = document.getElementById('risk-replay-status');
+    return new Promise(function (resolve) {
+      var done = false;
+      runReplayForWindow(win, statusEl, function (m) { done = true; resolve(m); }, opts)
+        .then(function () { if (!done) resolve(null); })
+        .catch(function () { if (!done) resolve(null); });
+    });
+  }
+  // Replay one window in the current mode. Actual book → single card. Hypothetical book →
+  // ALSO computes the actual book for the same window and attaches it as `model.compare`,
+  // so the card can show the book-vs-book difference (values table + diff paragraph).
+  async function _runWindow(winId) {
     var win = STRESS_WINDOWS.filter(function (w) { return w.id === winId; })[0];
     if (!win) return;
-    var statusEl = document.getElementById('risk-replay-status');
     var b = document.querySelector('#risk-replay-section button[data-win="' + winId + '"]');
-    var hypo = riskHypotheticalWeights(), useHypo = _hypoMode && hypo.active, opts = {}, variant = 'cur';
-    if (useHypo) {
-      variant = 'hypo';
-      opts.weights = hypo.weights;
-      opts.scenario = 'your current holdings + ' + hypo.moveCount + ' staged move' + (hypo.moveCount > 1 ? 's' : '') + '.' +
-        (hypo.newTickers.length ? ' New: ' + hypo.newTickers.join(', ') + '.' : '') + ' Untick \u201cfold in\u201d to see your actual book.';
-    }
+    var hypo = riskHypotheticalWeights(), useHypo = _hypoMode && hypo.active;
     if (b) b.disabled = true;
-    runReplayForWindow(win, statusEl, function (model) {
-      var key = _rowKey(win.id, variant);
-      _summaryRows[key] = { winId: win.id, label: win.label, variant: variant, model: model };
-      _showCard(key);
-      if (b) b.disabled = false;
-    }, opts).catch(function () { if (b) b.disabled = false; });
+    try {
+      if (useHypo) {
+        // current book first (reuse cache if already run) — needed as the comparison baseline
+        var curKey = _rowKey(win.id, 'cur'), curModel = _summaryRows[curKey] && _summaryRows[curKey].model;
+        if (!curModel) {
+          curModel = await _replayModel(win, {});
+          if (curModel) { _summaryRows[curKey] = { winId: win.id, label: win.label, variant: 'cur', model: curModel }; renderSummaryTable(); }
+        }
+        var note = 'your current holdings + ' + hypo.moveCount + ' staged move' + (hypo.moveCount > 1 ? 's' : '') + '.' +
+          (hypo.newTickers.length ? ' New: ' + hypo.newTickers.join(', ') + '.' : '') + ' Untick \u201cfold in\u201d to see your actual book.';
+        var hypoModel = await _replayModel(win, { weights: hypo.weights, scenario: note });
+        if (hypoModel) {
+          if (curModel) hypoModel.compare = curModel;
+          _summaryRows[_rowKey(win.id, 'hypo')] = { winId: win.id, label: win.label, variant: 'hypo', model: hypoModel };
+          _showCard(_rowKey(win.id, 'hypo'));
+        }
+      } else {
+        var m = await _replayModel(win, {});
+        if (m) {
+          // a freshly-run actual book invalidates any attached compare on the hypo row's baseline,
+          // but we simply re-point: store cur and, if a hypo row exists, refresh its compare baseline.
+          _summaryRows[_rowKey(win.id, 'cur')] = { winId: win.id, label: win.label, variant: 'cur', model: m };
+          var hk = _rowKey(win.id, 'hypo'); if (_summaryRows[hk]) _summaryRows[hk].model.compare = m;
+          _showCard(_rowKey(win.id, 'cur'));
+        }
+      }
+    } finally { if (b) b.disabled = false; }
   }
   // When the toggle flips, reflect it on the active window: show the cached variant if we
   // have it, otherwise replay it in the new mode.
@@ -25903,8 +26029,8 @@ init();
     if (_summaryRows[targetKey]) _showCard(targetKey);
     else _runWindow(wid);
   }
-  // Cross-tab entry: jump to Risk Review, fold in the staged scenario, and run a window for
-  // BOTH the actual and hypothetical book so the comparison rows appear immediately.
+  // Cross-tab entry: jump to Risk Review, fold in the staged scenario, run the window for
+  // both books (handled by _runWindow's hypo path) so the comparison appears immediately.
   function stressScenario(winId) {
     winId = winId || 'tech2022';
     if (typeof switchTab === 'function') { try { switchTab('risk'); } catch (e) {} }
@@ -25913,13 +26039,7 @@ init();
       var hypo = riskHypotheticalWeights(), statusEl = document.getElementById('risk-replay-status');
       if (!hypo.active) { if (statusEl) statusEl.textContent = 'Nothing staged yet \u2014 add buys/trims in New Position Evaluation or Theme Level Review first.'; return; }
       _setHypoMode(true);
-      var win = STRESS_WINDOWS.filter(function (w) { return w.id === winId; })[0]; if (!win) return;
-      // actual book first (populates the comparison row), then the hypothetical (shows the card)
-      runReplayForWindow(win, statusEl, function (curModel) {
-        _summaryRows[_rowKey(win.id, 'cur')] = { winId: win.id, label: win.label, variant: 'cur', model: curModel };
-        renderSummaryTable();
-        _runWindow(win.id);
-      }, {}).catch(function () {});
+      _runWindow(winId);
     }, 80);
   }
   function _mountCrossTabBtn(panelId) {
