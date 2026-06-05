@@ -25874,11 +25874,13 @@ init();
     }).join('');
     var hasBlended = J.some(function (c) { return c.blendedPct != null; });
     function rowLabel(txt, swatch) { return '<td style="text-align:left;padding:2px 8px 2px 0;color:' + tert + ';white-space:nowrap">' + (swatch || '') + txt + '</td>'; }
-    var blueSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
-    var violetSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BLEND_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
+    var blueSwatch = '<span style="display:inline-block;width:9px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:5px;border-radius:1px"></span>';
+    var _retSw = (model.returnPct >= 0 ? succ : dang);
+    var fillDot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + _retSw + ';vertical-align:middle;margin-right:5px"></span>';
+    var hollowDot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--color-text-secondary, #aaa);box-sizing:border-box;vertical-align:middle;margin-right:5px"></span>';
     var warn = (model.recoveryIncomplete ? ' <span style="color:' + dang + '">\u26a0 partial \u2014 click again</span>' : '') +
                (model.recoveryCovDrop ? ' <span style="opacity:.7">(on reduced coverage)</span>' : '');
-    var blendedRow = hasBlended ? '<tr>' + rowLabel('Blended liquid book', violetSwatch) + blendedCells + '</tr>' : '';
+    var blendedRow = hasBlended ? '<tr>' + rowLabel('Blended liquid book', hollowDot) + blendedCells + '</tr>' : '';
     var _nColsA = J.length + 1;
     function subHeadA(txt) { return '<tr><td colspan="' + _nColsA + '" style="padding:7px 0 1px;font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-text-secondary);font-weight:600">' + txt + '</td></tr>'; }
     var headerNote = hasBlended
@@ -25888,7 +25890,7 @@ init();
       '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">' + headerNote + warn + '</div>' +
       '<table style="border-collapse:collapse;font-size:10px">' + head +
         (hasBlended ? subHeadA('Your sleeve \u2014 your picks, ex-VOO') : '') +
-        '<tr>' + rowLabel('Active sleeve') + youCells + '</tr>' +
+        '<tr>' + rowLabel('Active sleeve', fillDot) + youCells + '</tr>' +
         (hasBlended ? subHeadA('Your book \u2014 those picks + your VOO core') : '') +
         blendedRow +
         '<tr>' + rowLabel('VOO', blueSwatch) + vooCells + '</tr>' +
@@ -25957,11 +25959,12 @@ init();
     function rowLabel(txt, color) { return '<td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:' + (color || tert) + '">' + txt + '</td>'; }
     var _nCols = labels.length + 1;
     function subHead(txt) { return '<tr><td colspan="' + _nCols + '" style="padding:7px 0 1px;font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-text-secondary);font-weight:600">' + txt + '</td></tr>'; }
-    var blueSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
-    var violetSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BLEND_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
+    var blueSwatch = '<span style="display:inline-block;width:9px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:5px;border-radius:1px"></span>';
+    var fillDot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--color-text-success, #22c55e);vertical-align:middle;margin-right:5px"></span>';
+    var hollowDot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--color-text-secondary, #aaa);box-sizing:border-box;vertical-align:middle;margin-right:5px"></span>';
     var bookBlock = hasBlendedCmp
-      ? '<tr>' + rowLabel(violetSwatch + 'Hypothetical liquid book') + labels.map(function (l) { return blendedCell(hp[l]); }).join('') + '</tr>' +
-        '<tr>' + rowLabel(violetSwatch + 'Current liquid book', 'var(--color-text-secondary)') + labels.map(function (l) { return blendedCell(cp[l]); }).join('') + '</tr>' +
+      ? '<tr>' + rowLabel(fillDot + 'Hypothetical liquid book') + labels.map(function (l) { return blendedCell(hp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel(hollowDot + 'Current liquid book', 'var(--color-text-secondary)') + labels.map(function (l) { return blendedCell(cp[l]); }).join('') + '</tr>' +
         '<tr>' + rowLabel('\u0394 scenario \u2014 book') + labels.map(function (l) { return blendedDeltaCell(hp[l], cp[l]); }).join('') + '</tr>'
       : '';
     var headerNote = hasBlendedCmp
@@ -25974,8 +25977,8 @@ init();
       '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">' + headerNote + '</div>' +
       '<table style="border-collapse:collapse;font-size:10px">' + head +
         subHead('Your sleeve \u2014 your picks, ex-VOO') +
-        '<tr><td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</td>' + labels.map(function (l) { return bookCell(hp[l]); }).join('') + '</tr>' +
-        '<tr>' + rowLabel('Current sleeve', 'var(--color-text-secondary)') + labels.map(function (l) { return bookCell(cp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel(fillDot + 'Hypothetical sleeve', 'var(--color-text-primary)') + labels.map(function (l) { return bookCell(hp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel(hollowDot + 'Current sleeve', 'var(--color-text-secondary)') + labels.map(function (l) { return bookCell(cp[l]); }).join('') + '</tr>' +
         '<tr>' + rowLabel('\u0394 scenario \u2014 sleeve') + labels.map(function (l) { return deltaCell(hp[l], cp[l]); }).join('') + '</tr>' +
         (hasBlendedCmp ? subHead('Your book \u2014 those picks + your VOO core') : '') +
         bookBlock +
