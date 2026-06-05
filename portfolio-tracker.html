@@ -17877,6 +17877,10 @@ function computeThemeReturns(ticker) {
 // Compute current $ exposure for a theme.
 // "Existing" themes use the position list directly. "Missing" themes are zero by definition
 // (since they're not in BENCHMARKS.themes). Returns { dollars, percentOfActive }.
+// LEGACY / direct-only. Counts ONLY directly-tagged positions, as % of the active sleeve — it does NOT
+// see look-through (what you hold inside funds). Kept for reference, but theme readouts now use the
+// look-through truth via computeThemeExposureLookthrough() so they reconcile to the diversified-base %.
+// Do not reintroduce this as a theme-exposure source without a deliberate reason.
 function computeThemeExposure(themeName) {
   const open = positions.filter(p => !p.closed && p.ticker);
   const totalActive = open.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
@@ -18159,11 +18163,11 @@ function computeThemeClusters(hypo) {
     const k = r.key;
     if (overrides[k]) { // user override wins; map theme -> merged label if it has a benchmark
       const b = themeBench[overrides[k]];
-      return { label: b ? clusterLabelForBench(b) : overrides[k], why: 'you assigned this', isBase: false, key: k };
+      return { label: b ? clusterLabelForBench(b) : overrides[k], why: 'you assigned this', isBase: false, key: k, themes: [overrides[k]] };
     }
     if (directTheme[k]) {
       const b = themeBench[directTheme[k]];
-      return { label: b ? clusterLabelForBench(b) : directTheme[k], why: 'your direct position is tagged ' + directTheme[k], isBase: false, key: k };
+      return { label: b ? clusterLabelForBench(b) : directTheme[k], why: 'your direct position is tagged ' + directTheme[k], isBase: false, key: k, themes: [directTheme[k]] };
     }
     const fw = nameThemeFundW[k];
     if (fw && Object.keys(fw).length) {
@@ -18172,12 +18176,13 @@ function computeThemeClusters(hypo) {
       // necessarily a fund the user holds. Saying "sits in QQQ" falsely implies they own QQQ. The
       // honest statement: it's classified into this theme because it's a top benchmark constituent;
       // whether they actually hold it comes from their OWN funds (VOO etc.), shown in true-exposure.
-      return { label: clusterLabelForBench(bestFund), why: 'classified here — it\'s ' + fw[bestFund].toFixed(1) + '% of the ' + bestFund + ' benchmark (this name\'s weight inside that ETF — used to bucket it by theme, not your position size)', isBase: false, key: k };
+      return { label: clusterLabelForBench(bestFund), why: 'classified here — it\'s ' + fw[bestFund].toFixed(1) + '% of the ' + bestFund + ' benchmark (this name\'s weight inside that ETF — used to bucket it by theme, not your position size)', isBase: false, key: k, themes: (benchToThemes[bestFund] || []) };
     }
-    return { label: '__BASE__', why: 'only a broad-index constituent — no theme signal', isBase: true, key: k };
+    return { label: '__BASE__', why: 'only a broad-index constituent — no theme signal', isBase: true, key: k, themes: [] };
   };
 
   const clusters = {};
+  const byTheme = {}; // per-INDIVIDUAL-theme look-through $; via-fund names under a shared benchmark split equally across the merged themes (direct-tagged names go wholly to their one theme)
   let base = { total: 0, names: [] };
   rows.forEach(r => {
     const a = assign(r);
@@ -18185,6 +18190,7 @@ function computeThemeClusters(hypo) {
     if (!clusters[a.label]) clusters[a.label] = { label: a.label, total: 0, names: [] };
     clusters[a.label].total += r.total;
     clusters[a.label].names.push({ display: r.display, total: r.total, why: a.why, key: a.key, direct: r.direct, viaFunds: r.viaFunds });
+    if (a.themes && a.themes.length) { const share = r.total / a.themes.length; a.themes.forEach(thm => { byTheme[thm] = (byTheme[thm] || 0) + share; }); }
   });
 
   const ranked = Object.values(clusters).map(c => ({
@@ -18233,7 +18239,24 @@ function computeThemeClusters(hypo) {
     },
     biggest: ranked[0] || null,
     effectiveBets,
+    byTheme,                   // per-individual-theme look-through $, reconciled to fullBook (the same denom that yields the diversified-base %)
     allThemes: Object.keys(themeBench).sort() // for the override UI in stage 2
+  };
+}
+
+// Per-theme LOOK-THROUGH exposure (direct + everything you hold INSIDE funds), reconciled to the same
+// full book as the cluster engine — so every theme readout agrees with the diversified-base ("44%")
+// single truth. Return shape matches the legacy direct-only computeThemeExposure() so call sites swap
+// basis with no other change. hasPositions uses the same $1 "true gap" floor discovery already uses.
+// Pass a precomputed clusters object to avoid recomputing the whole engine per theme inside a loop.
+function computeThemeExposureLookthrough(themeName, clustersObj) {
+  const c = clustersObj || computeThemeClusters();
+  const dollars = (c && c.byTheme && c.byTheme[themeName]) || 0;
+  const denom = (c && (c.fullBook || c.totalBook)) || 0;
+  return {
+    dollars,
+    percentOfActive: denom > 0 ? (dollars / denom) * 100 : 0, // now % of the WHOLE book (look-through), matching cluster %s
+    hasPositions: dollars >= 1
   };
 }
 
@@ -18498,12 +18521,13 @@ function renderThemeUniverse() {
   // To enable, upgrade to Polygon Stocks Starter and re-add those windows to the backfill list.
   const longWindowCell = `<span style="color:var(--color-text-tertiary);opacity:0.4" title="5Y and 10Y windows require Polygon Stocks Starter ($30/mo) — free tier rejects dates older than 2 years.">—</span>`;
 
+  const _ltClusters = computeThemeClusters(); // one cluster pass; per-theme look-through read from it below
   const rows = all.map(t => {
     const isExisting = THEME_UNIVERSE.existing.some(e => e.name === t.name);
-    const exposure = computeThemeExposure(t.name);
+    const exposure = computeThemeExposureLookthrough(t.name, _ltClusters);
     const returns = computeThemeReturns(t.ticker);
 
-    const exposureCell = isExisting && exposure.hasPositions
+    const exposureCell = exposure.hasPositions
       ? `<span style="color:var(--color-text-secondary)">${fmtDollarWhole(exposure.dollars)}</span> <span style="color:var(--color-text-tertiary);font-size:9px">(${exposure.percentOfActive.toFixed(1)}%)</span>`
       : `<span style="color:var(--color-text-tertiary);font-style:italic">no exposure</span>`;
 
@@ -18581,7 +18605,7 @@ function renderThemeUniverse() {
             <th class="r">1Y</th>
             <th class="r">5Y</th>
             <th class="r">10Y</th>
-            <th class="r">Your Exposure</th>
+            <th class="r" title="True (look-through) exposure: your direct positions PLUS everything you hold inside the funds you own (VOO core, theme ETFs, etc.), as % of your whole book. Reconciles to the same look-through truth as the concentration view and its diversified-base figure.">Your Exposure <span style="font-weight:400;font-size:9px;color:var(--color-text-tertiary)">(look-through)</span></th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -18814,7 +18838,7 @@ function renderThemeClusters() {
 
       <div style="background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:10px;font-size:11px;line-height:1.55;color:var(--color-text-primary)">
         ${biggest ? `Your biggest moves-together block is <strong style="color:${biggest.pct >= 25 ? '#fbbf24' : 'var(--color-text-primary)'}">${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong> of your book — that's the chunk of you that rises and falls as one bet.` : ''}
-        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">On your whole book you behave like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} independent bets</strong> (lower = more concentrated). Your ${data.base.pct.toFixed(1)}% diversified base (VOO's broad holdings + fund tails) isn't a bet — it's hundreds of small positions, and holding that much of it is exactly what makes the count this high. The concentration lives in the themed blocks above it.</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">On your whole book you behave like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} effective positions</strong> (by weight; lower = more concentrated). This counts how spread your weight is, not how <em>uncorrelated</em> your bets are — co-moving blocks, and your base's shared equity beta, aren't independent of each other. Your ${data.base.pct.toFixed(1)}% diversified base (VOO's broad holdings + fund tails) isn't a bet — it's hundreds of small positions, and holding that much of it is exactly what makes the count this high. The concentration lives in the themed blocks above it.</div>
       </div>
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
@@ -19784,13 +19808,16 @@ function renderThemeDiscovery() {
 
 
 
-  // Theme exposure % per theme, for gap-weighting.
+  // Theme exposure % per theme, for gap-weighting. Look-through basis: a theme you hold only via funds
+  // is NOT a gap. Numerator (per-theme look-through $) and denom (totalBook) both come from the same
+  // computeTrueExposure rows, so the weighting stays internally consistent.
+  const _ltClusters = computeThemeClusters();
   const benchTheme = {}; // FUND -> theme
   const themePct = {};
   themeUniverseAll().forEach(t => {
     if (t.ticker) benchTheme[t.ticker.toUpperCase()] = t.name;
-    const ex = computeThemeExposure(t.name);
-    themePct[t.name] = totalBook > 0 ? (ex.dollars / totalBook) * 100 : 0;
+    const ltDollars = (_ltClusters.byTheme && _ltClusters.byTheme[t.name]) || 0;
+    themePct[t.name] = totalBook > 0 ? (ltDollars / totalBook) * 100 : 0;
   });
 
   // Mine every pasted fund's holdings for names. Only theme-benchmark funds map to a theme (so we
@@ -20171,7 +20198,7 @@ function buildBookAiPrompt() {
           }).join(', ');
           pl.push(`  · ${theme} (private): ${names}.`);
         });
-        pl.push(`Effective independent bets — public ${(clusters && clusters.effectiveBets || 0).toFixed(1)} → all-in at cost ${(allInCost && allInCost.effectiveBets || 0).toFixed(1)} → all-in at self-marked value ${(allInMkt && allInMkt.effectiveBets || 0).toFixed(1)} (lower = more concentrated). The self-marked lens concentrates the book more wherever a deal has marked up.`);
+        pl.push(`Effective positions by weight (NOT a correlation/independence measure — co-moving blocks and the base's shared equity beta are not independent) — public ${(clusters && clusters.effectiveBets || 0).toFixed(1)} → all-in at cost ${(allInCost && allInCost.effectiveBets || 0).toFixed(1)} → all-in at self-marked value ${(allInMkt && allInMkt.effectiveBets || 0).toFixed(1)} (lower = more concentrated). The self-marked lens concentrates the book more wherever a deal has marked up.`);
       }
       if (peCost.untaggedCount > 0) {
         pl.push(`NOTE: ${peCost.untaggedCount} private deal(s) totaling ~$${Math.round(peCost.untaggedValue).toLocaleString()} at cost are UNTAGGED and excluded from BOTH bases here — true private concentration may be higher than shown on either. Treat the private picture as incomplete; do not guess their themes.`);
@@ -20182,7 +20209,7 @@ function buildBookAiPrompt() {
 
   // --- Book structure (move-together themes) ---
   if (clusters && clusters.clusters && clusters.clusters.length) {
-    lines.push(`THEME CONCENTRATION (true exposure: direct + your look-through share inside funds you hold). Book behaves like ~${(clusters.effectiveBets || 0).toFixed(1)} independent bets (lower = more concentrated). Diversified base (broad-index tail, not a bet): ${clusters.base ? clusters.base.pct.toFixed(1) : '0'}%.`);
+    lines.push(`THEME CONCENTRATION (true exposure: direct + your look-through share inside funds you hold). Book behaves like ~${(clusters.effectiveBets || 0).toFixed(1)} effective positions by weight (lower = more concentrated; this measures weight spread, not return independence — co-moving blocks and the base's equity beta are correlated). Diversified base (broad-index tail, not a bet): ${clusters.base ? clusters.base.pct.toFixed(1) : '0'}%.`);
     clusters.clusters.forEach(c => {
       const all = (c.names || []).map(n => n.display);
       const shown = all.slice(0, 25);
@@ -20348,7 +20375,7 @@ Rules:
   • RISK FIGURES: maxDD/vol/return numbers exist ONLY for tickers explicitly listed with them — the selected discovery tickers, and any scenario tickers under "Recent price performance" in the staged what-if block. Do not state risk or return figures for any book holding (none were provided) or for any ticker not listed above with figures. EXCEPTION — scope, not loophole: a "RISK REVIEW" block, if present, gives PORTFOLIO-LEVEL (whole-book and, if folded in, whole-hypothetical-book) replayed return/drawdown figures for one historical window; you MAY cite those as the book's PAST behavior in that window. This does NOT license per-holding risk figures — none were provided for individual names; keep risk/return numbers either portfolio-level (from the RISK REVIEW block) or for the specific listed tickers, never invented per-name.
 
 Output in four sections:
-1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few independent bets, any theme resting on one name). FROM INPUTS, plainly stated. If a WHOLE-BOOK CONTEXT block is present, OPEN by situating the managed sleeve within the full book — what share of all-in AUM is the actively-picked sleeve vs the VOO diversified base vs the illiquid private sleeve — so every concentration you then discuss is read against the whole picture, not the managed sleeve in isolation.
+1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few effective positions by weight — describe this as weight concentration, never as statistical independence, since the metric measures weight spread not return correlation; any theme resting on one name). FROM INPUTS, plainly stated. If a WHOLE-BOOK CONTEXT block is present, OPEN by situating the managed sleeve within the full book — what share of all-in AUM is the actively-picked sleeve vs the VOO diversified base vs the illiquid private sleeve — so every concentration you then discuss is read against the whole picture, not the managed sleeve in isolation.
 2. GAPS & BLIND SPOTS — where the book is thin, absent, or exposed. This is the part that should generate ideas the user takes to a full evaluation.
 3. SELECTED CANDIDATES vs THE GAPS — for each selected discovery ticker: does it ADDRESS a gap or DEEPEN an existing concentration? How would it move true exposure? What would the user need to pressure-test in a full New Position Evaluation? Be willing to say a selected name is a poor structural fit. If none selected, say so and skip.
 4. DIRECTIONS WORTH EXPLORING — turn the gaps and concentrations above into QUESTIONS to investigate, not actions to take. THIS IS THE MOST DELICATE SECTION — strict rules:
@@ -20721,9 +20748,11 @@ function renderThemeUniverseDashTile() {
   if (!el) return;
 
   const all = themeUniverseAll();
-  // Filter to zero-exposure themes
+  // Filter to zero-exposure themes — look-through basis: a theme you hold even via funds (VOO etc.)
+  // is NOT a blind spot, so it drops off this list. Only themes you truly hold none of remain.
+  const _ltClusters = computeThemeClusters();
   const zeroExposure = all.map(t => {
-    const exposure = computeThemeExposure(t.name);
+    const exposure = computeThemeExposureLookthrough(t.name, _ltClusters);
     const returns = computeThemeReturns(t.ticker);
     return { ...t, exposure, returns };
   }).filter(t => !t.exposure.hasPositions);
