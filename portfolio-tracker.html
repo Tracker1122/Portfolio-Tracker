@@ -18909,19 +18909,11 @@ function renderSectorPanel() {
 
   // ---- The by-sector view (what your tags reveal) ----
   const biggest = data.sectors[0];
-  // "Hidden in base" insight: if a sector is substantially made of names that are NOT direct
-  // positions (i.e. they came via funds / would otherwise be "base"), call it out.
-  let hiddenNote = '';
-  if (data.sectors.length) {
-    const viaHeavy = data.sectors.find(s => {
-      const viaTotal = s.names.reduce((t, n) => t + ((n.direct || 0) === 0 ? n.total : 0), 0);
-      return viaTotal / s.total > 0.6 && s.pct >= 2; // mostly fund-embedded AND material
-    });
-    if (viaHeavy) {
-      const viaTotal = viaHeavy.names.reduce((t, n) => t + ((n.direct || 0) === 0 ? n.total : 0), 0);
-      hiddenNote = `<div style="font-size:10px;color:#fbbf24;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.4);border-radius:var(--border-radius-md);padding:8px 10px;margin:8px 0;line-height:1.5">⚠ <strong>${esc(viaHeavy.label)}</strong> is ${viaHeavy.pct.toFixed(1)}% of your book but ${fmtD(viaTotal)} of it is held only <em>inside funds</em> — it doesn\u2019t show up as positions you\u2019d recognize. This is the kind of latent cluster (scattered across funds like GRID/VOO) that "diversified base" was hiding.</div>`;
-    }
-  }
+  // (Former "hidden in base" latent-cluster callout removed: the "How your holdings move together"
+  // view now decomposes every fund and surfaces these clusters explicitly against the full book, so
+  // the diversified base no longer hides them. The note had become redundant — and contradictory,
+  // since it reported a sector's % on this panel's truncated book while the move-together view reports
+  // it on the full book. This panel keeps its non-redundant jobs: untagged names + undecomposed ETFs.)
 
   // (former sectorBlock list renderer removed — sectors now render as the compact chip grid below)
 
@@ -18987,7 +18979,6 @@ function renderSectorPanel() {
         const alerts = [];
         if (emptyHeldETFs.length) alerts.push(`<div style="font-size:10px;color:var(--color-text-danger);line-height:1.5"><span style="font-weight:700">● ${emptyHeldETFs.join(', ')} — held ETF${emptyHeldETFs.length > 1 ? 's' : ''} with no holdings pasted.</span> Paste ${emptyHeldETFs.length > 1 ? 'their' : 'its'} holdings in the index look-through table (True Exposure tab) — until then ${emptyHeldETFs.length > 1 ? 'their' : 'its'} underlying names are missing from every view here.</div>`);
         if (redCount) alerts.push(`<div style="font-size:10px;color:var(--color-text-danger);line-height:1.5"><span style="font-weight:700">● ${redCount} untagged position${redCount > 1 ? 's' : ''} with real exposure</span> — meaningful dollars with no sector, so they're missing from the breakdown. Hit "Tag sectors"; they sort to the top.</div>`);
-        if (hiddenNote) alerts.push(hiddenNote.replace(/<div[^>]*>/, '<div style="font-size:10px;color:#fbbf24;line-height:1.5">'));
         if (alerts.length) {
           return `<div style="background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.3);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:10px;display:flex;flex-direction:column;gap:7px">
             <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-danger)">⚑ Check these — hidden or missing exposure</div>
@@ -18998,7 +18989,7 @@ function renderSectorPanel() {
       })()}
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        This lens exists to catch what your theme view above can't: industry exposure hidden inside funds, untagged positions, and undecomposed ETFs — surfaced as the flags above. ${aiCount > 0 ? `Claude pre-labeled ${aiCount} names${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} flagged ⚠ verify</span>` : ''} — yours to override. ` : ''}The full sector ranking mostly echoes the bar above, so it's not shown; tag names below to keep the flags sharp. ${data.taggedPct < 100 ? `<span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged</span> — flags are a floor until the rest is tagged.` : ''}
+        This lens works the <em>sector</em> axis — what each holding <strong>is</strong> (industry), as opposed to the theme view's how-it-trades. Its job here is to flag what the other views can't: untagged positions and undecomposed ETFs — surfaced as the flags above. ${aiCount > 0 ? `Claude pre-labeled ${aiCount} names${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} flagged ⚠ verify</span>` : ''} — yours to override. ` : ''}The full sector ranking mostly echoes the bar above, so it's not shown; tag names below to keep the flags sharp. ${data.taggedPct < 100 ? `<span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged</span> — flags are a floor until the rest is tagged.` : ''}
       </div>
       ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names) — tag the big ones below.</div>` : ''}
 
