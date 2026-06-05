@@ -3825,7 +3825,7 @@ function renderRealizedLedger(mountId, mountKey) {
       <div class="eff-block"><span class="eff-label">ST gains</span><span class="eff-value" style="font-size:14px">${fmtDollarWhole(data.stGains)}</span><span class="eff-breakdown">tax ~${fmtDollarWhole(data.stTax)} @ ${(stRate*100).toFixed(0)}%</span></div>
       <div class="eff-block"><span class="eff-label">Losses harvested</span><span class="eff-value" style="font-size:14px;color:var(--color-text-success)">${fmtDollarWhole(data.harvested)}</span><span class="eff-breakdown">saves ~${fmtDollarWhole(data.harvestOffset)} in tax</span></div>
       <div class="eff-block"><span class="eff-label">Est. net bill</span><span class="eff-value" style="font-size:14px;color:${data.netBill>0?'var(--color-text-danger)':'var(--color-text-success)'}">${fmtDollarWhole(data.netBill)}</span><span class="eff-breakdown">${data.carryIn > 0 ? 'after harvest + carryforward' : 'after harvest offset'}</span></div>
-    </div>${data.carryIn > 0 ? `<div style="font-size:10px;color:var(--color-text-tertiary);margin:-8px 0 12px">Includes ${fmtDollarWhole(data.carryIn)} capital-loss carryforward from prior years${data.carryforwardTaxSaved > 0 ? ` — saves ~${fmtDollarWhole(data.carryforwardTaxSaved)} this year` : ''}.</div>` : ''}`;
+    </div>${data.carryIn > 0 ? `<div style="font-size:10px;color:var(--color-text-tertiary);margin:-8px 0 12px">Includes ${fmtDollarWhole(data.carryIn)} capital-loss carryforward from prior years${data.carryforwardTaxSaved > 0 ? ` — saves ~${fmtDollarWhole(data.carryforwardTaxSaved)} this year` : ''}.</div>` : ''}<div style="font-size:9px;color:var(--color-text-tertiary);margin:-4px 0 12px;line-height:1.5">Netting: this year's harvested losses are matched to gains of the same holding period first (ST vs ST, LT vs LT), then cross-applied — IRS Schedule&nbsp;D order. Simplifications: a prior-year carryforward's own ST/LT character isn't tracked (it's applied to ST gains first), and the $3,000 ordinary-income offset isn't applied to this year's bill. A CPA should confirm.</div>`;
 
   // Itemized table
   let tableRows = '';
@@ -4551,14 +4551,14 @@ function renderTrackRecordCards() {
     const winStr = t.avgWin !== null ? fmtDollarWhole(t.avgWin) : '—';
     const lossStr = t.avgLoss !== null ? fmtDollarWhole(t.avgLoss) : '—';
     edgeCard = `
-      <div class="summary-card" title="Average dollar gain across ${t.winners} winning close${t.winners!==1?'s':''}, vs average dollar loss across ${t.losers} losing close${t.losers!==1?'s':''}. After-tax adjusts only the winner side at LT/ST rates depending on hold period (Oregon resident defaults: ${(TAX_RATE_LT*100).toFixed(0)}% LT / ${(TAX_RATE_ST*100).toFixed(0)}% ST). IRA gains untaxed.">
+      <div class="summary-card" title="Average dollar gain across ${t.winners} winning close${t.winners!==1?'s':''}, vs average dollar loss across ${t.losers} losing close${t.losers!==1?'s':''}. After-tax adjusts only the winner side at LT/ST rates depending on hold period (Oregon resident defaults: ${(TAX_RATE_LT*100).toFixed(0)}% LT / ${(TAX_RATE_ST*100).toFixed(0)}% ST). IRA gains untaxed. Losses are shown at face value — no tax shield is assumed, because a loss's tax value depends on offsetting gains elsewhere and can't be known per-position. This slightly understates after-tax results on the loss side.">
         <div class="summary-card-label">Avg Win / Loss</div>
         <div class="summary-card-value" style="font-size:13px">
           <span class="success">${winStr}</span>
           <span style="color:var(--color-text-tertiary);font-weight:400"> / </span>
           <span class="danger">${lossStr}</span>
         </div>
-        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">after-tax: <span class="success">${winATXStr}</span> / <span class="danger">${lossATXStr}</span></div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">after-tax: <span class="success">${winATXStr}</span> / <span class="danger">${lossATXStr}</span> <span style="opacity:.7">(losses at face value)</span></div>
         <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px">${t.winners}W · ${t.losers}L</div>
       </div>
     `;
@@ -14917,7 +14917,7 @@ function candExportPdf() {
     pePdfBasisNote() +
     `<h2>Risk review — historical stress test</h2><div>${(() => { try { return riskReviewPdfSection(cleanFrag, esc2); } catch (e) { return ''; } })()}</div>` +
     `<h2>AI review</h2><div class="section">${aiHtml}</div>` +
-    `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting, harvested-loss and prior-year carryforward offsets; no $3,000 ordinary-income offset; losses not split by ST/LT character) — a CPA should confirm the actual figures.</div>` +
+    `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting within holding period then cross-applied; harvested-loss and prior-year carryforward offsets; carryforward character not tracked; no $3,000 ordinary-income offset on the current-year bill) — a CPA should confirm the actual figures.</div>` +
     `</div></body></html>`;
 
   const w = window.open('', '_blank');
