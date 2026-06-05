@@ -8438,8 +8438,9 @@ function renderQrForm() {
 
   const stage2Html = stage2 ? `
       <div style="margin-top:12px">${stage2FieldsHtml}</div>
-      <div style="display:flex;gap:8px;margin-top:6px">
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
         <button class="btn btn-sm btn-primary" onclick="saveQrCandidate()" style="font-size:11px">${editing ? '✓ Update Candidate' : '✓ Done — save candidate'}</button>
+        <button class="btn btn-sm" onclick="saveQrCandidate(true); if (typeof qrEditingId !== 'undefined' && qrEditingId) qrStageAsBuy(qrEditingId);" style="font-size:11px;border-color:var(--color-text-info);color:var(--color-text-info)" title="Save this candidate and add it as a buy in the trade below (uses the buy amount you set). All inputs persist; if no amount is set you'll be asked to size it.">⊕ Add to trade →</button>
         <button class="btn btn-sm" onclick="resetQrForm()" style="font-size:11px">${editing ? 'Cancel Edit' : 'Clear'}</button>
       </div>`
     : `
@@ -9691,26 +9692,11 @@ function qrStageAsBuy(id) {
   if (typeof switchTab === 'function') switchTab('evaltrade');
   const setV = (i, v) => { const el = document.getElementById(i); if (el) el.value = v; };
 
-  // EMPTY-AMOUNT FALLBACK — no sized buy on the candidate: drop it into the staging form, focused on
-  // the amount box, rather than queueing a zero. The user types the amount and hits "+ Add to scenario".
+  // EMPTY-AMOUNT FALLBACK — no sized buy yet. Buys are sized in the checklist now, so open this
+  // candidate there and focus its amount field rather than queueing a $0.
   if (amount <= 0) {
-    if (c.type === 'etf') {
-      if (typeof candSetMode === 'function') candSetMode('etf');
-      setV('cand-etf-ticker', T); setV('cand-etf-theme', theme); setV('cand-etf-sleeve', sleeve);
-      if (c.cachedHoldings && Array.isArray(c.cachedHoldings.parsed) && c.cachedHoldings.parsed.length) {
-        const ta = document.getElementById('cand-etf-paste');
-        if (ta) ta.value = c.cachedHoldings.parsed.filter(p => p.weight != null).map(p => `${p.ticker} ${p.weight}`).join('\n');
-      }
-      if (typeof candReadout === 'function') candReadout();
-      setTimeout(() => { const a = document.getElementById('cand-etf-amount'); if (a) { try { a.focus(); } catch (e) {} } }, 160);
-    } else {
-      if (typeof candSetMode === 'function') candSetMode('stock');
-      setV('cand-ticker', T); setV('cand-theme', theme); setV('cand-sleeve', sleeve);
-      if (typeof candReadout === 'function') candReadout();
-      setTimeout(() => { const a = document.getElementById('cand-amount'); if (a) { try { a.focus(); } catch (e) {} } }, 160);
-    }
-    const p0 = document.getElementById('theme-candidate-panel');
-    if (p0 && p0.scrollIntoView) { try { p0.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {} }
+    if (typeof editQrCandidate === 'function') editQrCandidate(id);
+    setTimeout(() => { const a = document.getElementById('qr-buy-amount'); if (a) { try { a.focus(); a.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} } }, 180);
     return;
   }
 
@@ -14396,31 +14382,9 @@ function _candUnitOff() { return 'font-size:10px;cursor:pointer;padding:3px 9px;
 
 function _candShellHtml() {
   return `
-    <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
-      <span id="cand-mode-stock" onclick="candSetMode('stock')" style="${_candPillOff()}">Add stock</span>
-      <span id="cand-mode-etf" onclick="candSetMode('etf')" style="${_candPillOff()}">Add ETF</span>
-      <span id="cand-mode-trim" onclick="candSetMode('trim')" style="${_candPillOff()}">Trim</span>
-    </div>
-    <div id="cand-stock-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-      <input id="cand-ticker" class="modal-input" type="text" placeholder="Ticker" style="width:90px;font-size:11px;padding:4px 8px;text-transform:uppercase" oninput="candReadout()">
-      <span style="font-size:11px;color:var(--color-text-tertiary)">$</span>
-      <input id="cand-amount" class="modal-input" type="number" placeholder="Amount" style="width:110px;font-size:11px;padding:4px 8px" oninput="candReadout()">
-      <select id="cand-theme" class="modal-input" style="font-size:11px;padding:4px 8px"><option value="">— Theme (optional) —</option></select>
-      <select id="cand-sleeve" class="modal-input" style="font-size:11px;padding:4px 8px"><option value="">— Sleeve (optional) —</option></select>
-    </div>
-    <div id="cand-etf-row" style="display:none;flex-direction:column;gap:8px">
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        <input id="cand-etf-ticker" class="modal-input" type="text" placeholder="ETF" style="width:90px;font-size:11px;padding:4px 8px;text-transform:uppercase" oninput="candReadout()">
-        <span style="font-size:11px;color:var(--color-text-tertiary)">$</span>
-        <input id="cand-etf-amount" class="modal-input" type="number" placeholder="Amount" style="width:110px;font-size:11px;padding:4px 8px" oninput="candReadout()">
-        <select id="cand-etf-theme" class="modal-input" style="font-size:11px;padding:4px 8px" title="Where the UNCOVERED remainder of the ETF (anything you don't paste, or the gap below 100%) gets bucketed."><option value="">— Theme for the rest —</option></select>
-        <select id="cand-etf-sleeve" class="modal-input" style="font-size:11px;padding:4px 8px"><option value="">— Sleeve (optional) —</option></select>
-      </div>
-      <div style="font-size:9px;color:var(--color-text-tertiary)">Need the holdings? <a href="#" onclick="candOpenHoldingsSource(event)" style="color:var(--color-text-info);text-decoration:underline">↗ Open this ETF on stockanalysis.com</a> (free) — copy the holdings table and paste it below. Row #, name &amp; shares are ignored automatically.</div>
-      <textarea id="cand-etf-paste" placeholder="Paste the ETF's holdings — ticker + %weight per line (same format as the Distribution look-through paste). Covered names spread the add by weight; the uncovered remainder routes to the theme above." oninput="candEtfPastePreview()" style="width:100%;box-sizing:border-box;min-height:54px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-size:10px;padding:6px 8px;font-family:inherit"></textarea>
-      <div id="cand-etf-preview" style="font-size:9px;color:var(--color-text-tertiary)"></div>
-    </div>
-    <div id="cand-trim-row" style="display:none;flex-wrap:wrap;gap:8px;align-items:center">
+    <div class="section-heading" style="margin-top:2px">Trim from the trade</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">Sell from your <strong>hypothetical book</strong> — your real holdings plus any buys you staged from the checklist above. Real holdings trim with full lot / gain / tax detail.</div>
+    <div id="cand-trim-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
       <select id="cand-holding" class="modal-input" style="font-size:11px;padding:4px 8px;max-width:280px" onchange="candOnHoldingPick()"><option value="">— Pick a holding —</option></select>
       <select id="cand-lot" class="modal-input" style="font-size:11px;padding:4px 8px;max-width:320px" onchange="candReadout()" title="Pick a specific tax lot for an exact gain / short-vs-long-term / IRA-shelter read, or leave on Whole position to trim across all lots pro-rata."><option value="">— Whole position (blended) —</option></select>
       <input id="cand-trim-amt" class="modal-input" type="number" placeholder="Amount" style="width:100px;font-size:11px;padding:4px 8px" oninput="candReadout()">
@@ -14432,8 +14396,8 @@ function _candShellHtml() {
     </div>
     <div id="cand-readout" style="font-size:10px;color:var(--color-text-tertiary);margin-top:6px;min-height:13px"></div>
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button class="btn btn-sm" onclick="candAddToQueue()" style="font-size:11px">+ Add to scenario</button>
-      <button class="btn btn-sm" onclick="candClearScenario()" style="font-size:11px">Clear scenario</button>
+      <button class="btn btn-sm" onclick="candAddToQueue()" style="font-size:11px">+ Add trim</button>
+      <button class="btn btn-sm" onclick="candClearScenario()" style="font-size:11px">Clear trade</button>
       <button class="btn btn-sm" onclick="candExportPdf()" style="font-size:11px" title="Export this scenario summary and the AI review as a PDF to share with an advisor">⤓ Export PDF</button>
     </div>
     <div id="cand-queue" style="margin-top:8px"></div>
@@ -14444,10 +14408,10 @@ function _candShellHtml() {
 function renderCandidatePanel() {
   const host = document.getElementById('theme-candidate-panel');
   if (!host) return;
-  if (!document.getElementById('cand-ticker')) {
+  if (!document.getElementById('cand-trim-row')) {
     host.innerHTML = `<div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">Test a candidate — sized what-if</div>
-      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">Stage a sized move — add a stock, add an ETF (paste its holdings so the look-through spreads across names), or trim a holding — and link several together (e.g. buy VDE <i>and</i> sell V). You'll see the TRUE-EXPOSURE cluster shift (direct + your share inside funds you own), how individual names move, and the sleeve shift. Data only; the AI book review below folds whatever you stage here into its read — there's no separate AI button here.</div>
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">Build the trade</div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">Buys come from the checklist above — fill a candidate and hit <strong>Add to trade</strong>. Down here you trim from the hypothetical book (your holdings + staged buys) and link several moves together (e.g. buy VDE <i>and</i> sell V). You'll see the TRUE-EXPOSURE cluster shift (direct + your share inside funds you own), how individual names move, the tax, and the sleeve shift. The AI book review below folds whatever you stage here into its read.</div>
       ${_candShellHtml()}
     </div>`;
   }
@@ -14468,7 +14432,7 @@ function renderCandidatePanel() {
     if (cur) hold.value = cur;
   }
   candPopulateLots();
-  candSetMode(_candMode);
+  candSetMode('trim');
   candSetTrimUnit(_candTrimUnit);
   candRenderQueue();
   // The Themes tab rebuilds this whole panel (including #cand-output) on every render, so the queue is
@@ -15155,7 +15119,7 @@ function candRenderQueue() {
   el.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px"><span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Scenario (${_candQueue.length} move${_candQueue.length === 1 ? '' : 's'})</span>${refreshBtn}</div>` +
     totalsLine +
     _candQueue.map((tr, i) => `<div style="padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this move back into the form to edit it">edit</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none">${tr.kind === 'trim' ? `<span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this trim back into the form to edit it">edit</span>` : `<span style="color:var(--color-text-tertiary);font-size:9px" title="Buys come from the checklist — remove this and re-stage from above to change it">checklist buy</span>`}<span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
       ${_candPerfLineHtml(tr.ticker)}
     </div>`).join('') +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">Recent performance via Polygon daily bars; * = under ~1Y of history. Informational — not a return forecast.</div>`;
@@ -15391,17 +15355,17 @@ function candToggleTaxDetail(open) { _candTaxDetailOpen = !!open; }
 function candStageFromDiscovery(ticker, theme) {
   const T = (ticker || '').toUpperCase().trim();
   if (!T) return;
-  // The candidate panel now lives in the "Evaluate a Trade" tab. Switch there first so the staging
-  // form is rendered + visible before we fill it (switchTab re-renders renderCandidatePanel).
+  // Buys go through the checklist now. Switch to the tab, start a fresh stock candidate, prefill the
+  // ticker (and theme if it matches the options), and drop the user at the top of the checklist.
   if (typeof switchTab === 'function') switchTab('evaltrade');
-  if (typeof candSetMode === 'function') candSetMode('stock');
-  const tEl = document.getElementById('cand-ticker'); if (tEl) tEl.value = T;
-  const thEl = document.getElementById('cand-theme');
-  if (thEl && theme && Array.from(thEl.options).some(o => o.value === theme)) thEl.value = theme;
-  if (typeof candReadout === 'function') candReadout();
-  const panel = document.getElementById('theme-candidate-panel');
-  if (panel && panel.scrollIntoView) { try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { } }
-  setTimeout(function () { const amt = document.getElementById('cand-amount'); if (amt) { try { amt.focus(); } catch (e) { } } }, 160);
+  if (typeof resetQrForm === 'function') resetQrForm();
+  if (typeof setQrType === 'function') setQrType('stock');
+  const tk = document.getElementById('qr-ticker'); if (tk) tk.value = T;
+  const th = document.getElementById('qr-theme');
+  if (th && theme && Array.from(th.options).some(o => o.value === theme)) th.value = theme;
+  const tab = document.getElementById('tab-evaltrade');
+  if (tab && tab.scrollIntoView) { try { tab.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { } }
+  setTimeout(function () { const tkf = document.getElementById('qr-ticker'); if (tkf) { try { tkf.focus(); } catch (e) { } } }, 160);
 }
 
 function candCompute() {
