@@ -10318,11 +10318,11 @@ function riskReviewAiFacts() {
       else if (c.moveCount) L.push(`The staged scenario folded in: ${c.moveCount} move(s)${(c.newTickers && c.newTickers.length) ? ', new name(s): ' + c.newTickers.join(', ') : ''}.`);
       if (c.compareCurrent && c.compareCurrent.junctions && c.compareCurrent.junctions.length) {
         const cj = c.compareCurrent.junctions.map(j => (j.pending || j.missing || j.bookPct == null) ? `${j.label}: —` : `${j.label} ${sgn(j.bookPct)}`).join('; ');
-        L.push(`For comparison, the user's ACTUAL book (no scenario) over the SAME window: ${cj}. The difference between the two books IS the scenario's effect — each book is measured against its OWN pre-event high, so a point-by-point gap is a fair level-vs-level difference.`);
+        L.push(`For comparison, the user's ACTUAL active sleeve (no scenario) over the SAME window: ${cj}. The difference between the two sleeves IS the scenario's effect — each is measured against its OWN pre-event high, so a point-by-point gap is a fair level-vs-level difference.`);
       }
       L.push(`NOTE: the folded-in scenario reflects the user's single staged what-if queue, which BOTH AI tabs feed. It may or may not correspond to the specific candidate or selection under discussion in THIS analysis — do not assume they are the same set of moves unless the moves listed above match it.`);
     } else if (c.scenarioStagedNotShown) {
-      L.push(`A what-if scenario IS staged but is NOT folded into the displayed card — the user is currently viewing their actual book. (Toggling "fold in staged scenario" in Risk Review would show the hypothetical version.)`);
+      L.push(`A what-if scenario IS staged but is NOT folded into the displayed card — the user is currently viewing their actual active sleeve. (Toggling "fold in staged scenario" in Risk Review would show the hypothetical version.)`);
     }
     return L.join('\n');
   } catch (e) { return ''; }
@@ -25775,7 +25775,11 @@ init();
   function replaySummaryText(model) {
     if (!model.hasData) return '';
     var range = model.dateRange ? ' (' + model.dateRange + ')' : '';
-    var J = model.junctions, s = ['This replays your active sleeve \u2014 your direct picks, before your VOO core \u2014 through the ' + (model.windowLabel || 'this window') + range + '.'];
+    var isHypoCard = !!(model.scenarioNote || model.compare);
+    var _lead = isHypoCard
+      ? 'This replays your active sleeve with the staged scenario folded in, through the ' + (model.windowLabel || 'this window') + range + '.'
+      : 'This replays your active sleeve \u2014 your direct picks, before your VOO core \u2014 through the ' + (model.windowLabel || 'this window') + range + '.';
+    var J = model.junctions, s = [_lead];
     if (J && J.length) {
       var low = J[0], lowStr = 'At the low it was ' + (low.bookPct >= 0 ? 'up ' : 'down ') + Math.abs(low.bookPct).toFixed(1) + '%';
       if (model.drawdownPct != null && low.bookPct != null && model.drawdownPct < low.bookPct - 0.5) lowStr += ' (dipping ' + Math.abs(model.drawdownPct).toFixed(1) + '% at its worst)';
@@ -25911,14 +25915,14 @@ init();
     function rowLabel(txt, color) { return '<td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:' + (color || tert) + '">' + txt + '</td>'; }
     var blueSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
     return '<div style="margin-top:7px">' +
-      '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">Book vs book at each marked point \u2014 level vs the pre-event high. \u201c\u0394 scenario\u201d = hypothetical \u2212 current, in points.</div>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">Sleeve vs sleeve at each marked point \u2014 level vs the pre-event high. \u201c\u0394 scenario\u201d = hypothetical \u2212 current sleeve, in points.</div>' +
       '<table style="border-collapse:collapse;font-size:10px">' + head +
-        '<tr><td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:var(--color-text-info, #60a5fa)">Hypothetical</td>' + labels.map(function (l) { return bookCell(hp[l]); }).join('') + '</tr>' +
-        '<tr>' + rowLabel('Current', 'var(--color-text-secondary)') + labels.map(function (l) { return bookCell(cp[l]); }).join('') + '</tr>' +
+        '<tr><td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</td>' + labels.map(function (l) { return bookCell(hp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel('Current sleeve', 'var(--color-text-secondary)') + labels.map(function (l) { return bookCell(cp[l]); }).join('') + '</tr>' +
         '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel('\u0394 scenario') + labels.map(function (l) { return deltaCell(hp[l], cp[l]); }).join('') + '</tr>' +
         '<tr>' + rowLabel(blueSwatch + 'VOO') + labels.map(function (l) { return vooCell(hp[l], cp[l]); }).join('') + '</tr>' +
       '</table>' +
-      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">Chart above is the hypothetical book. Untick \u201cfold in\u201d to see the actual-book chart.</div>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">Chart above is the hypothetical sleeve. Untick \u201cfold in\u201d to see the actual-sleeve chart.</div>' +
     '</div>';
   }
 
@@ -25929,14 +25933,14 @@ init();
   function _dp(x) { return (x >= 0 ? '+' : '') + x.toFixed(1); }
   function _holistic(ds) {
     var eps = 0.05, maxAbs = Math.max.apply(null, ds.map(function (d) { return Math.abs(d); }));
-    if (maxAbs < 0.5) return 'So the scenario barely moves the book at any of the marked points.';
+    if (maxAbs < 0.5) return 'So the scenario barely moves the sleeve at any of the marked points.';
     var first = ds[0], last = ds[ds.length - 1];
     var pos = ds.every(function (d) { return d >= -eps; }), neg = ds.every(function (d) { return d <= eps; });
     function rng() { var a = ds.map(function (d) { return Math.abs(d); }); return Math.min.apply(null, a).toFixed(1) + '\u2013' + Math.max.apply(null, a).toFixed(1); }
-    if (pos && !neg) return 'So the scenario keeps the book higher at every marked point (by ' + rng() + ' pts).';
-    if (neg && !pos) return 'So the scenario leaves the book lower at every marked point (by ' + rng() + ' pts).';
+    if (pos && !neg) return 'So the scenario keeps the sleeve higher at every marked point (by ' + rng() + ' pts).';
+    if (neg && !pos) return 'So the scenario leaves the sleeve lower at every marked point (by ' + rng() + ' pts).';
     if (first < -eps && last > eps) return 'So it digs a deeper hole at the low but ends higher \u2014 a more volatile path that finishes ahead here.';
-    if (first > eps && last < -eps) return 'So it cushions the drop early but finishes lower than your current book.';
+    if (first > eps && last < -eps) return 'So it cushions the drop early but finishes lower than your current sleeve.';
     return 'So the effect is mixed across the points \u2014 read the \u0394 row above point by point.';
   }
   function renderScenarioDiffText(model) {
@@ -25953,9 +25957,9 @@ init();
     // Point 1: the low (or earliest available), with absolutes + drawdown framing.
     if (first.label === 'low') {
       if (Math.abs(first.d) < 0.05) s.push('At the low the scenario barely moves the bottom (both about ' + first.c.toFixed(1) + '%).');
-      else s.push('At the low the book bottoms at ' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ' \u2014 ' + Math.abs(first.d).toFixed(1) + ' pts ' + (first.d > 0 ? 'shallower' : 'deeper') + '.');
+      else s.push('At the low the sleeve bottoms at ' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ' \u2014 ' + Math.abs(first.d).toFixed(1) + ' pts ' + (first.d > 0 ? 'shallower' : 'deeper') + '.');
     } else {
-      s.push('At ' + first.label + ' the book sits ' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ' (' + _dp(first.d) + ' pts).');
+      s.push('At ' + first.label + ' the sleeve sits ' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ' (' + _dp(first.d) + ' pts).');
     }
     // Point 2..n: the gap at each subsequent marked point, as a trajectory, ending on absolutes.
     var fwd = pts.slice(1);
@@ -25963,7 +25967,7 @@ init();
       var legs = fwd.map(function (p) { return (Math.abs(p.d) < 0.05 ? 'even' : _dp(p.d)) + ' at ' + p.label; });
       for (var k = legs.length - 1; k >= 0; k--) { if (Math.abs(fwd[k].d) >= 0.05) { legs[k] = _dp(fwd[k].d) + ' pts at ' + fwd[k].label; break; } }
       var joined = legs.join(', ').replace(/, ([^,]*)$/, ' and $1');
-      s.push('Versus your current book it then runs ' + joined + ' (ending ' + _pctSigned(last.h) + ' vs ' + _pctSigned(last.c) + ').');
+      s.push('Versus your current sleeve it then runs ' + joined + ' (ending ' + _pctSigned(last.h) + ' vs ' + _pctSigned(last.c) + ').');
     }
     // Holistic pattern across all points.
     if (pts.length >= 2) s.push(_holistic(pts.map(function (p) { return p.d; })));
@@ -26040,7 +26044,7 @@ init();
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
         (model.dateRange ? '<span style="font-size:10px;color:var(--color-text-tertiary)">' + model.dateRange + '</span>' : '') +
       '</div>' +
-      (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical book</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
+      (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
       replaySummaryText(model) +
       chart +
       (model.compare
@@ -26145,7 +26149,7 @@ init();
     }).join('');
     el.innerHTML =
       '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
-      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed \u2014 click a window button to add or refresh it, or click a row to bring its chart back up. A \u201c\u21b3 hypothetical\u201d row is the same window run on your book <em>plus</em> the staged scenario, so you can read the scenario\u2019s effect against the actual book directly above it. \u201cvs Mkt\u201d = book return minus VOO over the same window; blue path = VOO. \u201cRec\u201d = book level vs its pre-event high at 6mo / 1Y / 2Y after the window low.</div>' +
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed \u2014 click a window button to add or refresh it, or click a row to bring its chart back up. A \u201c\u21b3 hypothetical\u201d row is the same window run on your active sleeve <em>plus</em> the staged scenario, so you can read the scenario\u2019s effect against the actual sleeve directly above it. \u201cvs Mkt\u201d = sleeve return minus VOO over the same window; blue path = VOO. \u201cRec\u201d = sleeve level vs its pre-event high at 6mo / 1Y / 2Y after the window low.</div>' +
       '<table style="border-collapse:collapse;width:100%;max-width:640px">' + header + rows + '</table>';
   }
 
@@ -26196,8 +26200,8 @@ init();
           curModel = await _replayModel(win, {});
           if (curModel) { _summaryRows[curKey] = { winId: win.id, label: win.label, variant: 'cur', model: curModel }; renderSummaryTable(); }
         }
-        var note = 'your current holdings + ' + hypo.moveCount + ' staged move' + (hypo.moveCount > 1 ? 's' : '') + '.' +
-          (hypo.newTickers.length ? ' New: ' + hypo.newTickers.join(', ') + '.' : '') + ' Untick \u201cfold in\u201d to see your actual book.';
+        var note = 'your active sleeve + ' + hypo.moveCount + ' staged move' + (hypo.moveCount > 1 ? 's' : '') + '.' +
+          (hypo.newTickers.length ? ' New: ' + hypo.newTickers.join(', ') + '.' : '') + ' Untick \u201cfold in\u201d to see your actual sleeve.';
         var hypoModel = await _replayModel(win, { weights: hypo.weights, scenario: note });
         if (hypoModel) {
           if (curModel) hypoModel.compare = curModel;
@@ -26243,7 +26247,7 @@ init();
     var bar = document.createElement('div');
     bar.style.cssText = 'margin:8px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
     bar.innerHTML = '<button class="btn btn-sm risk-stress-jump" style="font-size:10px;padding:5px 12px">\u26a1 Stress-test this scenario in Risk Review \u2192</button>' +
-      '<span style="font-size:9px;color:var(--color-text-tertiary)">Replays your book + the staged moves through a real crash window, vs your actual book.</span>';
+      '<span style="font-size:9px;color:var(--color-text-tertiary)">Replays your active sleeve + the staged moves through a real crash window, vs your actual sleeve.</span>';
     bar.querySelector('button').addEventListener('click', function () { stressScenario('tech2022'); });
     panel.insertBefore(bar, panel.firstChild);
   }
