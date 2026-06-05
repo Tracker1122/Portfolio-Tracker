@@ -26059,31 +26059,31 @@ init();
       var minV = 0;
       rows.forEach(function (r) { [r.a, r.b, r.voo].forEach(function (v) { if (v != null && v < minV) minV = v; }); });
       var FLOOR = Math.min(minV * 1.12, -4);               // most-negative value, with headroom (always negative)
-      var W = 200, EVEN = 30, BOT = 80, REC = 17, LBLY = 90, xL = 16, xR = 190, n = rows.length;
+      // Large coordinate space + capped display width below, so fonts/dots render at a sane size
+      // instead of being magnified by a narrow viewBox stretched across a wide card.
+      var W = 480, H = 222, EVEN = 66, BOT = 186, REC = 42, LBLY = 210, xL = 44, xR = 452, n = rows.length;
       function xAt(i) { return n === 1 ? (xL + xR) / 2 : xL + (xR - xL) * (i / (n - 1)); }
       function yAt(v) { return v >= 0 ? REC : EVEN + (v / FLOOR) * (BOT - EVEN); }
-      var s = '<svg viewBox="0 0 ' + W + ' 96" width="100%" style="display:block;height:auto;overflow:visible;font-family:inherit">';
-      s += '<rect x="' + xL + '" y="6" width="' + (xR - xL) + '" height="' + (EVEN - 6) + '" fill="' + succ + '" fill-opacity="0.07"/>';
-      s += '<text x="' + xL + '" y="13.5" font-size="6" fill="' + succ + '" opacity="0.85">back to even or better \u2713</text>';
-      s += '<line x1="' + xL + '" y1="' + EVEN + '" x2="' + xR + '" y2="' + EVEN + '" stroke="' + tert + '" stroke-width="0.6" stroke-dasharray="3 2" stroke-opacity="0.7"/>';
-      s += '<text x="' + xR + '" y="' + (EVEN - 2) + '" font-size="6" fill="' + tert + '" text-anchor="end">even (pre-event high)</text>';
+      var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block;height:auto;overflow:visible;font-family:inherit">';
+      s += '<rect x="' + xL + '" y="12" width="' + (xR - xL) + '" height="' + (EVEN - 12) + '" fill="' + succ + '" fill-opacity="0.06"/>';
+      s += '<text x="' + xL + '" y="28" font-size="12" fill="' + succ + '" opacity="0.85">back to even or better \u2713</text>';
+      s += '<line x1="' + xL + '" y1="' + EVEN + '" x2="' + xR + '" y2="' + EVEN + '" stroke="' + tert + '" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.7"/>';
+      s += '<text x="' + xR + '" y="' + (EVEN - 4) + '" font-size="10.5" fill="' + tert + '" text-anchor="end">even (pre-event high)</text>';
       rows.forEach(function (r, i) {
         var x = xAt(i), hasA = r.a != null, hasB = r.b != null;
         var ya = hasA ? yAt(r.a) : 0, yb = hasB ? yAt(r.b) : 0, bothRec = hasA && hasB && r.a >= 0 && r.b >= 0;
         if (hasA && hasB && !bothRec) {
           var cc = (p.conn === 'delta') ? (r.b >= r.a ? succ : dang) : tert;
-          s += '<line x1="' + x.toFixed(1) + '" y1="' + ya.toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + yb.toFixed(1) + '" stroke="' + cc + '" stroke-width="2.4" stroke-opacity="0.5" stroke-linecap="round"/>';
+          s += '<line x1="' + x.toFixed(1) + '" y1="' + ya.toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + yb.toFixed(1) + '" stroke="' + cc + '" stroke-width="4.4" stroke-opacity="0.5" stroke-linecap="round"/>';
         }
-        if (r.voo != null) s += '<line x1="' + (x - 4).toFixed(1) + '" y1="' + yAt(r.voo).toFixed(1) + '" x2="' + (x + 4).toFixed(1) + '" y2="' + yAt(r.voo).toFixed(1) + '" stroke="' + BENCH_COLOR + '" stroke-width="1.8" stroke-linecap="round"/>';
-        if (hasA) s += '<circle cx="' + x.toFixed(1) + '" cy="' + ya.toFixed(1) + '" r="2.8" fill="' + bgFill + '" stroke="' + sec + '" stroke-width="1.3"/>';
-        if (hasB) { var bf = (p.bFill === 'delta') ? (r.b >= (hasA ? r.a : 0) ? succ : dang) : (p.bColor || prim); s += '<circle cx="' + x.toFixed(1) + '" cy="' + yb.toFixed(1) + '" r="3.1" fill="' + bf + '"/>'; }
-        if (hasA && r.a >= 0) s += '<text x="' + (x - 4).toFixed(1) + '" y="' + (REC - 2.5) + '" font-size="5.5" fill="' + sec + '" text-anchor="end">+' + r.a.toFixed(0) + '%</text>';
-        if (hasB && r.b >= 0) s += '<text x="' + (x + 4).toFixed(1) + '" y="' + (REC - 2.5) + '" font-size="5.5" fill="' + succ + '" text-anchor="start">+' + r.b.toFixed(0) + '%</text>';
-        s += '<text x="' + x.toFixed(1) + '" y="' + LBLY + '" font-size="6.5" fill="' + tert + '" text-anchor="middle">' + r.label + '</text>';
+        if (r.voo != null) s += '<line x1="' + (x - 9).toFixed(1) + '" y1="' + yAt(r.voo).toFixed(1) + '" x2="' + (x + 9).toFixed(1) + '" y2="' + yAt(r.voo).toFixed(1) + '" stroke="' + BENCH_COLOR + '" stroke-width="3.4" stroke-linecap="round"/>';
+        if (hasA) s += '<circle cx="' + x.toFixed(1) + '" cy="' + ya.toFixed(1) + '" r="5.2" fill="' + bgFill + '" stroke="' + sec + '" stroke-width="2.2"/>';
+        if (hasB) { var bf = (p.bFill === 'delta') ? (r.b >= (hasA ? r.a : 0) ? succ : dang) : (p.bColor || prim); s += '<circle cx="' + x.toFixed(1) + '" cy="' + yb.toFixed(1) + '" r="5.6" fill="' + bf + '"/>'; }
+        s += '<text x="' + x.toFixed(1) + '" y="' + LBLY + '" font-size="12" fill="' + tert + '" text-anchor="middle">' + r.label + '</text>';
       });
       s += '</svg>';
-      var head = '<div style="font-size:11px;color:' + prim + ';margin:6px 0 0">' + p.title + (p.note ? ' <span style="font-size:9px;color:' + tert + '">' + p.note + '</span>' : '') + '</div>';
-      return head + '<div style="width:100%;margin:1px 0 2px">' + s + '</div>';
+      var head = '<div style="font-size:11px;color:' + prim + ';margin:8px 0 0">' + p.title + (p.note ? ' <span style="font-size:9px;color:' + tert + '">' + p.note + '</span>' : '') + '</div>';
+      return head + '<div style="width:100%;max-width:540px;margin:2px 0 4px">' + s + '</div>';
     }
     return (panels || []).map(panelSvg).join('');
   }
