@@ -5241,14 +5241,29 @@ function renderThemeIntel() {
 
   // Per-theme aggregates (direct positions only). Alpha tracked all-open AND mature-only so the
   // verdict can honor the Matured toggle and hedge on thin seasoned evidence.
+  // Basket-fund tickers (have a look-through table): used to split a theme's directly-held value
+  // into single names you picked vs the theme's own ETF. The ETF's full face is the "sector ETF"
+  // block, counted ONCE — it is NOT also decomposed into its constituents and re-added (that was
+  // the per-theme double-count). d.value still holds the FULL theme direct value (single names +
+  // ETF) so allocation %, $alpha, and G/L are unchanged.
+  const _ltNorms = (typeof getIndexLookthrough === 'function')
+    ? new Set(Object.keys(getIndexLookthrough()).map(qrNormTicker)) : new Set();
+
   const themes = {};
   open.forEach(p => {
     const c = calcPos(p);
     const spxRet = c.spxReturn !== null ? c.spxReturn / 100 : null;
     const alpha = (spxRet !== null && c.invested > 0) ? (c.exitValue - c.invested) - (c.invested * spxRet) : null;
-    if (!themes[p.theme]) themes[p.theme] = { value: 0, invested: 0, gl: 0, alphaSum: 0, alphaCount: 0, positions: 0, matureAlphaSum: 0, matureAlphaCount: 0, maturePositions: 0, tickers: [] };
+    if (!themes[p.theme]) themes[p.theme] = { value: 0, directSingle: 0, fundFace: 0, fundTickers: [], invested: 0, gl: 0, alphaSum: 0, alphaCount: 0, positions: 0, matureAlphaSum: 0, matureAlphaCount: 0, maturePositions: 0, tickers: [] };
     const d = themes[p.theme];
-    d.value += c.exitValue || 0; d.invested += c.invested || 0; d.gl += c.gainLoss || 0; d.positions++;
+    const ev = c.exitValue || 0;
+    d.value += ev; d.invested += c.invested || 0; d.gl += c.gainLoss || 0; d.positions++;
+    if (_ltNorms.has(qrNormTicker(p.ticker))) {
+      d.fundFace += ev;                                              // thematic ETF — its full face is the sector block
+      if (!d.fundTickers.includes(p.ticker.toUpperCase())) d.fundTickers.push(p.ticker.toUpperCase());
+    } else {
+      d.directSingle += ev;                                          // a single name you picked
+    }
     if (!d.tickers.includes(p.ticker)) d.tickers.push(p.ticker);
     if (alpha !== null) { d.alphaSum += alpha; d.alphaCount++; }
     let isMature = false;
@@ -5256,14 +5271,15 @@ function renderThemeIntel() {
     if (isMature) { d.maturePositions++; if (alpha !== null) { d.matureAlphaSum += alpha; d.matureAlphaCount++; } }
   });
 
-  // ── Look-through, split into THREE buckets per theme ──
-  // For each theme: direct (the position value), intended-via-sector-ETF (embedded from a fund whose
-  // OWN theme == this theme, e.g. SMH for Semiconductors), and incidental (embedded from VOO + any
-  // fund tagged a DIFFERENT theme — chip names you carry without choosing them). Incidental + the
-  // total are FLOORS: VOO's untracked tail can't be theme-classified. Built from getIndexLookthrough.
-  const themeSectorEtf = {};   // theme -> $ embedded via its own sector ETF (intended)
-  const themeIncidental = {};  // theme -> $ embedded via broad/other funds (incidental)
-  const sectorEtfFunds = {};   // theme -> Set of fund tickers contributing the sector-ETF bucket
+  // ── Pass-through (incidental) look-through ──
+  // A theme's TRUE exposure = direct single names (d.directSingle) + the theme's own ETF at full
+  // face (d.fundFace, the "sector ETF" block) + incidental pass-through (computed here). Incidental
+  // is what you hold inside funds you didn't pick FOR this theme: broad funds (VOO), plus a thematic
+  // ETF's spillover into a DIFFERENT theme you hold (e.g. DRAM holds MU, which you tag Semiconductors).
+  // A thematic ETF's SAME-theme constituents are deliberately NOT decomposed here — they already sit
+  // inside that ETF's full face, so re-adding them would double-count (the old bug). Incidental is a
+  // FLOOR: VOO's untracked tail can't be theme-classified. Built from getIndexLookthrough.
+  const themeIncidental = {};  // theme -> $ held incidentally via broad funds / cross-theme ETF spillover
   const incidentalFunds = {};  // theme -> Set of fund tickers contributing the incidental bucket
   let embeddedTotal = 0, embeddedClassified = 0;
   (function(){
@@ -5273,6 +5289,10 @@ function renderThemeIntel() {
     // Map each fund ticker -> its own theme tag (thematic ETFs carry one; VOO does not).
     const fundTheme = {};
     open.forEach(p => { if (p.isETF && p.theme) fundTheme[qrNormTicker(p.ticker)] = p.theme; });
+    const addIncidental = (theme, val, fund) => {
+      themeIncidental[theme] = (themeIncidental[theme] || 0) + val;
+      (incidentalFunds[theme] = incidentalFunds[theme] || new Set()).add(fund.toUpperCase());
+    };
     const tables = getIndexLookthrough();
     for (const [fund, tbl] of Object.entries(tables)) {
       const held = indexFundHeldValue(fund);
@@ -5281,17 +5301,22 @@ function renderThemeIntel() {
       for (const [tk, w] of Object.entries(tbl.weights)) {
         if (w == null) continue;
         const val = held * (w / 100);
-        embeddedTotal += val;
         const embTheme = tickerTheme[qrNormTicker(tk)];
-        if (!embTheme) continue; // can't classify -> untracked tail
-        embeddedClassified += val;
-        if (fundOwnTheme === embTheme) {
-          themeSectorEtf[embTheme] = (themeSectorEtf[embTheme] || 0) + val; // intended sector exposure
-          (sectorEtfFunds[embTheme] = sectorEtfFunds[embTheme] || new Set()).add(fund.toUpperCase());
-        } else {
-          themeIncidental[embTheme] = (themeIncidental[embTheme] || 0) + val; // incidental (broad or cross-theme)
-          (incidentalFunds[embTheme] = incidentalFunds[embTheme] || new Set()).add(fund.toUpperCase());
+        if (fundOwnTheme) {
+          // Thematic ETF: its full face is already its sector block (d.fundFace). Only spillover into
+          // a DIFFERENT theme you hold is genuine pass-through; same-theme / unheld names are inside
+          // the face and must not be re-counted.
+          if (embTheme && embTheme !== fundOwnTheme) {
+            embeddedTotal += val; embeddedClassified += val;
+            addIncidental(embTheme, val, fund);
+          }
+          continue;
         }
+        // Broad fund (VOO, etc.): every constituent is pass-through; unheld names are the untracked tail.
+        embeddedTotal += val;
+        if (!embTheme) continue; // can't classify -> untracked tail (the floor)
+        embeddedClassified += val;
+        addIncidental(embTheme, val, fund);
       }
     }
   })();
@@ -5299,17 +5324,17 @@ function renderThemeIntel() {
   // Build per-theme rows.
   const SLEEVE_FALLBACK = 'var(--color-text-tertiary)';
   const rows = Object.entries(themes).map(([theme, d]) => {
-    const directVal = d.value;
-    const sectorEtf = themeSectorEtf[theme] || 0;
-    const incidental = themeIncidental[theme] || 0;
-    const trueVal = directVal + sectorEtf + incidental;
-    const allocPct = totalValue > 0 ? (directVal / totalValue) * 100 : 0;        // % of active managed sleeve
-    const directPct = grandTotal > 0 ? (directVal / grandTotal) * 100 : 0;       // % of whole portfolio (direct)
-    const sectorEtfPct = grandTotal > 0 ? (sectorEtf / grandTotal) * 100 : 0;
+    const directVal = d.directSingle;                                            // single names you picked (no thematic ETF)
+    const sectorEtf = d.fundFace;                                                // your theme's own ETF(s), full face — counted ONCE
+    const incidental = themeIncidental[theme] || 0;                              // pass-through via broad funds / cross-theme ETFs
+    const trueVal = directVal + sectorEtf + incidental;                          // == d.value + incidental (no double-count)
+    const allocPct = totalValue > 0 ? (d.value / totalValue) * 100 : 0;          // % of active sleeve (incl. the ETF you bought)
+    const directPct = grandTotal > 0 ? (directVal / grandTotal) * 100 : 0;       // single-name direct, % of whole portfolio
+    const sectorEtfPct = grandTotal > 0 ? (sectorEtf / grandTotal) * 100 : 0;    // theme ETF face, % of whole portfolio
     const incidentalPct = grandTotal > 0 ? (incidental / grandTotal) * 100 : 0;
     const truePct = grandTotal > 0 ? (trueVal / grandTotal) * 100 : 0;
-    const hasEmbedded = (sectorEtf + incidental) > 0;
-    const sectorFundsLabel = sectorEtfFunds[theme] ? [...sectorEtfFunds[theme]].join(', ') : '';
+    const hasEmbedded = incidental > 0;                                          // only incidental is a floor; the ETF face is exact
+    const sectorFundsLabel = d.fundTickers.length ? d.fundTickers.join(', ') : '';
     const incidentalFundsLabel = incidentalFunds[theme] ? [...incidentalFunds[theme]].join(', ') : '';
     const verdictAlpha = industryAlphaMatureOnly ? (d.matureAlphaCount > 0 ? d.matureAlphaSum : null) : (d.alphaCount > 0 ? d.alphaSum : null);
     const verdictN = industryAlphaMatureOnly ? d.maturePositions : d.positions;
@@ -5416,7 +5441,7 @@ function renderThemeIntel() {
   if (embeddedTotal > 0) {
     const classPct = (embeddedClassified / embeddedTotal) * 100;
     footnote = `<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-top:10px;padding:8px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">
-      <strong style="color:#BA7517">≥ means floor.</strong> True exposure adds what you hold in each theme inside your funds. Of ${fmtDollarWhole(embeddedTotal)} embedded across your funds, ~${classPct.toFixed(0)}% could be theme-classified; the rest (VOO's untracked tail) isn't shown in any theme — so true exposure and incidental are <em>at least</em> the figures shown, likely higher.</div>`;
+      <strong style="color:#BA7517">≥ means floor.</strong> True exposure counts your theme ETFs at full value, plus your share of each theme sitting inside broad funds you hold (incidental). Of ${fmtDollarWhole(embeddedTotal)} that broad funds pass through, ~${classPct.toFixed(0)}% could be theme-classified; the rest (VOO's untracked tail) isn't shown in any theme — so the incidental figures (and totals that include them) are <em>at least</em> what's shown, likely higher.</div>`;
   }
 
   // ── Portfolio-wide fee decomposition rollup ──
@@ -18759,7 +18784,7 @@ function renderThemeClusters() {
 
       <div style="background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:10px;font-size:11px;line-height:1.55;color:var(--color-text-primary)">
         ${biggest ? `Your biggest moves-together block is <strong style="color:${biggest.pct >= 25 ? '#fbbf24' : 'var(--color-text-primary)'}">${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong> of your book — that's the chunk of you that rises and falls as one bet.` : ''}
-        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">Across all blocks, your portfolio behaves like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} independent bets</strong> (lower = more concentrated). Plus a ${data.base.pct.toFixed(1)}% diversified base (your broad-index tail — not a bet).</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">Across all blocks, your portfolio behaves like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} independent bets</strong> (lower = more concentrated). That count already includes your ${data.base.pct.toFixed(1)}% diversified base (your broad-index tail) as one of those blocks — the spread-out one, not a concentrated bet.</div>
       </div>
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
