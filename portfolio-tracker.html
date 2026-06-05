@@ -25894,7 +25894,7 @@ init();
         '<tr>' + rowLabel('VOO', blueSwatch) + vooCells + '</tr>' +
         '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel('Sleeve \u2212 VOO') + sprCells + '</tr>' +
       '</table>' +
-      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">chart: red = drawdown leg \u00b7 grey = recovery leg \u00b7 blue = VOO' + (hasBlended ? ' \u00b7 violet = blended liquid book' : '') + ' \u00b7 dotted = \u201ceven\u201d \u00b7 dashed = window low \u00b7 \u2713 = back to even-or-better \u00b7 columns = the low, then 1mo / 3mo / 6mo / 1Y / 2Y into the climb-out</div>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">Ladder above: each dot is the level vs the pre-event high \u2014 filled = active sleeve' + (hasBlended ? ', hollow = blended liquid book (gap = your VOO core\u2019s effect)' : '') + ', blue tick = VOO. \u2713 = back to even-or-better \u00b7 columns = the low, then 1mo / 3mo / 6mo / 1Y / 2Y into the climb-out.</div>' +
     '</div>';
   }
 
@@ -25968,8 +25968,8 @@ init();
       ? 'Sleeve vs sleeve, then liquid book vs liquid book (your VOO core folded in), at each marked point \u2014 level vs the pre-event high. \u201c\u0394 scenario\u201d = hypothetical \u2212 current, in points.'
       : 'Sleeve vs sleeve at each marked point \u2014 level vs the pre-event high. \u201c\u0394 scenario\u201d = hypothetical \u2212 current sleeve, in points.';
     var footerNote = hasBlendedCmp
-      ? 'Chart: grey/red = hypothetical sleeve \u00b7 violet = hypothetical liquid book \u00b7 blue = VOO. Untick \u201cfold in\u201d to see the actual book.'
-      : 'Chart above is the hypothetical sleeve. Untick \u201cfold in\u201d to see the actual-sleeve chart.';
+      ? 'Ladder above: each checkpoint runs current (hollow) \u2192 with-trades (filled) for your sleeve and again for your book; blue tick = VOO. Untick \u201cfold in\u201d to see the actual book.'
+      : 'Ladder above runs your current sleeve (hollow) \u2192 with-trades sleeve (filled) at each checkpoint. Untick \u201cfold in\u201d to see the actual sleeve.';
     return '<div style="margin-top:7px">' +
       '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">' + headerNote + '</div>' +
       '<table style="border-collapse:collapse;font-size:10px">' + head +
@@ -26043,6 +26043,51 @@ init();
       '<strong style="color:var(--color-text-info, #60a5fa)">What the scenario changes:</strong> ' + s.join(' ') + '</div>';
   }
 
+  // Discrete recovery ladder (replaces the continuous line for drawdown windows). One panel per
+  // level; each checkpoint is a pair of dots (a = hollow, b = filled) connected by the gap that the
+  // card is about. Everything is anchored to the "even" line (pre-event high = 0): the underwater
+  // band gets the full vertical space; anything recovered (>=0) is parked off-scale in a top strip
+  // with its value labelled, so a runaway +74% tail can't hijack the axis. Pure fn of the supplied
+  // rows (junction %s already on the model) — no daily path, no recompute.
+  function renderRecoveryLadder(panels) {
+    var succ = 'var(--color-text-success, #22c55e)', dang = 'var(--color-text-danger, #ef4444)';
+    var tert = 'var(--color-text-tertiary, #888)', sec = 'var(--color-text-secondary, #aaa)';
+    var bgFill = 'var(--color-background-secondary, #1a1a1a)', prim = 'var(--color-text-primary, #eee)';
+    function panelSvg(p) {
+      var rows = (p.rows || []).filter(function (r) { return r && (r.a != null || r.b != null || r.voo != null); });
+      if (!rows.length) return '';
+      var minV = 0;
+      rows.forEach(function (r) { [r.a, r.b, r.voo].forEach(function (v) { if (v != null && v < minV) minV = v; }); });
+      var FLOOR = Math.min(minV * 1.12, -4);               // most-negative value, with headroom (always negative)
+      var W = 200, EVEN = 30, BOT = 80, REC = 17, LBLY = 90, xL = 16, xR = 190, n = rows.length;
+      function xAt(i) { return n === 1 ? (xL + xR) / 2 : xL + (xR - xL) * (i / (n - 1)); }
+      function yAt(v) { return v >= 0 ? REC : EVEN + (v / FLOOR) * (BOT - EVEN); }
+      var s = '<svg viewBox="0 0 ' + W + ' 96" width="100%" style="display:block;height:auto;overflow:visible;font-family:inherit">';
+      s += '<rect x="' + xL + '" y="6" width="' + (xR - xL) + '" height="' + (EVEN - 6) + '" fill="' + succ + '" fill-opacity="0.07"/>';
+      s += '<text x="' + xL + '" y="13.5" font-size="6" fill="' + succ + '" opacity="0.85">back to even or better \u2713</text>';
+      s += '<line x1="' + xL + '" y1="' + EVEN + '" x2="' + xR + '" y2="' + EVEN + '" stroke="' + tert + '" stroke-width="0.6" stroke-dasharray="3 2" stroke-opacity="0.7"/>';
+      s += '<text x="' + xR + '" y="' + (EVEN - 2) + '" font-size="6" fill="' + tert + '" text-anchor="end">even (pre-event high)</text>';
+      rows.forEach(function (r, i) {
+        var x = xAt(i), hasA = r.a != null, hasB = r.b != null;
+        var ya = hasA ? yAt(r.a) : 0, yb = hasB ? yAt(r.b) : 0, bothRec = hasA && hasB && r.a >= 0 && r.b >= 0;
+        if (hasA && hasB && !bothRec) {
+          var cc = (p.conn === 'delta') ? (r.b >= r.a ? succ : dang) : tert;
+          s += '<line x1="' + x.toFixed(1) + '" y1="' + ya.toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + yb.toFixed(1) + '" stroke="' + cc + '" stroke-width="2.4" stroke-opacity="0.5" stroke-linecap="round"/>';
+        }
+        if (r.voo != null) s += '<line x1="' + (x - 4).toFixed(1) + '" y1="' + yAt(r.voo).toFixed(1) + '" x2="' + (x + 4).toFixed(1) + '" y2="' + yAt(r.voo).toFixed(1) + '" stroke="' + BENCH_COLOR + '" stroke-width="1.8" stroke-linecap="round"/>';
+        if (hasA) s += '<circle cx="' + x.toFixed(1) + '" cy="' + ya.toFixed(1) + '" r="2.8" fill="' + bgFill + '" stroke="' + sec + '" stroke-width="1.3"/>';
+        if (hasB) { var bf = (p.bFill === 'delta') ? (r.b >= (hasA ? r.a : 0) ? succ : dang) : (p.bColor || prim); s += '<circle cx="' + x.toFixed(1) + '" cy="' + yb.toFixed(1) + '" r="3.1" fill="' + bf + '"/>'; }
+        if (hasA && r.a >= 0) s += '<text x="' + (x - 4).toFixed(1) + '" y="' + (REC - 2.5) + '" font-size="5.5" fill="' + sec + '" text-anchor="end">+' + r.a.toFixed(0) + '%</text>';
+        if (hasB && r.b >= 0) s += '<text x="' + (x + 4).toFixed(1) + '" y="' + (REC - 2.5) + '" font-size="5.5" fill="' + succ + '" text-anchor="start">+' + r.b.toFixed(0) + '%</text>';
+        s += '<text x="' + x.toFixed(1) + '" y="' + LBLY + '" font-size="6.5" fill="' + tert + '" text-anchor="middle">' + r.label + '</text>';
+      });
+      s += '</svg>';
+      var head = '<div style="font-size:11px;color:' + prim + ';margin:6px 0 0">' + p.title + (p.note ? ' <span style="font-size:9px;color:' + tert + '">' + p.note + '</span>' : '') + '</div>';
+      return head + '<div style="width:100%;margin:1px 0 2px">' + s + '</div>';
+    }
+    return (panels || []).map(panelSvg).join('');
+  }
+
   function renderReplayCard(model) {
     if (!model.hasData)
       return '<div style="font-size:11px;color:var(--color-text-tertiary)">No replayable data for <strong>' + model.windowLabel + '</strong> yet (coverage ' + model.coveragePct.toFixed(0) + '%). The held names likely had no price history in this window.</div>';
@@ -26100,6 +26145,49 @@ init();
     (model.checkpointDots || []).forEach(function (d) { if (!_LABELMILE[d.label]) return; xlabels += '<text x="' + clampX(d.x).toFixed(1) + '" y="32.6" text-anchor="middle" font-size="2.4" fill="var(--color-text-tertiary, #888)">' + d.label + '</text>'; });
     var chart = '<div style="width:100%;margin:8px 0 4px"><svg viewBox="0 0 120 34" width="100%" style="display:block;height:auto;overflow:visible">' +
       beLine + divLine + vooLine + blendLine + bookLines + troughC + cpC + xlabels + '</svg></div>';
+    // Recovery ladder — the discrete-waypoint replacement for the line, drawn from the junction %s.
+    // Built only for drawdown windows (which have junctions); any failure falls back to the line above.
+    var ladder = '';
+    try {
+      if (model.junctions && model.junctions.length) {
+        var _legendDot = function (fill, hollow) {
+          return hollow
+            ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;border:1.4px solid var(--color-text-secondary, #aaa);vertical-align:middle;margin-right:4px"></span>'
+            : '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + fill + ';vertical-align:middle;margin-right:4px"></span>';
+        };
+        var _vooKey = '<span style="display:inline-block;width:10px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px"></span>VOO';
+        if (model.compare) {
+          var _hp = _bookPoints(model), _cp = _bookPoints(model.compare);
+          var _labs = _JUNCTION_ORDER.filter(function (l) { return _hp[l] || _cp[l]; });
+          var _pick = function (pt, key) { return (pt && pt[key] != null && !pt.pending && !pt.missing) ? pt[key] : null; };
+          var _voo = function (l) { return (_hp[l] && _hp[l].vooPct != null) ? _hp[l].vooPct : ((_cp[l] && _cp[l].vooPct != null) ? _cp[l].vooPct : null); };
+          var _panels = [{ title: 'Your sleeve', note: 'your picks, ex-VOO', conn: 'delta', bFill: 'delta',
+            rows: _labs.map(function (l) { return { label: l, a: _pick(_cp[l], 'bookPct'), b: _pick(_hp[l], 'bookPct'), voo: _voo(l) }; }) }];
+          if (_labs.some(function (l) { return (_hp[l] && _hp[l].blendedPct != null) || (_cp[l] && _cp[l].blendedPct != null); })) {
+            _panels.push({ title: 'Your book', note: 'those picks + your VOO core', conn: 'delta', bFill: 'delta',
+              rows: _labs.map(function (l) { return { label: l, a: _pick(_cp[l], 'blendedPct'), b: _pick(_hp[l], 'blendedPct'), voo: _voo(l) }; }) });
+          }
+          var _legCmp = '<div style="font-size:9px;color:var(--color-text-tertiary);margin:6px 0 0;display:flex;gap:14px;flex-wrap:wrap">' +
+            '<span>' + _legendDot(null, true) + 'current</span><span>' + _legendDot('var(--color-text-success, #22c55e)', false) + 'with trades</span><span>' + _vooKey + '</span>' +
+            '<span style="opacity:.75">gap = what the trades changed</span></div>';
+          ladder = _legCmp + renderRecoveryLadder(_panels);
+        } else {
+          var _pa = _bookPoints(model);
+          var _labsA = _JUNCTION_ORDER.filter(function (l) { return _pa[l]; });
+          var _hasBook = _labsA.some(function (l) { return _pa[l].blendedPct != null; });
+          var _rowsA = _labsA.map(function (l) { var j = _pa[l];
+            return { label: l, a: (_hasBook && j.blendedPct != null && !j.pending) ? j.blendedPct : null,
+              b: (j.bookPct != null && !j.pending && !j.missing) ? j.bookPct : null,
+              voo: (j.vooPct != null) ? j.vooPct : null }; });
+          ladder = '<div style="font-size:9px;color:var(--color-text-tertiary);margin:6px 0 0;display:flex;gap:14px;flex-wrap:wrap">' +
+              '<span>' + _legendDot(retColor, false) + 'active sleeve</span>' +
+              (_hasBook ? '<span>' + _legendDot(null, true) + 'blended liquid book</span>' : '') +
+              '<span>' + _vooKey + '</span>' + (_hasBook ? '<span style="opacity:.75">gap = your VOO core\u2019s effect</span>' : '') + '</div>' +
+            renderRecoveryLadder([{ title: _hasBook ? 'Sleeve vs blended book' : 'Your sleeve',
+              note: _hasBook ? '' : 'level vs the pre-event high', conn: 'neutral', bFill: 'fixed', bColor: retColor, rows: _rowsA }]);
+        }
+      }
+    } catch (e) { ladder = ''; }
     return '<div style="border:1px solid var(--color-border-tertiary);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--color-background-secondary)">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">' +
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
@@ -26107,7 +26195,7 @@ init();
       '</div>' +
       (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
       replaySummaryText(model) +
-      chart +
+      (ladder || chart) +
       (model.compare
         ? renderCompareJunctionTable(model) + renderScenarioDiffText(model)
         : (model.junctions ? renderJunctionTable(model) :
