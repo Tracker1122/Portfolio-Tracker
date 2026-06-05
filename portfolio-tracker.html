@@ -10278,6 +10278,52 @@ function qrTrimPassThroughFact(candidate, overlaps) {
   } catch (e) { return null; }
 }
 
+// READ-ONLY: turns whatever the Risk Review (Risk & Stress Lens) tab is currently displaying into a
+// plain-text COMPUTED-FACTS block, so the two AI analyses (Theme Level Review + New Position Evaluation)
+// know which historical stress event the user is examining and whether a hypothetical scenario is folded
+// into it. Returns '' when no card is open (so the prompt is unchanged when there's nothing to add).
+// Every figure is a PAST return replayed through current holdings — how the book WOULD have moved in that
+// window, never a forecast or signal; the block says so, mirroring the existing performance discipline.
+// Fully defensive: any failure yields ''.
+function riskReviewAiFacts() {
+  try {
+    if (!(typeof window !== 'undefined' && window._riskReplay && typeof window._riskReplay.riskReviewContext === 'function')) return '';
+    const c = window._riskReplay.riskReviewContext();
+    if (!c || !c.active) return '';
+    const sgn = v => (v == null) ? 'n/a' : ((v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) + '%');
+    const L = [];
+    L.push(`RISK REVIEW — WHAT THE USER IS CURRENTLY LOOKING AT (read-only context from the Risk & Stress Lens tab the user has open). This replays the user's CURRENT holdings through a REAL PAST stress window using actual daily returns (co-movement included, no model) — it is how the book WOULD have moved through that historical period, NOT a forecast, an expected return, or a buy/sell signal. Treat it as the book's PAST behavior in that window only; do NOT extrapolate it forward and do NOT turn it into a recommendation to act.`);
+    L.push(`Window being viewed: ${c.windowLabel || c.windowId}${c.dateRange ? ' (' + c.dateRange + ')' : ''}${c.stresses ? ' — what it stresses: ' + c.stresses : ''}.`);
+    L.push(`Displayed book: ${c.isHypothetical ? 'the HYPOTHETICAL book (current holdings + the staged what-if scenario folded in)' : "the user's ACTUAL current book (no scenario folded in)"}.`);
+    let jline = '';
+    if (c.junctions && c.junctions.length) {
+      jline = c.junctions.map(j => {
+        if (j.pending) return `${j.label}: not yet reached`;
+        if (j.missing) return `${j.label}: no data`;
+        let p = `${j.label} ${sgn(j.bookPct)}`;
+        if (j.vooPct != null) p += ` vs VOO ${sgn(j.vooPct)}${j.spreadPct != null ? ` (spread ${j.spreadPct >= 0 ? '+' : ''}${j.spreadPct.toFixed(1)} pts)` : ''}`;
+        return p;
+      }).join('; ');
+    }
+    L.push(`Book vs VOO at each marked point (portfolio level, not per-name; measured vs the pre-event high — "low" = the window trough, then 6mo/1Y/2Y into the recovery): ${jline || ('at the low ' + sgn(c.bookReturnPct) + (c.benchReturnPct != null ? ' vs VOO ' + sgn(c.benchReturnPct) : ''))}.`);
+    if (c.drawdownPct != null) L.push(`Worst intra-window drawdown on the displayed book: ${sgn(c.drawdownPct)}.`);
+    if (c.frozen) L.push(`Liquidity note shown on the card: ${c.frozen}`);
+    L.push(`Coverage of this replay: ${c.coveragePct != null ? c.coveragePct.toFixed(0) + '% of the liquid book' : 'unknown'}${c.coverageWarn ? ' — LOW coverage, so read these figures loosely' : ''}.`);
+    if (c.isHypothetical) {
+      if (c.scenarioNote) L.push(`The staged scenario folded in: ${c.scenarioNote}`);
+      else if (c.moveCount) L.push(`The staged scenario folded in: ${c.moveCount} move(s)${(c.newTickers && c.newTickers.length) ? ', new name(s): ' + c.newTickers.join(', ') : ''}.`);
+      if (c.compareCurrent && c.compareCurrent.junctions && c.compareCurrent.junctions.length) {
+        const cj = c.compareCurrent.junctions.map(j => (j.pending || j.missing || j.bookPct == null) ? `${j.label}: —` : `${j.label} ${sgn(j.bookPct)}`).join('; ');
+        L.push(`For comparison, the user's ACTUAL book (no scenario) over the SAME window: ${cj}. The difference between the two books IS the scenario's effect — each book is measured against its OWN pre-event high, so a point-by-point gap is a fair level-vs-level difference.`);
+      }
+      L.push(`NOTE: the folded-in scenario reflects the user's single staged what-if queue, which BOTH AI tabs feed. It may or may not correspond to the specific candidate or selection under discussion in THIS analysis — do not assume they are the same set of moves unless the moves listed above match it.`);
+    } else if (c.scenarioStagedNotShown) {
+      L.push(`A what-if scenario IS staged but is NOT folded into the displayed card — the user is currently viewing their actual book. (Toggling "fold in staged scenario" in Risk Review would show the hypothetical version.)`);
+    }
+    return L.join('\n');
+  } catch (e) { return ''; }
+}
+
 function buildQrAiPrompt(candidate) {
   const f = candidate.fields || {};
   const fields = QR_FIELDS[candidate.type] || [];
@@ -10405,6 +10451,9 @@ function buildQrAiPrompt(candidate) {
     const _ptf = qrTrimPassThroughFact(candidate, overlaps);
     if (_ptf) computed.push(_ptf);
   }
+  // Risk Review context (what the user currently has open in the Risk & Stress Lens), if any. Whole-book,
+  // PAST replayed behavior — additive framing for this candidate; never blocks the payload.
+  try { const _rr = riskReviewAiFacts(); if (_rr) computed.push(_rr); } catch (e) { /* additive only */ }
   const computedBlock = computed.length ? computed.map(c=>`- ${c}`).join('\n') : '(none computed)';
 
   return `You are a critical analyst helping someone pressure-test a potential investment they are considering. You are NOT an advisor and must NOT recommend buying, selling, or holding. Your job is to populate both sides of the debate and expose what's missing — the user weighs it, not you.
@@ -10426,6 +10475,7 @@ Rules:
 - JUDGE AGAINST THE SLEEVE'S PURPOSE, not a generic yardstick. If a sleeve fact is present, assess whether the candidate fits that sleeve's stated objective, and flag a mismatch. Examples: a "Quality" candidate whose only case is a near-term catalyst (that's thesis-play reasoning, not durability); a "Thesis Plays" candidate with no articulated thesis (the sleeve's whole premise is missing); a "Portfolio Balance Plays" candidate being argued on growth/alpha (a category error — PBP is structural, judged on balance not outperformance). If the candidate fits its sleeve cleanly, say so briefly and move on.
 - USE THE REALIZED TRACK RECORD AS A MIRROR, scaled to its sample. The track-record facts describe the user's OWN closed trades. Sample size is information, not a gate — scale your CLAIM to it: at ANECDOTE level (few closes) you may reference specific outcomes and gaps but must NOT state or imply a win-rate, edge, or "you tend to" pattern; at TENDENCY level, you may note a soft lean, hedged; only at BASE-RATE level may you speak of a demonstrated edge. CRUCIALLY: treat DISTRIBUTION and GAPS as their own signal — e.g. "you've never closed a position in this sleeve" or "no realized trades in this theme" is a real, statable fact even at n=0, because it means this judgment is untested by your history. Never discard a thin record as meaningless; never inflate it into a base rate. Where the record is relevant, surface it in CASE FOR/AGAINST or WHAT'S ABSENT (e.g. "your thesis assumes stock-picking skill in a theme where you have no closed trades to confirm it").
 - CHECK TIME-HORIZON COHERENCE. The sleeve implies a holding horizon (e.g. Quality = held past ~1yr, judged on durability; Thesis Plays = conviction bet; PBP = ~3yr structural). Compare that to the user's OWN thesis and exit-if language: if a long-horizon sleeve holds a candidate whose thesis or exit condition is short-horizon (a near-term catalyst, a price-pop exit), that's an internal contradiction worth flagging — they may have mis-sleeved it, or the thesis doesn't match the bucket. Only raise this if the contradiction is actually present in their inputs.
+- IF A "RISK REVIEW" BLOCK IS PRESENT in the computed facts, it tells you which historical stress window the user is currently examining and how their book (and, if folded in, the hypothetical book) behaved through it. Use it as PORTFOLIO-LEVEL, PAST behavior to frame this candidate — e.g. whether adding it leans further into a theme that already drove the book's drawdown in that window, or whether its character differs from what already got hit. It is FROM INPUTS (computed from the user's holdings), so you may cite it, but: it is PAST replayed behavior, NOT a forecast and NOT a per-name figure for this candidate; never use it as a reason to buy or sell. The folded-in scenario may or may not include this candidate — do not assume it does unless the listed moves say so.
 - Be specific to THIS candidate using THEIR inputs — no generic boilerplate.
 - WRITE FOR A LEARNER — EXPAND ACRONYMS, DON'T DEFINE THEM. The reader is coming up to speed on fundamentals. EVERY time you use a metric acronym, write its expansion in parentheses: "ROIC (return on invested capital)", "PEG (price/earnings-to-growth ratio)", "P/E (price-to-earnings ratio)", "ROE (return on equity)", "FCF (free cash flow)", "D/E (debt-to-equity)", "TTM (trailing twelve months)", "NAV (net asset value)", "AUM (assets under management)", "SG&A (selling, general & administrative)". Expand on every occurrence, not just the first — the reader shouldn't have to scroll back. CRITICAL: only EXPAND the letters — do NOT explain what the metric means, how to read it, or where to look it up. No definitions, no "see the explainer" pointers, nothing beyond the parenthetical expansion of the letters (definitions you generate can drift; the static explainers are the authoritative source, and the reader knows where they are). Also avoid the bare word "Financials" as a section label for the entered numbers — say "the entered metrics" or "the financial figures".
 - Keep each section tight.
@@ -20091,6 +20141,10 @@ function buildBookAiPrompt() {
     lines.push(`Any ticker named ONLY in this scenario is a HYPOTHETICAL the user is considering — NOT a holding unless it also appears in the theme lists above. A name's true exposure can be non-zero before the scenario because it already sits inside funds the user holds; use the figures given, don't invent.`);
   }
 
+  // --- Risk Review context (what the user currently has open in the Risk & Stress Lens), if any. ---
+  // Whole-book PAST replayed behavior through a real stress window; additive, never blocks the payload.
+  try { const _rr = riskReviewAiFacts(); if (_rr) lines.push('\n' + _rr); } catch (e) { /* additive only */ }
+
   const ctx = lines.join('\n');
 
   return `You are a critical portfolio analyst helping someone understand their book's STRUCTURE and find GAPS. You are NOT an advisor and must NOT recommend buying, selling, holding, or rebalancing. Your output feeds the user's own New Position Evaluation process — your job is to surface what's there and what's missing, not to decide.
@@ -20109,7 +20163,7 @@ Rules:
   • COUNTS, NOT NAMES: Each theme line gives a name COUNT and at most a few example names. The unlisted names are NOT provided — do not invent them or characterize them. If the count exceeds the examples shown, the extra names are unknown to you — say so, don't guess them.
   • SELECTED CANDIDATES ARE NOT HOLDINGS: A selected discovery ticker is something the user is CONSIDERING, not something they own — UNLESS that exact ticker also appears verbatim as a held name in the theme lists above. Do NOT say a candidate is "already held" or would "deepen an existing position" unless its ticker literally appears in the holdings facts. Check before claiming it.
   • ABSENCES: You may note that an asset class or theme is "not listed in the inputs," but do NOT assert the user definitively holds NONE of it — the facts list themes that EXIST, it does not enumerate everything absent. Phrase gaps as "not visible in the computed themes" rather than "the book has no X." This is an [inference] about the inputs, not a FROM INPUTS fact.
-  • RISK FIGURES: maxDD/vol/return numbers exist ONLY for tickers explicitly listed with them — the selected discovery tickers, and any scenario tickers under "Recent price performance" in the staged what-if block. Do not state risk or return figures for any book holding (none were provided) or for any ticker not listed above with figures.
+  • RISK FIGURES: maxDD/vol/return numbers exist ONLY for tickers explicitly listed with them — the selected discovery tickers, and any scenario tickers under "Recent price performance" in the staged what-if block. Do not state risk or return figures for any book holding (none were provided) or for any ticker not listed above with figures. EXCEPTION — scope, not loophole: a "RISK REVIEW" block, if present, gives PORTFOLIO-LEVEL (whole-book and, if folded in, whole-hypothetical-book) replayed return/drawdown figures for one historical window; you MAY cite those as the book's PAST behavior in that window. This does NOT license per-holding risk figures — none were provided for individual names; keep risk/return numbers either portfolio-level (from the RISK REVIEW block) or for the specific listed tickers, never invented per-name.
 
 Output in four sections:
 1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few independent bets, any theme resting on one name). FROM INPUTS, plainly stated. If a WHOLE-BOOK CONTEXT block is present, OPEN by situating the managed sleeve within the full book — what share of all-in AUM is the actively-picked sleeve vs the VOO diversified base vs the illiquid private sleeve — so every concentration you then discuss is read against the whole picture, not the managed sleeve in isolation.
@@ -20123,6 +20177,7 @@ Output in four sections:
    • For CONCENTRATION: pose the rebalancing QUESTION it raises — e.g. "with ~X% in two correlated themes, the question is what genuinely uncorrelated exposure looks like, and whether [the user's selected tickers] provide it or just add correlated beta." Tie this explicitly to the SELECTED discovery tickers where relevant — frame whether those specific clicked names move toward or away from the concentration, as a question, not a verdict.
    • Every item ends pointing to the next step: this is candidate-generation; the actual decision happens in New Position Evaluation, not here.
 5. STAGED WHAT-IF — include this section ONLY if a "STAGED WHAT-IF SCENARIO" block appears in the facts above; otherwise omit it entirely. Read what the staged moves do to the book's STRUCTURE, FROM INPUTS: which clusters move and in which direction, whether the scenario deepens or relieves the largest concentrations and how independent-bets shifts, and — for an added ETF — that its look-through can deepen names the user already holds (call out any such name from the per-name moves). Where the tracker's plain-language read flags the trade as closer to a reshuffle than a reduction (much of what's trimmed handed back through what's bought), engage with that FROM INPUTS rather than ignoring it. If an estimated tax figure is given, state it as the dollar cost of the rotation (and surface any wash-sale or "days-from-long-term" flag), framed as a fact to weigh — never as a reason to act or not act. If recent-performance figures are given for scenario tickers, you may reference them as PAST returns/drawdown to characterize what's being bought or trimmed (e.g. trimming a name after a large run, or adding one deep in a drawdown), but do NOT treat past performance as predictive or as a buy/sell signal. Then turn all of it into QUESTIONS for New Position Evaluation under the same rules as section 4 (no buy/sell/trim/rebalance imperatives). Do NOT tell the user whether to make the trade.
+6. RISK-REVIEW CONTEXT — include this section ONLY if a "RISK REVIEW" block appears in the facts above; otherwise omit it entirely. The user is actively examining how their book (or, if folded in, the hypothetical book) behaved through a specific real stress window. Connect that PAST behavior to the structure you described in sections 1–2, FROM INPUTS: which of the concentrations you flagged are the ones that actually drove the drawdown / lagged or led VOO at the marked points, and — if a hypothetical is folded in — what the scenario changed about that path (deeper or shallower hole, better or worse recovery, gap to VOO), reading the current-vs-hypothetical figures level-for-level. This is the book's PAST behavior in ONE historical window, NOT a forecast, an expected return, or evidence the same will recur — say so, and do not extrapolate it. Then, under the same strict rules as section 4, turn it into QUESTIONS to take to evaluation (e.g. "the question this raises is whether the themes that drove the [window] drawdown are ones a new add would deepen or offset"). FORBIDDEN here as in section 4: any buy/sell/add/trim/hedge/rebalance imperative. If the folded-in scenario may not match the user's current discovery selection, note that rather than conflating them.
 End with CLAIMS TO VERIFY (the ⚠UNVERIFIED external facts you leaned on, if any).
 
 Keep it tight and scannable. The checkable structure facts are already on the user's screen — your value is the gaps, the candidate screen, and the questions to explore, not restating every number.`;
@@ -26122,7 +26177,68 @@ init();
     if (name === 'risk') _refreshHypoStatus();
   }
 
-  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow };
+  // READ-ONLY snapshot of what the Risk Review tab is CURRENTLY DISPLAYING, for the two AI
+  // analyses (Theme Level Review + New Position Evaluation) to read. Pure reader of the active
+  // card's model (the one the user is looking at) — it computes nothing new, triggers no fetch,
+  // and returns {active:false} when no card has been opened. Every number it returns is one
+  // already on the user's screen. Fully defensive: any failure degrades to {active:false}.
+  function _rrSanitizeJunctions(J) {
+    return (J || []).map(function (c) {
+      var o = { label: c.label };
+      if (c.pending) { o.pending = true; return o; }
+      if (c.missing || c.bookPct == null) { o.missing = true; return o; }
+      o.bookPct = c.bookPct;
+      if (c.vooPct != null) o.vooPct = c.vooPct;
+      if (c.spreadPct != null) o.spreadPct = c.spreadPct;
+      if (c.recovered) o.recovered = true;
+      return o;
+    });
+  }
+  function riskReviewContext() {
+    try {
+      if (!_activeRowKey) return { active: false };
+      var entry = _summaryRows[_activeRowKey];
+      if (!entry || !entry.model || !entry.model.hasData) return { active: false };
+      var m = entry.model, isHypo = (entry.variant === 'hypo');
+      var win = STRESS_WINDOWS.filter(function (w) { return w.id === entry.winId; })[0] || null;
+      var hypo = null; try { hypo = riskHypotheticalWeights(); } catch (e) {}
+      var out = {
+        active: true,
+        windowId: entry.winId,
+        windowLabel: m.windowLabel || entry.label || '',
+        dateRange: m.dateRange || '',
+        stresses: win ? (win.stresses || '') : '',
+        isHypothetical: isHypo,
+        coveragePct: (typeof m.coveragePct === 'number') ? m.coveragePct : null,
+        coverageWarn: !!m.coverageWarn,
+        bookReturnPct: (typeof m.returnPct === 'number') ? m.returnPct : null,
+        drawdownPct: (typeof m.drawdownPct === 'number') ? m.drawdownPct : null,
+        benchReturnPct: (typeof m.benchReturnPct === 'number') ? m.benchReturnPct : null,
+        benchSpreadPct: (typeof m.benchSpreadPct === 'number') ? m.benchSpreadPct : null,
+        junctions: _rrSanitizeJunctions(m.junctions),
+        frozen: m.frozenLine || null,
+        scenarioStaged: !!(hypo && hypo.active),
+        // a what-if is staged but the user is looking at their ACTUAL book (not folded in)
+        scenarioStagedNotShown: !!(hypo && hypo.active) && !isHypo
+      };
+      if (isHypo) {
+        // scenarioNote is the exact prose shown on the card (captured at run time = what's displayed)
+        out.scenarioNote = m.scenarioNote || null;
+        if (hypo && hypo.active) { out.moveCount = hypo.moveCount; out.newTickers = hypo.newTickers || []; }
+        if (m.compare && m.compare.hasData) {
+          out.compareCurrent = {
+            bookReturnPct: (typeof m.compare.returnPct === 'number') ? m.compare.returnPct : null,
+            drawdownPct: (typeof m.compare.drawdownPct === 'number') ? m.compare.drawdownPct : null,
+            benchReturnPct: (typeof m.compare.benchReturnPct === 'number') ? m.compare.benchReturnPct : null,
+            junctions: _rrSanitizeJunctions(m.compare.junctions)
+          };
+        }
+      }
+      return out;
+    } catch (e) { return { active: false }; }
+  }
+
+  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext };
 })(window);
 
 </script>
