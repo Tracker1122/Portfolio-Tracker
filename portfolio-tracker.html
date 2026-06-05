@@ -25803,7 +25803,7 @@ init();
       if (model.drawdownPct != null && low.bookPct != null && model.drawdownPct < low.bookPct - 0.5) lowStr += ' (dipping ' + Math.abs(model.drawdownPct).toFixed(1) + '% at its worst)';
       if (low.vooPct != null) lowStr += ' against VOO\u2019s ' + _pctSigned(low.vooPct) + ' \u2014 ' + _leadLag(low.spreadPct);
       s.push(lowStr + '.');
-      if (low.blendedPct != null) {
+      if (!isHypoCard && low.blendedPct != null) {
         var _bTail = (low.blendedPct > low.bookPct + 0.05) ? ' \u2014 your VOO core cushioning the sleeve\u2019s ' + _pctSigned(low.bookPct) + '.'
           : (low.blendedPct < low.bookPct - 0.05) ? ' \u2014 here your picks (' + _pctSigned(low.bookPct) + ') held up better than the index, so the core pulled the book down a touch.'
           : ' \u2014 essentially in line with the sleeve\u2019s ' + _pctSigned(low.bookPct) + '.';
@@ -25845,6 +25845,41 @@ init();
     }
     s.push('Based on ' + model.coveragePct.toFixed(0) + '% of your active sleeve' + (model.coverageWarn ? ' \u2014 low coverage, so read it loosely' : '') + '.');
     return '<div style="font-size:11px;line-height:1.55;margin:6px 0 2px;color:var(--color-text-secondary)">' + s.join(' ') + '</div>';
+  }
+
+  // Parallel to replaySummaryText, but for the blended liquid book (sleeve + VOO core). Sits BETWEEN
+  // the two ladder panels on the hypothetical card: read it, then look at the book graph below it.
+  // Same vs-VOO lens (the trajectory of book − VOO), plus the at-the-low nuance vs the bare sleeve.
+  function bookSummaryText(model) {
+    var J = model.junctions; if (!J || !J.length) return '';
+    var low = J[0]; if (low.blendedPct == null) return '';
+    var s = ['Now fold your VOO core back in.'];
+    var lowStr = 'The book bottomed at ' + _pctSigned(low.blendedPct) + ' at the low';
+    if (low.vooPct != null) lowStr += ', vs VOO\u2019s ' + _pctSigned(low.vooPct) + ' \u2014 ' + _leadLag(low.blendedPct - low.vooPct);
+    if (low.bookPct != null) {
+      if (low.blendedPct > low.bookPct + 0.05) lowStr += '; the core cushioned the sleeve\u2019s ' + _pctSigned(low.bookPct);
+      else if (low.blendedPct < low.bookPct - 0.05) lowStr += '; a hair below your picks\u2019 ' + _pctSigned(low.bookPct) + ', which beat the index, so the core pulled it down slightly';
+    }
+    s.push(lowStr + '.');
+    var fwd = [];
+    for (var i = 1; i < J.length; i++) {
+      var c = J[i];
+      if (c.pending || c.missing || c.blendedPct == null || c.vooPct == null) continue;
+      fwd.push({ label: c.label, spread: c.blendedPct - c.vooPct, blended: c.blendedPct, voo: c.vooPct });
+    }
+    if (fwd.length) {
+      var last = fwd[fwd.length - 1], gFirst = fwd[0], gLast = fwd[fwd.length - 1];
+      var allAhead = fwd.every(function (c) { return c.spread >= -0.05; });
+      var allBehind = fwd.every(function (c) { return c.spread <= 0.05; });
+      var tail = ', ending ' + _pctSigned(last.blended) + ' vs VOO\u2019s ' + _pctSigned(last.voo);
+      var sent;
+      if (fwd.length === 1) sent = 'Against VOO it was ' + _gapPhrase(gFirst.spread, gFirst.label) + tail;
+      else if (allAhead) sent = 'Against VOO the book stayed ahead the whole way \u2014 from ' + Math.abs(gFirst.spread).toFixed(1) + ' pts at ' + gFirst.label + ' to ' + Math.abs(gLast.spread).toFixed(1) + ' pts ahead by ' + gLast.label + tail;
+      else if (allBehind) sent = 'Against VOO the book trailed the whole way \u2014 from ' + Math.abs(gFirst.spread).toFixed(1) + ' pts at ' + gFirst.label + ' to ' + Math.abs(gLast.spread).toFixed(1) + ' pts behind by ' + gLast.label + tail;
+      else sent = 'Against VOO the book went from ' + _gapPhrase(gFirst.spread, gFirst.label) + ' to ' + _gapPhrase(gLast.spread, gLast.label) + tail;
+      s.push(sent + '.');
+    }
+    return '<div style="font-size:11px;line-height:1.55;margin:8px 0 2px;color:var(--color-text-secondary)">' + s.join(' ') + '</div>';
   }
 
   // Per-junction book-vs-VOO grid. Expresses the data that already exists (each
@@ -26165,16 +26200,18 @@ init();
           var _labs = _JUNCTION_ORDER.filter(function (l) { return _hp[l] || _cp[l]; });
           var _pick = function (pt, key) { return (pt && pt[key] != null && !pt.pending && !pt.missing) ? pt[key] : null; };
           var _voo = function (l) { return (_hp[l] && _hp[l].vooPct != null) ? _hp[l].vooPct : ((_cp[l] && _cp[l].vooPct != null) ? _cp[l].vooPct : null); };
-          var _panels = [{ title: 'Your sleeve', note: 'your picks, ex-VOO', conn: 'delta', bFill: 'delta',
-            rows: _labs.map(function (l) { return { label: l, a: _pick(_cp[l], 'bookPct'), b: _pick(_hp[l], 'bookPct'), voo: _voo(l) }; }) }];
-          if (_labs.some(function (l) { return (_hp[l] && _hp[l].blendedPct != null) || (_cp[l] && _cp[l].blendedPct != null); })) {
-            _panels.push({ title: 'Your book', note: 'those picks + your VOO core', conn: 'delta', bFill: 'delta',
-              rows: _labs.map(function (l) { return { label: l, a: _pick(_cp[l], 'blendedPct'), b: _pick(_hp[l], 'blendedPct'), voo: _voo(l) }; }) });
-          }
+          var _sleevePanel = { title: 'Your sleeve', note: 'your picks, ex-VOO', conn: 'delta', bFill: 'delta',
+            rows: _labs.map(function (l) { return { label: l, a: _pick(_cp[l], 'bookPct'), b: _pick(_hp[l], 'bookPct'), voo: _voo(l) }; }) };
+          var _bookPanel = _labs.some(function (l) { return (_hp[l] && _hp[l].blendedPct != null) || (_cp[l] && _cp[l].blendedPct != null); })
+            ? { title: 'Your book', note: 'those picks + your VOO core', conn: 'delta', bFill: 'delta',
+                rows: _labs.map(function (l) { return { label: l, a: _pick(_cp[l], 'blendedPct'), b: _pick(_hp[l], 'blendedPct'), voo: _voo(l) }; }) }
+            : null;
           var _legCmp = '<div style="font-size:9px;color:var(--color-text-tertiary);margin:6px 0 0;display:flex;gap:14px;flex-wrap:wrap">' +
             '<span>' + _legendDot(null, true) + 'current</span><span>' + _legendDot('var(--color-text-success, #22c55e)', false) + 'with trades</span><span>' + _vooKey + '</span>' +
             '<span style="opacity:.75">gap = what the trades changed</span></div>';
-          ladder = _legCmp + renderRecoveryLadder(_panels);
+          // Sleeve graph, then the book paragraph as a visual break, then the book graph.
+          ladder = _legCmp + renderRecoveryLadder([_sleevePanel]) +
+            (_bookPanel ? bookSummaryText(model) + renderRecoveryLadder([_bookPanel]) : '');
         } else {
           var _pa = _bookPoints(model);
           var _labsA = _JUNCTION_ORDER.filter(function (l) { return _pa[l]; });
