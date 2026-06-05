@@ -10306,9 +10306,19 @@ function riskReviewAiFacts() {
       }).join('; ');
     }
     L.push(`Active sleeve vs VOO at each marked point (sleeve level, not per-name; measured vs the pre-event high — "low" = the window trough, then 6mo/1Y/2Y into the recovery): ${jline || ('at the low ' + sgn(c.bookReturnPct) + (c.benchReturnPct != null ? ' vs VOO ' + sgn(c.benchReturnPct) : ''))}.`);
-    if (!c.isHypothetical && c.junctions && c.junctions.length) {
+    if (c.junctions && c.junctions.length) {
       const bj = c.junctions.filter(j => j.blendedPct != null);
-      if (bj.length) L.push(`BLENDED LIQUID BOOK at each marked point (the active sleeve with the user's VOO passive core folded back in at its real book weight, replayed by the SAME engine): ${bj.map(j => j.label + ' ' + sgn(j.blendedPct)).join('; ')}. THIS is the whole-liquid-book figure; the sleeve numbers above EXCLUDE the VOO core, so do NOT call the sleeve drawdown the "portfolio" or "book" drawdown — the core materially cushions it.`);
+      if (bj.length) {
+        const sleeveName = c.isHypothetical ? 'the hypothetical sleeve (active sleeve + the staged scenario)' : 'the active sleeve';
+        const low = c.junctions[0];
+        let dir = '';
+        if (low && low.blendedPct != null && low.bookPct != null) {
+          if (low.blendedPct > low.bookPct + 0.05) dir = ` At the low the whole book (${sgn(low.blendedPct)}) is SHALLOWER than ${sleeveName} (${sgn(low.bookPct)}) — the VOO core cushions the drawdown.`;
+          else if (low.blendedPct < low.bookPct - 0.05) dir = ` At the low the whole book (${sgn(low.blendedPct)}) is DEEPER than ${sleeveName} (${sgn(low.bookPct)}) — the picks held up better than the index, so the core drags the book down slightly there.`;
+          else dir = ` At the low the whole book is essentially in line with ${sleeveName}.`;
+        }
+        L.push(`BLENDED LIQUID BOOK at each marked point (${sleeveName} with the user's VOO passive core folded back in at its real book weight, replayed by the SAME engine): ${bj.map(j => j.label + ' ' + sgn(j.blendedPct)).join('; ')}.${dir} THIS is the whole publicly-traded book; the sleeve numbers above EXCLUDE the VOO core, so do NOT treat the sleeve drawdown as the portfolio/book drawdown.`);
+      }
     }
     if (c.drawdownPct != null) L.push(`Worst intra-window drawdown on the ${c.isHypothetical ? 'hypothetical sleeve' : 'active sleeve'}: ${sgn(c.drawdownPct)}.`);
     if (c.frozen) L.push(`Liquidity note shown on the card: ${c.frozen}`);
@@ -10319,6 +10329,10 @@ function riskReviewAiFacts() {
       if (c.compareCurrent && c.compareCurrent.junctions && c.compareCurrent.junctions.length) {
         const cj = c.compareCurrent.junctions.map(j => (j.pending || j.missing || j.bookPct == null) ? `${j.label}: —` : `${j.label} ${sgn(j.bookPct)}`).join('; ');
         L.push(`For comparison, the user's ACTUAL active sleeve (no scenario) over the SAME window: ${cj}. The difference between the two sleeves IS the scenario's effect — each is measured against its OWN pre-event high, so a point-by-point gap is a fair level-vs-level difference.`);
+        const curMap = {}; c.compareCurrent.junctions.forEach(j => { if (j.blendedPct != null) curMap[j.label] = j.blendedPct; });
+        const bookEffect = (c.junctions || []).filter(j => j.blendedPct != null && curMap[j.label] != null)
+          .map(j => `${j.label} ${sgn(j.blendedPct)} vs ${sgn(curMap[j.label])} (${(j.blendedPct - curMap[j.label]) >= 0 ? '+' : ''}${(j.blendedPct - curMap[j.label]).toFixed(1)} pts)`).join('; ');
+        if (bookEffect) L.push(`At the WHOLE-LIQUID-BOOK level (the VOO core folded into BOTH books), hypothetical vs current: ${bookEffect}. This is the scenario's effect on the user's ENTIRE publicly-traded book — materially smaller than the sleeve-level effect above, because the picks are only part of the book. This is the right magnitude for sizing the trade; the sleeve delta overstates the impact on net worth.`);
       }
       L.push(`NOTE: the folded-in scenario reflects the user's single staged what-if queue, which BOTH AI tabs feed. It may or may not correspond to the specific candidate or selection under discussion in THIS analysis — do not assume they are the same set of moves unless the moves listed above match it.`);
     } else if (c.scenarioStagedNotShown) {
