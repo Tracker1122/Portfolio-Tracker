@@ -9673,6 +9673,92 @@ function saveQrCandidate(keepForm) {
   renderQrSavedList();
 }
 
+// ── Handoff: stage a saved checklist candidate as a BUY in the shared scenario queue. ──
+// Keeps the two stores distinct (qualityReviews vs _candQueue) and links them by ticker. Pushes the
+// candidate's buy — plus any PAIRED ROTATION TRIMS it carries — into _candQueue using the IDENTICAL
+// math candAddToQueue uses, then fires the same follow-ups (recompute combined impact + persist).
+// Empty buyAmount → pre-fill the staging form (Discovery-style) instead of queueing a $0 buy.
+function qrStageAsBuy(id) {
+  const c = qualityReviews.find(q => q.id === id);
+  if (!c) { alert('Candidate not found.'); return; }
+  const T = (c.ticker || '').toUpperCase().trim();
+  if (!T) { alert('This candidate has no ticker.'); return; }
+  const amount = (+c.buyAmount > 0) ? +c.buyAmount : 0;
+  const theme = c.theme || '';
+  const sleeve = c.sleeve || '';
+
+  // Make sure the staging form / queue exists and is visible (this tab owns #theme-candidate-panel).
+  if (typeof switchTab === 'function') switchTab('evaltrade');
+  const setV = (i, v) => { const el = document.getElementById(i); if (el) el.value = v; };
+
+  // EMPTY-AMOUNT FALLBACK — no sized buy on the candidate: drop it into the staging form, focused on
+  // the amount box, rather than queueing a zero. The user types the amount and hits "+ Add to scenario".
+  if (amount <= 0) {
+    if (c.type === 'etf') {
+      if (typeof candSetMode === 'function') candSetMode('etf');
+      setV('cand-etf-ticker', T); setV('cand-etf-theme', theme); setV('cand-etf-sleeve', sleeve);
+      if (c.cachedHoldings && Array.isArray(c.cachedHoldings.parsed) && c.cachedHoldings.parsed.length) {
+        const ta = document.getElementById('cand-etf-paste');
+        if (ta) ta.value = c.cachedHoldings.parsed.filter(p => p.weight != null).map(p => `${p.ticker} ${p.weight}`).join('\n');
+      }
+      if (typeof candReadout === 'function') candReadout();
+      setTimeout(() => { const a = document.getElementById('cand-etf-amount'); if (a) { try { a.focus(); } catch (e) {} } }, 160);
+    } else {
+      if (typeof candSetMode === 'function') candSetMode('stock');
+      setV('cand-ticker', T); setV('cand-theme', theme); setV('cand-sleeve', sleeve);
+      if (typeof candReadout === 'function') candReadout();
+      setTimeout(() => { const a = document.getElementById('cand-amount'); if (a) { try { a.focus(); } catch (e) {} } }, 160);
+    }
+    const p0 = document.getElementById('theme-candidate-panel');
+    if (p0 && p0.scrollIntoView) { try { p0.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {} }
+    return;
+  }
+
+  // AMOUNT PRESENT — push the buy straight into the shared queue.
+  if (c.type === 'etf') {
+    let holdings = [], coverage = 0;
+    if (c.cachedHoldings && Array.isArray(c.cachedHoldings.parsed)) {
+      holdings = c.cachedHoldings.parsed.filter(p => p.weight != null).map(p => ({ ticker: p.ticker, weight: p.weight }));
+      coverage = holdings.reduce((s, h) => s + h.weight, 0);
+    }
+    _candQueue.push({ kind: 'etf', ticker: T, amount, theme, sleeve, holdings, coverage });
+  } else {
+    _candQueue.push({ kind: 'stock', ticker: T, amount, theme, sleeve });
+  }
+
+  // Carry the candidate's PAIRED ROTATION TRIMS (the sells it planned to fund the buy) into the same
+  // queue — resolved through the exact chain candAddToQueue uses, so nothing is recreated by hand.
+  const rts = Array.isArray(c.rotateTrims) ? c.rotateTrims : [];
+  let stagedTrims = 0;
+  rts.forEach(rt => {
+    const RT = (rt.norm || rt.display || '').toUpperCase().trim();
+    if (!RT) return;
+    const r = _candTrimShares(RT, rt.amount, rt.unit || 'pct', rt.lotId || '');
+    if (!r || r.sh <= 0) return;
+    const lots = _candTickerLots(RT);
+    const chosen = rt.lotId ? lots.find(p => String(p.id) === String(rt.lotId)) : null;
+    const src = chosen || lots[0];
+    const tax = _candResolveTrimTax(RT, rt.lotId || '', r.sh);
+    _candQueue.push({
+      kind: 'trim', ticker: RT, shares: r.sh, totalSh: r.totalSh, proceeds: r.proceeds,
+      lotId: rt.lotId || null, lotLabel: chosen ? _candLotLabel(chosen) : '',
+      sleeve: (src && src.sleeve) ? src.sleeve : '(unassigned)',
+      theme: (src && src.theme) ? src.theme : '(unassigned)', tax
+    });
+    stagedTrims++;
+  });
+
+  // Same follow-ups candAddToQueue fires: recompute the combined impact + PERSIST the queue.
+  if (typeof candReadout === 'function') candReadout();
+  if (typeof candRenderQueue === 'function') candRenderQueue();
+  if (typeof candCompute === 'function') candCompute();
+  if (typeof saveCandQueue === 'function') saveCandQueue();
+  if (typeof candFetchPerf === 'function') candFetchPerf();
+
+  const panel = document.getElementById('theme-candidate-panel');
+  if (panel && panel.scrollIntoView) { try { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {} }
+}
+
 function editQrCandidate(id) {
   const c = qualityReviews.find(q => q.id === id);
   if (!c) return;
@@ -9734,6 +9820,7 @@ function renderQrSavedList() {
         <div id="qr-analysis-${c.id}" style="margin-top:10px;display:none"></div>` : ''}
         <div id="qr-ai-${c.id}" style="margin-top:10px"></div>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="qrStageAsBuy('${c.id}')" style="font-size:10px;border-color:var(--color-text-info);color:var(--color-text-info)" title="Add this candidate as a buy in the trade queue below — with its amount, theme, sleeve, and any paired rotation trims — then see the combined impact. If no buy amount is set, it drops into the staging form for you to size.">⊕ Stage as buy →</button>
           <button class="btn btn-sm" onclick="startQrAiAnalysis('${c.id}')" style="font-size:10px">⚖ Analyze with AI (for / against / gaps)</button>
           <button class="btn btn-sm" onclick="qrExportPdf('${c.id}')" style="font-size:10px" title="Export this candidate's inputs, portfolio context, and AI review as a PDF to share with an advisor">⤓ Export PDF</button>
           <button class="btn btn-sm" onclick="deleteQrCandidate('${c.id}')" style="font-size:10px;color:var(--color-text-danger)">Delete</button>
