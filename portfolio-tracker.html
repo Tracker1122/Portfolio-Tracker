@@ -25491,6 +25491,15 @@ init();
           spreadPct: (c.vooPct != null ? c.bookPct - c.vooPct : null), recovered: c.recovered });
       });
     }
+    // Blended liquid-book tier: fold the matching blended-series levels (computed by the same
+    // engine on sleeve+VOO weights, passed in via opts.blendedJunctions) onto each junction by
+    // label, so the table can show a third "blended liquid book" row alongside the sleeve and
+    // VOO. Pure attach — no recompute here; absent opt leaves junctions untouched (sleeve-only).
+    if (junctions && opts.blendedJunctions && opts.blendedJunctions.length) {
+      var _bMap = {};
+      opts.blendedJunctions.forEach(function (b) { if (b && b.label != null && b.bookPct != null) _bMap[b.label] = b.bookPct; });
+      junctions.forEach(function (j) { if (_bMap[j.label] != null) j.blendedPct = _bMap[j.label]; });
+    }
     return { windowLabel: opts.windowLabel || '', dateRange: (opts.from && opts.to) ? fmtRange(opts.from, opts.to) : '', hasData: has,
       returnPct: has ? result.totalReturn * 100 : null, drawdownPct: has ? result.maxDrawdown * 100 : null,
       coveragePct: cov * 100, coverageWarn: cov < COVERAGE_WARN, excluded: result ? (result.excluded || []) : [],
@@ -25704,7 +25713,40 @@ init();
       }
     }
 
-    var model = replayCardModel(result, { windowLabel: win.label, from: win.from, to: win.to, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery, scenarioNote: opts.scenario || null });
+    // Blended liquid-book series (actual card only): fold the VOO passive core back in at its
+    // liquid-book weight and replay the combined book through the SAME engine, so the third
+    // table tier is a real compounded series, not a hand-blended average. Best-effort and fully
+    // guarded — needs VOO window bars and an actual VOO core; the hypothetical/compare path
+    // (opts.weights set) is left untouched. The engine renormalizes over covered names, so the
+    // no-2022-history sleeve names drop out and VOO (full history) stays, exactly as intended.
+    var blendedJunctions = null;
+    if (!opts.weights && typeof vooBars !== 'undefined' && vooBars && result.totalReturn != null) {
+      try {
+        var _spT = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+        var _spVal = _spT ? (_spT.price > 0 ? _spT.currentValue : _spT.totalInvested) : 0;
+        var _sleeveVal = _publicBookValue();
+        if (_spVal > 0 && _sleeveVal > 0) {
+          var _wv = _spVal / (_spVal + _sleeveVal);
+          var _bw = {};
+          Object.keys(weights).forEach(function (k) { _bw[k] = weights[k] * (1 - _wv); });
+          _bw.VOO = (_bw.VOO || 0) + _wv;
+          var _bBars = Object.assign({}, barsByTicker, { VOO: vooBars });
+          var _bRes = RiskLens.replayWindow(_bw, _bBars, ms(win.from), ms(win.to));
+          var _bRec = null;
+          if (recovery && typeof fullByTicker !== 'undefined' && fullByTicker &&
+              typeof vooRec !== 'undefined' && vooRec && typeof capMs !== 'undefined') {
+            var _bFull = Object.assign({}, fullByTicker, { VOO: _mergeBars(vooBars, vooRec) });
+            var _bExt = RiskLens.replayWindow(_bw, _bFull, ms(win.from), capMs);
+            if (_bExt.totalReturn != null)
+              _bRec = { extPath: _bExt.path, extBenchPath: recovery.extBenchPath, windowEndMs: recovery.windowEndMs, todayMs: recovery.todayMs, coverage: _bExt.coverage, incomplete: recovery.incomplete };
+          }
+          var _bModel = replayCardModel(_bRes, { benchmark: benchmark, recovery: _bRec, from: win.from, to: win.to });
+          blendedJunctions = _bModel.junctions;
+        }
+      } catch (e) { blendedJunctions = null; /* best-effort; sleeve-only card still renders */ }
+    }
+
+    var model = replayCardModel(result, { windowLabel: win.label, from: win.from, to: win.to, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery, scenarioNote: opts.scenario || null, blendedJunctions: blendedJunctions });
     if (statusEl) statusEl.textContent = '';
     if (onDone) onDone(model);
   }
@@ -25729,12 +25771,13 @@ init();
   function replaySummaryText(model) {
     if (!model.hasData) return '';
     var range = model.dateRange ? ' (' + model.dateRange + ')' : '';
-    var J = model.junctions, s = ['This replays your current holdings through the ' + (model.windowLabel || 'this window') + range + '.'];
+    var J = model.junctions, s = ['This replays your active sleeve \u2014 your direct picks, before your VOO core \u2014 through the ' + (model.windowLabel || 'this window') + range + '.'];
     if (J && J.length) {
       var low = J[0], lowStr = 'At the low it was ' + (low.bookPct >= 0 ? 'up ' : 'down ') + Math.abs(low.bookPct).toFixed(1) + '%';
       if (model.drawdownPct != null && low.bookPct != null && model.drawdownPct < low.bookPct - 0.5) lowStr += ' (dipping ' + Math.abs(model.drawdownPct).toFixed(1) + '% at its worst)';
       if (low.vooPct != null) lowStr += ' against VOO\u2019s ' + _pctSigned(low.vooPct) + ' \u2014 ' + _leadLag(low.spreadPct);
       s.push(lowStr + '.');
+      if (low.blendedPct != null) s.push('Fold your VOO core back in and the liquid book bottomed at ' + _pctSigned(low.blendedPct) + ' \u2014 the passive core cushioning the sleeve\u2019s ' + _pctSigned(low.bookPct) + '.');
       // Forward checkpoints: walk them carrying the VOO gap at EACH point (that's the
       // story — the spread goes from behind at the low to ahead later), then land on the
       // latest checkpoint's absolute book-vs-VOO so the size of the lead is explicit.
@@ -25763,7 +25806,7 @@ init();
       s.push(up + '.');
       if (model.drawdownPct > -1) s.push('No real drawdown here, so there\u2019s no recovery arc to read.');
     }
-    s.push('Based on ' + model.coveragePct.toFixed(0) + '% of your liquid book' + (model.coverageWarn ? ' \u2014 low coverage, so read it loosely' : '') + '.');
+    s.push('Based on ' + model.coveragePct.toFixed(0) + '% of your active sleeve' + (model.coverageWarn ? ' \u2014 low coverage, so read it loosely' : '') + '.');
     return '<div style="font-size:11px;line-height:1.55;margin:6px 0 2px;color:var(--color-text-secondary)">' + s.join(' ') + '</div>';
   }
 
@@ -25793,16 +25836,27 @@ init();
       if (c.spreadPct == null) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
       return '<td style="text-align:right;padding:2px 7px;color:' + (c.spreadPct >= 0 ? succ : dang) + ';font-weight:600">' + (c.spreadPct >= 0 ? '+' : '') + c.spreadPct.toFixed(1) + '</td>';
     }).join('');
+    var blendedCells = J.map(function (c) {
+      if (c.pending) return '<td style="text-align:right;padding:2px 7px">' + dim + '</td>';
+      if (c.blendedPct == null) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + (c.blendedPct >= 0 ? succ : dang) + ';font-weight:600">' + (c.blendedPct >= 0 ? '+' : '') + c.blendedPct.toFixed(1) + '%</td>';
+    }).join('');
+    var hasBlended = J.some(function (c) { return c.blendedPct != null; });
     function rowLabel(txt, swatch) { return '<td style="text-align:left;padding:2px 8px 2px 0;color:' + tert + ';white-space:nowrap">' + (swatch || '') + txt + '</td>'; }
     var blueSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
     var warn = (model.recoveryIncomplete ? ' <span style="color:' + dang + '">\u26a0 partial \u2014 click again</span>' : '') +
                (model.recoveryCovDrop ? ' <span style="opacity:.7">(on reduced coverage)</span>' : '');
+    var blendedRow = hasBlended ? '<tr>' + rowLabel('Blended liquid book') + blendedCells + '</tr>' : '';
+    var headerNote = hasBlended
+      ? 'Each book\u2019s level vs its own pre-event high (\u201clow\u201d = the window trough). Active sleeve = your direct picks; blended liquid book folds your VOO core back in; spread = sleeve \u2212 VOO, in pts.'
+      : 'Active sleeve vs market at each marked point \u2014 level vs the pre-event high (\u201clow\u201d = the window trough; spread in points).';
     return '<div style="margin-top:7px">' +
-      '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">You vs market at each marked point \u2014 level vs your pre-event high (\u201clow\u201d = the window trough; spread in points).' + warn + '</div>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">' + headerNote + warn + '</div>' +
       '<table style="border-collapse:collapse;font-size:10px">' + head +
-        '<tr>' + rowLabel('You') + youCells + '</tr>' +
+        '<tr>' + rowLabel('Active sleeve') + youCells + '</tr>' +
+        blendedRow +
         '<tr>' + rowLabel('VOO', blueSwatch) + vooCells + '</tr>' +
-        '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel('You \u2212 VOO') + sprCells + '</tr>' +
+        '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel('Sleeve \u2212 VOO') + sprCells + '</tr>' +
       '</table>' +
       '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">chart: red = drawdown leg \u00b7 grey = recovery leg \u00b7 blue = VOO \u00b7 dotted = \u201ceven\u201d \u00b7 dashed = window low \u00b7 \u2713 = back to even-or-better</div>' +
     '</div>';
