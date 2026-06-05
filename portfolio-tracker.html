@@ -9722,11 +9722,18 @@ function qrStageAsBuy(id) {
 
   // AMOUNT PRESENT — push the buy straight into the shared queue.
   if (c.type === 'etf') {
-    let holdings = [], coverage = 0;
+    // Holdings can come from a fetch (cachedHoldings) OR — the normal path — the pasted "Top 5-10
+    // holdings" text (fields.holdingsTop). The handoff previously only read the fetch source, so
+    // pasted ETFs landed in the trade as "0 holdings · 0% covered". Mirror renderQualityFlags:
+    // prefer the cached parse, else parse the pasted text.
+    let parsed = [];
     if (c.cachedHoldings && Array.isArray(c.cachedHoldings.parsed)) {
-      holdings = c.cachedHoldings.parsed.filter(p => p.weight != null).map(p => ({ ticker: p.ticker, weight: p.weight }));
-      coverage = holdings.reduce((s, h) => s + h.weight, 0);
+      parsed = c.cachedHoldings.parsed;
+    } else if (c.fields && c.fields.holdingsTop && typeof parseHoldings === 'function') {
+      parsed = parseHoldings(c.fields.holdingsTop).parsed || [];
     }
+    const holdings = parsed.filter(p => p.weight != null).map(p => ({ ticker: p.ticker, weight: p.weight }));
+    const coverage = holdings.reduce((s, h) => s + (h.weight || 0), 0);
     _candQueue.push({ kind: 'etf', ticker: T, amount, theme, sleeve, holdings, coverage });
   } else {
     _candQueue.push({ kind: 'stock', ticker: T, amount, theme, sleeve });
