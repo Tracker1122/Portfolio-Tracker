@@ -25617,7 +25617,7 @@ init();
     var total = 0; Object.keys(dollars).forEach(function (k) { if (dollars[k] > 0) total += dollars[k]; });
     if (total <= 0) return { active: false, weights: null, newTickers: [], moveCount: q.length };
     var w = {}; Object.keys(dollars).forEach(function (k) { if (dollars[k] > 0) w[k] = dollars[k] / total; });
-    return { active: true, weights: w, newTickers: Object.keys(added).filter(function (k) { return w[k]; }), moveCount: q.length };
+    return { active: true, weights: w, newTickers: Object.keys(added).filter(function (k) { return w[k]; }), moveCount: q.length, totalValue: total };
   }
   function _publicBookValue() {
     if (typeof positions === 'undefined') return 0;
@@ -25735,11 +25735,13 @@ init();
     // (opts.weights set) is left untouched. The engine renormalizes over covered names, so the
     // no-2022-history sleeve names drop out and VOO (full history) stays, exactly as intended.
     var blendedJunctions = null, blendedGraphPath = null;
-    if (!opts.weights && typeof vooBars !== 'undefined' && vooBars && result.totalReturn != null) {
+    if (typeof vooBars !== 'undefined' && vooBars && result.totalReturn != null) {
       try {
         var _spT = (typeof getSpTotals === 'function') ? getSpTotals() : null;
         var _spVal = _spT ? (_spT.price > 0 ? _spT.currentValue : _spT.totalInvested) : 0;
-        var _sleeveVal = _publicBookValue();
+        // Sleeve dollar base for VOO's share: the hypothetical sleeve's total when a scenario is
+        // folded in (so net buys correctly dilute VOO's share), else today's actual sleeve.
+        var _sleeveVal = (opts.hypoSleeveValue != null) ? opts.hypoSleeveValue : _publicBookValue();
         if (_spVal > 0 && _sleeveVal > 0) {
           var _wv = _spVal / (_spVal + _sleeveVal);
           var _bw = {};
@@ -25800,7 +25802,12 @@ init();
       if (model.drawdownPct != null && low.bookPct != null && model.drawdownPct < low.bookPct - 0.5) lowStr += ' (dipping ' + Math.abs(model.drawdownPct).toFixed(1) + '% at its worst)';
       if (low.vooPct != null) lowStr += ' against VOO\u2019s ' + _pctSigned(low.vooPct) + ' \u2014 ' + _leadLag(low.spreadPct);
       s.push(lowStr + '.');
-      if (low.blendedPct != null) s.push('Fold your VOO core back in and the liquid book bottomed at ' + _pctSigned(low.blendedPct) + ' \u2014 the passive core cushioning the sleeve\u2019s ' + _pctSigned(low.bookPct) + '.');
+      if (low.blendedPct != null) {
+        var _bTail = (low.blendedPct > low.bookPct + 0.05) ? ' \u2014 your VOO core cushioning the sleeve\u2019s ' + _pctSigned(low.bookPct) + '.'
+          : (low.blendedPct < low.bookPct - 0.05) ? ' \u2014 here your picks (' + _pctSigned(low.bookPct) + ') held up better than the index, so the core pulled the book down a touch.'
+          : ' \u2014 essentially in line with the sleeve\u2019s ' + _pctSigned(low.bookPct) + '.';
+        s.push('Fold your VOO core back in and the liquid book bottomed at ' + _pctSigned(low.blendedPct) + _bTail);
+      }
       // Forward checkpoints: walk them carrying the VOO gap at EACH point (that's the
       // story — the spread goes from behind at the low to ahead later), then land on the
       // latest checkpoint's absolute book-vs-VOO so the size of the lead is explicit.
@@ -25926,19 +25933,46 @@ init();
       if (v == null) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
       return '<td style="text-align:right;padding:2px 7px;color:' + tert + '">' + (v >= 0 ? '+' : '') + v.toFixed(1) + '%</td>';
     }
+    function blendedCell(pt) {
+      if (!pt) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
+      if (pt.pending) return '<td style="text-align:right;padding:2px 7px">' + dim + '</td>';
+      if (pt.blendedPct == null) return '<td style="text-align:right;padding:2px 7px">' + dash + '</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + (pt.blendedPct >= 0 ? succ : dang) + ';font-weight:600">' + (pt.blendedPct >= 0 ? '+' : '') + pt.blendedPct.toFixed(1) + '%</td>';
+    }
+    function blendedDeltaCell(h, c) {
+      if (!h || !c || h.blendedPct == null || c.blendedPct == null || h.pending || c.pending)
+        return '<td style="text-align:right;padding:2px 7px">' + dim + '</td>';
+      var d = h.blendedPct - c.blendedPct;
+      if (Math.abs(d) < 0.05) return '<td style="text-align:right;padding:2px 7px;color:' + tert + '">0.0</td>';
+      return '<td style="text-align:right;padding:2px 7px;color:' + (d >= 0 ? succ : dang) + ';font-weight:600">' + (d >= 0 ? '+' : '') + d.toFixed(1) + '</td>';
+    }
+    var hasBlendedCmp = labels.some(function (l) { return (hp[l] && hp[l].blendedPct != null) || (cp[l] && cp[l].blendedPct != null); });
     var head = '<tr style="font-size:9px;color:' + tert + '"><th style="text-align:left;padding:2px 8px 2px 0;font-weight:600"></th>' +
       labels.map(function (l) { return '<th style="text-align:right;padding:2px 7px;font-weight:600;color:' + tert + '">' + l + '</th>'; }).join('') + '</tr>';
     function rowLabel(txt, color) { return '<td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:' + (color || tert) + '">' + txt + '</td>'; }
     var blueSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
+    var violetSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BLEND_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
+    var bookBlock = hasBlendedCmp
+      ? '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel(violetSwatch + 'Hypothetical liquid book') + labels.map(function (l) { return blendedCell(hp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel(violetSwatch + 'Current liquid book', 'var(--color-text-secondary)') + labels.map(function (l) { return blendedCell(cp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel('\u0394 scenario \u2014 book') + labels.map(function (l) { return blendedDeltaCell(hp[l], cp[l]); }).join('') + '</tr>'
+      : '';
+    var headerNote = hasBlendedCmp
+      ? 'Sleeve vs sleeve, then liquid book vs liquid book (your VOO core folded in), at each marked point \u2014 level vs the pre-event high. \u201c\u0394 scenario\u201d = hypothetical \u2212 current, in points.'
+      : 'Sleeve vs sleeve at each marked point \u2014 level vs the pre-event high. \u201c\u0394 scenario\u201d = hypothetical \u2212 current sleeve, in points.';
+    var footerNote = hasBlendedCmp
+      ? 'Chart: grey/red = hypothetical sleeve \u00b7 violet = hypothetical liquid book \u00b7 blue = VOO. Untick \u201cfold in\u201d to see the actual book.'
+      : 'Chart above is the hypothetical sleeve. Untick \u201cfold in\u201d to see the actual-sleeve chart.';
     return '<div style="margin-top:7px">' +
-      '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">Sleeve vs sleeve at each marked point \u2014 level vs the pre-event high. \u201c\u0394 scenario\u201d = hypothetical \u2212 current sleeve, in points.</div>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-bottom:2px">' + headerNote + '</div>' +
       '<table style="border-collapse:collapse;font-size:10px">' + head +
         '<tr><td style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</td>' + labels.map(function (l) { return bookCell(hp[l]); }).join('') + '</tr>' +
         '<tr>' + rowLabel('Current sleeve', 'var(--color-text-secondary)') + labels.map(function (l) { return bookCell(cp[l]); }).join('') + '</tr>' +
-        '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel('\u0394 scenario') + labels.map(function (l) { return deltaCell(hp[l], cp[l]); }).join('') + '</tr>' +
-        '<tr>' + rowLabel(blueSwatch + 'VOO') + labels.map(function (l) { return vooCell(hp[l], cp[l]); }).join('') + '</tr>' +
+        '<tr>' + rowLabel('\u0394 scenario \u2014 sleeve') + labels.map(function (l) { return deltaCell(hp[l], cp[l]); }).join('') + '</tr>' +
+        bookBlock +
+        '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel(blueSwatch + 'VOO') + labels.map(function (l) { return vooCell(hp[l], cp[l]); }).join('') + '</tr>' +
       '</table>' +
-      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">Chart above is the hypothetical sleeve. Untick \u201cfold in\u201d to see the actual-sleeve chart.</div>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">' + footerNote + '</div>' +
     '</div>';
   }
 
@@ -26219,7 +26253,7 @@ init();
         }
         var note = 'your active sleeve + ' + hypo.moveCount + ' staged move' + (hypo.moveCount > 1 ? 's' : '') + '.' +
           (hypo.newTickers.length ? ' New: ' + hypo.newTickers.join(', ') + '.' : '') + ' Untick \u201cfold in\u201d to see your actual sleeve.';
-        var hypoModel = await _replayModel(win, { weights: hypo.weights, scenario: note });
+        var hypoModel = await _replayModel(win, { weights: hypo.weights, scenario: note, hypoSleeveValue: hypo.totalValue });
         if (hypoModel) {
           if (curModel) hypoModel.compare = curModel;
           _summaryRows[_rowKey(win.id, 'hypo')] = { winId: win.id, label: win.label, variant: 'hypo', model: hypoModel };
