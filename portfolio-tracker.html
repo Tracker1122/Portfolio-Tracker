@@ -4558,7 +4558,8 @@ function renderTrackRecordCards() {
     `;
   }
 
-  return hitCard + beatCard + beatThemeCard + edgeCard;
+  const afterTaxNote = `<div style="grid-column:1/-1;font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-top:2px">After-tax figures tax <strong>winners</strong> at your ${(TAX_RATE_LT*100).toFixed(0)}% LT / ${(TAX_RATE_ST*100).toFixed(0)}% ST rate, but show <strong>losers at full size</strong> — no harvest credit is assumed, since a loss's tax value depends on offsetting gains elsewhere and can't be known per trade. That makes the after-tax record slightly conservative on losing trades. IRA gains are untaxed.</div>`;
+  return hitCard + beatCard + beatThemeCard + edgeCard + afterTaxNote;
 }
 
 function toggleTrackRecordMature() {
@@ -16209,7 +16210,7 @@ function _renderCardOverlay(type) {
     // Use Oregon-calibrated TAX_RATE_ST/LT constants — match Track Record + Rebalance for consistency.
     const stRate = TAX_RATE_ST;
     const ltRate = TAX_RATE_LT;
-    let ltGains=0, stGains=0, harvested=0;
+    let ltGains=0, stGains=0, harvested=0, harvestedST=0, harvestedLT=0;
     const taxPositions = [];
     positions.filter(p=>p.closed&&p.ticker&&p.sellDate).forEach(p=>{
       if(new Date(p.sellDate).getFullYear()!==taxYear) return;
@@ -16220,10 +16221,12 @@ function _renderCardOverlay(type) {
       const days=bd?Math.floor((sd-bd)/86400000):0;
       const isLT=days>365;
       if(gl>0){if(isLT)ltGains+=gl;else stGains+=gl;}
-      else if(gl<0) harvested+=Math.abs(gl);
+      else if(gl<0){ harvested+=Math.abs(gl); if(isLT) harvestedLT+=Math.abs(gl); else harvestedST+=Math.abs(gl); }
       taxPositions.push({ticker:p.ticker,gl,isLT,date:p.sellDate});
     });
-    const netTax=Math.max(0,ltGains*ltRate+stGains*stRate-harvested);
+    // Losses offset GAINS (not the tax bill) before tax — via the single shared helper, so this card
+    // matches the Tax tab, the ledger, and the scenario sims exactly.
+    const { netBill: netTax } = computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate);
     html = '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">' + taxYear + ' Tax Year</div>';
     html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:14px">Taxable accounts only · IRA excluded</div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">';
