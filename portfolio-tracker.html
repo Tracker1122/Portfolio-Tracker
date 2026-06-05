@@ -5716,6 +5716,9 @@ function switchTab(name) {
   if (name === 'trends') safeRender('renderTrends', renderTrends);
   if (name === 'themes') safeRender('renderThemeUniverse', renderThemeUniverse);
   if (name === 'dashboard') safeRender('syncFixedScrollbar', syncFixedScrollbar);
+  // Risk & Stress Lens (injected block) hook: refresh staged-scenario status on entering
+  // Risk Review, and (re)mount the "stress-test in Risk Review" buttons on Themes / Quality.
+  if (window._riskReplay && typeof window._riskReplay.onShow === 'function') { try { window._riskReplay.onShow(name); } catch (e) {} }
 }
 
 function setPriceToday(id, value) {
@@ -25372,6 +25375,7 @@ init();
       sparkD: sparkD, sparkDStress: sparkDStress, sparkDRecovery: sparkDRecovery, benchSparkD: benchSparkD, benchReturnPct: benchReturnPct, benchSpreadPct: benchSpreadPct, troughDot: troughDot,
       windowEndX: windowEndX, breakevenY: breakevenY, checkpointDots: checkpointDots, recovery: recovery, recoveryIncomplete: recoveryIncomplete, recoveryCovDrop: recoveryCovDrop, junctions: junctions,
       frozenLine: (opts.frozenPct > 0) ? '~' + (opts.frozenPct * 100).toFixed(0) + '% of your all-in book (' + (opts.basisLabel || 'self-marked privates') + ') is illiquid and cannot be sold during this drawdown.' : null,
+      scenarioNote: opts.scenarioNote || null,
       perName: opts.perName || [] };
   }
 
@@ -25440,6 +25444,35 @@ init();
     var w = {}; Object.keys(byKey).forEach(function (k) { w[k] = byKey[k] / total; });
     return w;
   }
+  // Post-scenario liquid weights. Same construction as riskLiquidWeights (ETFs as
+  // themselves), then the staged scenario applied in DOLLARS: a buy adds its `amount`,
+  // a trim subtracts its `proceeds` (shares×current px), floored at 0, then renormalized.
+  // Reads `_candQueue` — the single staged-scenario queue that BOTH the Theme Level Review
+  // and New Position Evaluation tabs add to (persisted as portfolio-cand-scenario-v1), so
+  // this one function covers every place the user builds a hypothetical. Returns inactive
+  // when nothing is staged so callers can fall back to the actual book.
+  function riskHypotheticalWeights() {
+    var q = (typeof _candQueue !== 'undefined' && _candQueue && _candQueue.length) ? _candQueue : null;
+    if (typeof positions === 'undefined' || !q) return { active: false, weights: null, newTickers: [], moveCount: 0 };
+    function keyOf(t) { return (typeof qrCanonical === 'function') ? qrCanonical(t).key : String(t || '').toUpperCase(); }
+    var dollars = {}, held = {};
+    positions.filter(function (p) { return !p.closed && p.ticker; }).forEach(function (p) {
+      var v = (typeof calcPos === 'function') ? (calcPos(p).exitValue || 0) : 0;
+      if (v <= 0) return;
+      var k = keyOf(p.ticker); dollars[k] = (dollars[k] || 0) + v; held[k] = 1;
+    });
+    var added = {};
+    q.forEach(function (tr) {
+      if (!tr || !tr.ticker) return;
+      var k = keyOf(tr.ticker);
+      if (tr.kind === 'trim') { dollars[k] = Math.max(0, (dollars[k] || 0) - (+tr.proceeds || 0)); }
+      else { var amt = +tr.amount || 0; if (amt <= 0) return; if (!held[k]) added[k] = 1; dollars[k] = (dollars[k] || 0) + amt; }
+    });
+    var total = 0; Object.keys(dollars).forEach(function (k) { if (dollars[k] > 0) total += dollars[k]; });
+    if (total <= 0) return { active: false, weights: null, newTickers: [], moveCount: q.length };
+    var w = {}; Object.keys(dollars).forEach(function (k) { if (dollars[k] > 0) w[k] = dollars[k] / total; });
+    return { active: true, weights: w, newTickers: Object.keys(added).filter(function (k) { return w[k]; }), moveCount: q.length };
+  }
   function _publicBookValue() {
     if (typeof positions === 'undefined') return 0;
     var s = 0;
@@ -25459,8 +25492,9 @@ init();
     return b === 'market' ? 'SpaceX, Anduril, self-marked' : 'SpaceX, Anduril, at cost';
   }
 
-  async function runReplayForWindow(win, statusEl, onDone) {
-    var weights = riskLiquidWeights(), tickers = Object.keys(weights);
+  async function runReplayForWindow(win, statusEl, onDone, opts) {
+    opts = opts || {};
+    var weights = opts.weights || riskLiquidWeights(), tickers = Object.keys(weights);
     if (!tickers.length) { if (statusEl) statusEl.textContent = 'No held positions to replay (add positions / fetch live prices first).'; return; }
     var barsByTicker = {}, rateLimited = false;
     for (var i = 0; i < tickers.length; i++) {
@@ -25548,7 +25582,7 @@ init();
       }
     }
 
-    var model = replayCardModel(result, { windowLabel: win.label, from: win.from, to: win.to, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery });
+    var model = replayCardModel(result, { windowLabel: win.label, from: win.from, to: win.to, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery, scenarioNote: opts.scenario || null });
     if (statusEl) statusEl.textContent = '';
     if (onDone) onDone(model);
   }
@@ -25712,6 +25746,7 @@ init();
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
         (model.dateRange ? '<span style="font-size:10px;color:var(--color-text-tertiary)">' + model.dateRange + '</span>' : '') +
       '</div>' +
+      (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical book</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
       replaySummaryText(model) +
       chart +
       (model.junctions ? renderJunctionTable(model) :
@@ -25734,22 +25769,25 @@ init();
   // re-clicks upsert rather than duplicate). Rendered in STRESS_WINDOWS order
   // for stability as rows fill in. Reuses the model the cards already produce —
   // no extra fetch, no extra math.
+  // Cross-window summary now holds up to TWO rows per window: the actual book ('cur')
+  // and the hypothetical book ('hypo', current holdings + the staged scenario). Keyed by
+  // a composite rowKey so both can coexist and be compared side by side.
   var _summaryRows = {};
-  // Single-card model (request 3): one card shown at a time, persisting until another
-  // window is chosen. _activeWinId tracks which one; _showCard renders it from the stored
-  // model (no re-fetch — clicking a summary row just re-renders from cache).
-  var _activeWinId = null;
+  var _activeRowKey = null;
+  var _hypoMode = false;   // when on (and a scenario is staged), window clicks replay the hypothetical book
+  function _winIdOf(rowKey) { var i = rowKey.indexOf('::hypo'); return i > 0 ? rowKey.slice(0, i) : rowKey; }
+  function _rowKey(winId, variant) { return variant === 'hypo' ? winId + '::hypo' : winId; }
   function _highlightActive() {
+    var wid = _activeRowKey ? _winIdOf(_activeRowKey) : null;
     var btns = document.querySelectorAll('#risk-replay-section button[data-win]');
     for (var i = 0; i < btns.length; i++) {
-      var on = btns[i].getAttribute('data-win') === _activeWinId;
-      btns[i].style.boxShadow = on ? 'inset 0 0 0 1.5px var(--color-text-info, #60a5fa)' : '';
+      btns[i].style.boxShadow = (btns[i].getAttribute('data-win') === wid) ? 'inset 0 0 0 1.5px var(--color-text-info, #60a5fa)' : '';
     }
   }
-  function _showCard(id) {
-    var entry = _summaryRows[id];
+  function _showCard(rowKey) {
+    var entry = _summaryRows[rowKey];
     if (!entry) return;
-    _activeWinId = id;
+    _activeRowKey = rowKey;
     var outEl = document.getElementById('risk-replay-out');
     if (outEl) outEl.innerHTML = renderReplayCard(entry.model);
     _highlightActive();
@@ -25758,8 +25796,12 @@ init();
   function renderSummaryTable() {
     var el = document.getElementById('risk-replay-summary');
     if (!el) return;
-    var ids = STRESS_WINDOWS.map(function (w) { return w.id; }).filter(function (id) { return _summaryRows[id]; });
-    if (!ids.length) { el.innerHTML = ''; return; }
+    var keys = [];
+    STRESS_WINDOWS.forEach(function (w) {
+      if (_summaryRows[w.id]) keys.push(w.id);
+      if (_summaryRows[w.id + '::hypo']) keys.push(w.id + '::hypo');
+    });
+    if (!keys.length) { el.innerHTML = ''; return; }
     var header =
       '<tr style="font-size:9px;color:var(--color-text-tertiary)">' +
         '<th style="text-align:left;font-weight:600;padding:2px 6px 2px 0">Window</th>' +
@@ -25770,8 +25812,8 @@ init();
         '<th style="text-align:center;font-weight:600;padding:2px 6px">Rec 6m\u00b71y\u00b72y</th>' +
         '<th style="text-align:center;font-weight:600;padding:2px 0 2px 6px">Path</th>' +
       '</tr>';
-    var rows = ids.map(function (id) {
-      var m = _summaryRows[id].model, label = _summaryRows[id].label, has = m.hasData;
+    var rows = keys.map(function (key) {
+      var entry = _summaryRows[key], m = entry.model, isHypo = (entry.variant === 'hypo'), has = m.hasData;
       var retColor = (has && m.returnPct >= 0) ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
       var covColor = m.coverageWarn ? 'var(--color-text-danger, #ef4444)' : 'var(--color-text-tertiary)';
       var dash = '<span style="color:var(--color-text-tertiary)">\u2014</span>';
@@ -25791,9 +25833,12 @@ init();
         var rc = c.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
         return '<span style="color:' + rc + '">' + (c.bookPct >= 0 ? '+' : '') + c.bookPct.toFixed(0) + '</span>';
       }).join('<span style="opacity:.4"> / </span>') : dash;
-      var activeRow = (id === _activeWinId);
-      return '<tr data-show="' + id + '" title="Click to view this window" style="font-size:10px;border-top:1px solid var(--color-border-tertiary, #333);cursor:pointer;background:' + (activeRow ? 'var(--color-background-tertiary, #2a2a2a)' : 'transparent') + '">' +
-        '<td style="text-align:left;padding:3px 6px 3px 0" title="' + (m.dateRange || '') + '"><span style="color:var(--color-text-secondary)">' + label + (m.coverageWarn ? ' \u26a0' : '') + '</span>' + (m.dateRange ? '<br><span style="font-size:8px;color:var(--color-text-tertiary)">' + m.dateRange + '</span>' : '') + '</td>' +
+      var activeRow = (key === _activeRowKey);
+      var labelCell = isHypo
+        ? '<span style="color:var(--color-text-info, #60a5fa)">\u21b3 hypothetical</span>'
+        : '<span style="color:var(--color-text-secondary)">' + entry.label + (m.coverageWarn ? ' \u26a0' : '') + '</span>' + (m.dateRange ? '<br><span style="font-size:8px;color:var(--color-text-tertiary)">' + m.dateRange + '</span>' : '');
+      return '<tr data-show="' + key + '" title="Click to view" style="font-size:10px;border-top:1px solid var(--color-border-tertiary, #333);cursor:pointer;background:' + (activeRow ? 'var(--color-background-tertiary, #2a2a2a)' : 'transparent') + '">' +
+        '<td style="text-align:left;padding:3px 6px 3px 0' + (isHypo ? ';padding-left:10px' : '') + '" title="' + (m.dateRange || '') + '">' + labelCell + '</td>' +
         '<td style="text-align:right;padding:3px 6px;color:' + retColor + ';font-weight:600">' + (has ? (m.returnPct >= 0 ? '+' : '') + m.returnPct.toFixed(1) + '%' : dash) + '</td>' +
         '<td style="text-align:right;padding:3px 6px;color:var(--color-text-danger, #ef4444)">' + (has ? m.drawdownPct.toFixed(1) + '%' : dash) + '</td>' +
         '<td style="text-align:right;padding:3px 6px">' + spreadCell + '</td>' +
@@ -25804,8 +25849,88 @@ init();
     }).join('');
     el.innerHTML =
       '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
-      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed \u2014 click a window button to add or refresh it, or click a row to bring its chart back up. \u201cvs Mkt\u201d = book return minus VOO over the same window, in points; blue path = VOO. \u201cRec\u201d = book level vs its pre-event high at 6mo / 1Y / 2Y after the window low (green = back to even or better; \u00b7 = not yet reached).</div>' +
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed \u2014 click a window button to add or refresh it, or click a row to bring its chart back up. A \u201c\u21b3 hypothetical\u201d row is the same window run on your book <em>plus</em> the staged scenario, so you can read the scenario\u2019s effect against the actual book directly above it. \u201cvs Mkt\u201d = book return minus VOO over the same window; blue path = VOO. \u201cRec\u201d = book level vs its pre-event high at 6mo / 1Y / 2Y after the window low.</div>' +
       '<table style="border-collapse:collapse;width:100%;max-width:640px">' + header + rows + '</table>';
+  }
+
+  function _refreshHypoStatus() {
+    var el = document.getElementById('risk-hypo-status'), cb = document.getElementById('risk-hypo-toggle');
+    var hypo = riskHypotheticalWeights();
+    if (!hypo.active) {
+      _hypoMode = false;
+      if (cb) { cb.checked = false; cb.disabled = true; }
+      if (el) el.innerHTML = '<span style="opacity:.8">No staged scenario \u2014 build one in New Position Evaluation or Theme Level Review, then it folds in here.</span>';
+      return;
+    }
+    if (cb) cb.disabled = false;
+    if (el) el.innerHTML = hypo.moveCount + ' staged move' + (hypo.moveCount > 1 ? 's' : '') +
+      (hypo.newTickers.length ? ' \u00b7 new name' + (hypo.newTickers.length > 1 ? 's' : '') + ': ' + hypo.newTickers.join(', ') : '') +
+      (_hypoMode ? ' \u00b7 <strong style="color:var(--color-text-info, #60a5fa)">folding in</strong>' : '');
+  }
+  function _setHypoMode(on) {
+    _hypoMode = !!on;
+    var cb = document.getElementById('risk-hypo-toggle'); if (cb) cb.checked = _hypoMode;
+    _refreshHypoStatus();
+  }
+  // Replay one window in the current mode (actual book, or hypothetical if the toggle is on
+  // and a scenario is staged). Finds its own button so callers (button click, toggle, the
+  // cross-tab jump) can all route through here.
+  function _runWindow(winId) {
+    var win = STRESS_WINDOWS.filter(function (w) { return w.id === winId; })[0];
+    if (!win) return;
+    var statusEl = document.getElementById('risk-replay-status');
+    var b = document.querySelector('#risk-replay-section button[data-win="' + winId + '"]');
+    var hypo = riskHypotheticalWeights(), useHypo = _hypoMode && hypo.active, opts = {}, variant = 'cur';
+    if (useHypo) {
+      variant = 'hypo';
+      opts.weights = hypo.weights;
+      opts.scenario = 'your current holdings + ' + hypo.moveCount + ' staged move' + (hypo.moveCount > 1 ? 's' : '') + '.' +
+        (hypo.newTickers.length ? ' New: ' + hypo.newTickers.join(', ') + '.' : '') + ' Untick \u201cfold in\u201d to see your actual book.';
+    }
+    if (b) b.disabled = true;
+    runReplayForWindow(win, statusEl, function (model) {
+      var key = _rowKey(win.id, variant);
+      _summaryRows[key] = { winId: win.id, label: win.label, variant: variant, model: model };
+      _showCard(key);
+      if (b) b.disabled = false;
+    }, opts).catch(function () { if (b) b.disabled = false; });
+  }
+  // When the toggle flips, reflect it on the active window: show the cached variant if we
+  // have it, otherwise replay it in the new mode.
+  function _reflectActiveForMode() {
+    if (!_activeRowKey) return;
+    var wid = _winIdOf(_activeRowKey), targetKey = _rowKey(wid, _hypoMode ? 'hypo' : 'cur');
+    if (_summaryRows[targetKey]) _showCard(targetKey);
+    else _runWindow(wid);
+  }
+  // Cross-tab entry: jump to Risk Review, fold in the staged scenario, and run a window for
+  // BOTH the actual and hypothetical book so the comparison rows appear immediately.
+  function stressScenario(winId) {
+    winId = winId || 'tech2022';
+    if (typeof switchTab === 'function') { try { switchTab('risk'); } catch (e) {} }
+    setTimeout(function () {
+      _refreshHypoStatus();
+      var hypo = riskHypotheticalWeights(), statusEl = document.getElementById('risk-replay-status');
+      if (!hypo.active) { if (statusEl) statusEl.textContent = 'Nothing staged yet \u2014 add buys/trims in New Position Evaluation or Theme Level Review first.'; return; }
+      _setHypoMode(true);
+      var win = STRESS_WINDOWS.filter(function (w) { return w.id === winId; })[0]; if (!win) return;
+      // actual book first (populates the comparison row), then the hypothetical (shows the card)
+      runReplayForWindow(win, statusEl, function (curModel) {
+        _summaryRows[_rowKey(win.id, 'cur')] = { winId: win.id, label: win.label, variant: 'cur', model: curModel };
+        renderSummaryTable();
+        _runWindow(win.id);
+      }, {}).catch(function () {});
+    }, 80);
+  }
+  function _mountCrossTabBtn(panelId) {
+    var panel = document.getElementById(panelId);
+    if (!panel || panel.querySelector('.risk-stress-jump')) return;
+    var bar = document.createElement('div');
+    bar.style.cssText = 'margin:8px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+    bar.innerHTML = '<button class="btn btn-sm risk-stress-jump" style="font-size:10px;padding:5px 12px">\u26a1 Stress-test this scenario in Risk Review \u2192</button>' +
+      '<span style="font-size:9px;color:var(--color-text-tertiary)">Replays your book + the staged moves through a real crash window, vs your actual book.</span>';
+    bar.querySelector('button').addEventListener('click', function () { stressScenario('tech2022'); });
+    panel.insertBefore(bar, panel.firstChild);
   }
 
   function buildPanel() {
@@ -25818,41 +25943,51 @@ init();
     section.innerHTML =
       '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary, #eee);margin-bottom:2px">Risk &amp; Stress Lens</div>' +
       '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your current holdings through a real past stress window using actual daily returns (co-movement included, no model). Each button fetches that window\u2019s daily bars via your Tiingo worker (deep free history; partial fills cache and resume on re-click).</div>' +
+      '<div id="risk-hypo-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px;font-size:10px">' +
+        '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--color-text-secondary)"><input type="checkbox" id="risk-hypo-toggle" style="cursor:pointer"> Fold in staged scenario</label>' +
+        '<span id="risk-hypo-status" style="color:var(--color-text-tertiary)"></span>' +
+      '</div>' +
       '<div style="margin-bottom:4px">' + btns + '</div>' +
       '<div id="risk-replay-status" style="font-size:10px;color:var(--color-text-tertiary);min-height:14px"></div>' +
       '<div id="risk-replay-summary"></div>' +
       '<div id="risk-replay-out"></div>' + STANDING_CAVEAT;
-    var statusEl = section.querySelector('#risk-replay-status');
     var summaryEl = section.querySelector('#risk-replay-summary');
-    // Click a summary row to bring that window's chart back up (from cache, no re-fetch).
+    // Click a summary row to bring that card back up (from cache, no re-fetch).
     summaryEl.addEventListener('click', function (e) {
       var tr = e.target && e.target.closest ? e.target.closest('tr[data-show]') : null;
       if (tr) _showCard(tr.getAttribute('data-show'));
     });
+    var toggle = section.querySelector('#risk-hypo-toggle');
+    toggle.addEventListener('change', function () { _setHypoMode(toggle.checked); _reflectActiveForMode(); });
     section.querySelectorAll('button[data-win]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var win = STRESS_WINDOWS.filter(function (w) { return w.id === b.getAttribute('data-win'); })[0];
-        b.disabled = true;
-        runReplayForWindow(win, statusEl, function (model) {
-          _summaryRows[win.id] = { label: win.label, model: model };
-          _showCard(win.id);   // one card, replaces whatever was shown; summary still accumulates every window
-          b.disabled = false;
-        }).catch(function () { b.disabled = false; });
-      });
+      b.addEventListener('click', function () { _runWindow(b.getAttribute('data-win')); });
     });
     return section;
   }
 
   function init() {
     _loadBarsCache();
-    if (document.getElementById('risk-replay-section')) return;
-    var mount = document.getElementById('risk-review-mount') || document.body;
-    mount.appendChild(buildPanel());
+    if (!document.getElementById('risk-replay-section')) {
+      var mount = document.getElementById('risk-review-mount') || document.body;
+      mount.appendChild(buildPanel());
+    }
+    _refreshHypoStatus();
+    _mountCrossTabBtn('tab-themes');
+    _mountCrossTabBtn('tab-quality');
   }
   if (document.readyState === 'loading') W.addEventListener('DOMContentLoaded', init);
   else init();
 
-  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskFrozenPct: riskFrozenPct };
+  // onShow is called by switchTab (a one-line hook added in the main app) so the scenario
+  // status stays fresh when you arrive at Risk Review after staging, and the cross-tab
+  // buttons re-mount if their panels were re-rendered.
+  function onShow(name) {
+    _mountCrossTabBtn('tab-themes');
+    _mountCrossTabBtn('tab-quality');
+    if (name === 'risk') _refreshHypoStatus();
+  }
+
+  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow };
 })(window);
 
 </script>
