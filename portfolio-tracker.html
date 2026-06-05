@@ -3752,7 +3752,7 @@ function _rawRealizedYear(year) {
   return { rows, ltGains, stGains, harvested, harvestedST, harvestedLT };
 }
 
-// Returns { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill }.
+// Returns { rows, ltGains, stGains, harvested, harvestedST, harvestedLT, ltTax, stTax, grossTax, harvestOffset, netBill }.
 // Net bill is THIS YEAR ONLY: prior-year loss carryforward and the $3,000 ordinary-income
 // offset are intentionally not modeled — each year stands alone (see UI note). This keeps the
 // ledger a clean "what did these trades generate" estimate rather than a multi-year tax projection.
@@ -3762,7 +3762,7 @@ function buildRealizedData(year) {
   const ltTax = ltGains * ltRate;
   const stTax = stGains * stRate;
   const { grossTax, netBill, taxSaved: harvestOffset } = computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate);
-  return { rows, ltGains, stGains, harvested, ltTax, stTax, grossTax, harvestOffset, netBill };
+  return { rows, ltGains, stGains, harvested, harvestedST, harvestedLT, ltTax, stTax, grossTax, harvestOffset, netBill };
 }
 
 // Render the full ledger (summary + year selector + itemized table) into a mount element.
@@ -14489,21 +14489,19 @@ function _candScenarioTax() {
   const proceedsTotal = taxableProceeds + shelteredProceeds;
   const costBasisTotal = proceedsTotal - realizedTotalGL;
   // Layer the staged trims on top of the user's ACTUAL year-to-date realized position (from the same
-  // Realized Gains Ledger on the Tax tab), using the ledger's harvest-offset model so the numbers agree.
-  // marginalTax = tax(YTD + scenario) − tax(YTD): the scenario's gain is absorbed by YTD harvested
-  // losses, and a scenario LOSS shows up as tax SAVED against existing YTD gains.
-  const scSTgains = stGain, scLTgains = ltGain, scLosses = stLoss + ltLoss; // scenario, ledger convention
+  // Realized Gains Ledger on the Tax tab), through the SAME character-aware netting (computeHarvestOffset)
+  // so every surface agrees. marginalTax = tax(YTD + scenario) − tax(YTD): the scenario's gain is
+  // absorbed by YTD harvested losses, and a scenario LOSS shows up as tax SAVED against existing YTD gains.
   const ytdYear = new Date().getFullYear();
-  let ytd = { ltGains: 0, stGains: 0, harvested: 0, netBill: 0, carry: 0, year: ytdYear, available: false };
-  try { if (typeof buildRealizedData === 'function') { const rd = buildRealizedData(ytdYear); ytd = { ltGains: rd.ltGains || 0, stGains: rd.stGains || 0, harvested: rd.harvested || 0, netBill: rd.netBill || 0, carry: rd.carryIn || 0, year: ytdYear, available: true }; } } catch (e) { /* no ledger — fall back to standalone */ }
-  const _hbill = (lt, st, harv) => { const nST = Math.max(0, st - harv); const rem = Math.max(0, harv - st); const nLT = Math.max(0, lt - rem); return { bill: nST * _ST + nLT * _LT, taxedST: nST, taxedLT: nLT }; };
-  const aloneR = _hbill(scLTgains, scSTgains, scLosses);
-  // YTD net bill is single-year (no carryforward); the combined figure is too.
-  const combinedR = _hbill(ytd.ltGains + scLTgains, ytd.stGains + scSTgains, ytd.harvested + ytd.carry + scLosses);
-  const scenarioTax = aloneR.bill;                       // the scenario in isolation
-  const combinedNetBill = combinedR.bill;
+  let ytd = { ltGains: 0, stGains: 0, harvested: 0, harvestedST: 0, harvestedLT: 0, netBill: 0, carry: 0, year: ytdYear, available: false };
+  try { if (typeof buildRealizedData === 'function') { const rd = buildRealizedData(ytdYear); ytd = { ltGains: rd.ltGains || 0, stGains: rd.stGains || 0, harvested: rd.harvested || 0, harvestedST: rd.harvestedST || 0, harvestedLT: rd.harvestedLT || 0, netBill: rd.netBill || 0, carry: 0, year: ytdYear, available: true }; } } catch (e) { /* no ledger — fall back to standalone */ }
+  // Scenario in isolation: this is exactly totalTax / taxableST / taxableLT computed above (same netting).
+  const scenarioTax = totalTax;
+  // Combined = this year's realized + this scenario, netted by character (ST losses vs ST gains first, etc).
+  const combinedR = computeHarvestOffset(ytd.ltGains + ltGain, ytd.stGains + stGain, ytd.harvestedST + stLoss, ytd.harvestedLT + ltLoss, _LT, _ST);
+  const combinedNetBill = combinedR.netBill;
   const marginalTax = combinedNetBill - ytd.netBill;     // incremental cost given the year so far
-  return { totalTax, taxableGain: Math.max(0, netST) + Math.max(0, netLT), stGain, stLoss, ltGain, ltLoss, netST, netLT, taxableST, taxableLT, taxableProceeds, shelteredProceeds, hasIRA, anyLoss, washSale, waitLT, rateST: _ST, rateLT: _LT, realizedTotalGL, realizedIRAGL, realizedTaxableGL, proceedsTotal, costBasisTotal, scenarioTax, marginalTax, combinedNetBill, ytd, aloneTaxedST: aloneR.taxedST, aloneTaxedLT: aloneR.taxedLT };
+  return { totalTax, taxableGain: Math.max(0, netST) + Math.max(0, netLT), stGain, stLoss, ltGain, ltLoss, netST, netLT, taxableST, taxableLT, taxableProceeds, shelteredProceeds, hasIRA, anyLoss, washSale, waitLT, rateST: _ST, rateLT: _LT, realizedTotalGL, realizedIRAGL, realizedTaxableGL, proceedsTotal, costBasisTotal, scenarioTax, marginalTax, combinedNetBill, ytd, aloneTaxedST: taxableST, aloneTaxedLT: taxableLT };
 }
 
 // Open this ETF's holdings page on stockanalysis.com (free, no login) — copy the table and paste it
