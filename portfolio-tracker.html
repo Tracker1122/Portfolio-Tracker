@@ -25742,45 +25742,60 @@ init();
     '</div>';
   }
 
-  // Explicit plain-English diff between the actual book and the book-with-scenario, for the
-  // marked points. States the drawdown-depth change at the low and the level change at the
-  // latest checkpoint present in BOTH books, plus how the VOO gap shifts there. Factual
-  // (shallower/deeper, higher/lower), no value judgement.
+  // Explicit plain-English diff between the actual book and the book-with-scenario. Tells the
+  // WHOLE story: the gap at every marked point (low → 6mo → 1Y → 2Y), a holistic read of the
+  // pattern (helps everywhere / widens / trades a deeper hole for a better recovery / mixed),
+  // and how the VOO gap shifts at the end. Factual; no value judgement on "better/worse".
+  function _dp(x) { return (x >= 0 ? '+' : '') + x.toFixed(1); }
+  function _holistic(ds) {
+    var eps = 0.05, maxAbs = Math.max.apply(null, ds.map(function (d) { return Math.abs(d); }));
+    if (maxAbs < 0.5) return 'So the scenario barely moves the book at any of the marked points.';
+    var first = ds[0], last = ds[ds.length - 1];
+    var pos = ds.every(function (d) { return d >= -eps; }), neg = ds.every(function (d) { return d <= eps; });
+    function rng() { var a = ds.map(function (d) { return Math.abs(d); }); return Math.min.apply(null, a).toFixed(1) + '\u2013' + Math.max.apply(null, a).toFixed(1); }
+    if (pos && !neg) return 'So the scenario keeps the book higher at every marked point (by ' + rng() + ' pts).';
+    if (neg && !pos) return 'So the scenario leaves the book lower at every marked point (by ' + rng() + ' pts).';
+    if (first < -eps && last > eps) return 'So it digs a deeper hole at the low but ends higher \u2014 a more volatile path that finishes ahead here.';
+    if (first > eps && last < -eps) return 'So it cushions the drop early but finishes lower than your current book.';
+    return 'So the effect is mixed across the points \u2014 read the \u0394 row above point by point.';
+  }
   function renderScenarioDiffText(model) {
     var cur = model.compare; if (!cur) return '';
-    var hp = _bookPoints(model), cp = _bookPoints(cur), tert = 'var(--color-text-tertiary, #888)';
-    function depthWord(d) { return d > 0 ? 'shallower' : 'deeper'; }   // d = hypo − cur at the low; higher (less negative) = shallower
-    function moveWord(d) { return d > 0 ? 'higher' : 'lower'; }
-    var s = [];
-    // Low: drawdown depth
-    if (hp.low && cp.low && hp.low.bookPct != null && cp.low.bookPct != null) {
-      var dLow = hp.low.bookPct - cp.low.bookPct;
-      if (Math.abs(dLow) < 0.05) s.push('At the low the scenario barely moves the bottom (both about ' + cp.low.bookPct.toFixed(1) + '%).');
-      else s.push('At the low the book bottoms at ' + (hp.low.bookPct >= 0 ? '+' : '') + hp.low.bookPct.toFixed(1) + '% instead of ' + (cp.low.bookPct >= 0 ? '+' : '') + cp.low.bookPct.toFixed(1) + '% \u2014 ' + Math.abs(dLow).toFixed(1) + ' pts ' + depthWord(dLow) + '.');
+    var hp = _bookPoints(model), cp = _bookPoints(cur);
+    var pts = [];
+    _JUNCTION_ORDER.forEach(function (l) {
+      var h = hp[l], c = cp[l];
+      if (h && c && !h.pending && !c.pending && !h.missing && !c.missing && h.bookPct != null && c.bookPct != null)
+        pts.push({ label: l, h: h.bookPct, c: c.bookPct, d: h.bookPct - c.bookPct, vh: h.vooPct, vc: c.vooPct });
+    });
+    if (!pts.length) return '';
+    var first = pts[0], last = pts[pts.length - 1], s = [];
+    // Point 1: the low (or earliest available), with absolutes + drawdown framing.
+    if (first.label === 'low') {
+      if (Math.abs(first.d) < 0.05) s.push('At the low the scenario barely moves the bottom (both about ' + first.c.toFixed(1) + '%).');
+      else s.push('At the low the book bottoms at ' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ' \u2014 ' + Math.abs(first.d).toFixed(1) + ' pts ' + (first.d > 0 ? 'shallower' : 'deeper') + '.');
+    } else {
+      s.push('At ' + first.label + ' the book sits ' + _pctSigned(first.h) + ' vs ' + _pctSigned(first.c) + ' (' + _dp(first.d) + ' pts).');
     }
-    // Latest checkpoint present in BOTH (prefer 2Y, then 1Y, then 6mo)
-    var lastL = null;
-    for (var i = _JUNCTION_ORDER.length - 1; i >= 1; i--) {
-      var l = _JUNCTION_ORDER[i], h = hp[l], c = cp[l];
-      if (h && c && !h.pending && !c.pending && !h.missing && !c.missing && h.bookPct != null && c.bookPct != null) { lastL = l; break; }
+    // Point 2..n: the gap at each subsequent marked point, as a trajectory, ending on absolutes.
+    var fwd = pts.slice(1);
+    if (fwd.length) {
+      var legs = fwd.map(function (p) { return (Math.abs(p.d) < 0.05 ? 'even' : _dp(p.d)) + ' at ' + p.label; });
+      for (var k = legs.length - 1; k >= 0; k--) { if (Math.abs(fwd[k].d) >= 0.05) { legs[k] = _dp(fwd[k].d) + ' pts at ' + fwd[k].label; break; } }
+      var joined = legs.join(', ').replace(/, ([^,]*)$/, ' and $1');
+      s.push('Versus your current book it then runs ' + joined + ' (ending ' + _pctSigned(last.h) + ' vs ' + _pctSigned(last.c) + ').');
     }
-    if (lastL) {
-      var H = hp[lastL], C = cp[lastL], dEnd = H.bookPct - C.bookPct;
-      var endStr = 'By ' + lastL + ' it ends at ' + (H.bookPct >= 0 ? '+' : '') + H.bookPct.toFixed(1) + '% versus ' + (C.bookPct >= 0 ? '+' : '') + C.bookPct.toFixed(1) + '% without the scenario';
-      endStr += (Math.abs(dEnd) < 0.05) ? ' \u2014 essentially unchanged' : ' \u2014 ' + Math.abs(dEnd).toFixed(1) + ' pts ' + moveWord(dEnd);
-      endStr += '.';
-      s.push(endStr);
-      // VOO gap shift at the same point
-      if (H.vooPct != null && C.vooPct != null) {
-        var gH = H.bookPct - H.vooPct, gC = C.bookPct - C.vooPct, dGap = gH - gC;
-        if (Math.abs(dGap) >= 0.05) {
-          var gapPhraseH = (Math.abs(gH) < 0.05) ? 'even with VOO' : (Math.abs(gH).toFixed(1) + ' pts ' + (gH >= 0 ? 'ahead' : 'behind'));
-          var gapPhraseC = (Math.abs(gC) < 0.05) ? 'even' : (Math.abs(gC).toFixed(1) + ' ' + (gC >= 0 ? 'ahead' : 'behind'));
-          s.push('Against VOO at ' + lastL + ' that takes you from ' + gapPhraseC + ' to ' + gapPhraseH + '.');
-        }
+    // Holistic pattern across all points.
+    if (pts.length >= 2) s.push(_holistic(pts.map(function (p) { return p.d; })));
+    // VOO gap shift at the last point.
+    if (last.vh != null && last.vc != null) {
+      var gH = last.h - last.vh, gC = last.c - last.vc;
+      if (Math.abs(gH - gC) >= 0.05) {
+        var ph = Math.abs(gH) < 0.05 ? 'even with VOO' : (Math.abs(gH).toFixed(1) + ' pts ' + (gH >= 0 ? 'ahead' : 'behind'));
+        var pc = Math.abs(gC) < 0.05 ? 'even' : (Math.abs(gC).toFixed(1) + ' ' + (gC >= 0 ? 'ahead' : 'behind'));
+        s.push('Against VOO at ' + last.label + ' that moves you from ' + pc + ' to ' + ph + '.');
       }
     }
-    if (!s.length) return '';
     return '<div style="font-size:10.5px;line-height:1.55;margin-top:8px;padding-top:7px;border-top:1px solid var(--color-border-tertiary, #333);color:var(--color-text-secondary)">' +
       '<strong style="color:var(--color-text-info, #60a5fa)">What the scenario changes:</strong> ' + s.join(' ') + '</div>';
   }
