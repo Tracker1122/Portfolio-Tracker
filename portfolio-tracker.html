@@ -8440,9 +8440,9 @@ function renderQrForm() {
       <div style="margin-top:12px">${stage2FieldsHtml}</div>
       <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
         <button class="btn btn-sm btn-primary" onclick="saveQrCandidate()" style="font-size:11px">${editing ? '✓ Update Candidate' : '✓ Done — save candidate'}</button>
-        <button class="btn btn-sm" onclick="saveQrCandidate(true); if (typeof qrEditingId !== 'undefined' && qrEditingId) qrStageAsBuy(qrEditingId);" style="font-size:11px;border-color:var(--color-text-info);color:var(--color-text-info)" title="Save this candidate and add it as a buy in the trade below (uses the buy amount you set). All inputs persist; if no amount is set you'll be asked to size it.">⊕ Add to trade →</button>
         <button class="btn btn-sm" onclick="resetQrForm()" style="font-size:11px">${editing ? 'Cancel Edit' : 'Clear'}</button>
-      </div>`
+      </div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:6px;font-style:italic;line-height:1.5">Saved candidates appear below — open one and hit <strong>⊕ Add to trade</strong> to stage it (set a buy amount first).</div>`
     : `
       <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
         <button id="qr-stage1-continue" class="btn btn-sm btn-primary" disabled onclick="qrUnlockStage2()" style="font-size:11px;opacity:0.4;cursor:not-allowed">Save & continue ↓</button>
@@ -9692,6 +9692,7 @@ function qrStageAsBuy(id) {
   // EMPTY-AMOUNT FALLBACK — no sized buy yet. Buys are sized in the checklist now, so open this
   // candidate there and focus its amount field rather than queueing a $0.
   if (amount <= 0) {
+    alert(`${T} has no buy amount yet — set "How much are you buying?" in the candidate form, save it, then Add to trade.`);
     if (typeof editQrCandidate === 'function') editQrCandidate(id);
     setTimeout(() => { const a = document.getElementById('qr-buy-amount'); if (a) { try { a.focus(); a.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} } }, 180);
     return;
@@ -9795,15 +9796,20 @@ function renderQrSavedList() {
         <span style="font-size:8px;color:var(--color-text-tertiary);margin-left:auto">${filled}/${fields.length} filled · ${updated}</span>
       </summary>
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          <div style="font-size:11px;color:var(--color-text-secondary);line-height:1.5">
+            ${(+c.buyAmount > 0) ? `Buy <strong style="color:var(--color-text-primary)">$${Math.round(+c.buyAmount).toLocaleString()}</strong>` : `<span style="color:#fbbf24">No buy amount set yet</span>`}${c.theme ? ` · ${esc(c.theme)}` : ''}${c.sleeve ? ` · ${esc(c.sleeve)}` : ''} · ${filled}/${fields.length} fields
+          </div>
+          <button class="btn btn-sm" onclick="qrStageAsBuy('${c.id}')" style="font-size:11px;font-weight:600;border-color:var(--color-text-info);color:var(--color-text-info)" title="Add this candidate as a buy in the trade below — with its amount, theme, sleeve, and any paired trims — then see the combined impact. Set a buy amount first.">⊕ Add to trade →</button>
+        </div>
         ${rows || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No fields filled.</div>'}
         <div id="qr-perf-${c.id}" style="margin-top:10px"></div>
-        <div style="margin-top:10px"><button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">✎ Edit candidate</button></div>
-        ${c.type === 'etf' ? `<button id="qr-analysis-btn-${c.id}" class="btn btn-sm" onclick="toggleQrCardAnalysis('${c.id}')" style="font-size:10px;margin-top:10px">🔍 View analysis (overlap + rotation)</button>
-        <div id="qr-analysis-${c.id}" style="margin-top:10px;display:none"></div>` : ''}
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="qrStageAsBuy('${c.id}')" style="font-size:10px;border-color:var(--color-text-info);color:var(--color-text-info)" title="Add this candidate as a buy in the trade queue below — with its amount, theme, sleeve, and any paired rotation trims — then see the combined impact. If no buy amount is set, it drops into the staging form for you to size.">⊕ Stage as buy →</button>
+          <button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">✎ Edit candidate</button>
+          ${c.type === 'etf' ? `<button id="qr-analysis-btn-${c.id}" class="btn btn-sm" onclick="toggleQrCardAnalysis('${c.id}')" style="font-size:10px">🔍 View analysis (overlap)</button>` : ''}
           <button class="btn btn-sm" onclick="deleteQrCandidate('${c.id}')" style="font-size:10px;color:var(--color-text-danger)">Delete</button>
         </div>
+        ${c.type === 'etf' ? `<div id="qr-analysis-${c.id}" style="margin-top:10px;display:none"></div>` : ''}
         <div id="qr-flags-${c.id}" style="margin-top:10px">${renderQualityFlags(c)}</div>
         <div id="qr-ai-${c.id}" style="display:none"></div>
       </div>
@@ -9874,7 +9880,7 @@ function toggleQrCardAnalysis(id) {
   const btn = document.getElementById('qr-analysis-btn-' + id);
   if (!panel) return;
   const open = panel.style.display !== 'none';
-  if (open) { panel.style.display = 'none'; if (btn) btn.textContent = '🔍 View analysis (overlap + rotation)'; }
+  if (open) { panel.style.display = 'none'; if (btn) btn.textContent = '🔍 View analysis (overlap)'; }
   else { panel.style.display = 'block'; if (btn) btn.textContent = '× Hide analysis'; renderQrCardAnalysis(id); }
 }
 
