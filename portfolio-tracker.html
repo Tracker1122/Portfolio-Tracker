@@ -3556,18 +3556,46 @@ function renderTaxProfilePanel() {
 // ─── Shared harvest-offset math ───
 // Capital losses offset capital GAINS before tax is applied — NOT the tax bill
 // dollar-for-dollar. A $1k loss removes $1k of taxable gain, saving you the RATE
-// on it (~rate×$1k), not $1k of tax. We net losses against ST gains first (taxed
-// highest → taxpayer-favorable and a reasonable proxy for IRS same-then-cross
-// character ordering), then against LT gains.
-// NOTE: simplification — we don't split harvested losses into LT/ST character,
-// and we ignore the $3k/yr ordinary-income offset and loss carryforward.
+// on it (~rate×$1k), not $1k of tax.
+//
+// Netting follows IRS Schedule D ordering:
+//   1) net losses WITHIN their own holding-period category first (ST loss vs ST
+//      gain, LT loss vs LT gain) — this is where character actually matters;
+//   2) cross-net any residual loss against the opposite category's residual gain.
+// Callers pass harvested losses already split by holding period (harvestedST /
+// harvestedLT, positive magnitudes). This avoids the prior simplification, which
+// routed every loss to ST gains first and so overstated the harvest's value
+// whenever LT losses sat alongside ST gains.
+//
+// `untypedLoss` (optional) is character-less loss — i.e. prior-year carryforward,
+// whose ST/LT character we do NOT track (see computeLossCarryforward). It's applied
+// LAST, against any remaining ST gain first then LT (taxpayer-favorable). This is a
+// real and disclosed simplification: a carryforward's true character is ignored.
+// We also still ignore the $3k/yr ordinary-income offset inside this function.
+//
 // Returns { grossTax, netBill, taxSaved } — taxSaved is the real value of the harvest.
-function computeHarvestOffset(ltGains, stGains, harvested, ltRate, stRate) {
+function computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate, untypedLoss = 0) {
   const grossTax = ltGains * ltRate + stGains * stRate;
-  const netST = Math.max(0, stGains - harvested);
-  const remainingLoss = Math.max(0, harvested - stGains);
-  const netLT = Math.max(0, ltGains - remainingLoss);
-  const netBill = netST * stRate + netLT * ltRate;
+
+  // 1) within-category netting (a residual may be negative = net loss in that category)
+  let netST = stGains - harvestedST;
+  let netLT = ltGains - harvestedLT;
+
+  // 2) cross-net a residual loss in one category against a residual gain in the other
+  if (netST > 0 && netLT < 0) {
+    const applied = Math.min(netST, -netLT);
+    netST -= applied; netLT += applied;
+  } else if (netLT > 0 && netST < 0) {
+    const applied = Math.min(netLT, -netST);
+    netLT -= applied; netST += applied;
+  }
+
+  // 3) untyped carryforward losses: remaining ST gain first, then LT gain
+  let blob = Math.max(0, untypedLoss);
+  if (blob > 0 && netST > 0) { const a = Math.min(blob, netST); netST -= a; blob -= a; }
+  if (blob > 0 && netLT > 0) { const a = Math.min(blob, netLT); netLT -= a; blob -= a; }
+
+  const netBill = Math.max(0, netST) * stRate + Math.max(0, netLT) * ltRate;
   const taxSaved = Math.max(0, grossTax - netBill);
   return { grossTax, netBill, taxSaved };
 }
@@ -3581,17 +3609,18 @@ function renderTaxImplications() {
   const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
 
   // ── Year-to-date realized summary (option C) ──
-  let ytdLT = 0, ytdST = 0, ytdHarvested = 0;
+  let ytdLT = 0, ytdST = 0, ytdHarvestedST = 0, ytdHarvestedLT = 0;
   positions.filter(p => p.closed && p.ticker && p.sellDate).forEach(p => {
     if (new Date(p.sellDate).getFullYear() !== taxYear) return;
     if ((p.account || '').toUpperCase().includes('IRA')) return;
     const c = calcPos(p);
     const gl = c.gainLoss;
     const days = closedHoldingDays(p);
-    if (gl > 0) { (days !== null && days > 365) ? ytdLT += gl : ytdST += gl; }
-    else if (gl < 0) ytdHarvested += Math.abs(gl);
+    const isLT = days !== null && days > 365; // unknown holding period → treated as ST
+    if (gl > 0) { isLT ? ytdLT += gl : ytdST += gl; }
+    else if (gl < 0) { isLT ? ytdHarvestedLT += Math.abs(gl) : ytdHarvestedST += Math.abs(gl); }
   });
-  const { grossTax, netBill, taxSaved: harvestOffset } = computeHarvestOffset(ytdLT, ytdST, ytdHarvested, ltRate, stRate);
+  const { grossTax, netBill, taxSaved: harvestOffset } = computeHarvestOffset(ytdLT, ytdST, ytdHarvestedST, ytdHarvestedLT, ltRate, stRate);
 
   // ── Open positions: holding-period + sell-now-vs-wait (options A & D) ──
   const openRows = [];
@@ -3708,7 +3737,7 @@ const _realizedYearSel = { inline: null, modal: null };
 function _rawRealizedYear(year) {
   const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
   const rows = [];
-  let ltGains = 0, stGains = 0, harvested = 0;
+  let ltGains = 0, stGains = 0, harvested = 0, harvestedST = 0, harvestedLT = 0;
   positions.filter(p => p.closed && p.ticker && p.sellDate).forEach(p => {
     const sellYear = new Date(p.sellDate).getFullYear();
     if (year !== 'all' && sellYear !== year) return;
@@ -3723,12 +3752,12 @@ function _rawRealizedYear(year) {
     if (!isIRA && gl > 0) estTax = gl * (isLT ? ltRate : stRate);
     if (!isIRA) {
       if (gl > 0) { isLT ? ltGains += gl : stGains += gl; }
-      else if (gl < 0) harvested += Math.abs(gl);
+      else if (gl < 0) { harvested += Math.abs(gl); (isLT ? harvestedLT += Math.abs(gl) : harvestedST += Math.abs(gl)); }
     }
     rows.push({ ticker: p.ticker, account: p.account || '', isIRA, buyDate: p.dateBought || '', sellDate: p.sellDate, daysHeld, isLT, gl, proceeds: c.exitValue || 0, estTax, sellYear });
   });
   rows.sort((a, b) => (b.sellDate || '').localeCompare(a.sellDate || ''));
-  return { rows, ltGains, stGains, harvested };
+  return { rows, ltGains, stGains, harvested, harvestedST, harvestedLT };
 }
 
 // Capital-loss carryforward available going INTO `intoYear`, walking every prior year with realized
@@ -3751,14 +3780,16 @@ function computeLossCarryforward(intoYear) {
 //           carryIn, carryforwardTaxSaved, netBillNoCarry }.
 function buildRealizedData(year) {
   const ltRate = TAX_RATE_LT, stRate = TAX_RATE_ST;
-  const { rows, ltGains, stGains, harvested } = _rawRealizedYear(year);
+  const { rows, ltGains, stGains, harvested, harvestedST, harvestedLT } = _rawRealizedYear(year);
   const carryIn = computeLossCarryforward(year); // prior-year loss carryforward into this year
   const ltTax = ltGains * ltRate;
   const stTax = stGains * stRate;
-  // Carryforward acts as extra available losses this year (same harvest-offset model). Net bill below
-  // is AFTER applying it; netBillNoCarry is this year's harvest only — the gap is the carryforward's value.
-  const base = computeHarvestOffset(ltGains, stGains, harvested, ltRate, stRate);
-  const withCarry = computeHarvestOffset(ltGains, stGains, harvested + carryIn, ltRate, stRate);
+  // Carryforward acts as extra available losses this year. It's character-less (we don't track
+  // a carryforward's ST/LT split), so it's passed as the untypedLoss tail — applied after this
+  // year's own ST/LT losses net within category. netBillNoCarry is this year's harvest only;
+  // the gap to netBill is the carryforward's value.
+  const base = computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate);
+  const withCarry = computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate, carryIn);
   const grossTax = base.grossTax;
   const harvestOffset = base.taxSaved;                 // this year's harvesting, against this year's gains
   const netBillNoCarry = base.netBill;
@@ -13291,7 +13322,7 @@ function renderTaxExposure() {
   const stRate = TAX_RATE_ST;
   const ltRate = TAX_RATE_LT;
 
-  let ltGains = 0, stGains = 0, harvested = 0;
+  let ltGains = 0, stGains = 0, harvested = 0, harvestedST = 0, harvestedLT = 0;
 
   // Only closed positions with a sell date in the current calendar year
   positions.filter(p => p.closed && p.ticker && p.sellDate).forEach(p => {
@@ -13309,12 +13340,13 @@ function renderTaxExposure() {
       else stGains += gl;
     } else if (gl < 0) {
       harvested += Math.abs(gl);
+      if (daysHeld > 365) harvestedLT += Math.abs(gl); else harvestedST += Math.abs(gl);
     }
   });
 
   const ltTax = ltGains * ltRate;
   const stTax = stGains * stRate;
-  const { grossTax, netBill: netTax } = computeHarvestOffset(ltGains, stGains, harvested, ltRate, stRate);
+  const { grossTax, netBill: netTax } = computeHarvestOffset(ltGains, stGains, harvestedST, harvestedLT, ltRate, stRate);
 
   const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   const setColor = (id, color) => { const el = document.getElementById(id); if (el) el.style.color = color; };
