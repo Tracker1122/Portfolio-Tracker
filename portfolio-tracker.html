@@ -9662,11 +9662,17 @@ function saveQrCandidate(keepForm) {
     });
   }
   scheduleSave();
-  // Stay on the saved candidate after BOTH stage-1 commit and final update — so the analysis
-  // (overlap box, pass-through, etc.) persists instead of vanishing when the form clears.
-  // Starting a fresh candidate is done explicitly via "New / Clear Form" (resetQrForm).
-  qrEditingId = savedId;
-  if (!keepForm) qrStage2Unlocked = true; // a fully-saved candidate shows its complete form
+  if (keepForm) {
+    // "Save & continue" (stage 1 → stage 2): stay on the just-created candidate with its full form
+    // open so the user can fill the checklist fields.
+    qrEditingId = savedId;
+  } else {
+    // "Update Candidate" / "Done — save candidate": consolidate the editor back down to the initial
+    // add-a-candidate box. The candidate now lives in the saved list below — open it there to add it
+    // to the trade or to keep editing. (The in-form analysis re-renders when you reopen the card.)
+    qrEditingId = null;
+    qrStage2Unlocked = false;
+  }
   renderQrForm();
   renderQrSavedList();
 }
