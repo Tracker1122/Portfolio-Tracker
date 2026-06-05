@@ -25334,6 +25334,7 @@ init();
   // reference reads as its own thing and the left-edge bunching clears up. One knob, both
   // renderers (card + summary spark). Flip back to '#4ade40' to undo.
   var BENCH_COLOR = 'var(--color-text-info, #60a5fa)';
+  var BLEND_COLOR = 'var(--color-text-accent, #a78bfa)';
   function sparklinePath(path, w, h, loIn, hiIn) {
     if (!path || path.length < 2) return '';
     var ys = path.map(function (p) { return p.cum; });
@@ -25426,7 +25427,7 @@ init();
     opts = opts || {};
     var has = result && result.totalReturn != null, cov = result ? result.coverage : 0;
     var bench = opts.benchmark || null, rec = opts.recovery || null;
-    var sparkD = '', sparkDStress = '', sparkDRecovery = '', benchSparkD = '', benchReturnPct = null, benchSpreadPct = null, troughDot = null;
+    var sparkD = '', sparkDStress = '', sparkDRecovery = '', benchSparkD = '', blendedSparkD = '', benchReturnPct = null, benchSpreadPct = null, troughDot = null;
     var windowEndX = null, breakevenY = null, checkpointDots = [], recovery = null, recoveryIncomplete = false, recoveryCovDrop = false, junctions = null;
     if (has) {
       // vs-Mkt number is always WINDOW-scoped (book − VOO over [from,to]).
@@ -25440,6 +25441,11 @@ init();
       var useExt = !!(rec && rec.extPath && rec.extPath.length >= 2 && hadDD && (rec.coverage == null || rec.coverage >= 0.6));
       var graphPath = useExt ? rec.extPath : result.path;
       var graphBench = useExt ? (rec.extBenchPath || null) : (bench ? bench.path : null);
+      // Blended liquid-book line, resampled onto the book's own timestamps (same trick as the VOO
+      // benchmark) so all three lines share one x-axis. Built only when the blended series exists.
+      var alignedBlended = (opts.blendedPath && opts.blendedPath.length >= 2)
+        ? graphPath.map(function (p) { var b = _cumAtOrBefore(opts.blendedPath, p.t); return { cum: b ? b.cum : 1 }; })
+        : null;
 
       var ys = graphPath.map(function (p) { return p.cum; });
       var lo = Math.min.apply(null, ys), hi = Math.max.apply(null, ys);
@@ -25447,9 +25453,14 @@ init();
         var bys = graphBench.map(function (p) { return p.cum; });
         lo = Math.min(lo, Math.min.apply(null, bys)); hi = Math.max(hi, Math.max.apply(null, bys));
       }
+      if (alignedBlended) {
+        var abys = alignedBlended.map(function (p) { return p.cum; });
+        lo = Math.min(lo, Math.min.apply(null, abys)); hi = Math.max(hi, Math.max.apply(null, abys));
+      }
       var span = (hi - lo) || 1, n = graphPath.length;
       sparkD = sparklinePath(graphPath, 120, 28, lo, hi);  // full path (summary + non-extended card)
       if (graphBench && graphBench.length >= 2) benchSparkD = sparklinePath(graphBench, 120, 28, lo, hi);
+      if (alignedBlended) blendedSparkD = sparklinePath(alignedBlended, 120, 28, lo, hi);
       // Breakeven (pre-event level, cum=1) — the "back to even" reference. Always in range (path starts at 1).
       if (1 >= lo && 1 <= hi) breakevenY = 28 - ((1 - lo) / span) * 28;
 
@@ -25507,7 +25518,7 @@ init();
     return { windowLabel: opts.windowLabel || '', dateRange: (opts.from && opts.to) ? fmtRange(opts.from, opts.to) : '', hasData: has,
       returnPct: has ? result.totalReturn * 100 : null, drawdownPct: has ? result.maxDrawdown * 100 : null,
       coveragePct: cov * 100, coverageWarn: cov < COVERAGE_WARN, excluded: result ? (result.excluded || []) : [],
-      sparkD: sparkD, sparkDStress: sparkDStress, sparkDRecovery: sparkDRecovery, benchSparkD: benchSparkD, benchReturnPct: benchReturnPct, benchSpreadPct: benchSpreadPct, troughDot: troughDot,
+      sparkD: sparkD, sparkDStress: sparkDStress, sparkDRecovery: sparkDRecovery, benchSparkD: benchSparkD, blendedSparkD: blendedSparkD, benchReturnPct: benchReturnPct, benchSpreadPct: benchSpreadPct, troughDot: troughDot,
       windowEndX: windowEndX, breakevenY: breakevenY, checkpointDots: checkpointDots, recovery: recovery, recoveryIncomplete: recoveryIncomplete, recoveryCovDrop: recoveryCovDrop, junctions: junctions,
       frozenLine: (opts.frozenPct > 0) ? '~' + (opts.frozenPct * 100).toFixed(0) + '% of your all-in book (' + (opts.basisLabel || 'self-marked privates') + ') is illiquid and cannot be sold during this drawdown.' : null,
       scenarioNote: opts.scenarioNote || null,
@@ -25723,7 +25734,7 @@ init();
     // guarded — needs VOO window bars and an actual VOO core; the hypothetical/compare path
     // (opts.weights set) is left untouched. The engine renormalizes over covered names, so the
     // no-2022-history sleeve names drop out and VOO (full history) stays, exactly as intended.
-    var blendedJunctions = null;
+    var blendedJunctions = null, blendedGraphPath = null;
     if (!opts.weights && typeof vooBars !== 'undefined' && vooBars && result.totalReturn != null) {
       try {
         var _spT = (typeof getSpTotals === 'function') ? getSpTotals() : null;
@@ -25736,21 +25747,25 @@ init();
           _bw.VOO = (_bw.VOO || 0) + _wv;
           var _bBars = Object.assign({}, barsByTicker, { VOO: vooBars });
           var _bRes = RiskLens.replayWindow(_bw, _bBars, ms(win.from), ms(win.to));
+          var _bGraphPath = _bRes.path;
           var _bRec = null;
           if (recovery && typeof fullByTicker !== 'undefined' && fullByTicker &&
               typeof vooRec !== 'undefined' && vooRec && typeof capMs !== 'undefined') {
             var _bFull = Object.assign({}, fullByTicker, { VOO: _mergeBars(vooBars, vooRec) });
             var _bExt = RiskLens.replayWindow(_bw, _bFull, ms(win.from), capMs);
-            if (_bExt.totalReturn != null)
+            if (_bExt.totalReturn != null) {
               _bRec = { extPath: _bExt.path, extBenchPath: recovery.extBenchPath, windowEndMs: recovery.windowEndMs, todayMs: recovery.todayMs, coverage: _bExt.coverage, incomplete: recovery.incomplete };
+              _bGraphPath = _bExt.path;
+            }
           }
           var _bModel = replayCardModel(_bRes, { benchmark: benchmark, recovery: _bRec, from: win.from, to: win.to });
           blendedJunctions = _bModel.junctions;
+          if (blendedJunctions && blendedJunctions.length) blendedGraphPath = _bGraphPath;
         }
       } catch (e) { blendedJunctions = null; /* best-effort; sleeve-only card still renders */ }
     }
 
-    var model = replayCardModel(result, { windowLabel: win.label, from: win.from, to: win.to, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery, scenarioNote: opts.scenario || null, blendedJunctions: blendedJunctions });
+    var model = replayCardModel(result, { windowLabel: win.label, from: win.from, to: win.to, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery, scenarioNote: opts.scenario || null, blendedJunctions: blendedJunctions, blendedPath: blendedGraphPath });
     if (statusEl) statusEl.textContent = '';
     if (onDone) onDone(model);
   }
@@ -25852,9 +25867,10 @@ init();
     var hasBlended = J.some(function (c) { return c.blendedPct != null; });
     function rowLabel(txt, swatch) { return '<td style="text-align:left;padding:2px 8px 2px 0;color:' + tert + ';white-space:nowrap">' + (swatch || '') + txt + '</td>'; }
     var blueSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BENCH_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
+    var violetSwatch = '<span style="display:inline-block;width:7px;height:2px;background:' + BLEND_COLOR + ';vertical-align:middle;margin-right:4px;border-radius:1px"></span>';
     var warn = (model.recoveryIncomplete ? ' <span style="color:' + dang + '">\u26a0 partial \u2014 click again</span>' : '') +
                (model.recoveryCovDrop ? ' <span style="opacity:.7">(on reduced coverage)</span>' : '');
-    var blendedRow = hasBlended ? '<tr>' + rowLabel('Blended liquid book') + blendedCells + '</tr>' : '';
+    var blendedRow = hasBlended ? '<tr>' + rowLabel('Blended liquid book', violetSwatch) + blendedCells + '</tr>' : '';
     var headerNote = hasBlended
       ? 'Each book\u2019s level vs its own pre-event high (\u201clow\u201d = the window trough). Active sleeve = your direct picks; blended liquid book folds your VOO core back in; spread = sleeve \u2212 VOO, in pts.'
       : 'Active sleeve vs market at each marked point \u2014 level vs the pre-event high (\u201clow\u201d = the window trough; spread in points).';
@@ -25866,7 +25882,7 @@ init();
         '<tr>' + rowLabel('VOO', blueSwatch) + vooCells + '</tr>' +
         '<tr style="border-top:1px solid var(--color-border-tertiary, #333)">' + rowLabel('Sleeve \u2212 VOO') + sprCells + '</tr>' +
       '</table>' +
-      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">chart: red = drawdown leg \u00b7 grey = recovery leg \u00b7 blue = VOO \u00b7 dotted = \u201ceven\u201d \u00b7 dashed = window low \u00b7 \u2713 = back to even-or-better</div>' +
+      '<div style="font-size:9px;color:' + tert + ';margin-top:3px;opacity:.7">chart: red = drawdown leg \u00b7 grey = recovery leg \u00b7 blue = VOO' + (hasBlended ? ' \u00b7 violet = blended liquid book' : '') + ' \u00b7 dotted = \u201ceven\u201d \u00b7 dashed = window low \u00b7 \u2713 = back to even-or-better</div>' +
     '</div>';
   }
 
@@ -26028,6 +26044,7 @@ init();
       ? '<line x1="' + model.windowEndX.toFixed(1) + '" y1="0" x2="' + model.windowEndX.toFixed(1) + '" y2="28" stroke="var(--color-text-tertiary, #888)" stroke-width="0.5" stroke-dasharray="2 2" stroke-opacity="0.4" ' + nz + '/>'
       : '';
     var vooLine = model.benchSparkD ? '<path d="' + model.benchSparkD + '" fill="none" stroke="' + BENCH_COLOR + '" stroke-width="1.3" stroke-opacity="0.9" ' + nz + '/>' : '';
+    var blendLine = model.blendedSparkD ? '<path d="' + model.blendedSparkD + '" fill="none" stroke="' + BLEND_COLOR + '" stroke-width="1.2" stroke-opacity="0.95" ' + nz + '/>' : '';
     var troughC = model.troughDot ? '<circle cx="' + model.troughDot.x.toFixed(1) + '" cy="' + model.troughDot.y.toFixed(1) + '" r="1.0" fill="' + retColor + '" stroke="var(--color-background-secondary, #1a1a1a)" stroke-width="0.4" ' + nz + '><title>The low \u2014 max drawdown ' + model.drawdownPct.toFixed(1) + '%</title></circle>' : '';
     var cpC = (model.checkpointDots || []).map(function (d) {
       var c = d.recovered ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
@@ -26038,7 +26055,7 @@ init();
     if (model.windowEndX != null) xlabels += '<text x="' + clampX(model.windowEndX).toFixed(1) + '" y="32.6" text-anchor="middle" font-size="2.4" fill="var(--color-text-tertiary, #888)">low</text>';
     (model.checkpointDots || []).forEach(function (d) { xlabels += '<text x="' + clampX(d.x).toFixed(1) + '" y="32.6" text-anchor="middle" font-size="2.4" fill="var(--color-text-tertiary, #888)">' + d.label + '</text>'; });
     var chart = '<div style="width:100%;margin:8px 0 4px"><svg viewBox="0 0 120 34" width="100%" style="display:block;height:auto;overflow:visible">' +
-      beLine + divLine + vooLine + bookLines + troughC + cpC + xlabels + '</svg></div>';
+      beLine + divLine + vooLine + blendLine + bookLines + troughC + cpC + xlabels + '</svg></div>';
     return '<div style="border:1px solid var(--color-border-tertiary);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--color-background-secondary)">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">' +
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
@@ -26105,7 +26122,7 @@ init();
     var header =
       '<tr style="font-size:9px;color:var(--color-text-tertiary)">' +
         '<th style="text-align:left;font-weight:600;padding:2px 6px 2px 0">Window</th>' +
-        '<th style="text-align:right;font-weight:600;padding:2px 6px">Book</th>' +
+        '<th style="text-align:right;font-weight:600;padding:2px 6px">Sleeve</th>' +
         '<th style="text-align:right;font-weight:600;padding:2px 6px">Max DD</th>' +
         '<th style="text-align:right;font-weight:600;padding:2px 6px">vs Mkt</th>' +
         '<th style="text-align:right;font-weight:600;padding:2px 6px">Cov</th>' +
