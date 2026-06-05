@@ -15144,11 +15144,17 @@ function _candThemeConcText(adds, themeCtx, opts) {
 
 // The on-screen "how this impacts theme concentration" section (header + narrative callout), placed
 // between the Names-moved table and the theme-cluster table so it sets up what the cluster table shows.
-function _candThemeConcSection(adds, themeCtx) {
+function _candThemeConcSection(adds, themeCtx, ebBefore, ebAfter) {
   const t = _candThemeConcText(adds, themeCtx);
-  if (!t) return '';
-  return `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:14px 0 3px">How this impacts theme concentration</div>` +
-    `<div style="font-size:10px;line-height:1.6;color:var(--color-text-primary);padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md)">${t} <span style="color:var(--color-text-tertiary)">The cluster table below shows the resulting theme weights.</span></div>`;
+  const haveEb = (typeof ebBefore === 'number' && typeof ebAfter === 'number');
+  if (!t && !haveEb) return '';
+  const ebLine = haveEb
+    ? `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 ${t ? '6px' : '2px'}">Independent bets: <strong style="color:${ebAfter < ebBefore ? 'var(--color-text-danger)' : ebAfter > ebBefore ? 'var(--color-text-success)' : 'var(--color-text-secondary)'}">${ebBefore.toFixed(1)} \u2192 ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>`
+    : '';
+  const box = t
+    ? `<div style="font-size:10px;line-height:1.6;color:var(--color-text-primary);padding:7px 9px;background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md)">${t} <span style="color:var(--color-text-tertiary)">The cluster table below shows the resulting theme weights.</span></div>`
+    : '';
+  return `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:14px 0 3px">How this impacts theme concentration</div>` + ebLine + box;
 }
 
 function _candMovedParagraph(nameMoves, tax, pos, directVia, adds, themeCtx, opts) {
@@ -15333,11 +15339,11 @@ function candCompute() {
   }
   const sleeveRows = _candSleeveDelta();
 
-  const ebCol = ebAfter < ebBefore ? 'var(--color-text-danger)' : ebAfter > ebBefore ? 'var(--color-text-success)' : 'var(--color-text-secondary)';
   const clBody = clRows.map(r => { const col = r.d > 0 ? 'var(--color-text-success)' : r.d < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)'; return `<tr><td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.label)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${r.bp.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${r.ap.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:${col}">${r.d >= 0 ? '+' : ''}${r.d.toFixed(1)}pp</td></tr>`; }).join('');
+  const _clHead = `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Theme cluster shift</div>`;
   const clTable = clRows.length
-    ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Theme cluster</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Δ</th></tr></thead><tbody>${clBody}</tbody></table></div>`
-    : `<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">No material cluster shift.</div>`;
+    ? _clHead + `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Theme cluster</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Δ</th></tr></thead><tbody>${clBody}</tbody></table></div>`
+    : _clHead + `<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">No material cluster shift.</div>`;
 
   const nameBody = nameRows.map(r => { const col = r.d > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'; return `<tr><td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.display)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td><td style="padding:3px 8px;text-align:right;color:${col}">${r.d >= 0 ? '+' : '−'}${fmtDollarWhole(Math.abs(r.d))}</td></tr>`; }).join('');
   const nameTable = nameRows.length
@@ -15411,9 +15417,8 @@ function candCompute() {
   out.innerHTML =
     `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:4px 0 3px">True exposure — theme clusters (direct + look-through)</div>` +
     _candPeToggle +
-    `<div style="font-size:11px;color:var(--color-text-secondary);margin:2px 0 4px">Independent bets: <strong style="color:${ebCol}">${ebBefore.toFixed(1)} → ${ebAfter.toFixed(1)}</strong> <span style="color:var(--color-text-tertiary)">(lower = more concentrated)</span></div>` +
     _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds, _themeCtx) +
-    glTable + taxTable + nameTable + _candThemeConcSection(adds, _themeCtx) + clTable + slTable +
+    glTable + taxTable + nameTable + _candThemeConcSection(adds, _themeCtx, ebBefore, ebAfter) + clTable + slTable +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
 
   const _pos = _candPositionCountDelta();
