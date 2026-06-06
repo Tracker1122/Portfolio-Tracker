@@ -14126,6 +14126,7 @@ let _candScenario = null;     // last computed result, fed to the book AI: {sig,
 let _candTempHoldings = {};   // ETF paste, card-local (never persisted): { ETF: [{ticker,weight}] }
 let _candPerf = {};           // recent-performance windows per ticker (from fetchTickerWindows): { TICKER: {m1,m3,m6,y1,ytd,maxDrawdown,annVol,shortHist,fetchedAt,error} }
 let _candPerfBusy = false;    // guard so overlapping fetches don't stack
+let _candBenchFetching = null; // which benchmark ticker is being fetched on-demand (per-card compare button)
 let _candTaxDetailOpen = false; // remembers whether the "adjust for year-to-date" detail is expanded
 
 // Persist ONLY the staged queue (the moves you built) — a scratchpad so a refresh doesn't wipe what
@@ -14166,12 +14167,9 @@ function loadCandPerf() {
 // would blow the rate limit. Deduped, uppercased.
 function _candScenarioTickers() {
   const set = new Set();
-  _candQueue.forEach(tr => {
-    if (tr.ticker) set.add(tr.ticker.toUpperCase());
-    // also pull each piece's theme benchmark so we have its windows for the relative read
-    const b = _candBenchTickerFor(tr);
-    if (b) set.add(b);
-  });
+  // Position tickers ONLY — theme benchmarks are fetched on demand per card (candFetchBench), never
+  // auto-pulled, so a single trade can't bulk-fetch benchmarks and starve the free-tier budget.
+  _candQueue.forEach(tr => { if (tr.ticker) set.add(tr.ticker.toUpperCase()); });
   return [...set];
 }
 
@@ -14180,7 +14178,7 @@ function _candScenarioTickers() {
 // manual refresh button). Sequential with a small gap to be polite to the free tier; stops early and
 // flags the rest if Polygon rate-limits. Re-renders the queue and recomputes so the AI sees fresh perf.
 async function candFetchPerf(force) {
-  if (_candPerfBusy) return;
+  if (_candPerfBusy || _candBenchFetching) return;
   const tickers = _candScenarioTickers();
   if (!tickers.length) return;
   const todo = force ? tickers : tickers.filter(t => !_candPerf[t] || _candPerf[t].error);
@@ -14204,6 +14202,27 @@ async function candFetchPerf(force) {
   saveCandPerf();
   candRenderQueue();
   if (_candQueue.length) candCompute(); // re-attach perf to _candScenario for the AI
+}
+
+// On-demand benchmark fetch: pull ONE theme benchmark's windows when the user taps "compare" on a
+// card. Single Polygon call, cached/persisted in _candPerf and reused by every move sharing that
+// benchmark — so you spend the budget deliberately, on the comparisons you actually want.
+async function candFetchBench(bench) {
+  const B = (bench || '').toUpperCase();
+  if (!B || _candPerfBusy || _candBenchFetching) return;
+  if (!polygonKey) loadPolygonKey();
+  _candBenchFetching = B; candRenderQueue();
+  try {
+    const w = await fetchTickerWindows(B);
+    _candPerf[B] = { m1: w.m1, m3: w.m3, m6: w.m6, y1: w.y1, ytd: w.ytd, maxDrawdown: w.maxDrawdown, annVol: w.annVol, shortHist: w.shortHist, histDays: w.histDays, fetchedAt: w.fetchedAt };
+  } catch (e) {
+    const msg = (e && e.message) || 'err';
+    _candPerf[B] = { error: msg === 'rate' ? 'rate' : (msg === 'nokey' ? 'nokey' : 'err'), fetchedAt: Date.now() };
+  }
+  _candBenchFetching = null;
+  saveCandPerf();
+  candRenderQueue();
+  if (_candQueue.length) candCompute();
 }
 
 // Signed percent for the queue display: null → "—", else e.g. "+3.2%" / "−1.1%" with a colour.
@@ -15262,8 +15281,14 @@ function _candBenchLineHtml(tr) {
   const bench = _candBenchTickerFor(tr);
   if (!bench || bench === T) return '';
   const b = _candPerf[bench];
-  if (!b) return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">vs ${esc(bench)} (theme benchmark) — not fetched yet</div>`;
-  if (b.error) return `<div style="font-size:8px;color:#fbbf24;margin-top:1px">vs ${esc(bench)} (theme benchmark) — ${b.error === 'rate' ? 'rate-limited, refresh again' : 'unavailable'}</div>`;
+  // On-demand: the benchmark's windows are fetched only when the user taps this button, so one trade
+  // never bulk-fetches benchmarks and starves the free tier. Once fetched it's cached + reused.
+  if (_candBenchFetching === bench) return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">fetching ${esc(bench)} (theme benchmark)…</div>`;
+  if (!b || b.error) {
+    const why = (b && b.error === 'rate') ? ' — rate-limited last try, tap to retry' : (b && b.error === 'nokey') ? ' — set your Polygon key first' : (b && b.error) ? ' — last try failed, tap to retry' : '';
+    const verb = (b && b.error) ? 'retry' : 'compare';
+    return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px"><span onclick="candFetchBench('${escq(bench)}')" style="cursor:pointer;color:var(--color-text-info);text-decoration:underline">↻ ${verb} vs ${esc(bench)} (theme benchmark)</span>${why}</div>`;
+  }
   const p = _candPerf[T] || {};
   const absStr = _CAND_REL_WINDOWS.filter(([lbl, k]) => typeof b[k] === 'number').map(([lbl, k]) => `${lbl} ${_candFmtPctHtml(b[k])}`).join(' · ') || '—';
   const riskBits = [];
@@ -15326,7 +15351,7 @@ function _candPerfBenchParagraph() {
     if (!bench) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. No theme benchmark mapped, so no relative read.</div>`); return; }
     if (bench === T) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. It IS its theme benchmark, so it sets the bar.</div>`); return; }
     const b = _candPerf[bench];
-    if (!b || b.error) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. Benchmark ${esc(bench)} ${b && b.error === 'rate' ? 'rate-limited' : 'not loaded'} — refresh to compare.</div>`); return; }
+    if (!b || b.error) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. ${b && b.error === 'rate' ? `Benchmark ${esc(bench)} rate-limited — ` : ''}tap "↻ compare vs ${esc(bench)}" on its card to add the relative read.</div>`); return; }
     const chips = _CAND_REL_WINDOWS.filter(([lbl, k]) => typeof p[k] === 'number' && typeof b[k] === 'number').map(([lbl, k]) => `${lbl} ${_candPpHtml(p[k] - b[k])}`).join(' · ');
     rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) vs ${esc(bench)} — ${chips || 'no overlapping windows'}</div>`);
   });
@@ -15334,7 +15359,7 @@ function _candPerfBenchParagraph() {
   return `<div style="margin-top:5px;padding:7px 10px;border-left:3px solid #a78bfa;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;line-height:1.7;color:var(--color-text-secondary)">
     <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#a78bfa;font-weight:600;margin-bottom:2px">Performance vs theme benchmark — relative pp by window</div>
     ${cumulative}${rows.join('')}
-    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px">Each value = the name's return minus its theme benchmark's over that trailing window, in points. Cumulative rows are dollar-weighted across names vs their own benchmarks. Same windows, price-only — relative recent return is context, not a forecast.</div>
+    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px">Each value = the name's return minus its theme benchmark's over that trailing window, in points. Cumulative rows are dollar-weighted across names vs their own benchmarks. Benchmarks are fetched per card on demand (↻ compare), so only positions you've compared appear in the relative rows. Same windows, price-only — relative recent return is context, not a forecast.</div>
   </div>`;
 }
 
