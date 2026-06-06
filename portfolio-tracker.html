@@ -15304,62 +15304,79 @@ function _candBenchLineHtml(tr) {
 // block. All price-only, from data already in hand; relative recent return is context, not a forecast.
 function _candPerfBenchParagraph() {
   if (!_candQueue.length) return '';
-  const fmt = (v) => (typeof v === 'number') ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` : 'n/a';
-
-  // Cumulative: dollar-weighted relative gap (name − its benchmark) per window, adds vs trims.
-  const sideAgg = (items, amtKey) => {
-    const acc = {}, wt = {};
-    items.forEach(it => {
-      const T = (it.ticker || '').toUpperCase(); const bench = _candBenchTickerFor(it);
-      const p = _candPerf[T], b = bench ? _candPerf[bench] : null;
-      const amt = Math.abs(Number(it[amtKey]) || 0) || 1;
-      if (!p || p.error || !b || b.error || bench === T) return;
-      _CAND_REL_WINDOWS.forEach(([lbl, k]) => {
-        if (typeof p[k] === 'number' && typeof b[k] === 'number') { acc[k] = (acc[k] || 0) + amt * (p[k] - b[k]); wt[k] = (wt[k] || 0) + amt; }
-      });
-    });
-    let any = false; const out = {};
-    _CAND_REL_WINDOWS.forEach(([lbl, k]) => { if (wt[k]) { out[k] = acc[k] / wt[k]; any = true; } });
-    return any ? out : null;
+  const HEAD_ORDER = ['y1', 'ytd', 'm6', 'm3', 'm1'];
+  const HEAD_LABEL = { y1: '1Y', ytd: 'YTD', m6: '6M', m3: '3M', m1: '1M' };
+  const ptsStr = (v) => (Math.abs(v) >= 10 ? Math.round(v) : v.toFixed(1)); // tidy big/small numbers
+  const verdict = (g, bench) => {
+    if (g == null) return `tracked ${esc(bench)}`;
+    const a = Math.abs(g);
+    if (a <= 3) return `tracks ${esc(bench)} closely`;
+    const dir = g > 0 ? 'ahead of' : 'behind';
+    const mag = a > 25 ? 'far ' : a > 10 ? 'well ' : 'modestly ';
+    return `${mag}${dir} ${esc(bench)}`;
   };
-  const addsAgg = sideAgg(_candQueue.filter(t => t.kind !== 'trim'), 'amount');
-  const trimsAgg = sideAgg(_candQueue.filter(t => t.kind === 'trim'), 'proceeds');
-  const aggRow = (label, agg) => {
-    if (!agg) return '';
-    const chips = _CAND_REL_WINDOWS.filter(([lbl, k]) => agg[k] != null).map(([lbl, k]) => `${lbl} ${_candPpHtml(agg[k])}`).join(' · ');
-    return `<div><strong>${label}</strong> vs own benchmarks: ${chips}</div>`;
-  };
-  let cumulative = '';
-  if (addsAgg || trimsAgg) {
-    cumulative = `<div style="margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid var(--color-border-tertiary)">
-      <div style="color:var(--color-text-primary);font-weight:600;margin-bottom:1px">Cumulative effect ($-weighted relative, pp)</div>
-      ${aggRow('Adding', addsAgg)}${aggRow('Trimming', trimsAgg)}
-    </div>`;
-  }
 
-  // Per-piece relative pp across windows.
   const seen = new Set();
   const rows = [];
+  const compared = []; // pieces with a valid fetched benchmark — used for the dollar-weighted net
   _candQueue.forEach(tr => {
     const T = (tr.ticker || '').toUpperCase(); if (!T || seen.has(T)) return;
     seen.add(T);
     const tag = (tr.kind !== 'trim') ? 'buying' : 'trimming';
     const themeStr = (tr.theme && tr.theme !== '(unassigned)') ? esc(tr.theme) : 'no theme';
     const p = _candPerf[T];
-    if (!p || p.error || typeof p.y1 !== 'number') { rows.push(`<div><strong>${esc(T)}</strong> (${tag}) — return ${p && p.error === 'rate' ? 'rate-limited' : 'not loaded'} yet.</div>`); return; }
+    if (!p || p.error || typeof p.y1 !== 'number') { rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag}) — return ${p && p.error === 'rate' ? 'rate-limited' : 'not loaded'} yet.</div>`); return; }
     const bench = _candBenchTickerFor(tr);
-    if (!bench) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. No theme benchmark mapped, so no relative read.</div>`); return; }
-    if (bench === T) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. It IS its theme benchmark, so it sets the bar.</div>`); return; }
+    if (!bench) { rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag} · ${themeStr}) — no index mapped for this theme, so there's nothing to measure it against.</div>`); return; }
+    if (bench === T) { rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag} · ${themeStr}) — this IS the ${themeStr} index, so it sets the bar rather than being measured against one.</div>`); return; }
     const b = _candPerf[bench];
-    if (!b || b.error) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. ${b && b.error === 'rate' ? `Benchmark ${esc(bench)} rate-limited — ` : ''}tap "↻ compare vs ${esc(bench)}" on its card to add the relative read.</div>`); return; }
-    const chips = _CAND_REL_WINDOWS.filter(([lbl, k]) => typeof p[k] === 'number' && typeof b[k] === 'number').map(([lbl, k]) => `${lbl} ${_candPpHtml(p[k] - b[k])}`).join(' · ');
-    rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) vs ${esc(bench)} — ${chips || 'no overlapping windows'}</div>`);
+    if (!b || b.error) { rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag} · ${themeStr}) — not compared yet. ${b && b.error === 'rate' ? `${esc(bench)} rate-limited; ` : ''}tap "↻ compare vs ${esc(bench)}" on its card to see how it's done against its index.</div>`); return; }
+    // Compared OK — build the per-window gap (name − benchmark)
+    const g = {};
+    _CAND_REL_WINDOWS.forEach(([lbl, k]) => { if (typeof p[k] === 'number' && typeof b[k] === 'number') g[k] = p[k] - b[k]; });
+    const hk = HEAD_ORDER.find(k => g[k] != null);
+    const gh = hk != null ? g[hk] : null;
+    compared.push({ tr, g });
+    const headCol = gh == null ? 'var(--color-text-secondary)' : gh >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const headPhrase = gh == null ? '' : `: <span style="color:${headCol}">${gh >= 0 ? '+' : '−'}${ptsStr(Math.abs(gh))} pts over ${HEAD_LABEL[hk]}</span>`;
+    const chips = _CAND_REL_WINDOWS.filter(([lbl, k]) => g[k] != null).map(([lbl, k]) => `${lbl} ${_candPpHtml(g[k])}`).join(' · ');
+    rows.push(`<div style="margin-top:5px">
+      <strong>${esc(T)}</strong> (${tag} · ${themeStr}) — ${verdict(gh, bench)}${headPhrase}.
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">by window (${esc(T)} − ${esc(bench)}, pts): ${chips || '—'}</div>
+    </div>`);
   });
-  if (!rows.length && !cumulative) return '';
-  return `<div style="margin-top:5px;padding:7px 10px;border-left:3px solid #a78bfa;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;line-height:1.7;color:var(--color-text-secondary)">
-    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#a78bfa;font-weight:600;margin-bottom:2px">Performance vs theme benchmark — relative pp by window</div>
+  if (!rows.length) return '';
+
+  // Dollar-weighted net — only meaningful when 2+ names are compared (otherwise it just repeats the
+  // single name's row). Combine each name's gap-vs-its-OWN-index, weighted by trade size.
+  let cumulative = '';
+  if (compared.length >= 2) {
+    const sideAgg = (items, amtKey) => {
+      const acc = {}, wt = {};
+      items.forEach(pc => {
+        const amt = Math.abs(Number(pc.tr[amtKey]) || 0) || 1;
+        _CAND_REL_WINDOWS.forEach(([lbl, k]) => { if (pc.g[k] != null) { acc[k] = (acc[k] || 0) + amt * pc.g[k]; wt[k] = (wt[k] || 0) + amt; } });
+      });
+      let any = false; const out = {};
+      _CAND_REL_WINDOWS.forEach(([lbl, k]) => { if (wt[k]) { out[k] = acc[k] / wt[k]; any = true; } });
+      return any ? out : null;
+    };
+    const addsAgg = sideAgg(compared.filter(pc => pc.tr.kind !== 'trim'), 'amount');
+    const trimsAgg = sideAgg(compared.filter(pc => pc.tr.kind === 'trim'), 'proceeds');
+    const aggLine = (label, agg) => agg ? `<div>${label} are, on average, ${_CAND_REL_WINDOWS.filter(([lbl, k]) => agg[k] != null).map(([lbl, k]) => `${lbl} ${_candPpHtml(agg[k])}`).join(' · ')} pts vs their own indices</div>` : '';
+    if (addsAgg || trimsAgg) {
+      cumulative = `<div style="margin:5px 0;padding-bottom:4px;border-bottom:1px solid var(--color-border-tertiary)">
+        <div style="color:var(--color-text-primary);font-weight:600;margin-bottom:1px">Whole trade (weighted by dollars)</div>
+        ${aggLine('Names being added', addsAgg)}${aggLine('Names being trimmed', trimsAgg)}
+      </div>`;
+    }
+  }
+
+  return `<div style="margin-top:5px;padding:8px 11px;border-left:3px solid #a78bfa;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-secondary)">
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#a78bfa;font-weight:600">How each name has done vs its theme's index</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:2px">Positive = the name beat its index; negative = it lagged. Figures are percentage points (the name's price return minus the index's) over each trailing window.</div>
     ${cumulative}${rows.join('')}
-    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px">Each value = the name's return minus its theme benchmark's over that trailing window, in points. Cumulative rows are dollar-weighted across names vs their own benchmarks. Benchmarks are fetched per card on demand (↻ compare), so only positions you've compared appear in the relative rows. Same windows, price-only — relative recent return is context, not a forecast.</div>
+    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Benchmarks are fetched per card on demand (↻ compare), so only names you've compared appear here. Price-only, same windows — relative recent return is context, not a forecast.</div>
   </div>`;
 }
 
