@@ -1557,6 +1557,7 @@
     <!-- renderCandidatePanel() mounts here (keeps its own internal heading/intro); ID preserved so -->
     <!-- renderCandidatePanel / candCompute / candStageFromDiscovery keep finding it by string. ── -->
     <div id="theme-candidate-panel" style="margin-top:18px"></div>
+    <div id="evaltrade-risk-mirror" style="margin-top:18px"></div>
     <div id="theme-ai-review" style="margin-top:18px"></div>
 
   </div><!-- end tab-evaltrade -->
@@ -5751,7 +5752,7 @@ function switchTab(name) {
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
   if (name === 'rebalance') { safeRender('renderRebalance', renderRebalance); if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
-  if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderThemeAiReview', renderThemeAiReview); }
+  if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
   if (name === 'trends') safeRender('renderTrends', renderTrends);
   if (name === 'themes') safeRender('renderThemeUniverse', renderThemeUniverse);
@@ -21083,6 +21084,34 @@ function renderThemeAiReview() {
       ${result}
       ${threadHtml}
     </div>`;
+}
+
+
+// Mirror the Risk Review replay into the Evaluate-a-Trade tab, above the "Stress-test this scenario"
+// bar. Read-only snapshot of whatever window the user currently has open in Risk Review (pulled via the
+// risk module's riskReviewReportHtml() API — the SAME source the PDF export uses). The cards are static
+// (SVG chart + native <details>; no IDs/controls), so they inject raw and dark, no cleaning needed. To
+// CHANGE what's shown, the user clicks the stress-test bar below → runs a different window in Risk
+// Review → returns here (switchTab re-renders this), and the new chart appears.
+function renderEvaltradeRiskMirror() {
+  const host = document.getElementById('evaltrade-risk-mirror');
+  if (!host) return;
+  let r = null;
+  try {
+    if (window._riskReplay && typeof window._riskReplay.riskReviewReportHtml === 'function') r = window._riskReplay.riskReviewReportHtml();
+  } catch (e) { r = null; }
+  if (!r || !r.active) {
+    host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;line-height:1.45;margin:4px 0">No stress test run yet. Use the <strong>⚡ Stress-test this scenario in Risk Review</strong> button below to replay your staged trade through a real historical window — the chart will appear here when you come back.</div>`;
+    return;
+  }
+  const head =
+    `<div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin:2px 0 2px">Stress test — ${esc(r.windowLabel || r.windowId)}${r.dateRange ? ` <span style="font-weight:400;color:var(--color-text-tertiary)">(${esc(r.dateRange)})</span>` : ''}</div>` +
+    `<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.45;margin-bottom:6px">Mirrored from Risk Review — how your active sleeve${r.hasHypothetical ? ' (and the staged trade, folded in)' : ''} would have moved through this real past window. Past behavior, not a forecast. To change it, use the stress-test button below.</div>`;
+  let body = r.eventHtml || '';
+  if (r.hasHypothetical && r.hypoHtml) {
+    body += `<div style="font-size:10px;font-weight:600;color:var(--color-text-secondary);margin:12px 0 2px">With the staged trade folded in</div>` + r.hypoHtml;
+  }
+  host.innerHTML = `<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-secondary)">${head}${body}</div>`;
 }
 
 
