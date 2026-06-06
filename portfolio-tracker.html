@@ -10240,7 +10240,7 @@ function qrBuyAdjustments(type, ticker, theme, parsedHoldings, buyAmount) {
     holdings.forEach(h => adj.push({ ticker: h.ticker, deltaViaFunds: buyAmount * (h.weight / 100), display: h.ticker }));
     const cov = Math.min(holdings.reduce((s, h) => s + h.weight, 0), 100);
     const rem = buyAmount * (1 - cov / 100);
-    if (rem > 1) adj.push({ ticker: tk || 'ETF', deltaViaFunds: rem, themeTag: theme || null, display: (tk || 'ETF') + ' (rest)' });
+    if (rem > 1) adj.push({ ticker: tk || 'ETF', deltaViaFunds: rem, themeTag: theme || null, display: (tk || 'ETF') + ' (rest of fund)' });
   } else {
     adj.push({ ticker: tk, deltaDirect: buyAmount, themeTag: theme || null, display: tk });
   }
@@ -15218,7 +15218,7 @@ function _candQueueAdjustments() {
       (tr.holdings || []).forEach(h => { if (h.weight != null) adj.push({ ticker: h.ticker, deltaViaFunds: tr.amount * (h.weight / 100), display: h.ticker }); });
       const cov = Math.min((tr.coverage || 0), 100);
       const rem = tr.amount * (1 - cov / 100);
-      if (rem > 1) adj.push({ ticker: tr.ticker, deltaViaFunds: rem, themeTag: tr.theme || null, display: tr.ticker + ' (rest)' });
+      if (rem > 1) adj.push({ ticker: tr.ticker, deltaViaFunds: rem, themeTag: tr.theme || null, display: tr.ticker + ' (rest of fund)' });
     } else if (tr.kind === 'trim') {
       if (tr.proceeds > 0) adj.push({ ticker: tr.ticker, deltaDirect: -tr.proceeds, display: tr.ticker });
     }
@@ -15525,8 +15525,10 @@ function candCompute() {
     : _clHead + `<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px">No material cluster shift.</div>`;
 
   const nameBody = nameRows.map(r => { const col = r.d > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'; return `<tr><td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.display)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${fmtDollarWhole(r.before)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${fmtDollarWhole(r.after)}</td><td style="padding:3px 8px;text-align:right;color:${col}">${r.d >= 0 ? '+' : '−'}${fmtDollarWhole(Math.abs(r.d))}</td></tr>`; }).join('');
+  const hasRestRow = nameRows.some(r => r.display && r.display.includes('(rest of fund)'));
+  const restNote = hasRestRow ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px;line-height:1.5">"(rest of fund)" = the slice of an ETF buy that lands in the fund's remaining holdings — the weight your pasted list didn't cover. It's real added exposure, just spread across many names not broken out individually in this table.</div>` : '';
   const nameTable = nameRows.length
-    ? `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Names moved (true exposure — direct + via funds)</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Δ</th></tr></thead><tbody>${nameBody}</tbody></table></div>`
+    ? `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:12px 0 3px">Names moved (true exposure — direct + via funds)</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:3px 8px;text-align:left;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Name</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Before</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">After</th><th style="padding:3px 8px;text-align:right;font-size:8px;text-transform:uppercase;color:var(--color-text-tertiary)">Δ</th></tr></thead><tbody>${nameBody}</tbody></table></div>${restNote}`
     : '';
 
   const slBody = sleeveRows.map(r => { const col = r.dPct > 0 ? 'var(--color-text-success)' : r.dPct < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)'; return `<tr><td style="padding:3px 8px;color:var(--color-text-primary)">${esc(r.name)}</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-secondary)">${r.bp.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:var(--color-text-primary)">${r.ap.toFixed(1)}%</td><td style="padding:3px 8px;text-align:right;color:${col}">${r.dPct >= 0 ? '+' : ''}${r.dPct.toFixed(1)}pp</td></tr>`; }).join('');
