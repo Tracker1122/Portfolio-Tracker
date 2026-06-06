@@ -15440,7 +15440,24 @@ function _candSleeveDelta() {
 }
 
 function _candScenarioSignature() {
-  return JSON.stringify(_candQueue.map(tr => tr.kind === 'trim' ? ['t', tr.ticker, Math.round(tr.proceeds), tr.lotId || ''] : tr.kind === 'etf' ? ['e', tr.ticker, Math.round(tr.amount), Math.round(tr.coverage), (tr.holdings || []).length] : ['s', tr.ticker, Math.round(tr.amount), tr.theme || '']));
+  // Vetting digest for a buy: a canonical (sorted-key, non-blank) string of the matching saved
+  // candidate's typed fields, so editing a thesis/figure changes the signature and invalidates a
+  // cached book review (whose prompt now folds that vetting in). Read-only ticker join; no merge.
+  const _qr = (typeof qualityReviews !== 'undefined') ? qualityReviews : [];
+  const _vet = (ticker) => {
+    const c = _qr.find(q => (q.ticker || '').toUpperCase() === ticker);
+    if (!c || !c.fields) return '';
+    return Object.keys(c.fields).sort().reduce((acc, k) => {
+      const v = (c.fields[k] == null ? '' : String(c.fields[k])).trim();
+      return v ? acc + k + '=' + v + '|' : acc;
+    }, '');
+  };
+  return JSON.stringify(_candQueue.map(tr =>
+    tr.kind === 'trim'
+      ? ['t', tr.ticker, Math.round(tr.proceeds), tr.lotId || '']
+      : tr.kind === 'etf'
+        ? ['e', tr.ticker, Math.round(tr.amount), Math.round(tr.coverage), (tr.holdings || []).length, _vet((tr.ticker || '').toUpperCase())]
+        : ['s', tr.ticker, Math.round(tr.amount), tr.theme || '', _vet((tr.ticker || '').toUpperCase())]));
 }
 
 // Position-count effect of the staged scenario. Each stock/ETF add is a new line; a trim removes a
@@ -20441,7 +20458,10 @@ function bookAiReviewStale() {
   if (ran.size !== now.size) return true;
   for (const t of now) if (!ran.has(t)) return true;
   // Also stale if the staged candidate scenario changed since the review ran.
-  const scenarioNow = (_candScenario && _candScenario.sig) ? _candScenario.sig : '';
+  // Compute the scenario signature FRESH (live queue + live vetting) rather than reading the cached
+  // _candScenario.sig — the prompt reads vetting live at send time, so the staleness check must read
+  // from the same live source or a post-send vetting edit would silently leave a stale review.
+  const scenarioNow = (typeof _candScenarioSignature === 'function') ? _candScenarioSignature() : '';
   if ((bookAiReview.scenarioAtRun || '') !== scenarioNow) return true;
   // Also stale if the private-deal basis toggle changed since the review ran. The AI prose narrates
   // figures on the basis that was active at run time; the deterministic tables follow the live toggle.
@@ -20691,6 +20711,32 @@ function buildBookAiPrompt() {
       perfKeys.forEach(t => { const p = sc.perf[t]; const f = v => v == null ? 'n/a' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; lines.push(`  · ${t}: 1M ${f(p.m1)}, 3M ${f(p.m3)}, 6M ${f(p.m6)}, 1Y ${f(p.y1)}${p.shortHist ? '*' : ''}, YTD ${f(p.ytd)}; maxDD ${p.maxDrawdown != null ? p.maxDrawdown.toFixed(0) + '%' : 'n/a'}.`); });
       lines.push(`These performance figures ARE provided as FROM INPUTS for these specific tickers. They are PAST returns over fixed windows, not forecasts — do not extrapolate them into expected future return.`);
     }
+    // --- Per-buy stated reasoning: the user's OWN vetting inputs for each staged buy, linked by
+    // ticker to the saved candidate in qualityReviews. Compact by design — ONLY the fields the user
+    // typed, NOT the full per-candidate computed machinery (look-through / ETF overlap / track record),
+    // which the scenario figures above already cover structurally. The two data stores are NOT merged;
+    // this is a read-only ticker join at prompt-build time. Treated as USER-ENTERED (judgments, may be
+    // optimistic / incomplete / wrong; typed figures unverified), never as a COMPUTED FACT.
+    try {
+      const _buys = (typeof _candQueue !== 'undefined' ? _candQueue : []).filter(t => t && (t.kind === 'stock' || t.kind === 'etf'));
+      const _vetBlocks = [];
+      _buys.forEach(b => {
+        const T = (b.ticker || '').toUpperCase();
+        if (!T) return;
+        const cand = (typeof qualityReviews !== 'undefined' ? qualityReviews : []).find(q => (q.ticker || '').toUpperCase() === T);
+        if (!cand || !cand.fields) return;
+        const defs = (typeof QR_FIELDS !== 'undefined' && QR_FIELDS[cand.type]) || [];
+        const entered = defs
+          .filter(fd => (cand.fields[fd.key] || '').toString().trim() !== '')
+          .map(fd => `    · ${fd.label}: ${cand.fields[fd.key]}`);
+        if (!entered.length) return;
+        const tag = `${T}${cand.theme ? ' · ' + cand.theme : ''}${cand.sleeve ? ' · ' + cand.sleeve : ''}`;
+        _vetBlocks.push(`  ${tag} — the user's stated reasoning:\n${entered.join('\n')}`);
+      });
+      if (_vetBlocks.length) {
+        lines.push(`\nUSER'S STATED REASONING FOR THE STAGED BUYS — the user's OWN typed vetting for each name they are adding. These are USER-ENTERED judgments and figures, NOT computed facts: they may be optimistic, incomplete, or wrong, and any number the user typed is UNVERIFIED. USE THEM AS THE LENS ON THE TRADE, not as a fundamentals recap: for each buy, weigh whether the structural reality above (what it does to concentration, the tax, how it has performed, any overlap) SUPPORTS or UNDERCUTS the user's own stated reason for buying it, and surface where the typed rationale and the structural facts diverge (e.g. a "diversifier" thesis on a name the figures show deepens the largest cluster; a "cheap" valuation read against a steep recent run-up). Do NOT restate these as a standalone per-stock breakdown, and do NOT treat any typed figure as verified — if a typed figure is load-bearing to your point, flag it as the user's unverified input. Only names the user has saved vetting for appear here; a staged buy with no block here was added without a checklist.\n${_vetBlocks.join('\n')}`);
+      }
+    } catch (e) { /* additive context only — never block the payload */ }
     lines.push(`Any ticker named ONLY in this scenario is a HYPOTHETICAL the user is considering — NOT a holding unless it also appears in the theme lists above. A name's true exposure can be non-zero before the scenario because it already sits inside funds the user holds; use the figures given, don't invent.`);
   }
 
@@ -20718,9 +20764,9 @@ Rules:
   • ABSENCES: You may note that an asset class or theme is "not listed in the inputs," but do NOT assert the user definitively holds NONE of it — the facts list themes that EXIST, it does not enumerate everything absent. Phrase gaps as "not visible in the computed themes" rather than "the book has no X." This is an [inference] about the inputs, not a FROM INPUTS fact.
   • RISK FIGURES: maxDD/vol/return numbers exist ONLY for tickers explicitly listed with them — the selected discovery tickers, and any scenario tickers under "Recent price performance" in the staged what-if block. Do not state risk or return figures for any book holding (none were provided) or for any ticker not listed above with figures. EXCEPTION — scope, not loophole: a "RISK REVIEW" block, if present, gives PORTFOLIO-LEVEL (whole-book and, if folded in, whole-hypothetical-book) replayed return/drawdown figures for one historical window; you MAY cite those as the book's PAST behavior in that window. This does NOT license per-holding risk figures — none were provided for individual names; keep risk/return numbers either portfolio-level (from the RISK REVIEW block) or for the specific listed tickers, never invented per-name.
 
-Output in four sections:
+Output in the following sections (sections 5 and 6 appear only when their data is present):
 1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few effective positions by weight — describe this as weight concentration, never as statistical independence, since the metric measures weight spread not return correlation; any theme resting on one name). FROM INPUTS, plainly stated. If a WHOLE-BOOK CONTEXT block is present, OPEN by situating the managed sleeve within the full book — what share of all-in AUM is the actively-picked sleeve vs the VOO diversified base vs the illiquid private sleeve — so every concentration you then discuss is read against the whole picture, not the managed sleeve in isolation.
-2. GAPS & BLIND SPOTS — where the book is thin, absent, or exposed. This is the part that should generate ideas the user takes to a full evaluation.
+2. GAPS & BLIND SPOTS — name only the absences that MATTER; this is NOT a roll-call of everything the user doesn't hold. It IS still worth flagging when a theme is unexpressed — but only surface a thin or absent theme when (a) a staged candidate or selected discovery name would fill or deepen it, or (b) it is a structurally significant hole given the concentrations in section 1 (e.g. the book leans hard on two correlated themes and carries little that would move differently in a drawdown). Do NOT enumerate asset classes or sectors the user lacks just to show coverage — an absence the user plainly already knows about, with no reason attached, is not insight and is the part the user skips. For any gap you do raise: keep the absence honest per the ABSENCES rule above ("not visible in the computed themes", flagged as [inference], never "the book holds none of X"), and state WHY it matters HERE — what structural risk the hole creates or what a staged/selected name does to it — not merely that it is absent.
 3. SELECTED CANDIDATES vs THE GAPS — for each selected discovery ticker: does it ADDRESS a gap or DEEPEN an existing concentration? How would it move true exposure? What would the user need to pressure-test in a full New Position Evaluation? Be willing to say a selected name is a poor structural fit. If none selected, say so and skip.
 4. DIRECTIONS WORTH EXPLORING — turn the gaps and concentrations above into QUESTIONS to investigate, not actions to take. THIS IS THE MOST DELICATE SECTION — strict rules:
    • You are NOT giving advice. Each item is a QUESTION or a DIRECTION TO INVESTIGATE that the user takes to their New Position Evaluation process — never an instruction.
@@ -20729,7 +20775,7 @@ Output in four sections:
    • For each GAP: pose the question of what filling it would actually require and the trap to check (e.g. whether a candidate already comes via the user's funds, so a direct add would concentrate not diversify).
    • For CONCENTRATION: pose the rebalancing QUESTION it raises — e.g. "with ~X% in two correlated themes, the question is what genuinely uncorrelated exposure looks like, and whether [the user's selected tickers] provide it or just add correlated beta." Tie this explicitly to the SELECTED discovery tickers where relevant — frame whether those specific clicked names move toward or away from the concentration, as a question, not a verdict.
    • Every item ends pointing to the next step: this is candidate-generation; the actual decision happens in New Position Evaluation, not here.
-5. STAGED WHAT-IF — include this section ONLY if a "STAGED WHAT-IF SCENARIO" block appears in the facts above; otherwise omit it entirely. Read what the staged moves do to the book's STRUCTURE, FROM INPUTS: which clusters move and in which direction, whether the scenario deepens or relieves the largest concentrations and how independent-bets shifts, and — for an added ETF — that its look-through can deepen names the user already holds (call out any such name from the per-name moves). Where the tracker's plain-language read flags the trade as closer to a reshuffle than a reduction (much of what's trimmed handed back through what's bought), engage with that FROM INPUTS rather than ignoring it. If an estimated tax figure is given, state it as the dollar cost of the rotation (and surface any wash-sale or "days-from-long-term" flag), framed as a fact to weigh — never as a reason to act or not act. If recent-performance figures are given for scenario tickers, you may reference them as PAST returns/drawdown to characterize what's being bought or trimmed (e.g. trimming a name after a large run, or adding one deep in a drawdown), but do NOT treat past performance as predictive or as a buy/sell signal. Then turn all of it into QUESTIONS for New Position Evaluation under the same rules as section 4 (no buy/sell/trim/rebalance imperatives). Do NOT tell the user whether to make the trade.
+5. STAGED WHAT-IF — include this section ONLY if a "STAGED WHAT-IF SCENARIO" block appears in the facts above; otherwise omit it entirely. Read what the staged moves do to the book's STRUCTURE, FROM INPUTS: which clusters move and in which direction, whether the scenario deepens or relieves the largest concentrations and how independent-bets shifts, and — for an added ETF — that its look-through can deepen names the user already holds (call out any such name from the per-name moves). Where the tracker's plain-language read flags the trade as closer to a reshuffle than a reduction (much of what's trimmed handed back through what's bought), engage with that FROM INPUTS rather than ignoring it. If an estimated tax figure is given, state it as the dollar cost of the rotation (and surface any wash-sale or "days-from-long-term" flag), framed as a fact to weigh — never as a reason to act or not act. If recent-performance figures are given for scenario tickers, you may reference them as PAST returns/drawdown to characterize what's being bought or trimmed (e.g. trimming a name after a large run, or adding one deep in a drawdown), but do NOT treat past performance as predictive or as a buy/sell signal. Then turn all of it into QUESTIONS for New Position Evaluation under the same rules as section 4 (no buy/sell/trim/rebalance imperatives). Do NOT tell the user whether to make the trade. If a "USER'S STATED REASONING FOR THE STAGED BUYS" block is present, fold each buy's stated thesis/judgments into this read as a short labeled note per name ("On the AC buy: …"): hold the user's OWN reason for the buy against the structural reality above and say plainly whether the facts support or undercut it, naming any divergence — woven into the trade read, NOT a separate per-stock fundamentals recap. Those typed figures are the user's UNVERIFIED inputs; if one is load-bearing to a point, flag it as such (it belongs in CLAIMS TO VERIFY), and never restate it as a computed fact. A staged buy with no reasoning block was added without a vetting checklist — note that the qualitative case for it is simply absent, rather than inventing one.
 6. RISK-REVIEW CONTEXT — include this section ONLY if a "RISK REVIEW" block appears in the facts above; otherwise omit it entirely. The user is actively examining how their book (or, if folded in, the hypothetical book) behaved through a specific real stress window. Connect that PAST behavior to the structure you described in sections 1–2, FROM INPUTS: which of the concentrations you flagged are the ones that actually drove the drawdown / lagged or led VOO at the marked points, and — if a hypothetical is folded in — what the scenario changed about that path (deeper or shallower hole, better or worse recovery, gap to VOO), reading the current-vs-hypothetical figures level-for-level. This is the book's PAST behavior in ONE historical window, NOT a forecast, an expected return, or evidence the same will recur — say so, and do not extrapolate it. Then, under the same strict rules as section 4, turn it into QUESTIONS to take to evaluation (e.g. "the question this raises is whether the themes that drove the [window] drawdown are ones a new add would deepen or offset"). FORBIDDEN here as in section 4: any buy/sell/add/trim/hedge/rebalance imperative. If the folded-in scenario may not match the user's current discovery selection, note that rather than conflating them.
 End with CLAIMS TO VERIFY (the ⚠UNVERIFIED external facts you leaned on, if any).
 
@@ -20741,7 +20787,7 @@ async function runBookAiReview() {
   if (!out) return;
   if (bookAiBusy) return;
   bookAiBusy = true;
-  out.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Reviewing your book — structure, gaps, and your selected candidates…</div>`;
+  out.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Reviewing your book, your candidates, and the staged trade…</div>`;
 
   const prompt = buildBookAiPrompt();
   if (!aiWorkerUrl) loadAiWorkerUrl();
@@ -20769,7 +20815,7 @@ async function runBookAiReview() {
       outTok: (usage && typeof usage.output_tokens === 'number') ? usage.output_tokens : qrAiEstTokens(text),
       measured: !!(usage && typeof usage.input_tokens === 'number'),
       selectedAtRun: [...discoverySelected],  // snapshot for staleness detection
-      scenarioAtRun: (_candScenario && _candScenario.sig) ? _candScenario.sig : '',  // staged what-if at run time
+      scenarioAtRun: (typeof _candScenarioSignature === 'function') ? _candScenarioSignature() : '',  // staged what-if + vetting at run time (fresh, matches the live state the prompt was built from)
       basisAtRun: peExposureMode,   // private-deal basis ('off'|'cost'|'market') the figures in this review were generated against — flipping the toggle desyncs the prose from the displayed tables, so it counts as stale
       openingPrompt: prompt,   // the full book context; reused as the head of every argue turn
       thread: [{               // conversation turns; turn 0 is the opening analysis
@@ -21071,9 +21117,9 @@ function renderThemeAiReview() {
 
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI book review — structure, gaps, and your selected candidates</div>
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI book review — structure, gaps, your candidates, and the staged trade</div>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        A one-shot read of your whole book: what's already visible in the structure, where the gaps are, how your ${selCount} selected discovery ticker${selCount === 1 ? '' : 's'} ${selCount === 1 ? 'lands' : 'land'} against those gaps (each judged as a hypothesis — may fit or may double-down), and the open questions worth taking to a full evaluation. Observations and questions only — it hands candidates to New Position Evaluation, it doesn't evaluate, recommend, or tell you to buy/sell/rebalance.
+        A one-shot read of your whole book: what's already visible in the structure, where the gaps are, how your ${selCount} selected discovery ticker${selCount === 1 ? '' : 's'} ${selCount === 1 ? 'lands' : 'land'} against those gaps (each judged as a hypothesis — may fit or may double-down), and the open questions worth taking to a full evaluation. If you have a trade staged below, it also reads the staged moves and folds in your own typed vetting for each buy — holding your stated reason for the buy against what it does to concentration, tax, and performance. Observations and questions only — it hands candidates to New Position Evaluation, it doesn't evaluate, recommend, or tell you to buy/sell/rebalance.
         ${selCount === 0 ? '<br><span style="color:#fbbf24">No discovery tickers selected — it\'ll review the book\'s own gaps. Click names in Discovery above to have them screened against your gaps.</span>' : ''}
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
