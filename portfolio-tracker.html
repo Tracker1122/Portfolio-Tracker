@@ -14166,7 +14166,12 @@ function loadCandPerf() {
 // would blow the rate limit. Deduped, uppercased.
 function _candScenarioTickers() {
   const set = new Set();
-  _candQueue.forEach(tr => { if (tr.ticker) set.add(tr.ticker.toUpperCase()); });
+  _candQueue.forEach(tr => {
+    if (tr.ticker) set.add(tr.ticker.toUpperCase());
+    // also pull each piece's theme benchmark so we have its windows for the relative read
+    const b = _candBenchTickerFor(tr);
+    if (b) set.add(b);
+  });
   return [...set];
 }
 
@@ -15226,6 +15231,63 @@ function _candMomentumSummary() {
   </div>`;
 }
 
+// Resolve a staged piece's THEME BENCHMARK ticker (the index that represents its theme) via the app's
+// existing getThemeBenchmark map; fall back to the sleeve benchmark. Null if the theme isn't mapped.
+function _candBenchTickerFor(tr) {
+  if (!tr) return null;
+  const b = (typeof getThemeBenchmark === 'function' && getThemeBenchmark(tr.theme)) ||
+            (typeof getSleeveBenchmark === 'function' && getSleeveBenchmark(tr.sleeve)) || null;
+  return b ? b.toUpperCase() : null;
+}
+
+// Per-move benchmark line: the theme benchmark's returns over the SAME trailing windows, plus the 1Y
+// gap (the piece's theme-relative read). Empty when there's no mapped benchmark or the piece IS the
+// benchmark. Benchmark windows come from the shared _candPerf cache (fetched alongside the scenario).
+function _candBenchLineHtml(tr) {
+  const T = (tr.ticker || '').toUpperCase();
+  const bench = _candBenchTickerFor(tr);
+  if (!bench || bench === T) return '';
+  const b = _candPerf[bench];
+  if (!b) return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">vs ${esc(bench)} (theme benchmark) — not fetched yet</div>`;
+  if (b.error) return `<div style="font-size:8px;color:#fbbf24;margin-top:1px">vs ${esc(bench)} (theme benchmark) — ${b.error === 'rate' ? 'rate-limited, refresh again' : 'unavailable'}</div>`;
+  const p = _candPerf[T];
+  const delta = (p && !p.error && typeof p.y1 === 'number' && typeof b.y1 === 'number') ? (p.y1 - b.y1) : null;
+  const dStr = delta != null ? ` · <span style="color:${delta >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${delta >= 0 ? '+' : ''}${delta.toFixed(1)}pp vs it</span>` : '';
+  return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">vs ${esc(bench)} (theme benchmark): 1M ${_candFmtPctHtml(b.m1)} · 3M ${_candFmtPctHtml(b.m3)} · 1Y ${_candFmtPctHtml(b.y1)}${dStr}</div>`;
+}
+
+// A separate, distinct narrative: how each staged piece performed vs its theme benchmark (1Y), so the
+// read is "am I trimming an out- or under-performer / buying into strength relative to its index?".
+// Deliberately styled apart from the blue WHAT-REALLY-MOVED block. Price-only, same caveats; context.
+function _candPerfBenchParagraph() {
+  if (!_candQueue.length) return '';
+  const seen = new Set();
+  const rows = [];
+  const fmt = (v) => (typeof v === 'number') ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` : 'n/a';
+  _candQueue.forEach(tr => {
+    const T = (tr.ticker || '').toUpperCase(); if (!T || seen.has(T)) return;
+    seen.add(T);
+    const tag = (tr.kind !== 'trim') ? 'buying' : 'trimming';
+    const themeStr = (tr.theme && tr.theme !== '(unassigned)') ? esc(tr.theme) : 'no theme';
+    const p = _candPerf[T];
+    if (!p || p.error || typeof p.y1 !== 'number') { rows.push(`<div><strong>${esc(T)}</strong> (${tag}) — return ${p && p.error === 'rate' ? 'rate-limited' : 'not loaded'} yet.</div>`); return; }
+    const bench = _candBenchTickerFor(tr);
+    if (!bench) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. No theme benchmark mapped, so no relative read.</div>`); return; }
+    if (bench === T) { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. It IS its theme benchmark, so it sets the bar.</div>`); return; }
+    const b = _candPerf[bench];
+    if (!b || b.error || typeof b.y1 !== 'number') { rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y. Benchmark ${esc(bench)} ${b && b.error === 'rate' ? 'rate-limited' : 'not loaded'} — refresh to compare.</div>`); return; }
+    const d = p.y1 - b.y1;
+    const col = d >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    rows.push(`<div><strong>${esc(T)}</strong> (${tag}, ${themeStr}) — ${fmt(p.y1)} 1Y vs ${esc(bench)} ${fmt(b.y1)}, <span style="color:${col}">${d >= 0 ? 'beating' : 'lagging'} by ${Math.abs(d).toFixed(1)}pp</span>.</div>`);
+  });
+  if (!rows.length) return '';
+  return `<div style="margin-top:5px;padding:7px 10px;border-left:3px solid #a78bfa;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;line-height:1.7;color:var(--color-text-secondary)">
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#a78bfa;font-weight:600;margin-bottom:2px">How each piece performed vs its theme benchmark (1Y)</div>
+    ${rows.join('')}
+    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:3px">Theme benchmark from your theme→index map, same trailing window, price-only. "Beating/lagging" is relative recent return — context for whether you're trimming an out- or under-performer, not a forecast.</div>
+  </div>`;
+}
+
 function candRenderQueue() {
   const el = document.getElementById('cand-queue'); if (!el) return;
   if (!_candQueue.length) { el.innerHTML = '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No moves staged yet. Add one or more above — they combine into a single scenario.</div>'; return; }
@@ -15247,8 +15309,9 @@ function candRenderQueue() {
     _candMomentumSummary() +
     _candQueue.map((tr, i) => `<div style="padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none">${tr.kind === 'trim' ? `<span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this trim back into the form to edit it">edit</span>` : `<span style="color:var(--color-text-tertiary);font-size:9px" title="Buys come from the checklist — remove this and re-stage from above to change it">checklist buy</span>`}<span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
-      ${_candPerfLineHtml(tr.ticker)}
+      ${_candPerfLineHtml(tr.ticker)}${_candBenchLineHtml(tr)}
     </div>`).join('') +
+    _candPerfBenchParagraph() +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">Recent performance via Polygon daily bars; * = under ~1Y of history. Informational — not a return forecast.</div>`;
 }
 
