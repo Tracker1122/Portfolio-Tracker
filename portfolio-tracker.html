@@ -21110,20 +21110,44 @@ function renderThemeAiReview() {
 // (SVG chart + native <details>; no IDs/controls), so they inject raw and dark, no cleaning needed. To
 // CHANGE what's shown, the user clicks the stress-test bar below → runs a different window in Risk
 // Review → returns here (switchTab re-renders this), and the new chart appears.
+const EVALTRADE_RISK_MIRROR_KEY = 'portfolio-evaltrade-risk-mirror-v1';
 function renderEvaltradeRiskMirror() {
   const host = document.getElementById('evaltrade-risk-mirror');
   if (!host) return;
-  let r = null;
+  let r = null, restored = false;
   try {
     if (window._riskReplay && typeof window._riskReplay.riskReviewReportHtml === 'function') r = window._riskReplay.riskReviewReportHtml();
   } catch (e) { r = null; }
-  if (!r || !r.active) {
+  if (r && r.active && (r.eventHtml || r.hypoHtml)) {
+    // Live state from Risk Review — render it AND persist a snapshot so it survives a page refresh.
+    // (The Risk Review tab rebuilds its own replay state each session and may be empty after reload;
+    // this mirror is part of the trade review, so it's meant to stick here.)
+    try {
+      localStorage.setItem(EVALTRADE_RISK_MIRROR_KEY, JSON.stringify({
+        windowId: r.windowId, windowLabel: r.windowLabel, dateRange: r.dateRange,
+        hasHypothetical: r.hasHypothetical, eventHtml: r.eventHtml, hypoHtml: r.hypoHtml, savedAt: Date.now()
+      }));
+    } catch (e) { /* storage disabled/full — non-fatal; it just won't persist */ }
+  } else {
+    // No live state (e.g. right after a refresh, before re-running in Risk Review) — fall back to the
+    // saved snapshot so the chart the user was reviewing is still here.
+    try {
+      const raw = localStorage.getItem(EVALTRADE_RISK_MIRROR_KEY);
+      if (raw) { const s = JSON.parse(raw); if (s && (s.eventHtml || s.hypoHtml)) { r = s; restored = true; } }
+    } catch (e) { r = null; restored = false; }
+  }
+  if (!r || (!r.eventHtml && !r.hypoHtml)) {
     host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;line-height:1.45;margin:4px 0">No stress test run yet. Use the <strong>⚡ Stress-test this scenario in Risk Review</strong> button below to replay your staged trade through a real historical window — the chart will appear here when you come back.</div>`;
     return;
   }
+  const lead = restored
+    ? 'Saved from your last stress test (Risk Review rebuilds its own state each session) — '
+    : 'Mirrored from Risk Review — ';
+  const tail = restored ? 'Re-run via the stress-test button below to refresh it.' : 'To change it, use the stress-test button below.';
+  const savedTag = restored ? ` <span style="font-weight:400;color:var(--color-text-tertiary)">· saved</span>` : '';
   const head =
-    `<div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin:2px 0 2px">Stress test — ${esc(r.windowLabel || r.windowId)}${r.dateRange ? ` <span style="font-weight:400;color:var(--color-text-tertiary)">(${esc(r.dateRange)})</span>` : ''}</div>` +
-    `<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.45;margin-bottom:6px">Mirrored from Risk Review — how your active sleeve${r.hasHypothetical ? ' (and the staged trade, folded in)' : ''} would have moved through this real past window. Past behavior, not a forecast. To change it, use the stress-test button below.</div>`;
+    `<div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin:2px 0 2px">Stress test — ${esc(r.windowLabel || r.windowId)}${r.dateRange ? ` <span style="font-weight:400;color:var(--color-text-tertiary)">(${esc(r.dateRange)})</span>` : ''}${savedTag}</div>` +
+    `<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.45;margin-bottom:6px">${lead}how your active sleeve${r.hasHypothetical ? ' (and the staged trade, folded in)' : ''} would have moved through this real past window. Past behavior, not a forecast. ${tail}</div>`;
   let body = r.eventHtml || '';
   if (r.hasHypothetical && r.hypoHtml) {
     body += `<div style="font-size:10px;font-weight:600;color:var(--color-text-secondary);margin:12px 0 2px">With the staged trade folded in</div>` + r.hypoHtml;
