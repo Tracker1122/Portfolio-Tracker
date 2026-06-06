@@ -15295,7 +15295,7 @@ function _candBenchLineHtml(tr) {
   if (typeof p.annVol === 'number' && typeof b.annVol === 'number') riskBits.push(`vol ${p.annVol.toFixed(0)}% vs ${b.annVol.toFixed(0)}%`);
   if (typeof p.maxDrawdown === 'number' && typeof b.maxDrawdown === 'number') riskBits.push(`maxDD ${p.maxDrawdown.toFixed(0)}% vs ${b.maxDrawdown.toFixed(0)}%`);
   const riskLine = riskBits.length ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">risk (name vs bench): ${riskBits.join(' · ')}</div>` : '';
-  return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">vs ${esc(bench)} (theme benchmark): ${absStr}</div>` + riskLine;
+  return `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:1px">${esc(bench)} (theme benchmark): ${absStr}</div>` + riskLine;
 }
 
 // A separate, distinct narrative: how each staged piece has tracked its theme benchmark ACROSS windows,
