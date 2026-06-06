@@ -15003,7 +15003,9 @@ const HS_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAcwAAAE9CAQAAAAsH
 // the already-formatted on-screen summary, strip interactive controls, expand the collapsed detail,
 // recolor for white paper, and add the AI review text. Opens a print window.
 function candExportPdf() {
-  if (!_candQueue.length || !_candScenario) { alert('Stage a scenario first — add at least one move, then export.'); return; }
+  const hasScenario = !!(_candQueue.length && _candScenario);
+  const hasReview = !!(typeof bookAiReview !== 'undefined' && bookAiReview && bookAiReview.text);
+  if (!hasScenario && !hasReview) { alert('Nothing to export yet — stage a trade and/or run the AI analysis first.'); return; }
   // Clone a DOM fragment, remove buttons/links, force <details> open, and darken light-on-dark accents
   // so they read on white. Inline CSS-variable colors resolve against the light :root we define below.
   const cleanFrag = (html) => {
@@ -15017,11 +15019,11 @@ function candExportPdf() {
       .replace(/#34d399/g, '#15803d')   // green
       .replace(/#f87171/g, '#dc2626');  // red
   };
-  const queueHtml = cleanFrag((document.getElementById('cand-queue') || {}).innerHTML);
-  const outputHtml = cleanFrag((document.getElementById('cand-output') || {}).innerHTML);
+  const queueHtml = hasScenario ? cleanFrag((document.getElementById('cand-queue') || {}).innerHTML) : '';
+  const outputHtml = hasScenario ? cleanFrag((document.getElementById('cand-output') || {}).innerHTML) : '';
 
   const esc2 = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  let aiHtml = '<p class="note">No AI review has been run for this scenario yet — run "Analyze with AI" first to include it.</p>';
+  let aiHtml = '<p class="note">No AI analysis has been run yet — run "Analyze my book &amp; trade with AI" first to include it.</p>';
   if (typeof bookAiReview !== 'undefined' && bookAiReview && bookAiReview.text) {
     const blocks = [`<div class="ai">${esc2(bookAiReview.text)}</div>`];
     (bookAiReview.thread || []).slice(1).forEach(t => {
@@ -15034,15 +15036,16 @@ function candExportPdf() {
     if (basisMismatch) {
       // A basis flip is the most dangerous staleness: the prose and the tables state different values for
       // the SAME metric. Call it out as a prominent banner ABOVE the review, not a quiet trailing note.
-      blocks.unshift(`<p class="note" style="margin:0 0 10px;padding:8px 11px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;color:#7f1d1d;font-style:normal;font-weight:600">⚠ Basis mismatch — ${esc2(basisMismatch)}. Re-run "Analyze with AI" on the current basis before sharing this report so the AI review and the tables agree.</p>`);
+      blocks.unshift(`<p class="note" style="margin:0 0 10px;padding:8px 11px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;color:#7f1d1d;font-style:normal;font-weight:600">⚠ Basis mismatch — ${esc2(basisMismatch)}. Re-run "Analyze my book &amp; trade with AI" on the current basis before sharing this report so the AI review and the tables agree.</p>`);
     }
     blocks.push(`<p class="note" style="margin-top:10px">Generated ${esc2(new Date(bookAiReview.at).toLocaleString())}${stale ? (basisMismatch ? ' — basis changed since this ran (see banner above)' : ' — inputs changed since this ran, so it may not reflect the scenario above') : ''}. Observations for discussion, not advice.</p>`);
     aiHtml = blocks.join('');
   }
 
   const now = new Date();
+  const title = hasScenario ? 'Portfolio Scenario Review' : 'Portfolio Analysis';
   const doc =
-    `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Portfolio Scenario Review</title><style>` +
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc2(title)}</title><style>` +
     `:root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}` +
     `*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
     `.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}` +
@@ -15051,16 +15054,16 @@ function candExportPdf() {
     `.ai{white-space:pre-wrap;font-size:12px;line-height:1.55;color:#111;margin:2px 0}.aiq{font-weight:600;font-size:12px;margin:14px 0 2px}` +
     `table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}` +
     `</style></head><body><div class="doc"><div class="letterhead"><img src="${HS_LOGO}" alt="Harlan Shelby"></div>` +
-    `<h1>Portfolio Scenario Review</h1>` +
+    `<h1>${esc2(title)}</h1>` +
     `<div class="sub">Prepared ${esc2(now.toLocaleDateString())} for discussion with my advisor.</div>` +
-    `<div class="note">Hypothetical. Figures are estimates from my own tracker — true-exposure look-through using fund weights I maintain, and a single-year tax estimate using my assumed rates. Not tax or investment advice.</div>` +
-    `<h2>Staged scenario</h2><div class="section">${queueHtml}</div>` +
-    `<h2>Scenario analysis</h2><div class="section">${outputHtml}</div>` +
-    (() => { try { const b = _candDualBasisPdfBlock(esc2); return b ? `<h2>Both bases — cost &amp; self-marked</h2><div class="section">${b}</div>` : ''; } catch (e) { return ''; } })() +
+    `<div class="note">${hasScenario ? 'Hypothetical. ' : ''}Figures are estimates from my own tracker — true-exposure look-through using fund weights I maintain${hasScenario ? ', and a single-year tax estimate using my assumed rates' : ''}. Not tax or investment advice.</div>` +
+    (hasScenario ? `<h2>Staged scenario</h2><div class="section">${queueHtml}</div>` : '') +
+    (hasScenario ? `<h2>Scenario analysis</h2><div class="section">${outputHtml}</div>` : '') +
+    (hasScenario ? (() => { try { const b = _candDualBasisPdfBlock(esc2); return b ? `<h2>Both bases — cost &amp; self-marked</h2><div class="section">${b}</div>` : ''; } catch (e) { return ''; } })() : '') +
     pePdfBasisNote() +
     `<h2>Risk review — historical stress test</h2><div>${(() => { try { return riskReviewPdfSection(cleanFrag, esc2); } catch (e) { return ''; } })()}</div>` +
-    `<h2>AI review</h2><div class="section">${aiHtml}</div>` +
-    `<div class="note" style="margin-top:26px">Performance via Polygon daily bars. Tax estimate uses simplified rules (ST/LT netting within holding period then cross-applied; harvested-loss offsets; single-year only — no prior-year carryforward or $3,000 ordinary-income offset) — a CPA should confirm the actual figures.</div>` +
+    `<h2>AI analysis</h2><div class="section">${aiHtml}</div>` +
+    `<div class="note" style="margin-top:26px">Performance via Polygon daily bars.${hasScenario ? ' Tax estimate uses simplified rules (ST/LT netting within holding period then cross-applied; harvested-loss offsets; single-year only — no prior-year carryforward or $3,000 ordinary-income offset) — a CPA should confirm the actual figures.' : ''}</div>` +
     `</div></body></html>`;
 
   const w = window.open('', '_blank');
@@ -21092,6 +21095,7 @@ function renderThemeAiReview() {
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <button class="btn btn-sm btn-primary" onclick="runBookAiReview()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Reviewing…' : (bookAiReview ? (stale ? '↻ Re-analyze (inputs changed)' : '↻ Re-run analysis') : 'Analyze my book & trade with AI')}</button>
         <span style="font-size:9px;color:var(--color-text-tertiary)" title="Estimated before sending. Sonnet ~$3/M input, ~$15/M output. Input is measured from the prompt; output is a ~1200-token ceiling assumption — actuals shown after the call.">Est. cost this call: <strong style="color:var(--color-text-secondary)">~${costStr}</strong> (${estIn.toLocaleString()} input tokens + ~${estOut} output)</span>
+        ${(!_bookAiReRunning && (bookAiReview || (typeof _candQueue !== 'undefined' && _candQueue.length))) ? `<button class="btn btn-sm" onclick="candExportPdf()" style="font-size:10px;margin-left:auto" title="Open a print-friendly report (staged trade, combined impact, both private-deal bases, the risk-review chart, and this AI analysis) — then use your browser's Save as PDF.">⤓ Export PDF</button>` : ''}
       </div>
       <div id="book-ai-output"></div>
       ${_bookAiReRunning ? '' : result}
