@@ -20435,6 +20435,7 @@ function renderThemeDiscovery() {
 // ─────────────────────────────────────────────
 let bookAiReview = null;        // { text, at, truncated, inTok, outTok, measured, scenarioAtRun, basisAtRun }
 let bookAiBusy = false;
+let _bookAiReRunning = false;  // true while a RE-RUN streams: hide the prior response (data kept) so the new one doesn't build in above the old
 
 // Persist the book review so it survives refresh AND travels with export/import (it's a saved
 // artifact the user comes back to, not a transient view). scenarioAtRun + basisAtRun record the staged
@@ -20742,10 +20743,16 @@ Keep it tight and scannable. The checkable structure facts are already on the us
 }
 
 async function runBookAiReview() {
-  const out = document.getElementById('book-ai-output');
-  if (!out) return;
+  if (!document.getElementById('book-ai-output')) return;
   if (bookAiBusy) return;
   bookAiBusy = true;
+  // RE-RUN: a prior response exists — hide it while the new one streams, so the new text doesn't build
+  // in above the stale one. Only its DISPLAY is suppressed; bookAiReview stays intact so a failed re-run
+  // can restore it. (First-ever run has nothing to hide.)
+  _bookAiReRunning = !!bookAiReview;
+  if (_bookAiReRunning) renderThemeAiReview();
+  const out = document.getElementById('book-ai-output');
+  if (!out) { bookAiBusy = false; _bookAiReRunning = false; return; }
   out.innerHTML = `<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Reviewing your book, your candidates, and the staged trade…</div>`;
 
   const prompt = buildBookAiPrompt();
@@ -20786,8 +20793,13 @@ async function runBookAiReview() {
     saveBookAiReview();
   } catch (err) {
     bookAiBusy = false;
+    // A re-run failed: un-suppress and restore the prior response (still valid) + reset the button, then
+    // surface the error in the freshly-rendered output area — so the user isn't left with a hidden review.
+    _bookAiReRunning = false;
+    if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
     const info = aiErrorMessage(err);
-    out.innerHTML = `<div style="border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:${info.color};line-height:1.5">
+    const eo = document.getElementById('book-ai-output') || out;
+    eo.innerHTML = `<div style="border:1px solid ${info.color};border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:${info.color};line-height:1.5">
       <strong>${info.title}</strong><br>
       <span style="color:var(--color-text-secondary)">${esc(info.detail)}</span>
       ${info.raw ? `<br><span style="color:var(--color-text-tertiary);font-size:9px">Raw: ${esc(info.raw)}${err.httpStatus ? ' (HTTP ' + err.httpStatus + ')' : ''}</span>` : ''}
@@ -20796,6 +20808,7 @@ async function runBookAiReview() {
     return;
   }
   bookAiBusy = false;
+  _bookAiReRunning = false;
   renderThemeAiReview();
 }
 
@@ -21081,8 +21094,8 @@ function renderThemeAiReview() {
         <span style="font-size:9px;color:var(--color-text-tertiary)" title="Estimated before sending. Sonnet ~$3/M input, ~$15/M output. Input is measured from the prompt; output is a ~1200-token ceiling assumption — actuals shown after the call.">Est. cost this call: <strong style="color:var(--color-text-secondary)">~${costStr}</strong> (${estIn.toLocaleString()} input tokens + ~${estOut} output)</span>
       </div>
       <div id="book-ai-output"></div>
-      ${result}
-      ${threadHtml}
+      ${_bookAiReRunning ? '' : result}
+      ${_bookAiReRunning ? '' : threadHtml}
     </div>`;
 }
 
