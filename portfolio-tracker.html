@@ -19426,8 +19426,8 @@ const DISCOVERY_MAX_SELECT = 5;
 // ── Discovery persistence ─────────────────────────────────────────────────
 // Everything Discovery fetches lives in module-level objects that die on refresh. We persist them so
 // fetched performance, the per-theme ranking, the source-fund map, AND the ≤5 selection all survive a
-// reload. This is also what makes the book-AI selection stick: the AI candidate set IS discoverySelected,
-// so persisting it is why your picks (and therefore the AI's candidates) are still there after a refresh.
+// reload. (The selection persists purely so your fetch picks stick across a refresh — it does NOT feed
+// the book AI review; that draws on the book + the staged trade only.)
 // We deliberately do NOT persist transient states: a value mid-flight ('loading') or an error slot
 // ({err}) is dropped on save, so a reload never resurrects a stuck "loading…" or a stale rate-limit
 // error — only real fetched numbers persist; misses simply re-fetch on demand.
@@ -20404,7 +20404,7 @@ function renderThemeDiscovery() {
         <button id="disc-fetch-btn" class="btn btn-sm btn-primary" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:auto">↡ Fetch ${discoverySelected.size} selected (1M + 1Y)</button>
         <button id="disc-deep-btn" class="btn btn-sm" onclick="deepFetchSelected()" title="Force-refresh these names: re-pulls current prices (even if already cached) and the deeper windows (3M / 6M / YTD), all shown in each name's 📊 detail. Free extra windows from the same call — no added API cost. ~5 names + funds fit under the rate limit." style="font-size:9px">🔄 Deeper dive ${discoverySelected.size} (latest + 3M/6M/YTD)</button>
         <button class="btn btn-sm" onclick="discoverySelected.clear();saveDiscoveryCache();renderThemeDiscovery();renderThemeAiReview()" style="font-size:9px">Clear</button>
-        <div style="flex-basis:100%;font-size:9px;color:var(--color-text-tertiary);line-height:1.45">These ${discoverySelected.size} selected name${discoverySelected.size === 1 ? '' : 's'} ${discoverySelected.size === 1 ? 'is' : 'are'} the candidate set the <strong>AI book review</strong> (below) screens against your gaps. 📊 on any fetched chip shows its full window set — no new API call. Selection survives refresh.</div>
+        <div style="flex-basis:100%;font-size:9px;color:var(--color-text-tertiary);line-height:1.45">These ${discoverySelected.size} selected name${discoverySelected.size === 1 ? '' : 's'} ${discoverySelected.size === 1 ? 'is' : 'are'} queued for a data fetch (1M/1Y, with deeper windows on demand) — this is a browse/fetch tool and does <strong>not</strong> feed the AI book review. To have the AI weigh a name, stage it as a buy in Evaluate a Trade. 📊 on any fetched chip shows its full window set — no new API call. Selection survives refresh.</div>
         <div id="disc-fetch-status" style="flex-basis:100%;margin-top:2px"></div>
       </div>` : ''}
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
@@ -20426,18 +20426,18 @@ function renderThemeDiscovery() {
 // ─────────────────────────────────────────────
 // BOOK-LEVEL AI REVIEW (Theme Level Review tab)
 // A one-shot AI read of the WHOLE book, reusing the quality-tab transport/error/cost machinery. Two
-// jobs: (1) verbalize what's already visible in the structure, (2) surface gaps/blind spots — and
-// judge the user's ≤5 SELECTED discovery tickers AS HYPOTHESES against those gaps (they may fit a thin
-// spot or deepen a concentration; the review says which). It does NOT do a full New Position
+// jobs: (1) verbalize what's already visible in the structure, (2) surface gaps/blind spots — and, when
+// a trade is staged in Evaluate a Trade, read those moves and the user's typed vetting for each buy. It
+// does NOT do a full New Position
 // Evaluation — it pre-screens and hands off. No verdict on the book, no buy/sell calls, external facts
 // quarantined to ⚠UNVERIFIED. Cost shown LOUDLY before sending given the large book-level prompt.
 // ─────────────────────────────────────────────
-let bookAiReview = null;        // { text, at, truncated, inTok, outTok, measured, selectedAtRun:[tickers] }
+let bookAiReview = null;        // { text, at, truncated, inTok, outTok, measured, scenarioAtRun, basisAtRun }
 let bookAiBusy = false;
 
 // Persist the book review so it survives refresh AND travels with export/import (it's a saved
-// artifact the user comes back to, not a transient view). selectedAtRun records which discovery
-// tickers were selected when it ran, so we can detect when the current selection has drifted (stale).
+// artifact the user comes back to, not a transient view). scenarioAtRun + basisAtRun record the staged
+// trade and private-deal basis it ran against, so we can detect when those have drifted (stale).
 function loadBookAiReview() {
   try {
     const raw = localStorage.getItem('portfolio-book-ai-review-v1');
@@ -20450,14 +20450,12 @@ function saveBookAiReview() {
     else localStorage.removeItem('portfolio-book-ai-review-v1');
   } catch (e) { /* storage full / unavailable — non-fatal, review just won't persist */ }
 }
-// True when the current discovery selection differs from what the saved review was run against.
+// True when the staged trade or the private-deal basis differs from what the saved review ran against.
+// (Discovery selection is intentionally NOT a staleness input — clicking Discovery names no longer feeds
+// the review, so changing the selection does not stale it.)
 function bookAiReviewStale() {
   if (!bookAiReview) return false;
-  const ran = new Set(bookAiReview.selectedAtRun || []);
-  const now = discoverySelected;
-  if (ran.size !== now.size) return true;
-  for (const t of now) if (!ran.has(t)) return true;
-  // Also stale if the staged candidate scenario changed since the review ran.
+  // Stale if the staged candidate scenario changed since the review ran.
   // Compute the scenario signature FRESH (live queue + live vetting) rather than reading the cached
   // _candScenario.sig — the prompt reads vetting live at send time, so the staleness check must read
   // from the same live source or a post-send vetting edit would silently leave a stale review.
@@ -20598,47 +20596,8 @@ function buildBookAiPrompt() {
     }
   }
 
-  // --- Selected discovery tickers (the hypotheses to judge) ---
-  const selected = [...discoverySelected];
-  if (selected.length) {
-    // Which source funds the user ACTUALLY HOLDS (a direct open position), vs funds whose holdings are
-    // merely pasted for benchmark/theme coverage. CRITICAL: "discovered in FUND" does NOT mean the user
-    // holds FUND — many discovery names come from tracked benchmark funds (e.g. ITA) the user does not
-    // own. Without this, the model wrongly infers "you hold ITA, so look-through overlap exists."
-    const heldFunds = new Set(positions.filter(p => !p.closed && p.ticker).map(p => p.ticker.toUpperCase()));
-    const heldTickers = heldFunds; // same set — any open position ticker
-    lines.push(`\nDISCOVERY TICKERS THE USER HAS SELECTED (≤5) — judge each AS A HYPOTHESIS against the gaps above. Each may FILL a thin spot or DEEPEN an existing concentration; say which, and how it would move true exposure. "Discovered in FUND" is a STRUCTURAL label — the name appears in that fund's holdings — and is NOT a fundamental classification of the business. CRITICAL: a selected ticker is a HYPOTHETICAL the user is considering — they do NOT own it unless its line below explicitly says "ALREADY OWNED." Do NOT describe a not-owned candidate as "held," "a current holding," "already in your book," or "appears in your theme list." Whether the user holds the source fund is stated per-ticker too; do NOT assume they hold it.`);
-    selected.forEach(tk => {
-      const fund = (discoverySourceFund[tk] || '').toUpperCase();
-      const fundHeld = fund && heldFunds.has(fund);
-      const tickerHeld = heldTickers.has(tk.toUpperCase());
-      const perf = discoveryPerf[tk];
-      let perfStr = 'not fetched (no return data — say so; do not infer performance)';
-      if (perf && typeof perf === 'object' && !perf.err) {
-        const m1 = typeof perf.m1 === 'number' ? `${perf.m1 >= 0 ? '+' : ''}${perf.m1.toFixed(1)}%` : 'n/a';
-        const y1 = typeof perf.y1 === 'number' ? `${perf.y1 >= 0 ? '+' : ''}${perf.y1.toFixed(1)}%` : 'n/a';
-        const bench = discoveryBenchPerf[fund];
-        const bStr = (bench && typeof bench === 'object' && typeof bench.y1 === 'number') ? `; source fund ${fund} 1Y ${bench.y1 >= 0 ? '+' : ''}${bench.y1.toFixed(1)}%` : '';
-        const dd = typeof perf.maxDrawdown === 'number' ? `; maxDD ${perf.maxDrawdown.toFixed(0)}%` : '';
-        const vol = typeof perf.annVol === 'number' ? `; vol ${perf.annVol.toFixed(0)}%` : '';
-        const partial = perf.shortHist ? ' (PARTIAL history — 1Y is over less than a full year, read loosely)' : '';
-        perfStr = `1M ${m1}, 1Y ${y1}${bStr}${dd}${vol}${partial}`;
-      } else if (perf && perf.err) {
-        perfStr = `fetch failed (${perf.err}) — no return data`;
-      }
-      const fundLabel = fund
-        ? (fundHeld
-            ? ` (discovered in ${fund}, which you HOLD — so some look-through exposure to this name may already exist via that fund)`
-            : ` (discovered in ${fund}, a tracked benchmark you do NOT hold — its holdings are pasted for theme coverage only, so there is NO existing exposure to this name through ${fund})`)
-        : '';
-      const ownTag = tickerHeld
-        ? `[ALREADY OWNED — this candidate is also a current holding]`
-        : `[NOT OWNED — hypothetical you're considering; you hold zero shares of this]`;
-      lines.push(`- ${tk} ${ownTag}${fundLabel}: ${perfStr}.`);
-    });
-  } else {
-    lines.push(`\nDISCOVERY TICKERS SELECTED: none. (The user hasn't clicked any discovery names. Focus on the book's own gaps; note that selecting discovery names would let you screen specific candidates.)`);
-  }
+  // Selected-discovery tickers are intentionally NOT fed to the book AI. Discovery is a
+  // browse/fetch tool only; any name to be analyzed flows in via the staged trade below.
 
   // --- Staged candidate what-if (from the Test-a-Candidate card above this review), if any ---
   if (_candScenario && _candScenario.trades && _candScenario.trades.length) {
@@ -20760,23 +20719,22 @@ Rules:
   • TICKERS: Only ticker symbols that appear VERBATIM in the facts above are known holdings. Do NOT name any other specific ticker as if it were a holding — not even ones you'd expect to be in a theme (e.g. do not assert the user holds "NVDA, AVGO, AMD" in their Semiconductors theme just because those are typical constituents, and do NOT fill a "Defense" bucket with names like LMT or a "Healthcare" bucket with names like LLY/ABT if those tickers are not listed above). If you name a ticker not listed above, it is an EXTERNAL guess and belongs in CLAIMS TO VERIFY, tagged ⚠UNVERIFIED — never inline as FROM INPUTS.
   • THEMES: Only themes that appear VERBATIM as a line above exist in the user's book. Do NOT invent a theme that isn't listed (e.g. do not introduce a "Healthcare" or "Industrials" section as if the user holds it). If a theme/sector is not listed, treat it as a possible GAP ("not visible in the computed themes"), never as a holding.
   • COUNTS, NOT NAMES: Each theme line gives a name COUNT and at most a few example names. The unlisted names are NOT provided — do not invent them or characterize them. If the count exceeds the examples shown, the extra names are unknown to you — say so, don't guess them.
-  • SELECTED CANDIDATES ARE NOT HOLDINGS: A selected discovery ticker is something the user is CONSIDERING, not something they own — UNLESS that exact ticker also appears verbatim as a held name in the theme lists above. Do NOT say a candidate is "already held" or would "deepen an existing position" unless its ticker literally appears in the holdings facts. Check before claiming it.
+  • STAGED BUYS ARE NOT HOLDINGS: A name in the staged what-if trade is something the user is CONSIDERING buying, not something they own — UNLESS that exact ticker also appears verbatim as a held name in the theme lists above. Do NOT say a staged buy is "already held" or would "deepen an existing position" unless its ticker literally appears in the holdings facts. Check before claiming it.
   • ABSENCES: You may note that an asset class or theme is "not listed in the inputs," but do NOT assert the user definitively holds NONE of it — the facts list themes that EXIST, it does not enumerate everything absent. Phrase gaps as "not visible in the computed themes" rather than "the book has no X." This is an [inference] about the inputs, not a FROM INPUTS fact.
-  • RISK FIGURES: maxDD/vol/return numbers exist ONLY for tickers explicitly listed with them — the selected discovery tickers, and any scenario tickers under "Recent price performance" in the staged what-if block. Do not state risk or return figures for any book holding (none were provided) or for any ticker not listed above with figures. EXCEPTION — scope, not loophole: a "RISK REVIEW" block, if present, gives PORTFOLIO-LEVEL (whole-book and, if folded in, whole-hypothetical-book) replayed return/drawdown figures for one historical window; you MAY cite those as the book's PAST behavior in that window. This does NOT license per-holding risk figures — none were provided for individual names; keep risk/return numbers either portfolio-level (from the RISK REVIEW block) or for the specific listed tickers, never invented per-name.
+  • RISK FIGURES: maxDD/vol/return numbers exist ONLY for tickers explicitly listed with them — the scenario tickers under "Recent price performance" in the staged what-if block. Do not state risk or return figures for any book holding (none were provided) or for any ticker not listed above with figures. EXCEPTION — scope, not loophole: a "RISK REVIEW" block, if present, gives PORTFOLIO-LEVEL (whole-book and, if folded in, whole-hypothetical-book) replayed return/drawdown figures for one historical window; you MAY cite those as the book's PAST behavior in that window. This does NOT license per-holding risk figures — none were provided for individual names; keep risk/return numbers either portfolio-level (from the RISK REVIEW block) or for the specific listed tickers, never invented per-name.
 
-Output in the following sections (sections 5 and 6 appear only when their data is present):
+Output in the following sections (sections 4 and 5 appear only when their data is present):
 1. WHAT'S ALREADY VISIBLE — the structural facts that matter (biggest concentrations, how few effective positions by weight — describe this as weight concentration, never as statistical independence, since the metric measures weight spread not return correlation; any theme resting on one name). FROM INPUTS, plainly stated. If a WHOLE-BOOK CONTEXT block is present, OPEN by situating the managed sleeve within the full book — what share of all-in AUM is the actively-picked sleeve vs the VOO diversified base vs the illiquid private sleeve — so every concentration you then discuss is read against the whole picture, not the managed sleeve in isolation.
-2. GAPS & BLIND SPOTS — name only the absences that MATTER; this is NOT a roll-call of everything the user doesn't hold. It IS still worth flagging when a theme is unexpressed — but only surface a thin or absent theme when (a) a staged candidate or selected discovery name would fill or deepen it, or (b) it is a structurally significant hole given the concentrations in section 1 (e.g. the book leans hard on two correlated themes and carries little that would move differently in a drawdown). Do NOT enumerate asset classes or sectors the user lacks just to show coverage — an absence the user plainly already knows about, with no reason attached, is not insight and is the part the user skips. For any gap you do raise: keep the absence honest per the ABSENCES rule above ("not visible in the computed themes", flagged as [inference], never "the book holds none of X"), and state WHY it matters HERE — what structural risk the hole creates or what a staged/selected name does to it — not merely that it is absent.
-3. SELECTED CANDIDATES vs THE GAPS — for each selected discovery ticker: does it ADDRESS a gap or DEEPEN an existing concentration? How would it move true exposure? What would the user need to pressure-test in a full New Position Evaluation? Be willing to say a selected name is a poor structural fit. If none selected, say so and skip.
-4. DIRECTIONS WORTH EXPLORING — turn the gaps and concentrations above into QUESTIONS to investigate, not actions to take. THIS IS THE MOST DELICATE SECTION — strict rules:
+2. GAPS & BLIND SPOTS — name only the absences that MATTER; this is NOT a roll-call of everything the user doesn't hold. It IS still worth flagging when a theme is unexpressed — but only surface a thin or absent theme when (a) a staged buy would fill or deepen it, or (b) it is a structurally significant hole given the concentrations in section 1 (e.g. the book leans hard on two correlated themes and carries little that would move differently in a drawdown). Do NOT enumerate asset classes or sectors the user lacks just to show coverage — an absence the user plainly already knows about, with no reason attached, is not insight and is the part the user skips. For any gap you do raise: keep the absence honest per the ABSENCES rule above ("not visible in the computed themes", flagged as [inference], never "the book holds none of X"), and state WHY it matters HERE — what structural risk the hole creates or what a staged buy does to it — not merely that it is absent.
+3. DIRECTIONS WORTH EXPLORING — turn the gaps and concentrations above into QUESTIONS to investigate, not actions to take. THIS IS THE MOST DELICATE SECTION — strict rules:
    • You are NOT giving advice. Each item is a QUESTION or a DIRECTION TO INVESTIGATE that the user takes to their New Position Evaluation process — never an instruction.
    • FORBIDDEN: any imperative or recommendation to buy, sell, add, trim, reduce, increase, rebalance, hedge, or allocate. Do NOT write "add X", "trim Y", "consider buying", "you should", "reduce your Tech weight". If you catch yourself writing a directive, rewrite it as the open QUESTION behind it.
    • ALLOWED framing: "The question to take to evaluation is whether…", "Worth investigating: does…", "An open question this raises:…", "If [gap] concerns you, the thing to pressure-test is…".
    • For each GAP: pose the question of what filling it would actually require and the trap to check (e.g. whether a candidate already comes via the user's funds, so a direct add would concentrate not diversify).
-   • For CONCENTRATION: pose the rebalancing QUESTION it raises — e.g. "with ~X% in two correlated themes, the question is what genuinely uncorrelated exposure looks like, and whether [the user's selected tickers] provide it or just add correlated beta." Tie this explicitly to the SELECTED discovery tickers where relevant — frame whether those specific clicked names move toward or away from the concentration, as a question, not a verdict.
+   • For CONCENTRATION: pose the rebalancing QUESTION it raises — e.g. "with ~X% in two correlated themes, the question is what genuinely uncorrelated exposure looks like, and whether the staged buys provide it or just add correlated beta." Where a trade is staged, tie this to those staged moves — frame whether they move toward or away from the concentration, as a question, not a verdict.
    • Every item ends pointing to the next step: this is candidate-generation; the actual decision happens in New Position Evaluation, not here.
-5. STAGED WHAT-IF — include this section ONLY if a "STAGED WHAT-IF SCENARIO" block appears in the facts above; otherwise omit it entirely. Read what the staged moves do to the book's STRUCTURE, FROM INPUTS: which clusters move and in which direction, whether the scenario deepens or relieves the largest concentrations and how independent-bets shifts, and — for an added ETF — that its look-through can deepen names the user already holds (call out any such name from the per-name moves). Where the tracker's plain-language read flags the trade as closer to a reshuffle than a reduction (much of what's trimmed handed back through what's bought), engage with that FROM INPUTS rather than ignoring it. If an estimated tax figure is given, state it as the dollar cost of the rotation (and surface any wash-sale or "days-from-long-term" flag), framed as a fact to weigh — never as a reason to act or not act. If recent-performance figures are given for scenario tickers, you may reference them as PAST returns/drawdown to characterize what's being bought or trimmed (e.g. trimming a name after a large run, or adding one deep in a drawdown), but do NOT treat past performance as predictive or as a buy/sell signal. Then turn all of it into QUESTIONS for New Position Evaluation under the same rules as section 4 (no buy/sell/trim/rebalance imperatives). Do NOT tell the user whether to make the trade. If a "USER'S STATED REASONING FOR THE STAGED BUYS" block is present, fold each buy's stated thesis/judgments into this read as a short labeled note per name ("On the AC buy: …"): hold the user's OWN reason for the buy against the structural reality above and say plainly whether the facts support or undercut it, naming any divergence — woven into the trade read, NOT a separate per-stock fundamentals recap. Those typed figures are the user's UNVERIFIED inputs; if one is load-bearing to a point, flag it as such (it belongs in CLAIMS TO VERIFY), and never restate it as a computed fact. A staged buy with no reasoning block was added without a vetting checklist — note that the qualitative case for it is simply absent, rather than inventing one.
-6. RISK-REVIEW CONTEXT — include this section ONLY if a "RISK REVIEW" block appears in the facts above; otherwise omit it entirely. The user is actively examining how their book (or, if folded in, the hypothetical book) behaved through a specific real stress window. Connect that PAST behavior to the structure you described in sections 1–2, FROM INPUTS: which of the concentrations you flagged are the ones that actually drove the drawdown / lagged or led VOO at the marked points, and — if a hypothetical is folded in — what the scenario changed about that path (deeper or shallower hole, better or worse recovery, gap to VOO), reading the current-vs-hypothetical figures level-for-level. This is the book's PAST behavior in ONE historical window, NOT a forecast, an expected return, or evidence the same will recur — say so, and do not extrapolate it. Then, under the same strict rules as section 4, turn it into QUESTIONS to take to evaluation (e.g. "the question this raises is whether the themes that drove the [window] drawdown are ones a new add would deepen or offset"). FORBIDDEN here as in section 4: any buy/sell/add/trim/hedge/rebalance imperative. If the folded-in scenario may not match the user's current discovery selection, note that rather than conflating them.
+4. STAGED WHAT-IF — include this section ONLY if a "STAGED WHAT-IF SCENARIO" block appears in the facts above; otherwise omit it entirely. Read what the staged moves do to the book's STRUCTURE, FROM INPUTS: which clusters move and in which direction, whether the scenario deepens or relieves the largest concentrations and how independent-bets shifts, and — for an added ETF — that its look-through can deepen names the user already holds (call out any such name from the per-name moves). Where the tracker's plain-language read flags the trade as closer to a reshuffle than a reduction (much of what's trimmed handed back through what's bought), engage with that FROM INPUTS rather than ignoring it. If an estimated tax figure is given, state it as the dollar cost of the rotation (and surface any wash-sale or "days-from-long-term" flag), framed as a fact to weigh — never as a reason to act or not act. If recent-performance figures are given for scenario tickers, you may reference them as PAST returns/drawdown to characterize what's being bought or trimmed (e.g. trimming a name after a large run, or adding one deep in a drawdown), but do NOT treat past performance as predictive or as a buy/sell signal. Then turn all of it into QUESTIONS for New Position Evaluation under the same rules as section 3 (no buy/sell/trim/rebalance imperatives). Do NOT tell the user whether to make the trade. If a "USER'S STATED REASONING FOR THE STAGED BUYS" block is present, fold each buy's stated thesis/judgments into this read as a short labeled note per name ("On the AC buy: …"): hold the user's OWN reason for the buy against the structural reality above and say plainly whether the facts support or undercut it, naming any divergence — woven into the trade read, NOT a separate per-stock fundamentals recap. Those typed figures are the user's UNVERIFIED inputs; if one is load-bearing to a point, flag it as such (it belongs in CLAIMS TO VERIFY), and never restate it as a computed fact. A staged buy with no reasoning block was added without a vetting checklist — note that the qualitative case for it is simply absent, rather than inventing one.
+5. RISK-REVIEW CONTEXT — include this section ONLY if a "RISK REVIEW" block appears in the facts above; otherwise omit it entirely. The user is actively examining how their book (or, if folded in, the hypothetical book) behaved through a specific real stress window. Connect that PAST behavior to the structure you described in sections 1–2, FROM INPUTS: which of the concentrations you flagged are the ones that actually drove the drawdown / lagged or led VOO at the marked points, and — if a hypothetical is folded in — what the scenario changed about that path (deeper or shallower hole, better or worse recovery, gap to VOO), reading the current-vs-hypothetical figures level-for-level. This is the book's PAST behavior in ONE historical window, NOT a forecast, an expected return, or evidence the same will recur — say so, and do not extrapolate it. Then, under the same strict rules as section 3, turn it into QUESTIONS to take to evaluation (e.g. "the question this raises is whether the themes that drove the [window] drawdown are ones a new add would deepen or offset"). FORBIDDEN here as in section 3: any buy/sell/add/trim/hedge/rebalance imperative. If the folded-in scenario may not match the user's current staged trade, note that rather than conflating them.
 End with CLAIMS TO VERIFY (the ⚠UNVERIFIED external facts you leaned on, if any).
 
 Keep it tight and scannable. The checkable structure facts are already on the user's screen — your value is the gaps, the candidate screen, and the questions to explore, not restating every number.`;
@@ -20814,7 +20772,6 @@ async function runBookAiReview() {
       inTok: (usage && typeof usage.input_tokens === 'number') ? usage.input_tokens : qrAiEstTokens(prompt),
       outTok: (usage && typeof usage.output_tokens === 'number') ? usage.output_tokens : qrAiEstTokens(text),
       measured: !!(usage && typeof usage.input_tokens === 'number'),
-      selectedAtRun: [...discoverySelected],  // snapshot for staleness detection
       scenarioAtRun: (typeof _candScenarioSignature === 'function') ? _candScenarioSignature() : '',  // staged what-if + vetting at run time (fresh, matches the live state the prompt was built from)
       basisAtRun: peExposureMode,   // private-deal basis ('off'|'cost'|'market') the figures in this review were generated against — flipping the toggle desyncs the prose from the displayed tables, so it counts as stale
       openingPrompt: prompt,   // the full book context; reused as the head of every argue turn
@@ -20864,19 +20821,17 @@ function verifyBookReviewTickers(text) {
 
   const heldSet = new Set();
   positions.filter(p => !p.closed && p.ticker).forEach(p => heldSet.add(p.ticker.toUpperCase()));
-  // Candidates the review concerns: current selection + the snapshot it actually ran against.
-  const candidateSet = new Set();
-  discoverySelected.forEach(t => candidateSet.add(t.toUpperCase()));
-  // Tickers named by a staged what-if scenario are legitimately discussable (the queued moves plus any
-  // pasted ETF holdings) — they're hypotheticals, not invented names. Add them so the checker doesn't
+  // Candidates the review legitimately discusses are the names in the staged what-if scenario (the
+  // queued moves plus any pasted ETF holdings) — hypotheticals, not invented names. (Discovery selection
+  // no longer feeds the review, so it is no longer part of this set.) Add them so the checker doesn't
   // false-flag them; they're still "not held" so a "you already own X" claim is still caught below.
+  const candidateSet = new Set();
   if (Array.isArray(_candQueue)) {
     _candQueue.forEach(tr => {
       if (tr.ticker) candidateSet.add(tr.ticker.toUpperCase());
       (tr.holdings || []).forEach(h => { if (h.ticker) candidateSet.add(h.ticker.toUpperCase()); });
     });
   }
-  if (bookAiReview && Array.isArray(bookAiReview.selectedAtRun)) bookAiReview.selectedAtRun.forEach(t => candidateSet.add(t.toUpperCase()));
   // Source funds the review may legitimately name.
   const fundSet = new Set();
   Object.values(discoverySourceFund).forEach(f => { if (f) fundSet.add(f.toUpperCase()); });
@@ -21011,20 +20966,18 @@ function renderThemeAiReview() {
   // Pre-send cost estimate — LOUD, because the book prompt is large and the credit budget is small.
   const prompt = buildBookAiPrompt();
   const estIn = qrAiEstTokens(prompt);
-  const selCount = discoverySelected.size;
   // Output is unknown ahead of time; assume a generous ~1200-token reply for the estimate ceiling.
   const estOut = 1200;
   const estCost = (estIn / 1e6) * 3 + (estOut / 1e6) * 15; // Sonnet ~$3/M in, ~$15/M out
   const costStr = '$' + estCost.toFixed(3);
 
   const stale = bookAiReviewStale();
-  const ranAgainst = (bookAiReview && bookAiReview.selectedAtRun) ? bookAiReview.selectedAtRun : [];
   const _basisMismatch = (typeof bookAiBasisMismatchNote === 'function') ? bookAiBasisMismatchNote() : '';
   const staleBanner = (bookAiReview && stale) ? `
       <div style="background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:10px;color:#fbbf24;line-height:1.5">
         ${_basisMismatch
           ? `⚠ Basis mismatch — ${esc(_basisMismatch)}. Re-analyze on the current basis so the AI review and the tables agree.`
-          : `⚠ Your inputs changed since this review ran (discovery selection and/or the staged what-if scenario). It was run against ${ranAgainst.length ? esc(ranAgainst.join(', ')) : 'no selected tickers'}${(bookAiReview && bookAiReview.scenarioAtRun) ? ' and a staged scenario' : ''}; re-analyze to fold in your current choices${(_candScenario && _candScenario.trades && _candScenario.trades.length) ? ' (including the staged ' + _candScenario.trades.length + '-move scenario)' : ''}.`}
+          : `⚠ Your inputs changed since this review ran — the staged what-if scenario and/or the private-deal basis. Re-analyze to fold in your current choices${(_candScenario && _candScenario.trades && _candScenario.trades.length) ? ' (including the staged ' + _candScenario.trades.length + '-move scenario)' : ''}.`}
       </div>` : '';
 
   const verify = bookAiReview ? verifyBookReviewTickers(bookAiReview.text) : { invented: [], misowned: [] };
@@ -21032,7 +20985,7 @@ function renderThemeAiReview() {
   const misowned = verify.misowned;
   const flagLines = [];
   if (suspectTickers.length) {
-    flagLines.push(`names ${suspectTickers.map(t => `<strong>${esc(t)}</strong>`).join(', ')} — ${suspectTickers.length === 1 ? 'a ticker' : 'tickers'} you don't hold and didn't select. The model likely invented ${suspectTickers.length === 1 ? 'it' : 'them'} from its priors.`);
+    flagLines.push(`names ${suspectTickers.map(t => `<strong>${esc(t)}</strong>`).join(', ')} — ${suspectTickers.length === 1 ? 'a ticker' : 'tickers'} you don't hold and aren't staging in this trade. The model likely invented ${suspectTickers.length === 1 ? 'it' : 'them'} from its priors.`);
   }
   if (misowned.length) {
     flagLines.push(`claims you already own ${misowned.map(t => `<strong>${esc(t)}</strong>`).join(', ')} — ${misowned.length === 1 ? 'this is a candidate you\'re considering, not a holding' : 'these are candidates you\'re considering, not holdings'}. You hold zero shares; any "already held / deepens existing position" claim about ${misowned.length === 1 ? 'it' : 'them'} is the model's error.`);
@@ -21068,7 +21021,7 @@ function renderThemeAiReview() {
       ${bookAiReview.truncated ? `<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">⚠ Response hit the length cap — may be cut off mid-thought.</div>` : ''}
       <div style="font-size:11px;line-height:1.6;color:var(--color-text-primary);white-space:pre-wrap">${esc(bookAiReview.text)}</div>
       <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">
-        ${new Date(bookAiReview.at).toLocaleString()} · ran against ${ranAgainst.length ? esc(ranAgainst.join(', ')) : 'no selected tickers'} · ${bookAiReview.inTok.toLocaleString()} in / ${bookAiReview.outTok.toLocaleString()} out tokens ${bookAiReview.measured ? '(measured)' : '(estimated)'} · ~$${(((bookAiReview.inTok / 1e6) * 3) + ((bookAiReview.outTok / 1e6) * 15)).toFixed(3)} · observations, not advice — take candidates to New Position Evaluation
+        ${new Date(bookAiReview.at).toLocaleString()} · ${bookAiReview.inTok.toLocaleString()} in / ${bookAiReview.outTok.toLocaleString()} out tokens ${bookAiReview.measured ? '(measured)' : '(estimated)'} · ~$${(((bookAiReview.inTok / 1e6) * 3) + ((bookAiReview.outTok / 1e6) * 15)).toFixed(3)} · observations, not advice — take candidates to New Position Evaluation
         · <span style="cursor:pointer;text-decoration:underline" onclick="if(confirm('Clear the saved AI book review?')){bookAiReview=null;saveBookAiReview();renderThemeAiReview();}">clear saved review</span></div>
     </div>` : '';
 
@@ -21119,8 +21072,8 @@ function renderThemeAiReview() {
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
       <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI book review — structure, gaps, your candidates, and the staged trade</div>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        A one-shot read of your whole book: what's already visible in the structure, where the gaps are, how your ${selCount} selected discovery ticker${selCount === 1 ? '' : 's'} ${selCount === 1 ? 'lands' : 'land'} against those gaps (each judged as a hypothesis — may fit or may double-down), and the open questions worth taking to a full evaluation. If you have a trade staged below, it also reads the staged moves and folds in your own typed vetting for each buy — holding your stated reason for the buy against what it does to concentration, tax, and performance. Observations and questions only — it hands candidates to New Position Evaluation, it doesn't evaluate, recommend, or tell you to buy/sell/rebalance.
-        ${selCount === 0 ? '<br><span style="color:#fbbf24">No discovery tickers selected — it\'ll review the book\'s own gaps. Click names in Discovery above to have them screened against your gaps.</span>' : ''}
+        A one-shot read of your whole book: what's already visible in the structure, where the gaps are, and the open questions worth taking to a full evaluation. If you have a trade staged below, it also reads the staged moves and folds in your own typed vetting for each buy — holding your stated reason for the buy against what it does to concentration, tax, and performance. Observations and questions only — it hands candidates to New Position Evaluation, it doesn't evaluate, recommend, or tell you to buy/sell/rebalance.
+        
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <button class="btn btn-sm btn-primary" onclick="runBookAiReview()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Reviewing…' : (bookAiReview ? (stale ? '↻ Re-analyze (selection changed)' : '↻ Re-run review') : 'Review my book with AI')}</button>
