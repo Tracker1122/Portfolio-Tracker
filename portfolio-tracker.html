@@ -14472,7 +14472,7 @@ function renderCandidatePanel() {
   if (!document.getElementById('cand-trim-row')) {
     host.innerHTML = `<div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
       <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">Build the trade</div>
-      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">Buys come from the checklist above — fill a candidate and hit <strong>Add to trade</strong>. Down here you trim from the hypothetical book (your holdings + staged buys) and link several moves together (e.g. buy VDE <i>and</i> sell V). You'll see the TRUE-EXPOSURE cluster shift (direct + your share inside funds you own), how individual names move, the tax, and the sleeve shift. The AI book review below folds whatever you stage here into its read.</div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:10px">Buys come from the checklist above — fill a candidate and hit <strong>Add to trade</strong>. Down here you trim from the hypothetical book (your holdings + staged buys) and link several moves together (e.g. buy VDE <i>and</i> sell V). You'll see the TRUE-EXPOSURE cluster shift (direct + your share inside funds you own), how individual names move, the tax, and the sleeve shift. The AI analysis below folds whatever you stage here into its read.</div>
       ${_candShellHtml()}
     </div>`;
   }
@@ -15810,7 +15810,7 @@ function candCompute() {
     _candPeToggle +
     _candWhatMovedHtml(nameMoves, nameRows, tax, directVia, adds, _themeCtx) +
     nameTable + _candThemeConcSection(adds, _themeCtx, ebBefore, ebAfter) + clTable + slTable + glTable + taxTable +
-    `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The book review below will fold this scenario in when you run it.</div>`;
+    `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">Theme clusters &amp; names are TRUE exposure (your direct holdings + your look-through share inside funds you own). Computed locally — nothing changed in your data. The AI analysis below will fold this scenario in when you run it.</div>`;
 
   const _pos = _candPositionCountDelta();
   const _perf = {};
@@ -20404,7 +20404,7 @@ function renderThemeDiscovery() {
         <button id="disc-fetch-btn" class="btn btn-sm btn-primary" onclick="fetchSelectedDiscovery()" style="font-size:9px;margin-left:auto">↡ Fetch ${discoverySelected.size} selected (1M + 1Y)</button>
         <button id="disc-deep-btn" class="btn btn-sm" onclick="deepFetchSelected()" title="Force-refresh these names: re-pulls current prices (even if already cached) and the deeper windows (3M / 6M / YTD), all shown in each name's 📊 detail. Free extra windows from the same call — no added API cost. ~5 names + funds fit under the rate limit." style="font-size:9px">🔄 Deeper dive ${discoverySelected.size} (latest + 3M/6M/YTD)</button>
         <button class="btn btn-sm" onclick="discoverySelected.clear();saveDiscoveryCache();renderThemeDiscovery();renderThemeAiReview()" style="font-size:9px">Clear</button>
-        <div style="flex-basis:100%;font-size:9px;color:var(--color-text-tertiary);line-height:1.45">These ${discoverySelected.size} selected name${discoverySelected.size === 1 ? '' : 's'} ${discoverySelected.size === 1 ? 'is' : 'are'} queued for a data fetch (1M/1Y, with deeper windows on demand) — this is a browse/fetch tool and does <strong>not</strong> feed the AI book review. To have the AI weigh a name, stage it as a buy in Evaluate a Trade. 📊 on any fetched chip shows its full window set — no new API call. Selection survives refresh.</div>
+        <div style="flex-basis:100%;font-size:9px;color:var(--color-text-tertiary);line-height:1.45">These ${discoverySelected.size} selected name${discoverySelected.size === 1 ? '' : 's'} ${discoverySelected.size === 1 ? 'is' : 'are'} queued for a data fetch (1M/1Y, with deeper windows on demand) — this is a browse/fetch tool and does <strong>not</strong> feed the AI analysis. To have the AI weigh a name, stage it as a buy in Evaluate a Trade. 📊 on any fetched chip shows its full window set — no new API call. Selection survives refresh.</div>
         <div id="disc-fetch-status" style="flex-basis:100%;margin-top:2px"></div>
       </div>` : ''}
       ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
@@ -21022,7 +21022,7 @@ function renderThemeAiReview() {
       <div style="font-size:11px;line-height:1.6;color:var(--color-text-primary);white-space:pre-wrap">${esc(bookAiReview.text)}</div>
       <div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">
         ${new Date(bookAiReview.at).toLocaleString()} · ${bookAiReview.inTok.toLocaleString()} in / ${bookAiReview.outTok.toLocaleString()} out tokens ${bookAiReview.measured ? '(measured)' : '(estimated)'} · ~$${(((bookAiReview.inTok / 1e6) * 3) + ((bookAiReview.outTok / 1e6) * 15)).toFixed(3)} · observations, not advice — take candidates to New Position Evaluation
-        · <span style="cursor:pointer;text-decoration:underline" onclick="if(confirm('Clear the saved AI book review?')){bookAiReview=null;saveBookAiReview();renderThemeAiReview();}">clear saved review</span></div>
+        · <span style="cursor:pointer;text-decoration:underline" onclick="if(confirm('Clear the saved AI analysis?')){bookAiReview=null;saveBookAiReview();renderThemeAiReview();}">clear saved analysis</span></div>
     </div>` : '';
 
   // ---- Argue thread: turns 1+ (turn 0 is the opening review above), the input box, running cost. ----
@@ -21070,13 +21070,13 @@ function renderThemeAiReview() {
 
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI book review — structure, gaps, your candidates, and the staged trade</div>
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI analysis — your book and the staged trade</div>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
         A one-shot read of your whole book: what's already visible in the structure, where the gaps are, and the open questions worth taking to a full evaluation. If you have a trade staged below, it also reads the staged moves and folds in your own typed vetting for each buy — holding your stated reason for the buy against what it does to concentration, tax, and performance. Observations and questions only — it hands candidates to New Position Evaluation, it doesn't evaluate, recommend, or tell you to buy/sell/rebalance.
         
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button class="btn btn-sm btn-primary" onclick="runBookAiReview()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Reviewing…' : (bookAiReview ? (stale ? '↻ Re-analyze (selection changed)' : '↻ Re-run review') : 'Review my book with AI')}</button>
+        <button class="btn btn-sm btn-primary" onclick="runBookAiReview()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Reviewing…' : (bookAiReview ? (stale ? '↻ Re-analyze (inputs changed)' : '↻ Re-run analysis') : 'Analyze my book & trade with AI')}</button>
         <span style="font-size:9px;color:var(--color-text-tertiary)" title="Estimated before sending. Sonnet ~$3/M input, ~$15/M output. Input is measured from the prompt; output is a ~1200-token ceiling assumption — actuals shown after the call.">Est. cost this call: <strong style="color:var(--color-text-secondary)">~${costStr}</strong> (${estIn.toLocaleString()} input tokens + ~${estOut} output)</span>
       </div>
       <div id="book-ai-output"></div>
@@ -26901,7 +26901,11 @@ init();
     bar.innerHTML = '<button class="btn btn-sm risk-stress-jump" style="font-size:10px;padding:5px 12px">\u26a1 Stress-test this scenario in Risk Review \u2192</button>' +
       '<span style="font-size:9px;color:var(--color-text-tertiary)">Replays your active sleeve + the staged moves through a real crash window, vs your actual sleeve.</span>';
     bar.querySelector('button').addEventListener('click', function () { stressScenario('tech2022'); });
-    panel.insertBefore(bar, panel.firstChild);
+    // Place it just above the AI section (#theme-ai-review), so it sits below the trade analysis
+    // (cluster shift / sleeve shift / G/L / tax) and right before the AI read. Fallback: top of panel.
+    var anchor = panel.querySelector('#theme-ai-review');
+    if (anchor) panel.insertBefore(bar, anchor);
+    else panel.insertBefore(bar, panel.firstChild);
   }
 
   function buildPanel() {
@@ -26943,7 +26947,6 @@ init();
       mount.appendChild(buildPanel());
     }
     _refreshHypoStatus();
-    _mountCrossTabBtn('tab-themes');
     _mountCrossTabBtn('tab-evaltrade');
   }
   if (document.readyState === 'loading') W.addEventListener('DOMContentLoaded', init);
@@ -26953,7 +26956,6 @@ init();
   // status stays fresh when you arrive at Risk Review after staging, and the cross-tab
   // buttons re-mount if their panels were re-rendered.
   function onShow(name) {
-    _mountCrossTabBtn('tab-themes');
     _mountCrossTabBtn('tab-evaltrade');
     if (name === 'risk') _refreshHypoStatus();
   }
