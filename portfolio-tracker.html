@@ -15289,9 +15289,9 @@ function _candConcFlag(themeCtx, opts) {
   let basisTag;
   if (opts.neutralBasis) basisTag = themeCtx.privateIncluded ? ' (counting your private deals at cost)' : '';
   else basisTag = !themeCtx.privateIncluded ? ''
+    : themeCtx.displayBasis === 'market' ? ' (counting your private deals at self-marked value)'
     : themeCtx.displayBasis === 'cost' ? ' (counting your private deals at cost)'
-    : themeCtx.displayBasis === 'market' ? ' (counting your private deals at cost \u2014 the cluster table below is on the self-marked basis, which is larger)'
-    : ' (counting your private deals at cost \u2014 not shown in the cluster table below, which is on the public basis)';
+    : '';
   return { label: top.label, after: top.after, isBiggest, basisTag };
 }
 
@@ -15499,17 +15499,13 @@ function candCompute() {
       else if (prior >= 1) { adds.passive += add; adds.passiveNames.push(disp); }
       else { adds.new += add; adds.newNames.push(disp); }
     });
-    // Theme-concentration lens for the narrative: ALWAYS incl-private AT COST (so tagged private deals
-    // count toward "is this theme already heavy?"), regardless of the display toggle/basis. The displayed
-    // before/after may now be on the MARKET basis (toggle = market), so only reuse them when the toggle
-    // is on at COST — i.e. when before/after already equal the cost-incl-private lens. Otherwise (public
-    // OR market) recompute the cost lens fresh so the narrative basis never silently shifts to self-mark.
+    // Theme-concentration lens for the narrative: FOLLOW THE DISPLAY TOGGLE so the paragraph and the
+    // cluster table below always read the same number. before/after are already on the toggle basis
+    // (public / incl-private at cost / incl-private at self-marked). The paragraph notes the basis only
+    // when private deals are folded in (cost or market); on public, neither it nor the table counts them.
+    // (Previously hardwired to cost, which diverged from a public table and read as two different stories.)
     const _allPe = (typeof peClusterAdjustments === 'function') ? peClusterAdjustments('cost') : [];
-    let _cB = before, _cA = after;
-    if (_allPe.length && peExposureMode !== 'cost') {
-      _cB = computeThemeClusters({ adjustments: _allPe });
-      _cA = computeThemeClusters({ adjustments: _allPe.concat(adjustments) });
-    }
+    const _cB = before, _cA = after;
     _themeCtx = { concBefore: _cB, concAfter: _cA, privateIncluded: !!_allPe.length, toggleOn: peModeOn(), displayBasis: peExposureMode };
   } catch (e) {
     out.innerHTML = `<div style="font-size:11px;color:var(--color-text-danger)">Couldn't compute the scenario: ${esc(e.message || 'error')}</div>`;
