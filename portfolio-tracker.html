@@ -10450,6 +10450,21 @@ function riskReviewAiFacts() {
     const L = [];
     L.push(`RISK REVIEW — WHAT THE USER IS CURRENTLY LOOKING AT (read-only context from the Risk & Stress Lens tab the user has open). This replays the user's ACTIVE SLEEVE (their direct equity picks, BEFORE the VOO passive core) through a REAL PAST stress window using actual daily returns (co-movement included, no model) — it is how that series WOULD have moved through that historical period, NOT a forecast, an expected return, or a buy/sell signal. Treat it as past behavior in that window only; do NOT extrapolate it forward and do NOT turn it into a recommendation to act.`);
     L.push(`Window being viewed: ${c.windowLabel || c.windowId}${c.dateRange ? ' (' + c.dateRange + ')' : ''}${c.stresses ? ' — what it stresses: ' + c.stresses : ''}.`);
+    if (c.whatHappened || c.eventPattern) {
+      let bf = `AUTHORED EVENT BRIEFING (static, human-vetted historical context — NOT live data and NOT a forecast; use it to ground your read of this event, and do NOT contradict it or embellish it with invented figures):`;
+      if (c.whatHappened) bf += ` What it was — ${c.whatHappened}`;
+      if (c.droveDown) bf += ` What drove it down — ${c.droveDown}`;
+      if (c.droveUp) bf += ` What pulled it back — ${c.droveUp}`;
+      if (c.eventPattern) bf += ` Transferable pattern — ${c.eventPattern}`;
+      L.push(bf);
+    }
+    if (c.factorExposure) {
+      const fx = Object.keys(c.factorExposure).map(k => {
+        const e = c.factorExposure[k];
+        return `${e.label} ${e.pct.toFixed(0)}% (${e.themes && e.themes.length ? e.themes.join(', ') : 'no held themes carry this factor'})`;
+      }).join('; ');
+      if (fx) L.push(`The user's CURRENT live look-through exposure to the risk factor(s) this event stressed: ${fx}. This ties the historical pattern to today's actual book — it is a present-book exposure measure (binary factor tags × live theme weights), NOT a prediction that the event recurs. Tags are "materially sensitive to this factor," not directional.`);
+    }
     L.push(`Displayed series: ${c.isHypothetical ? 'the HYPOTHETICAL active sleeve (direct picks + the staged what-if scenario folded in; the VOO passive core is NOT in this series)' : "the user's ACTIVE SLEEVE — direct equity picks only, BEFORE the VOO passive core (no scenario folded in)"}.`);
     let jline = '';
     if (c.junctions && c.junctions.length) {
@@ -21110,7 +21125,7 @@ function renderThemeAiReview() {
 // (SVG chart + native <details>; no IDs/controls), so they inject raw and dark, no cleaning needed. To
 // CHANGE what's shown, the user clicks the stress-test bar below → runs a different window in Risk
 // Review → returns here (switchTab re-renders this), and the new chart appears.
-const EVALTRADE_RISK_MIRROR_KEY = 'portfolio-evaltrade-risk-mirror-v1';
+const EVALTRADE_RISK_MIRROR_KEY = 'portfolio-evaltrade-risk-mirror-v2';
 function renderEvaltradeRiskMirror() {
   const host = document.getElementById('evaltrade-risk-mirror');
   if (!host) return;
@@ -25856,6 +25871,210 @@ init();
     { id: 'q4rate18', label: 'Q4-2018 Rate Scare', from: '2018-09-20', to: '2018-12-24', stresses: 'Powell hikes, growth selloff (2022 rhyme)' },
     { id: 'covid', label: 'COVID Crash', from: '2020-02-19', to: '2020-03-23', stresses: 'Everything-selloff / liquidity' }
   ];
+
+  /* ====================================================================
+     EVENT EXPLAINER + RISK-FACTOR GRID  (authored, vetted; live book row)
+     Parallel data keyed by STRESS_WINDOWS id — STRESS_WINDOWS untouched.
+     Tags are BINARY ("materially sensitive to this factor"), NOT directional;
+     direction lives in the prose. Theme names match the THEMES config exactly
+     (canonicalized on data load), so the live book row can't silently miss.
+     ES5 var/function to match this IIFE's local style.
+     ==================================================================== */
+  // Column order = grid order. id, short label (column head), full label + gloss (legend).
+  var RISK_FACTORS = [
+    { id: 'rate',   col: 'Rate',   label: 'Rate / duration',       gloss: "Value tied to the discount rate on future cash flows; high-multiple growth lives here. Read as \u201cfalls when rates rise\u201d \u2014 which is why rate-sensitive-but-often-helped names like banks are left off." },
+    { id: 'liq',    col: 'Liq',    label: 'Liquidity / funding',   gloss: "Forced selling for cash; correlations head toward 1 and even diversifiers drop." },
+    { id: 'credit', col: 'Credit', label: 'Credit',                gloss: "Solvency, spread, default risk." },
+    { id: 'policy', col: 'Policy', label: 'Policy shock',          gloss: "Discrete government action (tariffs, fiscal, regulatory) hitting earnings directly, not through rates." },
+    { id: 'posn',   col: 'Posn',   label: 'Positioning / leverage',gloss: "Crowded or levered trades unwinding; the move is about who owns it, not fundamentals." },
+    { id: 'cycl',   col: 'Cycl',   label: 'Demand cyclicality',    gloss: "Tied to the real-economy earnings cycle." }
+  ];
+  function _factorById(id) { for (var i = 0; i < RISK_FACTORS.length; i++) { if (RISK_FACTORS[i].id === id) return RISK_FACTORS[i]; } return null; }
+
+  // Theme -> factors it carries. Keys are EXACT canonical theme names (see THEMES config).
+  var THEME_FACTORS = {
+    'Mag 7-ish':              ['rate', 'posn', 'cycl'],
+    'Semiconductors':         ['rate', 'posn', 'cycl'],
+    'AI Infrastructure':      ['rate', 'posn', 'cycl'],
+    'Cybersecurity':          ['rate'],
+    'Space & Defense':        ['rate', 'policy'],
+    'Financials':             ['credit', 'cycl'],
+    'Energy & Grid':          ['policy', 'cycl'],
+    'Commodities':            ['liq', 'posn'],
+    'Consumer Discretionary': ['rate', 'cycl'],
+    'Utilities':              ['rate']
+  };
+
+  // Event -> factors it STRESSED (binary). Short label = grid row head.
+  var EVENT_FACTORS = {
+    tech2022: ['rate'],
+    q4rate18: ['rate'],
+    svb23:    ['credit'],
+    covid:    ['liq', 'credit', 'posn'],
+    tariff25: ['policy'],
+    carry24:  ['posn']
+  };
+  var EVENT_SHORT = {
+    tech2022: '2022 Tech', q4rate18: 'Q4-2018', svb23: 'SVB \u201923',
+    covid: 'COVID', tariff25: 'Tariff \u201925', carry24: 'Aug-24 Carry'
+  };
+  // Grid row order: rate-family together so the 2022/Q4-2018 rhyme is visible, then credit, the
+  // multi-factor COVID, then the two recent single-factor shocks.
+  var GRID_ORDER = ['tech2022', 'q4rate18', 'svb23', 'covid', 'tariff25', 'carry24'];
+
+  // Authored briefings. recent:true => deliberately short, no padded "pattern" (honesty rule).
+  var EVENT_BRIEFINGS = {
+    tech2022: {
+      whatHappened: "The Fed lifted rates off near-zero, fast, to fight the highest inflation in decades. The discount rate on future cash flows jumped, so the longest-duration assets \u2014 profitless tech first, then high-multiple mega-cap growth \u2014 derated hardest. A re-rating, not an earnings collapse.",
+      droveDown: "Multiple compression. Prices fell because the rate applied to far-off earnings rose, not because the businesses broke.",
+      droveUp: "Inflation rolled over and the market front-ran a Fed pivot; an AI / accelerated-compute narrative then pulled the same high-multiple names back up through 2023. What fell hardest led the snap-back.",
+      pattern: "Rate-shock derating: the highest-multiple, longest-duration names lead both legs \u2014 down on the way in, up on the way out.",
+      watchFor: ['real yields', 'forward multiples', 'long-duration leadership (both ways)']
+    },
+    q4rate18: {
+      whatHappened: "The 2022 rhyme in miniature. Powell signaled rates were \u201ca long way from neutral,\u201d the market read it as hiking into a slowdown, and growth sold off into Christmas Eve.",
+      droveDown: "Tightening fear \u2014 the same mechanism as 2022, on a much shorter fuse.",
+      droveUp: "A near-explicit January pivot (\u201cpatient\u201d) put in a V-bottom almost overnight. The recovery driver was a single change in Fed tone.",
+      pattern: "Same family as 2022, faster clock: a policy-tone reversal can mark the low before fundamentals move \u2014 which is exactly why trying to time it is a fool\u2019s errand.",
+      watchFor: ['Fed-tone shifts', 'real yields', 'high-multiple leadership']
+    },
+    svb23: {
+      whatHappened: "Idiosyncratic financial stress \u2014 a bank failed on a duration/deposit mismatch. A short window, but a complete and durable lesson.",
+      droveDown: "For the banks: deposit-flight contagion fear hit financials directly.",
+      droveUp: "For a tech book: rate-cut expectations got priced instantly, the 2-year yield dropped hard, and high-multiple growth rallied even as banks cratered. A tech book can rise in a bank crisis.",
+      pattern: "The counterintuitive one: idiosyncratic credit stress can help rate-sensitive growth short-term as yields fall \u2014 and that lift is a side effect, not safety. Don\u2019t mistake it for resilience.",
+      watchFor: ['2-year yield', 'credit spreads', 'the bank-vs-growth divergence itself']
+    },
+    covid: {
+      whatHappened: "A liquidity event, not a valuation one. A real-world shock forced indiscriminate selling for cash.",
+      droveDown: "Correlations went to ~1 \u2014 \u201cdiversifiers\u201d fell with everything as everyone raised cash at once.",
+      droveUp: "An overwhelming policy response (rates to zero, unlimited backstop, fiscal) restored liquidity; the recovery to prior highs was unusually fast.",
+      pattern: "In an everything-selloff, depth of drawdown barely differentiates anyone \u2014 recovery speed does. Your cluster mix won\u2019t save you in an acute cash scramble; the question is how fast you fill the hole, not how little you fell.",
+      watchFor: ['cross-asset correlation spiking', 'credit spreads', 'funding stress'],
+      noBookOverlay: true   // everything rhymes here; a per-factor % is the wrong lens (see prose)
+    },
+    tariff25: {
+      recent: true,
+      whatHappened: "A fast policy shock: tariffs announced, broad and supply-chain-exposed names sold off hard over a few days, then a pause reversed most of it almost as fast.",
+      pattern: "Too recent for a durable lesson \u2014 the mechanical read: fast policy shocks can round-trip fast, and acting at the low would have been the error. The round-trip itself is the read; naming a deeper \u201cpattern\u201d this soon would be inventing one.",
+      watchFor: ['headline / policy risk', 'breadth of the move']
+    },
+    carry24: {
+      recent: true,
+      whatHappened: "A vol spike from a leverage / carry-trade unwind colliding with a weak jobs print; high-beta and crowded longs took the brunt; recovered within weeks.",
+      pattern: "A few-day positioning washout, not a regime. Mechanical read: crowded, levered positioning amplifies an ordinary catalyst, then mean-reverts. The lesson is tentative by construction.",
+      watchFor: ['positioning / leverage crowding', 'vol term structure']
+    }
+  };
+
+  // LIVE per-factor book exposure: sum current look-through weight of every theme carrying the
+  // factor, over the full reconciled book (same denom as the cluster %s). Returns matched theme
+  // names too, so the grid can show its work (a dropped match shows as a missing cluster, not a
+  // silent undercount). Pure read of live holdings; wrapped so any failure degrades to ok:false.
+  function factorExposureLive() {
+    try {
+      var cl = (typeof computeThemeClusters === 'function') ? computeThemeClusters() : null;
+      if (!cl || !cl.byTheme || !(cl.fullBook > 0)) return { ok: false };
+      var bt = cl.byTheme, denom = cl.fullBook, out = {};
+      RISK_FACTORS.forEach(function (f) {
+        var sum = 0, names = [];
+        for (var thm in THEME_FACTORS) {
+          if (!THEME_FACTORS.hasOwnProperty(thm)) continue;
+          if (THEME_FACTORS[thm].indexOf(f.id) >= 0 && bt[thm] > 0) { sum += bt[thm]; names.push(thm); }
+        }
+        out[f.id] = { pct: denom > 0 ? (sum / denom * 100) : 0, themes: names };
+      });
+      return { ok: true, byFactor: out };
+    } catch (e) { return { ok: false }; }
+  }
+
+  // The grid: events (rows) x factors (cols), current event row highlighted, plus a LIVE
+  // "your book" row. One renderer, reused by every card (collapsed inside the briefing details,
+  // so no clutter cost), and it flows to PDF + mirror through renderReplayCard.
+  function renderRiskFactorGrid(currentWinId) {
+    var dotOn = '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--color-text-secondary,#aaa)"></span>';
+    var th = '<th style="font-size:8.5px;font-weight:600;color:var(--color-text-tertiary);padding:2px 4px;text-align:center;white-space:nowrap">';
+    var head = '<tr><th style="padding:2px 4px"></th>';
+    RISK_FACTORS.forEach(function (f) { head += th + f.col + '</th>'; });
+    head += '</tr>';
+    var rows = '';
+    GRID_ORDER.forEach(function (wid) {
+      var ef = EVENT_FACTORS[wid] || [], isCur = (wid === currentWinId);
+      var rowBg = isCur ? 'background:rgba(96,165,250,0.10)' : '';
+      var labCol = isCur ? 'var(--color-text-info,#60a5fa)' : 'var(--color-text-secondary)';
+      var labWt = isCur ? '700' : '500';
+      rows += '<tr style="' + rowBg + '"><td style="font-size:9px;font-weight:' + labWt + ';color:' + labCol + ';padding:2px 6px 2px 4px;white-space:nowrap">' + (EVENT_SHORT[wid] || wid) + '</td>';
+      RISK_FACTORS.forEach(function (f) {
+        rows += '<td style="text-align:center;padding:2px 4px">' + (ef.indexOf(f.id) >= 0 ? dotOn : '') + '</td>';
+      });
+      rows += '</tr>';
+    });
+    // Live book row
+    var fe = factorExposureLive(), bookRow = '';
+    bookRow += '<tr style="border-top:1px solid var(--color-border-tertiary)"><td style="font-size:9px;font-weight:700;color:var(--color-text-primary);padding:4px 6px 2px 4px;white-space:nowrap">YOUR BOOK</td>';
+    RISK_FACTORS.forEach(function (f) {
+      var cell = '\u2014', tip = '';
+      if (fe.ok && fe.byFactor[f.id]) {
+        var e = fe.byFactor[f.id];
+        cell = e.pct >= 0.5 ? e.pct.toFixed(0) + '%' : '\u2014';
+        tip = e.themes.length ? (' title="summed: ' + e.themes.join(', ') + '"') : ' title="no held themes carry this factor"';
+      }
+      bookRow += '<td style="text-align:center;font-size:9px;color:var(--color-text-secondary);padding:4px 4px 2px"' + tip + '>' + cell + '</td>';
+    });
+    bookRow += '</tr>';
+    var liveNote = fe.ok
+      ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:3px">YOUR BOOK = your current live look-through weight in the themes carrying each factor (hover a cell for which themes). Updates as your holdings change; the dots above are fixed, vetted judgment calls.</div>'
+      : '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:3px">YOUR BOOK row unavailable right now (couldn\u2019t read live look-through). The dots above still apply.</div>';
+    return '<div style="margin-top:8px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:280px">' +
+      '<thead>' + head + '</thead><tbody>' + rows + bookRow + '</tbody></table></div>' + liveNote;
+  }
+
+  function _legendHtml() {
+    var items = RISK_FACTORS.map(function (f) {
+      return '<div style="margin:2px 0"><strong style="color:var(--color-text-secondary)">' + f.label + '</strong> \u2014 ' + f.gloss + '</div>';
+    }).join('');
+    return '<details style="margin-top:7px"><summary style="font-size:9.5px;color:var(--color-text-tertiary);cursor:pointer">How to read this grid</summary>' +
+      '<div style="font-size:9px;line-height:1.5;color:var(--color-text-tertiary);margin-top:4px">' +
+      '<div style="margin-bottom:4px">A dot means the theme or event is <em>materially sensitive</em> to that factor \u2014 <strong>not</strong> which way it moves. Direction lives in the event write-up (SVB\u2019s rate move <em>helped</em> your book; a rate <em>shock</em> hurts it \u2014 same factor, opposite sign). Tags are binary on purpose: a clarifying lens, not a risk engine.</div>' +
+      items +
+      '<div style="margin-top:5px">A few specific calls: banks are rate-sensitive but often <em>helped</em> by higher rates, so Financials is left off Rate; SVB is tagged Credit only (its rate move helped growth); gold has lately traded like a momentum asset, so Commodities now carries Positioning, not just Liquidity.</div>' +
+      '</div></details>';
+  }
+
+  // The new qualitative layer: "What this was & what it teaches" + the grid + legend.
+  function renderEventBriefing(win) {
+    if (!win || !win.id) return '';
+    var b = EVENT_BRIEFINGS[win.id];
+    if (!b) return '';
+    var P = function (lab, txt) {
+      return txt ? '<div style="margin:0 0 6px"><strong style="color:var(--color-text-primary)">' + lab + '</strong> ' + txt + '</div>' : '';
+    };
+    var body = '';
+    if (b.recent) {
+      body += '<div style="margin:0 0 6px;padding:5px 8px;border-left:2px solid var(--color-text-tertiary);background:var(--color-background-tertiary,#2a2a2a);font-style:italic">' +
+        (b.whatHappened || '') + ' <span style="font-style:normal">' + (b.pattern || '') + '</span></div>';
+    } else {
+      body += P('What it was.', b.whatHappened) + P('What drove it down.', b.droveDown) +
+        P('What pulled it back.', b.droveUp) + P('The pattern.', b.pattern);
+    }
+    var tags = '';
+    if (b.watchFor && b.watchFor.length) {
+      tags = '<div style="margin:2px 0 4px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">' +
+        '<span style="font-size:9px;color:var(--color-text-tertiary)">What to watch:</span>' +
+        b.watchFor.map(function (w) {
+          return '<span style="font-size:9px;color:var(--color-text-secondary);background:var(--color-background-tertiary,#2a2a2a);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:1px 7px">' + w + '</span>';
+        }).join('') + '</div>';
+    }
+    var overlayCaveat = b.noBookOverlay
+      ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:4px;font-style:italic">Note for this event: in a liquidity crash your cluster mix barely differentiates you \u2014 so read the YOUR BOOK percentages below as context, not protection. The lesson is recovery speed, not which factors you carry.</div>'
+      : '';
+    var caveat = '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.4">Past behavior, not a forecast. The pattern names conditions that <em>rhyme</em> \u2014 it is never a buy/sell or timing signal.</div>';
+    return '<details style="margin-top:7px"><summary style="font-size:10px;color:var(--color-text-info,#60a5fa);cursor:pointer">What this was &amp; what it teaches</summary>' +
+      '<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:var(--color-text-secondary)">' +
+      body + tags + renderRiskFactorGrid(win.id) + overlayCaveat + _legendHtml() + caveat +
+      '</div></details>';
+  }
+
   function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
   var COVERAGE_WARN = 0.7;
   // VOO benchmark overlay color (P0). BLUE (#60a5fa) — was bright green, but green was
@@ -26046,7 +26265,7 @@ init();
       opts.blendedJunctions.forEach(function (b) { if (b && b.label != null && b.bookPct != null) _bMap[b.label] = b.bookPct; });
       junctions.forEach(function (j) { if (_bMap[j.label] != null) j.blendedPct = _bMap[j.label]; });
     }
-    return { windowLabel: opts.windowLabel || '', dateRange: (opts.from && opts.to) ? fmtRange(opts.from, opts.to) : '', hasData: has,
+    return { windowLabel: opts.windowLabel || '', windowId: opts.windowId || '', dateRange: (opts.from && opts.to) ? fmtRange(opts.from, opts.to) : '', hasData: has,
       returnPct: has ? result.totalReturn * 100 : null, drawdownPct: has ? result.maxDrawdown * 100 : null,
       coveragePct: cov * 100, coverageWarn: cov < COVERAGE_WARN, excluded: result ? (result.excluded || []) : [],
       sparkD: sparkD, sparkDStress: sparkDStress, sparkDRecovery: sparkDRecovery, benchSparkD: benchSparkD, blendedSparkD: blendedSparkD, benchReturnPct: benchReturnPct, benchSpreadPct: benchSpreadPct, troughDot: troughDot,
@@ -26298,7 +26517,7 @@ init();
       } catch (e) { blendedJunctions = null; /* best-effort; sleeve-only card still renders */ }
     }
 
-    var model = replayCardModel(result, { windowLabel: win.label, from: win.from, to: win.to, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery, scenarioNote: opts.scenario || null, blendedJunctions: blendedJunctions, blendedPath: blendedGraphPath });
+    var model = replayCardModel(result, { windowLabel: win.label, windowId: win.id, from: win.from, to: win.to, basisLabel: _basisLabel(), frozenPct: riskFrozenPct(), perName: perName, benchmark: benchmark, recovery: recovery, scenarioNote: opts.scenario || null, blendedJunctions: blendedJunctions, blendedPath: blendedGraphPath });
     if (statusEl) statusEl.textContent = '';
     if (onDone) onDone(model);
   }
@@ -26663,6 +26882,9 @@ init();
       return '<div style="font-size:11px;color:var(--color-text-tertiary)">No replayable data for <strong>' + model.windowLabel + '</strong> yet (coverage ' + model.coveragePct.toFixed(0) + '%). The held names likely had no price history in this window.</div>';
     var pos = model.returnPct >= 0;
     var retColor = pos ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
+    var _briefWin = null;
+    if (model.windowId) { for (var _bi = 0; _bi < STRESS_WINDOWS.length; _bi++) { if (STRESS_WINDOWS[_bi].id === model.windowId) { _briefWin = STRESS_WINDOWS[_bi]; break; } } }
+    var briefing = _briefWin ? renderEventBriefing(_briefWin) : '';
     var pn = model.perName || [], breakdown = '';
     if (pn.length) {
       var maxAbs = pn.reduce(function (m, r) { return Math.max(m, Math.abs(r.contrib)); }, 0) || 1;
@@ -26778,6 +27000,7 @@ init();
               '<span style="opacity:.75">(blue line = VOO)</span></div>'
             : ''))) +
       (model.excluded && model.excluded.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px">No price history in this window: ' + model.excluded.join(', ') + '.</div>' : '') +
+      briefing +
       breakdown +
       (model.frozenLine ? '<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"><em>And ' + model.frozenLine + '</em></div>' : '') +
     '</div>';
@@ -27062,6 +27285,22 @@ init();
         windowLabel: m.windowLabel || entry.label || '',
         dateRange: m.dateRange || '',
         stresses: win ? (win.stresses || '') : '',
+        whatHappened: (EVENT_BRIEFINGS[entry.winId] && EVENT_BRIEFINGS[entry.winId].whatHappened) || '',
+        droveDown: (EVENT_BRIEFINGS[entry.winId] && EVENT_BRIEFINGS[entry.winId].droveDown) || '',
+        droveUp: (EVENT_BRIEFINGS[entry.winId] && EVENT_BRIEFINGS[entry.winId].droveUp) || '',
+        eventPattern: (EVENT_BRIEFINGS[entry.winId] && EVENT_BRIEFINGS[entry.winId].pattern) || '',
+        factorExposure: (function () {
+          try {
+            var ef = EVENT_FACTORS[entry.winId] || [], fe = factorExposureLive();
+            if (!ef.length || !fe.ok) return null;
+            var o = {};
+            ef.forEach(function (fid) {
+              var rf = _factorById(fid), e = fe.byFactor[fid];
+              if (rf && e) o[fid] = { label: rf.label, pct: e.pct, themes: e.themes };
+            });
+            return Object.keys(o).length ? o : null;
+          } catch (e) { return null; }
+        })(),
         isHypothetical: isHypo,
         coveragePct: (typeof m.coveragePct === 'number') ? m.coveragePct : null,
         coverageWarn: !!m.coverageWarn,
