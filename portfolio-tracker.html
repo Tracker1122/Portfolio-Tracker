@@ -26057,6 +26057,43 @@ init();
       '</div></details>';
   }
 
+  // Theme -> factor MAP: the rows behind the aggregate "YOUR BOOK" line. Shows every theme in the
+  // framework (so the picture is complete) and, when live look-through is available, each held theme's
+  // weight. Direction-agnostic dots, same vocabulary as the event grid. Standalone block in the Risk
+  // Review tab — repainted on tab-enter so the live weights stay current.
+  function renderThemeFactorGrid() {
+    var LBL = { 'Commodities': 'Commodities (GLD)', 'Consumer Discretionary': 'Consumer Disc.' };
+    var weights = {}, fullBook = 0, haveW = false;
+    try {
+      var cl = (typeof computeThemeClusters === 'function') ? computeThemeClusters() : null;
+      if (cl && cl.byTheme && cl.fullBook > 0) { weights = cl.byTheme; fullBook = cl.fullBook; haveW = true; }
+    } catch (e) {}
+    var dotOn = '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--color-text-secondary,#aaa)"></span>';
+    var th = '<th style="font-size:8.5px;font-weight:600;color:var(--color-text-tertiary);padding:3px 5px;text-align:center;white-space:nowrap">';
+    var head = '<tr><th style="padding:3px 6px 3px 4px;text-align:left;font-size:8.5px;font-weight:600;color:var(--color-text-tertiary)">Theme</th>';
+    if (haveW) head += '<th style="font-size:8.5px;font-weight:600;color:var(--color-text-tertiary);padding:3px 8px;text-align:right">Your wt</th>';
+    RISK_FACTORS.forEach(function (f) { head += th + f.col + '</th>'; });
+    head += '</tr>';
+    var rows = '';
+    for (var thm in THEME_FACTORS) {
+      if (!THEME_FACTORS.hasOwnProperty(thm)) continue;
+      var tags = THEME_FACTORS[thm];
+      var held = haveW && weights[thm] > 0, wpct = held ? (weights[thm] / fullBook * 100) : 0;
+      var nameColor = (!haveW || held) ? 'var(--color-text-secondary)' : 'var(--color-text-tertiary)';
+      rows += '<tr style="border-top:1px solid var(--color-border-tertiary)"><td style="font-size:9.5px;color:' + nameColor + ';padding:3px 6px 3px 4px;white-space:nowrap">' + (LBL[thm] || thm) + '</td>';
+      if (haveW) rows += '<td style="font-size:9px;color:var(--color-text-tertiary);text-align:right;padding:3px 8px">' + (held ? (wpct >= 0.5 ? wpct.toFixed(0) + '%' : '&lt;1%') : '\u2014') + '</td>';
+      RISK_FACTORS.forEach(function (f) { rows += '<td style="text-align:center;padding:3px 5px">' + (tags.indexOf(f.id) >= 0 ? dotOn : '') + '</td>'; });
+      rows += '</tr>';
+    }
+    var caption = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.45">How each theme in your book maps to the six risks \u2014 the rows behind the \u201cYOUR BOOK\u201d line inside each event\u2019s grid. A dot means the theme is materially sensitive to that force (not a direction), so the same dot is your drawdown risk in a stress and your run-up in the rebound. ' + (haveW ? '\u201cYour wt\u201d is live look-through weight; \u201c\u2014\u201d means not currently held.' : 'Connect live prices to fill in your per-theme weight.') + '</div>';
+    return '<details style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">How your themes map to the six risks</summary>' +
+      '<div style="margin-top:8px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:320px"><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>' +
+      caption + _legendHtml() + '</details>';
+  }
+  function _paintThemeMap() {
+    try { var el = document.getElementById('risk-theme-map'); if (el) el.innerHTML = renderThemeFactorGrid(); } catch (e) {}
+  }
+
   // The new qualitative layer: "What this was & what it teaches" + the grid + legend.
   function renderEventBriefing(win) {
     if (!win || !win.id) return '';
@@ -27257,6 +27294,7 @@ init();
     section.innerHTML =
       '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary, #eee);margin-bottom:2px">Risk &amp; Stress Lens</div>' +
       '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your active sleeve through a real past stress window using actual daily returns (co-movement included, no model), then folds your VOO core back in as a blended liquid-book row. Each button fetches that window\u2019s daily bars via your Tiingo worker (deep free history; partial fills cache and resume on re-click).</div>' +
+      '<div id="risk-theme-map" style="margin:4px 0 10px"></div>' +
       '<div id="risk-hypo-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px;font-size:10px">' +
         '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--color-text-secondary)"><input type="checkbox" id="risk-hypo-toggle" style="cursor:pointer"> Fold in staged scenario</label>' +
         '<span id="risk-hypo-status" style="color:var(--color-text-tertiary)"></span>' +
@@ -27285,6 +27323,7 @@ init();
       var mount = document.getElementById('risk-review-mount') || document.body;
       mount.appendChild(buildPanel());
     }
+    _paintThemeMap();
     _refreshHypoStatus();
     _mountCrossTabBtn('tab-evaltrade');
   }
@@ -27296,7 +27335,7 @@ init();
   // buttons re-mount if their panels were re-rendered.
   function onShow(name) {
     _mountCrossTabBtn('tab-evaltrade');
-    if (name === 'risk') _refreshHypoStatus();
+    if (name === 'risk') { _refreshHypoStatus(); _paintThemeMap(); }
   }
 
   // READ-ONLY snapshot of what the Risk Review tab is CURRENTLY DISPLAYING, for the two AI
