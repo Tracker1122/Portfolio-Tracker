@@ -10465,6 +10465,9 @@ function riskReviewAiFacts() {
       }).join('; ');
       if (fx) L.push(`The user's CURRENT live look-through exposure to the risk factor(s) this event stressed: ${fx}. This ties the historical pattern to today's actual book — it is a present-book exposure measure (binary factor tags × live theme weights), NOT a prediction that the event recurs. Tags are "materially sensitive to this factor," not directional.`);
     }
+    if (c.lookthroughCoverage) {
+      L.push(`IMPORTANT framing for those exposure %s: they are computed off the ${c.lookthroughCoverage.namedPct.toFixed(0)}% of the book that is decomposed into identifiable, benchmarkable names; the other ${c.lookthroughCoverage.unnamedPct.toFixed(0)}% is diversified/unclassified tail (undecomposed index holdings + cash) with no factor signal. Because each % is a share of the WHOLE book, these figures UNDERSTATE rather than overstate — benchmarkable names sitting in the tail aren't counted until the look-through tables are refreshed. Treat the factor %s as a conservative floor, and if coverage is low, say so rather than implying the number is exhaustive.`);
+    }
     L.push(`Displayed series: ${c.isHypothetical ? 'the HYPOTHETICAL active sleeve (direct picks + the staged what-if scenario folded in; the VOO passive core is NOT in this series)' : "the user's ACTIVE SLEEVE — direct equity picks only, BEFORE the VOO passive core (no scenario folded in)"}.`);
     let jline = '';
     if (c.junctions && c.junctions.length) {
@@ -25984,7 +25987,13 @@ init();
         }
         out[f.id] = { pct: denom > 0 ? (sum / denom * 100) : 0, themes: names };
       });
-      return { ok: true, byFactor: out };
+      // Coverage: how much of the full book is decomposed into identifiable, benchmarkable names
+      // (the part factors can see) vs. the diversified/unclassified tail (undecomposed index + cash).
+      // Every factor % is a share of fullBook, so a low namedPct means factors UNDERSTATE (benchmarkable
+      // names are sitting in the tail until the look-through tables are refreshed) rather than overstate.
+      var named = (typeof cl.totalBook === 'number') ? cl.totalBook : null;
+      var namedPct = (named != null && denom > 0) ? (named / denom * 100) : null;
+      return { ok: true, byFactor: out, namedPct: namedPct, unnamedPct: (namedPct != null ? 100 - namedPct : null) };
     } catch (e) { return { ok: false }; }
   }
 
@@ -26025,8 +26034,15 @@ init();
     var liveNote = fe.ok
       ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:3px">YOUR BOOK = your current live look-through weight in the themes carrying each factor (hover a cell for which themes). Updates as your holdings change; the dots above are fixed, vetted judgment calls.</div>'
       : '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:3px">YOUR BOOK row unavailable right now (couldn\u2019t read live look-through). The dots above still apply.</div>';
+    var coverageNote = '';
+    if (fe.ok && fe.namedPct != null) {
+      coverageNote = '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:4px;padding-top:4px;border-top:1px dotted var(--color-border-tertiary)">' +
+        'Based on the <strong>' + fe.namedPct.toFixed(0) + '%</strong> of your book decomposed into identifiable, benchmarkable names. The other <strong>' + fe.unnamedPct.toFixed(0) + '%</strong> is diversified / unclassified tail (undecomposed index holdings + cash) and carries no factor signal. Because every percentage is a share of your whole book, this <em>understates</em> rather than overstates \u2014 benchmarkable names sitting in that tail aren\u2019t counted until you refresh your look-through tables.' +
+        '</div>';
+    }
     return '<div style="margin-top:8px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:280px">' +
-      '<thead>' + head + '</thead><tbody>' + rows + bookRow + '</tbody></table></div>' + liveNote;
+      '<thead>' + head + '</thead><tbody>' + rows + bookRow + '</tbody></table></div>' + liveNote + coverageNote +
+      '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:4px;font-style:italic">Two-sided: each percentage is how much of your book moves <em>with</em> that force \u2014 it fell in the stress and led the climb-out in the rebound. The exposure that took the deepest drawdown is the same exposure that ripped hardest off the low; the dots never pick a direction.</div>';
   }
 
   function _legendHtml() {
@@ -26539,6 +26555,35 @@ init();
     if (Math.abs(spread) < 0.05) return (label ? 'even' + at : 'even with the market');
     return Math.abs(spread).toFixed(1) + ' pts ' + (spread >= 0 ? 'ahead' : 'behind') + at;
   }
+  // Paired "beta cuts both ways" headline: the drawdown and the realized rebound in ONE line, so the
+  // run-up is never read without the drawdown that bought it. Pure read of model.junctions (already
+  // computed by the extended replay); degrades to nothing when there's no recovery arc. Rides the
+  // mirror to build-a-trade because it lives in the card.
+  function pairedBetaLine(model) {
+    try {
+      if (!model.hasData || !model.junctions || !model.junctions.length) return '';
+      var DANG = 'var(--color-text-danger, #ef4444)', SUCC = 'var(--color-text-success, #22c55e)', INFO = 'var(--color-text-info, #60a5fa)';
+      var box = function (inner) {
+        return '<div style="font-size:10.5px;line-height:1.5;margin:6px 0 2px;padding:6px 9px;border-left:3px solid ' + INFO + ';background:rgba(96,165,250,0.06);border-radius:4px;color:var(--color-text-secondary)"><strong style="color:' + INFO + '">Beta cuts both ways.</strong> ' + inner + '</div>';
+      };
+      var J = model.junctions, low = J[0];
+      if (!low || low.bookPct == null) return '';
+      var which = model.scenarioNote ? 'This hypothetical book' : 'Your book';
+      var dd = (model.drawdownPct != null && model.drawdownPct < low.bookPct) ? model.drawdownPct : low.bookPct;
+      var fell = 'fell <strong style="color:' + DANG + '">\u2212' + Math.abs(dd).toFixed(1) + '%</strong> to the low';
+      var last = null;
+      for (var i = J.length - 1; i >= 1; i--) { var c = J[i]; if (!c.pending && !c.missing && c.bookPct != null) { last = c; break; } }
+      if (!last) return box(which + ' ' + fell + ' \u2014 the rebound hasn\u2019t elapsed yet, so the run-up half fills in as time passes.');
+      var lowCum = 1 + low.bookPct / 100, endCum = 1 + last.bookPct / 100;
+      var rip = (lowCum > 0.02) ? ((endCum / lowCum) - 1) * 100 : null;
+      var ripTxt = (rip != null && rip > 0.5) ? 'then ripped <strong style="color:' + SUCC + '">+' + rip.toFixed(0) + '%</strong> off it' : 'then clawed back';
+      var net = (last.bookPct >= -0.05)
+        ? ' \u2014 <strong>back above</strong> its pre-event high by ' + last.label
+        : ' \u2014 still <strong>' + Math.abs(last.bookPct).toFixed(0) + '% under</strong> the pre-event high ' + last.label + ' in';
+      return box(which + ' ' + fell + ', ' + ripTxt + net + '. The exposure that took it down is what carried it back \u2014 same names, both legs.');
+    } catch (e) { return ''; }
+  }
+
   function replaySummaryText(model) {
     if (!model.hasData) return '';
     var range = model.dateRange ? ' (' + model.dateRange + ')' : '';
@@ -26989,6 +27034,7 @@ init();
       '</div>' +
       (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
       replaySummaryText(model) +
+      pairedBetaLine(model) +
       (ladder || chart) +
       (model.compare
         ? renderCompareJunctionTable(model) + renderScenarioDiffText(model)
@@ -27300,6 +27346,9 @@ init();
             });
             return Object.keys(o).length ? o : null;
           } catch (e) { return null; }
+        })(),
+        lookthroughCoverage: (function () {
+          try { var fe = factorExposureLive(); return (fe.ok && fe.namedPct != null) ? { namedPct: fe.namedPct, unnamedPct: fe.unnamedPct } : null; } catch (e) { return null; }
         })(),
         isHypothetical: isHypo,
         coveragePct: (typeof m.coveragePct === 'number') ? m.coveragePct : null,
