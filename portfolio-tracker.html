@@ -26094,11 +26094,10 @@ init();
     try { var el = document.getElementById('risk-theme-map'); if (el) el.innerHTML = renderThemeFactorGrid(); } catch (e) {}
   }
 
-  // The new qualitative layer: "What this was & what it teaches" + the grid + legend.
-  function renderEventBriefing(win) {
-    if (!win || !win.id) return '';
-    var b = EVENT_BRIEFINGS[win.id];
-    if (!b) return '';
+  // The authored prose for one event (what it was / drove down / drove up / pattern / watch-for),
+  // shared by the in-card briefing and the standalone reference so there is one source of words.
+  function _eventBriefingProse(win) {
+    var b = EVENT_BRIEFINGS[win.id]; if (!b) return '';
     var P = function (lab, txt) {
       return txt ? '<div style="margin:0 0 6px"><strong style="color:var(--color-text-primary)">' + lab + '</strong> ' + txt + '</div>' : '';
     };
@@ -26118,14 +26117,49 @@ init();
           return '<span style="font-size:9px;color:var(--color-text-secondary);background:var(--color-background-tertiary,#2a2a2a);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:1px 7px">' + w + '</span>';
         }).join('') + '</div>';
     }
+    return body + tags;
+  }
+
+  // In-card briefing: prose + the events×factors grid (current event highlighted) + legend.
+  function renderEventBriefing(win) {
+    if (!win || !win.id) return '';
+    var b = EVENT_BRIEFINGS[win.id];
+    if (!b) return '';
     var overlayCaveat = b.noBookOverlay
       ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:4px;font-style:italic">Note for this event: in a liquidity crash your cluster mix barely differentiates you \u2014 so read the YOUR BOOK percentages below as context, not protection. The lesson is recovery speed, not which factors you carry.</div>'
       : '';
     var caveat = '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.4">Past behavior, not a forecast. The pattern names conditions that <em>rhyme</em> \u2014 it is never a buy/sell or timing signal.</div>';
     return '<details style="margin-top:7px"><summary style="font-size:10px;color:var(--color-text-info,#60a5fa);cursor:pointer">What this was &amp; what it teaches</summary>' +
       '<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:var(--color-text-secondary)">' +
-      body + tags + renderRiskFactorGrid(win.id) + overlayCaveat + _legendHtml() + caveat +
+      _eventBriefingProse(win) + renderRiskFactorGrid(win.id) + overlayCaveat + _legendHtml() + caveat +
       '</div></details>';
+  }
+
+  // Standalone, always-available reference: the six events fully explained, plus the events×factors
+  // matrix once against the live book. Browsable WITHOUT running a replay (that's the whole point).
+  function renderEventReference() {
+    var matrix = renderRiskFactorGrid(null);
+    var items = '';
+    for (var i = 0; i < STRESS_WINDOWS.length; i++) {
+      var win = STRESS_WINDOWS[i], b = EVENT_BRIEFINGS[win.id]; if (!b) continue;
+      var tagCols = (EVENT_FACTORS[win.id] || []).map(function (fid) { var f = _factorById(fid); return f ? f.col : fid; }).join(' \u00b7 ');
+      var dates = (win.from && win.to) ? fmtRange(win.from, win.to) : '';
+      var conf = b.recent ? '<div style="font-size:8.5px;margin-top:3px;color:var(--color-text-danger,#ef4444);font-weight:600">Low confidence \u2014 too recent for a durable lesson.</div>' : '';
+      items += '<details style="border-top:1px solid var(--color-border-tertiary);padding:5px 0">' +
+        '<summary style="font-size:10.5px;color:var(--color-text-secondary);cursor:pointer;font-weight:600">' + win.label +
+        (dates ? ' <span style="font-weight:400;color:var(--color-text-tertiary);font-size:9.5px">' + dates + '</span>' : '') +
+        (tagCols ? ' <span style="font-weight:400;color:var(--color-text-tertiary);font-size:9px">\u00b7 stressed: ' + tagCols + '</span>' : '') + '</summary>' +
+        '<div style="margin:6px 0 2px;font-size:10.5px;line-height:1.5;color:var(--color-text-secondary)">' + _eventBriefingProse(win) + conf + '</div></details>';
+    }
+    var caveat = '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.4">Past behavior, not a forecast \u2014 the pattern names conditions that <em>rhyme</em>, never a buy/sell or timing signal. Hit a window button above to replay your own book through any of these.</div>';
+    return '<details style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">The six stress events, explained</summary>' +
+      '<div style="margin-top:6px">' +
+      '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:4px">What each historical event was, what drove it down and back up, and the transferable pattern \u2014 plus which of the six risks it stressed. The matrix shows all six at a glance against your live book; expand any event below for the full read.</div>' +
+      matrix + '<div style="margin-top:8px">' + items + '</div>' + _legendHtml() + caveat +
+      '</div></details>';
+  }
+  function _paintEventRef() {
+    try { var el = document.getElementById('risk-event-ref'); if (el) el.innerHTML = renderEventReference(); } catch (e) {}
   }
 
   function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
@@ -27294,6 +27328,7 @@ init();
     section.innerHTML =
       '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary, #eee);margin-bottom:2px">Risk &amp; Stress Lens</div>' +
       '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Tier 1 — Historical Scenario Replay. Replays your active sleeve through a real past stress window using actual daily returns (co-movement included, no model), then folds your VOO core back in as a blended liquid-book row. Each button fetches that window\u2019s daily bars via your Tiingo worker (deep free history; partial fills cache and resume on re-click).</div>' +
+      '<div id="risk-event-ref" style="margin:4px 0 8px"></div>' +
       '<div id="risk-theme-map" style="margin:4px 0 10px"></div>' +
       '<div id="risk-hypo-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px;font-size:10px">' +
         '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--color-text-secondary)"><input type="checkbox" id="risk-hypo-toggle" style="cursor:pointer"> Fold in staged scenario</label>' +
@@ -27323,6 +27358,7 @@ init();
       var mount = document.getElementById('risk-review-mount') || document.body;
       mount.appendChild(buildPanel());
     }
+    _paintEventRef();
     _paintThemeMap();
     _refreshHypoStatus();
     _mountCrossTabBtn('tab-evaltrade');
@@ -27335,7 +27371,7 @@ init();
   // buttons re-mount if their panels were re-rendered.
   function onShow(name) {
     _mountCrossTabBtn('tab-evaltrade');
-    if (name === 'risk') { _refreshHypoStatus(); _paintThemeMap(); }
+    if (name === 'risk') { _refreshHypoStatus(); _paintThemeMap(); _paintEventRef(); }
   }
 
   // READ-ONLY snapshot of what the Risk Review tab is CURRENTLY DISPLAYING, for the two AI
