@@ -10458,15 +10458,23 @@ function riskReviewAiFacts() {
       if (c.eventPattern) bf += ` Transferable pattern — ${c.eventPattern}`;
       L.push(bf);
     }
-    if (c.factorExposure) {
-      const fx = Object.keys(c.factorExposure).map(k => {
-        const e = c.factorExposure[k];
-        return `${e.label} ${e.pct.toFixed(0)}% (${e.themes && e.themes.length ? e.themes.join(', ') : 'no held themes carry this factor'})`;
+    if (c.factorProfileAll) {
+      const prof = c.factorProfileAll.map(f => {
+        const flag = f.stressedHere ? ' \u2190 stressed by THIS event' : '';
+        return `${f.col} (${f.label}) ${f.pct.toFixed(0)}%${f.themes && f.themes.length ? ' [' + f.themes.join(', ') + ']' : ''}${flag}`;
       }).join('; ');
-      if (fx) L.push(`The user's CURRENT live look-through exposure to the risk factor(s) this event stressed: ${fx}. This ties the historical pattern to today's actual book — it is a present-book exposure measure (binary factor tags × live theme weights), NOT a prediction that the event recurs. Tags are "materially sensitive to this factor," not directional.`);
+      if (prof) L.push(`The user's FULL live look-through risk profile across all six factors (binary factor tags × live theme weights; each is a share of the WHOLE book; "materially sensitive to," NOT directional; the UI labels them Rate / Liquidity / Credit / Policy / Crowding / Cyclical): ${prof}. The factor(s) this event stressed are flagged, but the rest matter for the book's overall tilt and for comparing across events. Tags are two-sided: the same exposure that fell in this stress is what would lead the rebound.`);
     }
     if (c.lookthroughCoverage) {
       L.push(`IMPORTANT framing for those exposure %s: they are computed off the ${c.lookthroughCoverage.namedPct.toFixed(0)}% of the book that is decomposed into identifiable, benchmarkable names; the other ${c.lookthroughCoverage.unnamedPct.toFixed(0)}% is diversified/unclassified tail (undecomposed index holdings + cash) with no factor signal. Because each % is a share of the WHOLE book, these figures UNDERSTATE rather than overstate — benchmarkable names sitting in the tail aren't counted until the look-through tables are refreshed. Treat the factor %s as a conservative floor, and if coverage is low, say so rather than implying the number is exhaustive.`);
+    }
+    if (c.pairedBeta) {
+      const p = c.pairedBeta;
+      if (p.rebounded && p.rip != null) {
+        L.push(`Two-sided ("beta cuts both ways") read of the displayed series: it fell ${sgn(p.dd)} to the low, then ripped ${p.rip >= 0 ? '+' : ''}${p.rip.toFixed(0)}% off the low \u2014 ${p.aboveHigh ? 'back above its pre-event high by ' + p.netLabel : 'still ' + Math.abs(p.netPct).toFixed(0) + '% under the pre-event high ' + p.netLabel + ' in'}. The same exposure that drove the drawdown drove the rebound; the stress and the run-up are two readings of one exposure, not two facts. The rip is measured off the engine's window-low, not an absolute tick-bottom.`);
+      } else {
+        L.push(`Two-sided read of the displayed series: it fell ${sgn(p.dd)} to the low; the rebound window hasn't fully elapsed, so the run-up half is incomplete \u2014 don't imply a finished round-trip.`);
+      }
     }
     L.push(`Displayed series: ${c.isHypothetical ? 'the HYPOTHETICAL active sleeve (direct picks + the staged what-if scenario folded in; the VOO passive core is NOT in this series)' : "the user's ACTIVE SLEEVE — direct equity picks only, BEFORE the VOO passive core (no scenario folded in)"}.`);
     let jline = '';
@@ -15006,6 +15014,11 @@ function riskReviewPdfSection(cleanFn, esc2) {
     } else {
       parts.push(`<p class="note" style="margin:6px 0 0">No hypothetical scenario was folded into this window at export time — only the actual-book stress path is shown.</p>`);
     }
+    if (r.themeMapHtml) {
+      parts.push(`<div style="font-size:11px;font-weight:700;color:#374151;margin:14px 0 4px">How my themes map to the six risks</div>`);
+      parts.push(`<p class="note" style="margin:0 0 6px">Which of my holdings carry each risk factor, against my live look-through weights — the book-side companion to the event grid above. A dot = materially sensitive to that force (not a direction).</p>`);
+      parts.push(`<div style="page-break-inside:avoid;margin:6px 0">${cleanFn(r.themeMapHtml)}</div>`);
+    }
     return parts.join('');
   } catch (e) {
     return '<p class="note">Risk review charts could not be included (an error occurred building them); the rest of the report is unaffected.</p>';
@@ -15031,7 +15044,7 @@ function candExportPdf() {
     t.innerHTML = html || '';
     t.querySelectorAll('[onclick]').forEach(el => el.remove());      // edit / × / refresh-performance
     t.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
-    t.querySelectorAll('summary').forEach(s => s.remove());          // drop the toggle label; body shows expanded
+    t.querySelectorAll('summary').forEach(s => { const h = document.createElement('div'); h.textContent = s.textContent; h.style.cssText = 'font-weight:700;margin:4px 0 2px'; s.replaceWith(h); });  // keep the label as a heading; body shows expanded
     return t.innerHTML
       .replace(/#fbbf24/g, '#b45309')   // amber → readable on white
       .replace(/#34d399/g, '#15803d')   // green
@@ -15116,7 +15129,7 @@ function qrExportPdf(id) {
     t.querySelectorAll('[onclick]').forEach(el => el.remove());
     t.querySelectorAll('button, textarea, input, select').forEach(el => el.remove());
     t.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
-    t.querySelectorAll('summary').forEach(s => s.remove());
+    t.querySelectorAll('summary').forEach(s => { const h = document.createElement('div'); h.textContent = s.textContent; h.style.cssText = 'font-weight:700;margin:4px 0 2px'; s.replaceWith(h); });
     return recolor(t.innerHTML);
   };
 
@@ -26630,27 +26643,38 @@ init();
   // run-up is never read without the drawdown that bought it. Pure read of model.junctions (already
   // computed by the extended replay); degrades to nothing when there's no recovery arc. Rides the
   // mirror to build-a-trade because it lives in the card.
+  // Shared paired-beta math (drawdown depth + rip off the low + net vs pre-event high), used by both
+  // the card line and the AI facts so they speak the same numbers. Pure read of model.junctions.
+  function _pairedBetaData(model) {
+    try {
+      if (!model || !model.junctions || !model.junctions.length) return null;
+      var J = model.junctions, low = J[0];
+      if (!low || low.bookPct == null) return null;
+      var dd = (model.drawdownPct != null && model.drawdownPct < low.bookPct) ? model.drawdownPct : low.bookPct;
+      var last = null;
+      for (var i = J.length - 1; i >= 1; i--) { var c = J[i]; if (!c.pending && !c.missing && c.bookPct != null) { last = c; break; } }
+      if (!last) return { dd: dd, rebounded: false };
+      var lowCum = 1 + low.bookPct / 100, endCum = 1 + last.bookPct / 100;
+      var rip = (lowCum > 0.02) ? ((endCum / lowCum) - 1) * 100 : null;
+      return { dd: dd, rebounded: true, rip: rip, netPct: last.bookPct, netLabel: last.label, aboveHigh: last.bookPct >= -0.05 };
+    } catch (e) { return null; }
+  }
   function pairedBetaLine(model) {
     try {
-      if (!model.hasData || !model.junctions || !model.junctions.length) return '';
+      if (!model.hasData) return '';
+      var p = _pairedBetaData(model);
+      if (!p) return '';
       var DANG = 'var(--color-text-danger, #ef4444)', SUCC = 'var(--color-text-success, #22c55e)', INFO = 'var(--color-text-info, #60a5fa)';
       var box = function (inner) {
         return '<div style="font-size:10.5px;line-height:1.5;margin:6px 0 2px;padding:6px 9px;border-left:3px solid ' + INFO + ';background:rgba(96,165,250,0.06);border-radius:4px;color:var(--color-text-secondary)"><strong style="color:' + INFO + '">Beta cuts both ways.</strong> ' + inner + '</div>';
       };
-      var J = model.junctions, low = J[0];
-      if (!low || low.bookPct == null) return '';
       var which = model.scenarioNote ? 'This hypothetical book' : 'Your book';
-      var dd = (model.drawdownPct != null && model.drawdownPct < low.bookPct) ? model.drawdownPct : low.bookPct;
-      var fell = 'fell <strong style="color:' + DANG + '">\u2212' + Math.abs(dd).toFixed(1) + '%</strong> to the low';
-      var last = null;
-      for (var i = J.length - 1; i >= 1; i--) { var c = J[i]; if (!c.pending && !c.missing && c.bookPct != null) { last = c; break; } }
-      if (!last) return box(which + ' ' + fell + ' \u2014 the rebound hasn\u2019t elapsed yet, so the run-up half fills in as time passes.');
-      var lowCum = 1 + low.bookPct / 100, endCum = 1 + last.bookPct / 100;
-      var rip = (lowCum > 0.02) ? ((endCum / lowCum) - 1) * 100 : null;
-      var ripTxt = (rip != null && rip > 0.5) ? 'then ripped <strong style="color:' + SUCC + '">+' + rip.toFixed(0) + '%</strong> off it' : 'then clawed back';
-      var net = (last.bookPct >= -0.05)
-        ? ' \u2014 <strong>back above</strong> its pre-event high by ' + last.label
-        : ' \u2014 still <strong>' + Math.abs(last.bookPct).toFixed(0) + '% under</strong> the pre-event high ' + last.label + ' in';
+      var fell = 'fell <strong style="color:' + DANG + '">\u2212' + Math.abs(p.dd).toFixed(1) + '%</strong> to the low';
+      if (!p.rebounded) return box(which + ' ' + fell + ' \u2014 the rebound hasn\u2019t elapsed yet, so the run-up half fills in as time passes.');
+      var ripTxt = (p.rip != null && p.rip > 0.5) ? 'then ripped <strong style="color:' + SUCC + '">+' + p.rip.toFixed(0) + '%</strong> off it' : 'then clawed back';
+      var net = p.aboveHigh
+        ? ' \u2014 <strong>back above</strong> its pre-event high by ' + p.netLabel
+        : ' \u2014 still <strong>' + Math.abs(p.netPct).toFixed(0) + '% under</strong> the pre-event high ' + p.netLabel + ' in';
       return box(which + ' ' + fell + ', ' + ripTxt + net + '. The exposure that took it down is what carried it back \u2014 same names, both legs.');
     } catch (e) { return ''; }
   }
@@ -27425,6 +27449,17 @@ init();
         lookthroughCoverage: (function () {
           try { var fe = factorExposureLive(); return (fe.ok && fe.namedPct != null) ? { namedPct: fe.namedPct, unnamedPct: fe.unnamedPct } : null; } catch (e) { return null; }
         })(),
+        factorProfileAll: (function () {
+          try {
+            var fe = factorExposureLive(); if (!fe.ok) return null;
+            var ev = EVENT_FACTORS[entry.winId] || [];
+            return RISK_FACTORS.map(function (f) {
+              var e = fe.byFactor[f.id];
+              return { col: f.col, label: f.label, pct: e ? e.pct : 0, themes: e ? e.themes : [], stressedHere: ev.indexOf(f.id) >= 0 };
+            });
+          } catch (e) { return null; }
+        })(),
+        pairedBeta: (function () { try { return _pairedBetaData(m); } catch (e) { return null; } })(),
         isHypothetical: isHypo,
         coveragePct: (typeof m.coveragePct === 'number') ? m.coveragePct : null,
         coverageWarn: !!m.coverageWarn,
@@ -27480,7 +27515,8 @@ init();
         stresses: win ? (win.stresses || '') : '',
         hasHypothetical: !!hypoModel,
         eventHtml: curModel ? renderReplayCard(curModel) : '',
-        hypoHtml: hypoModel ? renderReplayCard(hypoModel) : ''
+        hypoHtml: hypoModel ? renderReplayCard(hypoModel) : '',
+        themeMapHtml: (function () { try { return renderThemeFactorGrid(); } catch (e) { return ''; } })()
       };
     } catch (e) { return { active: false }; }
   }
