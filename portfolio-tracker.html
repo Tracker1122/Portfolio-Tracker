@@ -25886,11 +25886,11 @@ init();
   // Column order = grid order. id, short label (column head), full label + gloss (legend).
   var RISK_FACTORS = [
     { id: 'rate',   col: 'Rate',   label: 'Rate / duration',       gloss: "Value tied to the discount rate on future cash flows; high-multiple growth lives here. Read as \u201cfalls when rates rise\u201d \u2014 which is why rate-sensitive-but-often-helped names like banks are left off." },
-    { id: 'liq',    col: 'Liq',    label: 'Liquidity / funding',   gloss: "Forced selling for cash; correlations head toward 1 and even diversifiers drop." },
+    { id: 'liq',    col: 'Liquidity', label: 'Liquidity / funding',   gloss: "Forced selling for cash; correlations head toward 1 and even diversifiers drop." },
     { id: 'credit', col: 'Credit', label: 'Credit',                gloss: "Solvency, spread, default risk." },
     { id: 'policy', col: 'Policy', label: 'Policy shock',          gloss: "Discrete government action (tariffs, fiscal, regulatory) hitting earnings directly, not through rates." },
-    { id: 'posn',   col: 'Posn',   label: 'Positioning / leverage',gloss: "Crowded or levered trades unwinding; the move is about who owns it, not fundamentals." },
-    { id: 'cycl',   col: 'Cycl',   label: 'Demand cyclicality',    gloss: "Tied to the real-economy earnings cycle." }
+    { id: 'posn',   col: 'Crowding', label: 'Positioning / leverage',gloss: "Crowded or levered trades unwinding; the move is about who owns it, not fundamentals." },
+    { id: 'cycl',   col: 'Cyclical', label: 'Demand cyclicality',    gloss: "Tied to the real-economy earnings cycle." }
   ];
   function _factorById(id) { for (var i = 0; i < RISK_FACTORS.length; i++) { if (RISK_FACTORS[i].id === id) return RISK_FACTORS[i]; } return null; }
 
@@ -26040,7 +26040,7 @@ init();
         'Based on the <strong>' + fe.namedPct.toFixed(0) + '%</strong> of your book decomposed into identifiable, benchmarkable names. The other <strong>' + fe.unnamedPct.toFixed(0) + '%</strong> is diversified / unclassified tail (undecomposed index holdings + cash) and carries no factor signal. Because every percentage is a share of your whole book, this <em>understates</em> rather than overstates \u2014 benchmarkable names sitting in that tail aren\u2019t counted until you refresh your look-through tables.' +
         '</div>';
     }
-    return '<div style="margin-top:8px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:280px">' +
+    return '<div style="margin-top:8px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:360px">' +
       '<thead>' + head + '</thead><tbody>' + rows + bookRow + '</tbody></table></div>' + liveNote + coverageNote +
       '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:4px;font-style:italic">Two-sided: each percentage is how much of your book moves <em>with</em> that force \u2014 it fell in the stress and led the climb-out in the rebound. The exposure that took the deepest drawdown is the same exposure that ripped hardest off the low; the dots never pick a direction.</div>';
   }
@@ -26071,7 +26071,7 @@ init();
     var dotOn = '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--color-text-secondary,#aaa)"></span>';
     var th = '<th style="font-size:8.5px;font-weight:600;color:var(--color-text-tertiary);padding:3px 5px;text-align:center;white-space:nowrap">';
     var head = '<tr><th style="padding:3px 6px 3px 4px;text-align:left;font-size:8.5px;font-weight:600;color:var(--color-text-tertiary)">Theme</th>';
-    if (haveW) head += '<th style="font-size:8.5px;font-weight:600;color:var(--color-text-tertiary);padding:3px 8px;text-align:right">Your wt</th>';
+    if (haveW) head += '<th style="font-size:8.5px;font-weight:600;color:var(--color-text-tertiary);padding:3px 8px;text-align:right">Your weight</th>';
     RISK_FACTORS.forEach(function (f) { head += th + f.col + '</th>'; });
     head += '</tr>';
     var rows = '';
@@ -26085,9 +26085,9 @@ init();
       RISK_FACTORS.forEach(function (f) { rows += '<td style="text-align:center;padding:3px 5px">' + (tags.indexOf(f.id) >= 0 ? dotOn : '') + '</td>'; });
       rows += '</tr>';
     }
-    var caption = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.45">How each theme in your book maps to the six risks \u2014 the rows behind the \u201cYOUR BOOK\u201d line inside each event\u2019s grid. A dot means the theme is materially sensitive to that force (not a direction), so the same dot is your drawdown risk in a stress and your run-up in the rebound. ' + (haveW ? '\u201cYour wt\u201d is live look-through weight; \u201c\u2014\u201d means not currently held.' : 'Connect live prices to fill in your per-theme weight.') + '</div>';
+    var caption = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.45">How each theme in your book maps to the six risks \u2014 the rows behind the \u201cYOUR BOOK\u201d line inside each event\u2019s grid. A dot means the theme is materially sensitive to that force (not a direction), so the same dot is your drawdown risk in a stress and your run-up in the rebound. ' + (haveW ? '\u201cYour weight\u201d is live look-through weight; \u201c\u2014\u201d means not currently held.' : 'Connect live prices to fill in your per-theme weight.') + '</div>';
     return '<details open style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">How your themes map to the six risks</summary>' +
-      '<div style="margin-top:8px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:320px"><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div style="margin-top:8px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:400px"><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>' +
       caption + _legendHtml() + '</details>';
   }
   function _paintThemeMap() {
