@@ -26129,7 +26129,7 @@ init();
       ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:4px;font-style:italic">Note for this event: in a liquidity crash your cluster mix barely differentiates you \u2014 so read the YOUR BOOK percentages below as context, not protection. The lesson is recovery speed, not which factors you carry.</div>'
       : '';
     var caveat = '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.4">Past behavior, not a forecast. The pattern names conditions that <em>rhyme</em> \u2014 it is never a buy/sell or timing signal.</div>';
-    return '<details style="margin-top:7px"><summary style="font-size:10px;color:var(--color-text-info,#60a5fa);cursor:pointer">What this was &amp; what it teaches</summary>' +
+    return '<details open style="margin-top:7px"><summary style="font-size:10px;color:var(--color-text-info,#60a5fa);cursor:pointer">What this was &amp; what it teaches</summary>' +
       '<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:var(--color-text-secondary)">' +
       _eventBriefingProse(win) + renderRiskFactorGrid(win.id) + overlayCaveat + _legendHtml() + caveat +
       '</div></details>';
@@ -27018,7 +27018,7 @@ init();
           '<span style="flex:0 0 50px;color:' + c + ';text-align:right">' + (r.contrib >= 0 ? '+' : '') + (r.contrib * 100).toFixed(2) + 'pt</span>' +
         '</div>';
       }).join('');
-      breakdown = '<details style="margin-top:7px"><summary style="font-size:10px;color:var(--color-text-info,#60a5fa);cursor:pointer">Per-name breakdown — what drove it</summary>' +
+      breakdown = '<details open style="margin-top:7px"><summary style="font-size:10px;color:var(--color-text-info,#60a5fa);cursor:pointer">Per-name breakdown — what drove it</summary>' +
         '<div style="margin-top:5px">' +
           '<div style="display:flex;gap:6px;font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">' +
             '<span style="flex:0 0 50px">Name</span><span style="flex:0 0 36px;text-align:right">Wt</span><span style="flex:0 0 52px;text-align:right">Move</span><span style="flex:1 1 auto;text-align:center">← drag · help →</span><span style="flex:0 0 50px;text-align:right">pts</span>' +
