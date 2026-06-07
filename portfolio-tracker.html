@@ -25898,12 +25898,12 @@ init();
      ==================================================================== */
   // Column order = grid order. id, short label (column head), full label + gloss (legend).
   var RISK_FACTORS = [
-    { id: 'rate',   col: 'Rate',   label: 'Rate / duration',       gloss: "Value tied to the discount rate on future cash flows; high-multiple growth lives here. Read as \u201cfalls when rates rise\u201d \u2014 which is why rate-sensitive-but-often-helped names like banks are left off." },
-    { id: 'liq',    col: 'Liquidity', label: 'Liquidity / funding',   gloss: "Forced selling for cash; correlations head toward 1 and even diversifiers drop." },
-    { id: 'credit', col: 'Credit', label: 'Credit',                gloss: "Solvency, spread, default risk." },
-    { id: 'policy', col: 'Policy', label: 'Policy shock',          gloss: "Discrete government action (tariffs, fiscal, regulatory) hitting earnings directly, not through rates." },
-    { id: 'posn',   col: 'Crowding', label: 'Positioning / leverage',gloss: "Crowded or levered trades unwinding; the move is about who owns it, not fundamentals." },
-    { id: 'cycl',   col: 'Cyclical', label: 'Demand cyclicality',    gloss: "Tied to the real-economy earnings cycle." }
+    { id: 'rate',   col: 'Rate',   label: 'Rate / duration',       gloss: "How much a holding\u2019s value rides on profits expected far in the future. When interest rates rise, those far-off profits are worth less today, so the most expensive, fastest-growing companies fall the hardest. Read it as \u201cfalls when rates rise\u201d \u2014 which is why banks, which often do better as rates rise, are left off." },
+    { id: 'liq',    col: 'Liquidity', label: 'Liquidity / funding',   gloss: "When everyone sells at once to raise cash, almost everything falls together \u2014 even holdings that normally cushion a drop." },
+    { id: 'credit', col: 'Credit', label: 'Credit',                gloss: "The risk that a bank or borrower can\u2019t pay what it owes \u2014 defaults, bank runs, stress spreading through the financial system." },
+    { id: 'policy', col: 'Policy', label: 'Policy shock',          gloss: "A sudden government action \u2014 tariffs, taxes, regulation \u2014 that hits company profits directly, rather than through interest rates." },
+    { id: 'posn',   col: 'Crowding', label: 'Positioning / leverage',gloss: "When too many investors crowd into the same bet (often with borrowed money) and rush for the exit at once. The move is about who owns it, not about the businesses." },
+    { id: 'cycl',   col: 'Cyclical', label: 'Demand cyclicality',    gloss: "How much a holding\u2019s profits rise and fall with the overall economy." }
   ];
   function _factorById(id) { for (var i = 0; i < RISK_FACTORS.length; i++) { if (RISK_FACTORS[i].id === id) return RISK_FACTORS[i]; } return null; }
 
@@ -25941,45 +25941,45 @@ init();
   // Authored briefings. recent:true => deliberately short, no padded "pattern" (honesty rule).
   var EVENT_BRIEFINGS = {
     tech2022: {
-      whatHappened: "The Fed lifted rates off near-zero, fast, to fight the highest inflation in decades. The discount rate on future cash flows jumped, so the longest-duration assets \u2014 profitless tech first, then high-multiple mega-cap growth \u2014 derated hardest. A re-rating, not an earnings collapse.",
-      droveDown: "Multiple compression. Prices fell because the rate applied to far-off earnings rose, not because the businesses broke.",
-      droveUp: "Inflation rolled over and the market front-ran a Fed pivot; an AI / accelerated-compute narrative then pulled the same high-multiple names back up through 2023. What fell hardest led the snap-back.",
-      pattern: "Rate-shock derating: the highest-multiple, longest-duration names lead both legs \u2014 down on the way in, up on the way out.",
-      watchFor: ['real yields', 'forward multiples', 'long-duration leadership (both ways)']
+      whatHappened: "Prices were rising across the whole economy \u2014 the worst inflation in forty years \u2014 so the Federal Reserve raised interest rates very fast to cool things off. Here\u2019s why that hit tech the hardest: a fast-growing company is valuable today mostly because investors expect big profits years down the road. When interest rates jump, a dollar of profit in the future is worth less in today\u2019s money \u2014 so those far-off profits suddenly count for less, and the most expensive, fastest-growing stocks (unprofitable tech first, then the giant tech names) fell the furthest. The businesses themselves were mostly fine; it was the price investors were willing to pay for them that got marked down.",
+      droveDown: "Not collapsing profits \u2014 a repricing. Once interest rates were higher, investors simply weren\u2019t willing to pay as much for profits that were years away, so the priciest stocks took the deepest cut.",
+      droveUp: "Two things turned it around. Inflation began to fall, so investors bet the Fed was nearly finished raising rates \u2014 and then the 2023 AI boom sent money rushing back into the very same expensive tech names. What had fallen the hardest led the recovery.",
+      pattern: "The classic \u201crates up, growth down\u201d move. The most expensive, most future-dependent stocks swing the most in both directions \u2014 they drop the most when rates rise, and they bounce the most when rates ease back.",
+      watchFor: ['where interest rates are headed', 'how expensive growth stocks have gotten', 'whether the priciest names lead the move']
     },
     q4rate18: {
-      whatHappened: "The 2022 rhyme in miniature. Powell signaled rates were \u201ca long way from neutral,\u201d the market read it as hiking into a slowdown, and growth sold off into Christmas Eve.",
-      droveDown: "Tightening fear \u2014 the same mechanism as 2022, on a much shorter fuse.",
-      droveUp: "A near-explicit January pivot (\u201cpatient\u201d) put in a V-bottom almost overnight. The recovery driver was a single change in Fed tone.",
-      pattern: "Same family as 2022, faster clock: a policy-tone reversal can mark the low before fundamentals move \u2014 which is exactly why trying to time it is a fool\u2019s errand.",
-      watchFor: ['Fed-tone shifts', 'real yields', 'high-multiple leadership']
+      whatHappened: "A smaller, faster rehearsal for 2022. In late 2018 the Fed was still raising rates, and its chairman said rates were \u201ca long way\u201d from where they\u2019d stop \u2014 which investors heard as \u201cmore hikes are coming, even as the economy slows.\u201d Stocks slid for three months and were down close to 20% by Christmas Eve. Then, within days, the Fed softened its message to \u201cwe\u2019ll be patient,\u201d and the market bottomed and bounced back almost immediately.",
+      droveDown: "Fear that the Fed would push rates too high and stall the economy \u2014 the same worry that drove 2022, but it played out over weeks instead of months.",
+      droveUp: "Nothing about the economy actually changed. The Fed simply signaled it would ease off, and that one shift in tone was enough to turn the whole market around.",
+      pattern: "Same story as 2022, just on a much shorter clock. The takeaway: the market can turn the instant the Fed\u2019s tone softens \u2014 often well before the economy itself improves \u2014 which is exactly why trying to call the bottom is a losing game.",
+      watchFor: ['what the Fed is signaling next', 'where interest rates are headed', 'whether the priciest stocks lead']
     },
     svb23: {
-      whatHappened: "Idiosyncratic financial stress \u2014 a bank failed on a duration/deposit mismatch. A short window, but a complete and durable lesson.",
-      droveDown: "For the banks: deposit-flight contagion fear hit financials directly.",
-      droveUp: "For a tech book: rate-cut expectations got priced instantly, the 2-year yield dropped hard, and high-multiple growth rallied even as banks cratered. A tech book can rise in a bank crisis.",
-      pattern: "The counterintuitive one: idiosyncratic credit stress can help rate-sensitive growth short-term as yields fall \u2014 and that lift is a side effect, not safety. Don\u2019t mistake it for resilience.",
-      watchFor: ['2-year yield', 'credit spreads', 'the bank-vs-growth divergence itself']
+      whatHappened: "A single bank \u2014 Silicon Valley Bank \u2014 failed in a matter of days. It had put customer deposits into long-term bonds that lost value as interest rates rose, and when customers rushed to pull their cash out all at once, it couldn\u2019t cover them. Regulators stepped in to protect depositors. For bank stocks this was frightening \u2014 but for a tech-heavy portfolio, something surprising happened: investors instantly bet the Fed would now cut rates to steady the system, interest rates dropped sharply (the two-year Treasury had its biggest three-day fall since 1987), and tech stocks actually rose while bank stocks were being crushed.",
+      droveDown: "For the banks: fear that one bank run would spread to others.",
+      droveUp: "For a tech-heavy book: falling interest rates are good for expensive growth stocks, so the tech indexes climbed even on the worst days for the banks.",
+      pattern: "The counterintuitive one. A banking scare can actually help a tech-heavy portfolio in the short run, because it tends to push interest rates down. But that boost is a side effect of someone else\u2019s crisis \u2014 not proof your portfolio is safe. Don\u2019t read it as resilience.",
+      watchFor: ['where interest rates are headed', 'signs of stress in the banking system', 'banks falling while tech holds up']
     },
     covid: {
-      whatHappened: "A liquidity event, not a valuation one. A real-world shock forced indiscriminate selling for cash.",
-      droveDown: "Correlations went to ~1 \u2014 \u201cdiversifiers\u201d fell with everything as everyone raised cash at once.",
-      droveUp: "An overwhelming policy response (rates to zero, unlimited backstop, fiscal) restored liquidity; the recovery to prior highs was unusually fast.",
-      pattern: "In an everything-selloff, depth of drawdown barely differentiates anyone \u2014 recovery speed does. Your cluster mix won\u2019t save you in an acute cash scramble; the question is how fast you fill the hole, not how little you fell.",
-      watchFor: ['cross-asset correlation spiking', 'credit spreads', 'funding stress'],
+      whatHappened: "When the pandemic hit, investors tried to sell almost everything at once to raise cash \u2014 and nearly all of it fell together, even the kinds of holdings that usually hold steady when stocks drop. It wasn\u2019t about any single company; it was a frantic dash for cash. Then governments and central banks responded with overwhelming force \u2014 interest rates to zero, enormous support programs \u2014 confidence came back, and the market recovered unusually fast.",
+      droveDown: "A scramble for cash. When everyone sells everything in the same moment, the usual \u201cthis rises when that falls\u201d protection stops working \u2014 it all drops together.",
+      droveUp: "A massive, fast response from the Fed and the government put a floor under the market and got money flowing again.",
+      pattern: "In a true everything-falls-at-once panic, how far you dropped barely sets you apart \u2014 almost everyone fell hard. What actually separates portfolios is how quickly they climb back. So don\u2019t judge yourself on how little you fell here; judge yourself on how fast you recovered. Your particular mix of holdings won\u2019t shield you in a cash scramble.",
+      watchFor: ['everything falling together at once', 'stress in lending markets', 'a market-wide dash for cash'],
       noBookOverlay: true   // everything rhymes here; a per-factor % is the wrong lens (see prose)
     },
     tariff25: {
       recent: true,
-      whatHappened: "A fast policy shock: tariffs announced, broad and supply-chain-exposed names sold off hard over a few days, then a pause reversed most of it almost as fast.",
-      pattern: "Too recent for a durable lesson \u2014 the mechanical read: fast policy shocks can round-trip fast, and acting at the low would have been the error. The round-trip itself is the read; naming a deeper \u201cpattern\u201d this soon would be inventing one.",
-      watchFor: ['headline / policy risk', 'breadth of the move']
+      whatHappened: "On April 2, 2025, the U.S. announced sweeping new tariffs \u2014 larger than investors expected. The market fell hard, roughly 12% in a single week, its worst stretch since COVID. Then, a week later, the government announced a 90-day pause, and the market roared back with one of its best single days on record. One twist worth noting: U.S. government bonds and the dollar also fell during the panic, which dented the usual assumption that government bonds are a safe place to hide.",
+      pattern: "It\u2019s too soon to draw a lasting lesson from this one, and we won\u2019t pretend otherwise. The plain takeaway: a sudden government shock can hit fast and reverse just as fast \u2014 anyone who panic-sold at the bottom would have missed a rebound that arrived just days later. That quick round-trip is the whole story; claiming anything deeper this soon would be making it up.",
+      watchFor: ['surprise government or policy moves', 'how broad the selloff is']
     },
     carry24: {
       recent: true,
-      whatHappened: "A vol spike from a leverage / carry-trade unwind colliding with a weak jobs print; high-beta and crowded longs took the brunt; recovered within weeks.",
-      pattern: "A few-day positioning washout, not a regime. Mechanical read: crowded, levered positioning amplifies an ordinary catalyst, then mean-reverts. The lesson is tentative by construction.",
-      watchFor: ['positioning / leverage crowding', 'vol term structure']
+      whatHappened: "In early August 2024, a wildly popular trade blew up. For years, investors had borrowed Japanese yen cheaply to buy higher-returning investments elsewhere. Japan\u2019s central bank then raised rates unexpectedly, and a weak U.S. jobs report landed two days later \u2014 both sent the yen sharply higher, which forced investors to unwind that crowded, borrowed bet all at once. On August 5, Japan\u2019s market fell more than 12% (its worst day since 1987) and the U.S. market dropped about 3%, with fear spiking. It recovered within a few weeks.",
+      pattern: "A short, sharp shakeout \u2014 not the start of a new era \u2014 so we\u2019re keeping the lesson tentative on purpose. The plain read: when too many investors pile into the same borrowed bet, an ordinary piece of bad news can trigger a stampede for the exit far bigger than the news itself \u2014 and it tends to snap back once the crowd has cleared out.",
+      watchFor: ['crowded bets made with borrowed money', 'sudden spikes in market fear']
     }
   };
 
