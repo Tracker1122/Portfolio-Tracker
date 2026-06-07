@@ -26139,14 +26139,13 @@ init();
   // matrix once against the live book. Browsable WITHOUT running a replay (that's the whole point).
   function renderEventReference() {
     var matrix = renderRiskFactorGrid(null);
-    var items = '', openedFirst = false;
+    var items = '';
     for (var i = 0; i < STRESS_WINDOWS.length; i++) {
       var win = STRESS_WINDOWS[i], b = EVENT_BRIEFINGS[win.id]; if (!b) continue;
-      var op = openedFirst ? '' : ' open'; openedFirst = true;
       var tagCols = (EVENT_FACTORS[win.id] || []).map(function (fid) { var f = _factorById(fid); return f ? f.col : fid; }).join(' \u00b7 ');
       var dates = (win.from && win.to) ? fmtRange(win.from, win.to) : '';
       var conf = b.recent ? '<div style="font-size:8.5px;margin-top:3px;color:var(--color-text-danger,#ef4444);font-weight:600">Low confidence \u2014 too recent for a durable lesson.</div>' : '';
-      items += '<details' + op + ' style="border-top:1px solid var(--color-border-tertiary);padding:5px 0">' +
+      items += '<details style="border-top:1px solid var(--color-border-tertiary);padding:5px 0">' +
         '<summary style="font-size:10.5px;color:var(--color-text-secondary);cursor:pointer;font-weight:600">' + win.label +
         (dates ? ' <span style="font-weight:400;color:var(--color-text-tertiary);font-size:9.5px">' + dates + '</span>' : '') +
         (tagCols ? ' <span style="font-weight:400;color:var(--color-text-tertiary);font-size:9px">\u00b7 stressed: ' + tagCols + '</span>' : '') + '</summary>' +
