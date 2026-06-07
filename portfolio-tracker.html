@@ -1087,7 +1087,7 @@
     </div>
 
     <!-- Analytics Row -->
-    <!-- TOP ROW: four summary cards (Passive Core · Unrealised Gain · Private Investments · Capital Deployed) -->
+    <!-- TOP ROW: summary cards (Passive Core · Unrealised Gain · Tax Year · Private Investments · Capital Deployed) -->
     <div class="analytics-grid-4">
       <div class="analytics-card" id="sp-summary-card" onclick="showCardOverlay('voo')" style="cursor:pointer">
         <div class="analytics-card-title">Passive Core — VOO</div>
@@ -1096,6 +1096,29 @@
       <div class="analytics-card" id="account-card" onclick="showCardOverlay('account')" style="cursor:pointer">
         <div class="analytics-card-title">Unrealised Gain by Account</div>
         <div id="account-content"></div>
+      </div>
+      <div class="analytics-card" id="tax-exposure-card" onclick="openRealizedLedgerModal()" style="cursor:pointer" title="Click for the full realized-gains ledger by year">
+        <div class="analytics-card-title" id="tax-year-label">2026 Tax Year</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <div>
+            <div style="font-size:9px;color:var(--color-text-tertiary)">LT Gains Realised</div>
+            <div id="tax-lt-gains" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
+            <div id="tax-lt-est" style="font-size:9px;color:var(--color-text-tertiary)">Est. tax: $0 @ 27%</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--color-text-tertiary)">ST Gains Realised</div>
+            <div id="tax-st-gains" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
+            <div id="tax-st-est" style="font-size:9px;color:var(--color-text-tertiary)">Est. tax: $0 @ 36%</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--color-text-tertiary)">Losses Harvested</div>
+            <div id="tax-harvested" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--color-text-tertiary)">Net Tax Bill</div>
+            <div id="tax-sheltered" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
+          </div>
+        </div>
       </div>
       <div class="analytics-card" id="pe-deals-card" onclick="showCardOverlay('private-investments')" style="cursor:pointer">
         <div class="analytics-card-title">Private Investments — Direct PE Deals</div>
@@ -1183,58 +1206,8 @@
     </div>
     <div id="industry-ref-panel" style="margin:8px 0 12px"></div>
 
-    <!-- Capital Flow & Tax Exposure -->
-    <div class="section-heading">Capital Flow &amp; Tax Exposure</div>
-    <div id="cash-panel" style="margin-bottom:20px">
-      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
-        <!-- Capital Flow Summary -->
-        <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 14px;min-width:220px" id="capital-flow-card" onclick="showCardOverlay('capitalflow')" style="cursor:pointer">
-          <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">Capital Flow</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
-            <div>
-              <div style="font-size:9px;color:var(--color-text-tertiary)">Rotated</div>
-              <div id="flow-rotated" style="font-size:13px;font-weight:700;color:var(--color-text-info)">$0</div>
-            </div>
-            <div>
-              <div style="font-size:9px;color:var(--color-text-tertiary)">→ Index</div>
-              <div id="flow-indexed" style="font-size:13px;font-weight:700;color:#fbbf24">$0</div>
-            </div>
-            <div>
-              <div style="font-size:9px;color:var(--color-text-tertiary)">Pulled Out</div>
-              <div id="flow-out" style="font-size:13px;font-weight:700;color:var(--color-text-danger)">$0</div>
-            </div>
-            <div>
-              <div style="font-size:9px;color:var(--color-text-tertiary)">Net Flow</div>
-              <div id="flow-net" style="font-size:13px;font-weight:700;color:var(--color-text-primary)">$0</div>
-            </div>
-          </div>
-        </div>
-        <!-- Tax Exposure Summary -->
-        <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 14px;min-width:220px;cursor:pointer" id="tax-exposure-card" onclick="openRealizedLedgerModal()" title="Click for the full realized-gains ledger by year">
-          <div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px" id="tax-year-label">2026 Tax Year</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-            <div>
-              <div style="font-size:9px;color:var(--color-text-tertiary)">LT Gains Realised</div>
-              <div id="tax-lt-gains" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
-              <div id="tax-lt-est" style="font-size:9px;color:var(--color-text-tertiary)">Est. tax: $0 @ 27%</div>
-            </div>
-            <div>
-              <div style="font-size:9px;color:var(--color-text-tertiary)">ST Gains Realised</div>
-              <div id="tax-st-gains" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
-              <div id="tax-st-est" style="font-size:9px;color:var(--color-text-tertiary)">Est. tax: $0 @ 36%</div>
-            </div>
-            <div>
-              <div style="font-size:9px;color:var(--color-text-tertiary)">Losses Harvested</div>
-              <div id="tax-harvested" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
-            </div>
-            <div>
-              <div style="font-size:9px;color:var(--color-text-tertiary)">Net Tax Bill</div>
-              <div id="tax-sheltered" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Cash -->
+    <div class="section-heading">Cash</div>
 
     <!-- Cash Ledger -->
     <div style="margin-top:12px">
