@@ -26086,7 +26086,7 @@ init();
       rows += '</tr>';
     }
     var caption = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.45">How each theme in your book maps to the six risks \u2014 the rows behind the \u201cYOUR BOOK\u201d line inside each event\u2019s grid. A dot means the theme is materially sensitive to that force (not a direction), so the same dot is your drawdown risk in a stress and your run-up in the rebound. ' + (haveW ? '\u201cYour wt\u201d is live look-through weight; \u201c\u2014\u201d means not currently held.' : 'Connect live prices to fill in your per-theme weight.') + '</div>';
-    return '<details style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">How your themes map to the six risks</summary>' +
+    return '<details open style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">How your themes map to the six risks</summary>' +
       '<div style="margin-top:8px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:320px"><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>' +
       caption + _legendHtml() + '</details>';
   }
@@ -26139,20 +26139,21 @@ init();
   // matrix once against the live book. Browsable WITHOUT running a replay (that's the whole point).
   function renderEventReference() {
     var matrix = renderRiskFactorGrid(null);
-    var items = '';
+    var items = '', openedFirst = false;
     for (var i = 0; i < STRESS_WINDOWS.length; i++) {
       var win = STRESS_WINDOWS[i], b = EVENT_BRIEFINGS[win.id]; if (!b) continue;
+      var op = openedFirst ? '' : ' open'; openedFirst = true;
       var tagCols = (EVENT_FACTORS[win.id] || []).map(function (fid) { var f = _factorById(fid); return f ? f.col : fid; }).join(' \u00b7 ');
       var dates = (win.from && win.to) ? fmtRange(win.from, win.to) : '';
       var conf = b.recent ? '<div style="font-size:8.5px;margin-top:3px;color:var(--color-text-danger,#ef4444);font-weight:600">Low confidence \u2014 too recent for a durable lesson.</div>' : '';
-      items += '<details style="border-top:1px solid var(--color-border-tertiary);padding:5px 0">' +
+      items += '<details' + op + ' style="border-top:1px solid var(--color-border-tertiary);padding:5px 0">' +
         '<summary style="font-size:10.5px;color:var(--color-text-secondary);cursor:pointer;font-weight:600">' + win.label +
         (dates ? ' <span style="font-weight:400;color:var(--color-text-tertiary);font-size:9.5px">' + dates + '</span>' : '') +
         (tagCols ? ' <span style="font-weight:400;color:var(--color-text-tertiary);font-size:9px">\u00b7 stressed: ' + tagCols + '</span>' : '') + '</summary>' +
         '<div style="margin:6px 0 2px;font-size:10.5px;line-height:1.5;color:var(--color-text-secondary)">' + _eventBriefingProse(win) + conf + '</div></details>';
     }
     var caveat = '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.4">Past behavior, not a forecast \u2014 the pattern names conditions that <em>rhyme</em>, never a buy/sell or timing signal. Hit a window button above to replay your own book through any of these.</div>';
-    return '<details style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">The six stress events, explained</summary>' +
+    return '<details open style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">The six stress events, explained</summary>' +
       '<div style="margin-top:6px">' +
       '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:4px">What each historical event was, what drove it down and back up, and the transferable pattern \u2014 plus which of the six risks it stressed. The matrix shows all six at a glance against your live book; expand any event below for the full read.</div>' +
       matrix + '<div style="margin-top:8px">' + items + '</div>' + _legendHtml() + caveat +
