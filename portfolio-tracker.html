@@ -20443,11 +20443,11 @@ function buildThemeResearchPrompt(theme) {
     'The investor\'s ONLY direct holdings tagged to this theme: ' + (f.held.length ? f.held.join(', ') : 'none \u2014 they have no direct position tagged to this theme')
   ];
   const hints = (typeof THEME_SEARCH_HINTS !== 'undefined' && THEME_SEARCH_HINTS[theme]) ? THEME_SEARCH_HINTS[theme] : [];
-  const safetyNet = hints.length ? ' While searching, glance for anything material in: ' + hints.slice(0, 5).join(', ') + '.' : '';
+  const safetyNet = hints.length ? ' If a search is still in budget, glance for anything material in: ' + hints.slice(0, 5).join(', ') + '.' : '';
   return [
     'You are a markets analyst. Write a FOCUSED, current brief on the "' + theme + '" market segment for a sophisticated investor who already holds it. Aim for a substantial but efficient read \u2014 roughly 5 minutes. Give the three PRIORITY sections (Current State, Bull vs Bear, Your Book) real substance; keep the rest compact. Avoid bloat: no multi-subsection essays, no exhaustive lists, no repetition. Respect the per-section caps below.',
     '',
-    'HOW TO RESEARCH: run a HANDFUL of focused web searches \u2014 a moderate budget, enough to ground the current picture, not an exhaustive sweep. Prioritize (1) what is happening now / what changed, (2) the biggest recent policy or news items, (3) what bears on the investor\'s holdings.' + safetyNet,
+    'HOW TO RESEARCH: web searches are the most EXPENSIVE part of this run, so be economical \u2014 aim for about 3-4 targeted searches, no more. Spend them ONLY on the time-sensitive parts: CURRENT STATE, CURRENT NEWS, and any recent figure needed for YOUR BOOK. For the evergreen sections (HOW IT TRADES, KEY PLAYERS & ETFS, RISKS), use your own knowledge and tag it [inference] instead of searching \u2014 only search there if genuinely unsure of a specific fact.' + safetyNet,
     '',
     'Investor context (for the YOUR BOOK section only; do not restate it):',
     ctx.map(c => '- ' + c).join('\n'),
