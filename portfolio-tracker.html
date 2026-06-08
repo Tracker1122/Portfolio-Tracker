@@ -28360,14 +28360,14 @@ init();
     return (panels || []).map(panelSvg).join('');
   }
 
-  function renderReplayCard(model) {
+  function renderReplayCard(model, opts) {
     if (!model.hasData)
       return '<div style="font-size:11px;color:var(--color-text-tertiary)">No replayable data for <strong>' + model.windowLabel + '</strong> yet (coverage ' + model.coveragePct.toFixed(0) + '%). The held names likely had no price history in this window.</div>';
     var pos = model.returnPct >= 0;
     var retColor = pos ? 'var(--color-text-success, #22c55e)' : 'var(--color-text-danger, #ef4444)';
     var _briefWin = null;
     if (model.windowId) { for (var _bi = 0; _bi < STRESS_WINDOWS.length; _bi++) { if (STRESS_WINDOWS[_bi].id === model.windowId) { _briefWin = STRESS_WINDOWS[_bi]; break; } } }
-    var briefing = _briefWin ? renderEventBriefing(_briefWin) : '';
+    var briefing = (_briefWin && !(opts && opts.noBriefing)) ? renderEventBriefing(_briefWin) : '';
     var pn = model.perName || [], breakdown = '';
     if (pn.length) {
       var maxAbs = pn.reduce(function (m, r) { return Math.max(m, Math.abs(r.contrib)); }, 0) || 1;
@@ -28966,7 +28966,7 @@ init();
         stresses: win ? (win.stresses || '') : '',
         hasHypothetical: !!hypoModel,
         eventHtml: curModel ? renderReplayCard(curModel) : '',
-        hypoHtml: hypoModel ? renderReplayCard(hypoModel) : '',
+        hypoHtml: hypoModel ? renderReplayCard(hypoModel, { noBriefing: !!curModel }) : '',
         themeMapHtml: (function () { try { return renderThemeFactorGrid(); } catch (e) { return ''; } })()
       };
     } catch (e) { return { active: false }; }
