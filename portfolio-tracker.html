@@ -1055,10 +1055,10 @@
     <button class="tab-btn active" onclick="switchTab('dashboard')">Home</button>
     <button class="tab-btn" onclick="switchTab('distribution')">True Exposure</button>
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
-    <button class="tab-btn" onclick="switchTab('tradeideas')">Trade Ideas</button>
-    <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
     <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
     <button class="tab-btn" onclick="switchTab('risk')">Risk Review</button>
+    <button class="tab-btn" onclick="switchTab('tradeideas')">Trade Ideas</button>
+    <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
   </div>
@@ -1087,11 +1087,19 @@
     </div>
 
     <!-- Analytics Row -->
-    <!-- TOP ROW: summary cards (Passive Core · Unrealised Gain · Tax Year · Private Investments · Capital Deployed) -->
+    <!-- TOP ROW: summary cards (Passive Core · Private Investments · Unrealised Gain · Tax Year) -->
     <div class="analytics-grid-4">
       <div class="analytics-card" id="sp-summary-card" onclick="showCardOverlay('voo')" style="cursor:pointer">
         <div class="analytics-card-title">Passive Core — VOO</div>
         <div id="sp-summary-content"><div style="color:var(--color-text-tertiary);font-size:11px">No lots imported yet</div></div>
+      </div>
+      <div class="analytics-card" id="pe-deals-card" onclick="showCardOverlay('private-investments')" style="cursor:pointer">
+        <div class="analytics-card-title">Private Investments — Direct PE Deals</div>
+        <div id="pe-deals-content"></div>
+      </div>
+      <div class="analytics-card" id="pe-ipo-conc-card" style="display:none">
+        <div class="analytics-card-title">IPO'd Private Holdings — Concentration</div>
+        <div id="pe-ipo-conc-content"></div>
       </div>
       <div class="analytics-card" id="account-card" onclick="showCardOverlay('account')" style="cursor:pointer">
         <div class="analytics-card-title">Unrealised Gain by Account</div>
@@ -1119,18 +1127,6 @@
             <div id="tax-sheltered" style="font-size:13px;font-weight:700;color:var(--color-text-tertiary)">$0</div>
           </div>
         </div>
-      </div>
-      <div class="analytics-card" id="pe-deals-card" onclick="showCardOverlay('private-investments')" style="cursor:pointer">
-        <div class="analytics-card-title">Private Investments — Direct PE Deals</div>
-        <div id="pe-deals-content"></div>
-      </div>
-      <div class="analytics-card" id="pe-ipo-conc-card" style="display:none">
-        <div class="analytics-card-title">IPO'd Private Holdings — Concentration</div>
-        <div id="pe-ipo-conc-content"></div>
-      </div>
-      <div class="analytics-card" id="capital-deployed-card" onclick="showCardOverlay('capital-deployed')" style="cursor:pointer">
-        <div class="analytics-card-title">Capital Deployed — Money In Over Time</div>
-        <div id="capital-deployed-content"></div>
       </div>
     </div>
 
@@ -5527,7 +5523,7 @@ function renderAccountBreakdown() {
   const keys = Object.keys(accounts);
   if (keys.length === 0) { el.innerHTML = '<div style="color:var(--color-text-tertiary);font-size:11px">No open positions</div>'; return; }
 
-  el.innerHTML = keys.map(acct => {
+  let html = keys.map(acct => {
     const { invested, value } = accounts[acct];
     const gl = value - invested;
     const ret = invested > 0 ? (gl / invested) * 100 : null;
@@ -5554,6 +5550,44 @@ function renderAccountBreakdown() {
       </div>
     </div>`;
   }).join('');
+
+  // Private investments (direct PE deals) shown as their own "account" row. Uses gross unrealised
+  // gain (current mark − invested) — the same simple basis as the public rows here, NOT the
+  // dilution-aware per-share / valuation-change metrics on the Private Investments card. Marks are
+  // last-round / estimated values, not live market prices, so the label carries a quiet caveat.
+  if (typeof computePeTotals === 'function') {
+    const pe = computePeTotals();
+    if (pe && pe.count > 0) {
+      const invested = pe.totalInvested;
+      const value = pe.totalCurrentValue;
+      const gl = pe.gl;
+      const ret = invested > 0 ? (gl / invested) * 100 : null;
+      const col = gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      html += `<div class="acct-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+        <span class="acct-name" title="Private deals are valued at their last-round or estimated mark, not a live market price — and gross of fees/carry. See the Private Investments card for the dilution-aware returns.">Private <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400">· marked</span></span>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;width:100%;gap:12px">
+          <div class="acct-val">
+            <div class="acct-val-label">Invested</div>
+            <div class="acct-val-num">${fmtDollarWhole(invested)}</div>
+          </div>
+          <div class="acct-val">
+            <div class="acct-val-label">Value</div>
+            <div class="acct-val-num">${fmtDollarWhole(value)}</div>
+          </div>
+          <div class="acct-val">
+            <div class="acct-val-label">G/L</div>
+            <div class="acct-val-num" style="color:${col}">${fmtDollarWhole(gl)}</div>
+          </div>
+          <div class="acct-val">
+            <div class="acct-val-label">Ret %</div>
+            <div class="acct-val-num" style="color:${col}">${ret !== null ? fmtPct(ret) : '—'}</div>
+          </div>
+        </div>
+      </div>`;
+    }
+  }
+
+  el.innerHTML = html;
 }
 
 // ─────────────────────────────────────────────
