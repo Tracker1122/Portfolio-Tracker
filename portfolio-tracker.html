@@ -1168,6 +1168,22 @@
     </div>
     <div id="dashboard-theme-spotlight" style="margin-bottom:20px"></div>
       </div>
+      <!-- Strategy + Industry Reference (moved: under Industry Spotlight) -->
+      <div style="grid-column:1 / -1">
+    <!-- Strategy Reference -->
+    <div class="section-heading">Strategy Reference</div>
+    <div style="margin:6px 0 8px;padding:8px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
+      <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span><strong style="color:var(--color-text-primary)">Per-position pp</strong> — pp values shown in this panel are position-specific (this ticker's return minus its theme benchmark over the holding period). They are <strong>not</strong> capital-weighted across the industry. For industry-aggregate capital-weighted pp, see Industry Reference below or click any Industry Spotlight card.
+    </div>
+    <div id="sleeve-ref-panel" style="margin:8px 0 12px" onclick="showCardOverlay('stratref')" style="cursor:pointer"></div>
+
+    <!-- Industry Reference -->
+    <div class="section-heading">Industry Reference</div>
+    <div style="margin:6px 0 8px;padding:8px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
+      <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span><strong style="color:var(--color-text-primary)">Two pp methods used in this panel.</strong> The pp shown in each industry card header (next to the dollar deficit) is <strong>capital-weighted across positions</strong>. The per-position pp shown in the drill-down (when you click a card) is <strong>position-specific</strong>. <span id="legend-example-industryref"></span>
+    </div>
+    <div id="industry-ref-panel" style="margin:8px 0 12px"></div>
+      </div>
       <!-- ACTION TIER -->
       <div class="analytics-card" id="trim-watch-card" onclick="showCardOverlay('trim')" style="cursor:pointer">
         <div class="analytics-card-title">Top Laggards (vs S&P, $)</div>
@@ -1186,48 +1202,6 @@
 
 
 
-    <!-- Strategy Reference -->
-    <div class="section-heading">Strategy Reference</div>
-    <div style="margin:6px 0 8px;padding:8px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
-      <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span><strong style="color:var(--color-text-primary)">Per-position pp</strong> — pp values shown in this panel are position-specific (this ticker's return minus its theme benchmark over the holding period). They are <strong>not</strong> capital-weighted across the industry. For industry-aggregate capital-weighted pp, see Industry Reference below or click any Industry Spotlight card.
-    </div>
-    <div id="sleeve-ref-panel" style="margin:8px 0 12px" onclick="showCardOverlay('stratref')" style="cursor:pointer"></div>
-
-    <!-- Industry Reference -->
-    <div class="section-heading">Industry Reference</div>
-    <div style="margin:6px 0 8px;padding:8px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
-      <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span><strong style="color:var(--color-text-primary)">Two pp methods used in this panel.</strong> The pp shown in each industry card header (next to the dollar deficit) is <strong>capital-weighted across positions</strong>. The per-position pp shown in the drill-down (when you click a card) is <strong>position-specific</strong>. <span id="legend-example-industryref"></span>
-    </div>
-    <div id="industry-ref-panel" style="margin:8px 0 12px"></div>
-
-    <!-- Cash -->
-    <div class="section-heading">Cash</div>
-
-    <!-- Cash Ledger -->
-    <div style="margin-top:12px">
-      <div style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 14px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)" onclick="toggleLedger()">
-        <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-secondary)">📋 Cash Ledger</span>
-        <span id="ledger-total-badge" style="font-size:10px;color:var(--color-text-tertiary)"></span>
-        <span id="ledger-toggle-arrow" style="font-size:10px;color:var(--color-text-tertiary);margin-left:auto">▸</span>
-      </div>
-      <div id="ledger-panel" style="display:none;margin-top:4px">
-        <div id="ledger-table-wrap" style="overflow-x:auto;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">
-          <table style="width:100%;border-collapse:collapse;font-size:11px">
-            <thead>
-              <tr style="border-bottom:1px solid var(--color-border-tertiary)">
-                <th style="text-align:left;padding:6px 10px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;background:var(--color-background-secondary)">Date</th>
-                <th style="text-align:left;padding:6px 10px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;background:var(--color-background-secondary)">Account</th>
-                <th style="text-align:left;padding:6px 10px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;background:var(--color-background-secondary)">Type</th>
-                <th style="text-align:right;padding:6px 10px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;background:var(--color-background-secondary)">Amount</th>
-                <th style="text-align:left;padding:6px 10px;font-size:9px;color:var(--color-text-tertiary);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;background:var(--color-background-secondary)">Note</th>
-                <th style="background:var(--color-background-secondary)"></th>
-              </tr>
-            </thead>
-            <tbody id="ledger-tbody"></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
 
 
     <!-- Tax Profile -->
@@ -1287,6 +1261,13 @@
     <!-- Split-benchmark note: same ticker, multiple closed lots measured vs different benchmarks (filled by renderSplitBenchmarkNote) -->
     <div id="closed-split-benchmark-note" style="display:none;font-size:10px;color:var(--color-text-secondary);background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.3);border-radius:var(--border-radius-md);padding:6px 10px;margin-bottom:10px;line-height:1.5"></div>
     <div class="summary-grid" id="closed-summary"></div>
+    <!-- Closed position details — collapsed by default; the summary cards above stay visible -->
+    <div style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 14px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-top:6px" onclick="toggleClosedPositions()">
+      <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-secondary)">📁 Closed Position Details</span>
+      <span id="closed-count-badge" style="font-size:10px;color:var(--color-text-tertiary)"></span>
+      <span id="closed-toggle-arrow" style="font-size:10px;color:var(--color-text-tertiary);margin-left:auto">▸</span>
+    </div>
+    <div id="closed-positions-panel" style="display:none;margin-top:4px">
     <div class="table-wrapper" id="closed-table-wrapper">
       <table>
         <thead>
@@ -1321,6 +1302,7 @@
       <input type="range" class="scroll-slider" id="closed-slider" min="0" value="0" step="1"
         oninput="sliderScroll('closed-table-wrapper', this)">
     </div>
+    </div><!-- end closed-positions-panel -->
 
   </div><!-- end tab-dashboard -->
 
@@ -13396,6 +13378,16 @@ function togglePositionsTable() {
   if (isOpen && typeof syncFixedScrollbar === 'function') syncFixedScrollbar();
 }
 
+function toggleClosedPositions() {
+  const panel = document.getElementById('closed-positions-panel');
+  const arrow = document.getElementById('closed-toggle-arrow');
+  if (!panel) return;
+  const isOpen = panel.style.display === 'none';
+  panel.style.display = isOpen ? 'block' : 'none';
+  if (arrow) arrow.textContent = isOpen ? '▾' : '▸';
+  if (isOpen && typeof syncFixedScrollbar === 'function') syncFixedScrollbar();
+}
+
 function renderLedger() {
   const tbody = document.getElementById('ledger-tbody');
   const badge = document.getElementById('ledger-total-badge');
@@ -23243,6 +23235,8 @@ function renderAll() {
   safeRender('renderAumCard', renderAumCard);
   safeRender('renderPeIpoConcBlock', renderPeIpoConcBlock);
   safeRender('renderSummary(closed)', () => renderSummary('closed-summary', closed, false));
+  const _closedBadge = document.getElementById('closed-count-badge');
+  if (_closedBadge) _closedBadge.textContent = closed.length ? (closed.length + (closed.length === 1 ? ' closed lot' : ' closed lots')) : '';
   safeRender('renderSplitBenchmarkNote', renderSplitBenchmarkNote);
   safeRender('renderBookExcludePanel', () => renderBookExcludePanel(open));
   safeRender('renderTrimWatch', renderTrimWatch);
