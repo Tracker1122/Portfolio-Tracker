@@ -1471,6 +1471,11 @@
     <div class="modal-subtitle">Confirm the sale, then record why. Both get saved on the closed position.</div>
     <div id="sell-lockup-info"></div>
     <div class="modal-field">
+      <label class="modal-label" title="How many shares to sell. Defaults to the whole position. Enter less to TRIM — the sold shares become a closed lot and the rest stays open at the same basis, buy date, and lockup.">Shares to sell</label>
+      <input class="modal-input" id="sell-qty" type="number" min="0" step="any" style="width:170px">
+      <div id="sell-qty-note" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
+    </div>
+    <div class="modal-field">
       <label class="modal-label">Sale date</label>
       <input class="modal-input" id="sell-date" type="date" style="width:170px">
     </div>
@@ -2612,7 +2617,9 @@ function mkPos() {
     peLockup: null,
     peLockupResolved: null,
     peLockupReleased: {},
-    peFullyUnlockedDate: null
+    peFullyUnlockedDate: null,
+    peLockupOrigShares: null,   // share count at conversion — the denominator for the lockup trim cap
+    peLockupSoldShares: 0       // cumulative shares trimmed from this lineage (Piece 3 partial sales)
   };
 }
 
@@ -8350,6 +8357,7 @@ function renderQrForm() {
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Ticker</label>
           <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="qrCheckStage1()" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
           <div style="margin-top:3px"><a href="#" onclick="qrOpenAnalysis(event)" title="Opens the ${qrType === 'etf' ? 'fund' : 'company'} overview on stockanalysis.com (free, no login) — a handy reference while you fill this out" style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">↗ View ${qrType === 'etf' ? 'fund' : 'stock'} on stockanalysis.com</a></div>
+          <div style="margin-top:3px"><a href="#" onclick="event.preventDefault();qrToggleFormInfo()" title="Quick summary — what this is, sector, research links, and an AI read on which of YOUR themes it fits. Mirrors the Discovery card." style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">ⓘ What is this? · where it lands</a></div>
         </div>
         <div style="flex:1;min-width:140px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Theme</label>
@@ -8364,6 +8372,7 @@ function renderQrForm() {
           <div style="display:flex;align-items:center;gap:4px"><span style="font-size:12px;color:var(--color-text-tertiary)">$</span><input id="qr-buy-amount" type="number" value="${esc(buyVal)}" oninput="qrRenderBuyImpact()" placeholder="e.g. 25000" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px"></div>
         </div>
       </div>
+      <div id="qr-form-info" style="margin-bottom:12px"></div>
       <div id="qr-buy-impact" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:12px"></div>
       <div id="qr-perf-form" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:12px"></div>
       ${stage1ExtraHtml}
@@ -9725,9 +9734,11 @@ function renderQrSavedList() {
         <div id="qr-perf-${c.id}" style="margin-top:10px"></div>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="editQrCandidate('${c.id}')" style="font-size:10px">✎ Edit candidate</button>
+          <button class="btn btn-sm" onclick="qrToggleCardInfo('${c.id}','${escq(c.ticker)}')" style="font-size:10px" title="Quick summary — what this is, sector, research links, and an AI read on which of your themes it fits. Same card as Discovery.">ⓘ What is this?</button>
           ${c.type === 'etf' ? `<button id="qr-analysis-btn-${c.id}" class="btn btn-sm" onclick="toggleQrCardAnalysis('${c.id}')" style="font-size:10px">🔍 View analysis (overlap)</button>` : ''}
           <button class="btn btn-sm" onclick="deleteQrCandidate('${c.id}')" style="font-size:10px;color:var(--color-text-danger)">Delete</button>
         </div>
+        <div id="qr-info-${c.id}" style="margin-top:10px"></div>
         ${c.type === 'etf' ? `<div id="qr-analysis-${c.id}" style="margin-top:10px;display:none"></div>` : ''}
         <div id="qr-flags-${c.id}" style="margin-top:10px">${renderQualityFlags(c)}</div>
         <div id="qr-ai-${c.id}" style="display:none"></div>
@@ -19679,7 +19690,8 @@ function toggleDiscoverySelect(ticker) {
 // Build the info-card HTML for a ticker from the tickerInfo cache. Degrades gracefully: shows
 // whatever fields are present, a clear "no description" line when Polygon returned a sparse record,
 // and an always-present editable note field (manual override / your own one-liner).
-function discoveryInfoCardHtml(key, state) {
+function discoveryInfoCardHtml(key, state, opts) {
+  const _closeJs = (opts && opts.closeJs) ? opts.closeJs : 'hideDiscoveryInfo()';
   const info = tickerInfo[key] || {};
   const cap = (typeof fmtMarketCap === 'function') ? fmtMarketCap(info.marketCap) : null;
   let inner = '';
@@ -19730,7 +19742,7 @@ function discoveryInfoCardHtml(key, state) {
   return `<div style="margin-top:6px;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:10px">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px">
       <span style="font-size:10px;font-weight:700;color:var(--color-text-primary)">${esc(key)}</span>
-      <span onclick="hideDiscoveryInfo()" style="cursor:pointer;color:var(--color-text-tertiary);font-size:11px">×</span>
+      <span onclick="${_closeJs}" style="cursor:pointer;color:var(--color-text-tertiary);font-size:11px">×</span>
     </div>
     ${inner}
     ${linkRow}
@@ -19783,6 +19795,42 @@ function saveDiscoveryNote(ticker, text) {
   if (!tickerInfo[key]) tickerInfo[key] = { name: '', sector: '', description: '', marketCap: null, homepage: '', fetchedDate: '', userNote: '' };
   tickerInfo[key].userNote = text;
   if (typeof scheduleSave === 'function') scheduleSave();
+}
+
+// Generic version of showDiscoveryInfo: render the SAME ticker summary card (Polygon facts, research
+// links, your note, and the AI "Where it lands" suggestion) into ANY element by id — so the candidate
+// flow can show exactly what Discovery shows. The × closes just that slot. Fetches only if uncached.
+async function showTickerInfoInto(ticker, slotId) {
+  const key = (ticker || '').toUpperCase().trim();
+  const slot = document.getElementById(slotId);
+  if (!slot) return;
+  if (!key) { slot.innerHTML = '<span style="color:var(--color-text-tertiary);font-size:9px">Enter a ticker first.</span>'; return; }
+  const closeJs = "(function(){var s=document.getElementById('" + slotId + "');if(s){s.innerHTML='';s.dataset.open='';}})()";
+  const paint = (st) => { const s = document.getElementById(slotId); if (s) s.innerHTML = discoveryInfoCardHtml(key, st, { closeJs }); };
+  if (tickerInfo[key] && tickerInfo[key].fetchedDate) { paint(null); return; } // cached — no re-fetch
+  paint('loading');
+  const res = await fetchTickerInfo(key);
+  paint(res.ok ? null : { error: res.error });
+}
+
+// Toggle the summary card inside the candidate EVALUATION form (reads the qr-ticker field).
+function qrToggleFormInfo() {
+  const slot = document.getElementById('qr-form-info');
+  if (!slot) return;
+  if (slot.dataset.open === '1') { slot.dataset.open = ''; slot.innerHTML = ''; return; }
+  slot.dataset.open = '1';
+  const t = ((document.getElementById('qr-ticker') || {}).value || '').trim().toUpperCase();
+  if (!t) { slot.innerHTML = '<span style="color:var(--color-text-tertiary);font-size:9px">Enter a ticker first.</span>'; return; }
+  showTickerInfoInto(t, 'qr-form-info');
+}
+
+// Toggle the summary card inside a SAVED candidate card (qr-info-<id>).
+function qrToggleCardInfo(id, ticker) {
+  const slot = document.getElementById('qr-info-' + id);
+  if (!slot) return;
+  if (slot.dataset.open === '1') { slot.dataset.open = ''; slot.innerHTML = ''; return; }
+  slot.dataset.open = '1';
+  showTickerInfoInto(ticker, 'qr-info-' + id);
 }
 
 // AI "where does this land" classifier. Reasons in the investor's OWN thematic buckets (not GICS),
@@ -23472,8 +23520,15 @@ function peLockupStatus(pos, asOf) {
   const carryPct = parseFloat(pos.peCarryPct) || 0;
   const haveMark = currentPrice > 0 && shares > 0;
   const currentValue = haveMark ? shares * currentPrice : 0;
-  const unlockedValue = currentValue * (unlocked / 100);
-  const lockedValue = currentValue - unlockedValue;
+  // Share-based unlock accounting (Piece 3): the cap is measured against the ORIGINAL position and
+  // reduced by shares already trimmed, so it stays correct as the lot is whittled down.
+  const origShares = parseFloat(pos.peLockupOrigShares) || shares;
+  const soldShares = parseFloat(pos.peLockupSoldShares) || 0;
+  const unlockedShares = (unlocked / 100) * origShares;
+  const sellableNowShares = Math.max(0, Math.round((unlockedShares - soldShares) * 1e6) / 1e6);
+  const sellableShown = Math.min(sellableNowShares, shares);
+  const unlockedValue = haveMark ? sellableShown * currentPrice : 0;
+  const lockedValue = haveMark ? (currentValue - unlockedValue) : 0;
   const totalGain = haveMark ? (currentPrice - basis) * shares : 0;            // full gain from pre-IPO basis
   const sinceIpoGain = (haveMark && ipoPrice > 0) ? (currentPrice - ipoPrice) * shares : null; // public-era only
   const privateEraGain = (haveMark && ipoPrice > 0) ? (ipoPrice - basis) * shares : null;      // pre-IPO appreciation
@@ -23484,6 +23539,7 @@ function peLockupStatus(pos, asOf) {
     fullyUnlockedDate: pos.peFullyUnlockedDate || null,
     conditionalPending, hasConditional: conditionalPending.length > 0,
     haveMark, currentPrice, shares, basis, ipoPrice,
+    origShares, soldShares, unlockedShares, sellableNowShares,
     currentValue, unlockedValue, lockedValue,
     totalGain, sinceIpoGain, privateEraGain, carryPct, projectedCarry
   };
@@ -24410,6 +24466,8 @@ function convertPeDealToPublic(id) {
   const _peLk = resolvePeLockup(deal.peLockup, ipoDate);
   pos.peLockupResolved = _peLk.resolved;
   pos.peFullyUnlockedDate = _peLk.fullyUnlockedDate;
+  pos.peLockupOrigShares = pos.shares; // freeze the original share count as the trim-cap denominator (Piece 3)
+  pos.peLockupSoldShares = 0;
   pos.notes = (deal.notes ? deal.notes + ' · ' : '') + `Converted from private deal (${deal.company}) at IPO ${ipoDate}. Basis is pre-IPO cost; gain includes private-era appreciation.`;
 
   const confirmMsg = `Convert ${deal.company} → public ${ticker}?\n\n`
@@ -24736,22 +24794,41 @@ function toggleClosed(id) {
     const currentPrice = parseFloat(pos.exitPrice);
     document.getElementById('sell-price').value = (currentPrice > 0) ? currentPrice : '';
 
-    // Update proceeds preview as user types
+    // Prefill quantity with the FULL position, so a plain sell = the same one-click close as before.
+    const heldShares = parseFloat(pos.shares) || 0;
+    document.getElementById('sell-qty').value = heldShares || '';
+    const _sellLk = (typeof peLockupStatus === 'function') ? peLockupStatus(pos) : null;
+    const _cap = (_sellLk && _sellLk.state !== 'unlocked' && typeof _sellLk.sellableNowShares === 'number') ? _sellLk.sellableNowShares : null;
+
+    // Update proceeds preview + quantity note as the user types
     const updatePreview = () => {
       const price = parseFloat(document.getElementById('sell-price').value);
       const fees = parseFloat(document.getElementById('sell-fees').value) || 0;
-      const shares = parseFloat(pos.shares) || 0;
+      const enteredQty = parseFloat(document.getElementById('sell-qty').value);
+      let qty = (isNaN(enteredQty) || enteredQty <= 0) ? heldShares : Math.min(enteredQty, heldShares);
       const previewEl = document.getElementById('sell-proceeds-preview');
-      if (price > 0 && shares > 0) {
-        const gross = shares * price;
+      if (price > 0 && qty > 0) {
+        const gross = qty * price;
         previewEl.textContent = fees > 0
-          ? `Proceeds: ${shares} × ${fmtDollar(price)} = ${fmtDollar(gross)} − ${fmtDollar(fees)} fees = ${fmtDollar(gross - fees)} net`
-          : `Proceeds: ${shares} × ${fmtDollar(price)} = ${fmtDollar(gross)}`;
+          ? `Proceeds: ${qty} × ${fmtDollar(price)} = ${fmtDollar(gross)} − ${fmtDollar(fees)} fees = ${fmtDollar(gross - fees)} net`
+          : `Proceeds: ${qty} × ${fmtDollar(price)} = ${fmtDollar(gross)}`;
       } else {
         previewEl.textContent = '';
       }
+      const noteEl = document.getElementById('sell-qty-note');
+      if (noteEl) {
+        const isTrim = !isNaN(enteredQty) && enteredQty > 0 && enteredQty < heldShares - 1e-6;
+        const remaining = Math.round((heldShares - Math.min(isNaN(enteredQty) ? heldShares : enteredQty, heldShares)) * 1e6) / 1e6;
+        let note = 'Holding ' + heldShares + ' share(s). ' + (isTrim
+          ? 'Trim \u2192 sold shares become a closed lot; ' + remaining + ' stay open at the same basis.'
+          : 'Full close of the position.');
+        if (_cap != null) note += ' \uD83D\uDD12 Lockup cap: ' + _cap + ' share(s) sellable now.';
+        noteEl.textContent = note;
+        noteEl.style.color = (_cap != null && !isNaN(enteredQty) && enteredQty > _cap + 1e-6) ? 'var(--color-text-danger)' : 'var(--color-text-tertiary)';
+      }
     };
     document.getElementById('sell-price').oninput = updatePreview;
+    document.getElementById('sell-qty').oninput = updatePreview;
     document.getElementById('sell-fees').value = '';
     document.getElementById('sell-fees').oninput = updatePreview;
     updatePreview();
@@ -24766,8 +24843,10 @@ function skipSellThesis() {
   const salePriceStr = document.getElementById('sell-price').value;
   const salePrice = parseFloat(salePriceStr);
   const fees = parseFloat(document.getElementById('sell-fees').value) || 0;
+  const _qtyStr = document.getElementById('sell-qty').value;
+  const qty = (_qtyStr !== '' && _qtyStr != null && parseFloat(_qtyStr) > 0) ? parseFloat(_qtyStr) : undefined;
   document.getElementById('sell-modal').classList.add('hidden');
-  executeSell(pendingSellId, '', { saleDate, salePrice: isNaN(salePrice) ? null : salePrice, fees });
+  executeSell(pendingSellId, '', { saleDate, salePrice: isNaN(salePrice) ? null : salePrice, fees, qty });
   pendingSellId = null;
 }
 
@@ -24800,13 +24879,24 @@ function confirmSellThesis() {
     if (isNaN(fees) || fees < 0) return showErr('Fees must be zero or a positive number (or leave blank).');
   }
 
+  // Quantity (Piece 3) — optional; defaults to the full position. If given, must be > 0 and ≤ held.
+  const _qPos = positions.find(p => p.id === pendingSellId);
+  const _held = _qPos ? (parseFloat(_qPos.shares) || 0) : 0;
+  const qtyStr = document.getElementById('sell-qty').value;
+  let qty;
+  if (qtyStr !== '' && qtyStr != null) {
+    qty = parseFloat(qtyStr);
+    if (isNaN(qty) || qty <= 0) return showErr('Shares to sell must be greater than 0.');
+    if (qty > _held + 1e-6) return showErr("You can't sell more than the " + _held + ' share(s) you hold.');
+  }
+
   let sellNote = '';
   if (verdict) sellNote += `Exit verdict: ${verdict}`;
   if (why) sellNote += (sellNote ? ' | ' : '') + `Reason: ${why}`;
   if (proceeds) sellNote += (sellNote ? ' | ' : '') + `Proceeds: ${proceeds}`;
 
   document.getElementById('sell-modal').classList.add('hidden');
-  executeSell(pendingSellId, sellNote, { saleDate, salePrice, fees });
+  executeSell(pendingSellId, sellNote, { saleDate, salePrice, fees, qty });
   pendingSellId = null;
 }
 
@@ -24815,27 +24905,60 @@ let undoTimeout = null;
 let undoBarTimeout = null;
 
 function executeSell(id, sellNote, saleInfo) {
-  const pos = positions.find(p => p.id === id);
-  if (!pos) return;
+  const _parent = positions.find(p => p.id === id);
+  if (!_parent) return;
 
-  // Close-before-unlock guard (Stage B). Whole-position close only for now (partial-lot sales = Piece 3),
-  // so warn if the lockup hasn't fully lifted — a full close records more than is sellable today.
-  const _lkGuard = (typeof peLockupStatus === 'function') ? peLockupStatus(pos) : null;
-  if (_lkGuard && _lkGuard.state !== 'unlocked') {
-    if (!confirm('Lockup: only ' + _lkGuard.unlockedPct + '% of ' + (pos.ticker || 'this position') + ' is unlocked as of ' + _lkGuard.asOf + '.\n\nPartial-lot sales aren\'t built yet, so this records a FULL close of the position — more than you could actually sell today. Record the full sale anyway?')) {
-      return;
-    }
-  }
-
-  // saleInfo is { saleDate, salePrice } from the modal. Both may be missing if the
-  // function is called from a legacy path; we fall back to today + current exitPrice.
+  // saleInfo is { saleDate, salePrice, fees, qty } from the modal. All may be missing on a legacy call;
+  // we fall back to today + current exitPrice + the full position.
   const info = saleInfo || {};
   const userSaleDate = info.saleDate;
   const userSalePrice = (typeof info.salePrice === 'number' && info.salePrice > 0) ? info.salePrice : null;
   const userFees = (typeof info.fees === 'number' && info.fees >= 0) ? info.fees : 0;
 
-  // Apply user-supplied price BEFORE computing proceeds — so proceeds reflect what
-  // actually happened, not the last-refreshed market price.
+  // Quantity to sell (Piece 3). Default = full position, so a plain sell behaves exactly as before.
+  const EPS = 1e-6;
+  const heldShares = parseFloat(_parent.shares) || 0;
+  let sellQty = (typeof info.qty === 'number' && info.qty > 0) ? info.qty : heldShares;
+  if (sellQty > heldShares) sellQty = heldShares;
+  const isPartial = sellQty < heldShares - EPS;
+
+  // Lockup cap: a PE-converted locked position can't sell more than has actually released
+  // (unlocked% × original shares − already-trimmed). Hard backstop on top of the modal's live note.
+  const _lk = (typeof peLockupStatus === 'function') ? peLockupStatus(_parent) : null;
+  if (_lk && _lk.state !== 'unlocked') {
+    const cap = (typeof _lk.sellableNowShares === 'number') ? _lk.sellableNowShares : heldShares;
+    if (sellQty > cap + EPS) {
+      alert('Lockup: only ' + (Math.round(cap * 1e4) / 1e4) + ' share(s) of ' + (_parent.ticker || 'this position')
+        + ' are unlocked as of ' + _lk.asOf + ' (' + _lk.unlockedPct + '% of the original position, minus what you\'ve already trimmed). '
+        + 'Reduce the quantity to that or less'
+        + (_lk.nextUnlock ? ', or wait for the next release (+' + _lk.nextUnlock.pct + '% on ' + _lk.nextUnlock.date + ')' : '') + '.');
+      return;
+    }
+  }
+
+  // Determine the lot to CLOSE. Full sale → the position itself. Partial trim → SPLIT the lot: a new
+  // closed lot carries the sold shares (same basis, buy date, carry, PE provenance), and the original
+  // stays open with the remaining shares. Each piece is a normal position, so the closed table /
+  // realized P&L / post-sell treat the trim like any other realized trade.
+  let pos, undoExtra = null;
+  if (isPartial) {
+    const prevSold = parseFloat(_parent.peLockupSoldShares) || 0;
+    pos = Object.assign({}, _parent, { id: nextId++, shares: sellQty, fetchState: 'idle' });
+    // A sold lot carries no forward lockup of its own (peLockup kept only for the since-IPO record).
+    pos.peLockupResolved = null;
+    pos.peLockupReleased = {};
+    pos.peFullyUnlockedDate = null;
+    pos.peLockupOrigShares = null;
+    pos.peLockupSoldShares = 0;
+    _parent.shares = heldShares - sellQty;
+    _parent.peLockupSoldShares = prevSold + sellQty; // count this trim against the lockup allowance
+    positions.push(pos);
+    undoExtra = { type: 'partial', closedLotId: pos.id, parentId: _parent.id, prevParentShares: heldShares, prevParentSold: prevSold };
+  } else {
+    pos = _parent;
+  }
+
+  // Apply user-supplied price BEFORE computing proceeds — so proceeds reflect what actually happened.
   if (userSalePrice !== null) {
     pos.exitPrice = userSalePrice;
   }
@@ -24848,10 +24971,11 @@ function executeSell(id, sellNote, saleInfo) {
 
   // Save undo state before mutating
   undoState = {
-    id, prevNotes: pos.notes, prevClosed: pos.closed,
+    id: pos.id, prevNotes: pos.notes, prevClosed: pos.closed,
     prevSellDate: pos.sellDate, prevExitPrice: pos.exitPrice, prevSpxExit: pos.spxExit,
     prevBenchmarkPriceAtSell: pos.benchmarkPriceAtSell, prevFeesAtSale: pos.feesAtSale
   };
+  if (undoExtra) Object.assign(undoState, undoExtra);
 
   pos.closed = true;
   pos.feesAtSale = userFees;
@@ -24894,7 +25018,7 @@ function executeSell(id, sellNote, saleInfo) {
   }
   renderAll();
   scheduleSave();
-  showUndoToast(`${pos.ticker} marked as sold`);
+  showUndoToast(isPartial ? `Trimmed ${sellQty} sh of ${pos.ticker}` : `${pos.ticker} marked as sold`);
 
   // Show cash modal after brief delay so undo toast is visible
   if (proceeds > 0) {
@@ -24928,7 +25052,16 @@ function showUndoToast(message) {
 function undoSell() {
   if (!undoState) return;
 
-  if (undoState.type === 'delete') {
+  if (undoState.type === 'partial') {
+    // Undo a trim: remove the split-off closed lot and restore the parent open lot's shares + allowance.
+    const ci = positions.findIndex(p => p.id === undoState.closedLotId);
+    if (ci >= 0) positions.splice(ci, 1);
+    const parent = positions.find(p => p.id === undoState.parentId);
+    if (parent) {
+      parent.shares = undoState.prevParentShares;
+      parent.peLockupSoldShares = undoState.prevParentSold;
+    }
+  } else if (undoState.type === 'delete') {
     // Restore deleted position at original index
     positions.splice(undoState.index, 0, { ...undoState.pos });
   } else {
