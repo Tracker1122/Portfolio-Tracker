@@ -19651,6 +19651,17 @@ function discoveryInfoCardHtml(key, state) {
   ).join('') + `</div>`;
   const note = (info.userNote || '');
   const noteField = `<div style="margin-top:5px"><textarea data-info-note="${esc(key)}" placeholder="Your own note on ${esc(key)} (saved automatically)…" oninput="saveDiscoveryNote('${escq(key)}', this.value)" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:9px;background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:4px 6px;resize:vertical" rows="2">${esc(note)}</textarea></div>`;
+  const sugg = info.themeSuggestion;
+  const safe = 'tcls_' + key.replace(/[^A-Za-z0-9]/g, '_');
+  let suggHtml = '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+    +   '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-info)">Where it lands (AI)</span>'
+    +   (sugg && sugg.at ? '<span style="font-size:8px;color:var(--color-text-tertiary)">suggested ' + esc(_livePxAge(new Date(sugg.at).getTime())) + (sugg.web ? ' \u00b7 web' : '') + '</span>' : '')
+    +   '<button id="' + safe + '_btn" onclick="suggestTickerClassification(\'' + escq(key) + '\',\'' + safe + '\')" style="font-size:9px;color:var(--color-text-info);background:none;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:1px 7px;cursor:pointer;font-family:inherit">' + (sugg ? '\u21bb Re-run' : 'Suggest theme') + '</button>'
+    +   '<label style="display:flex;align-items:center;gap:4px;font-size:8px;color:var(--color-text-secondary);cursor:pointer" title="Let it run a web search if it doesn\u2019t recognize the ticker (costs a little more)"><input type="checkbox" id="' + safe + '_web" style="margin:0">web</label>'
+    + '</div>'
+    + '<div id="' + safe + '_out" style="margin-top:5px;font-size:10px;line-height:1.5;color:var(--color-text-secondary)">' + (sugg && sugg.text ? linkifyResearch(sugg.text) : '<span style="color:var(--color-text-tertiary);font-style:italic;font-size:9px">Reasons in your own theme buckets (not GICS) — a suggestion to accept or override.</span>') + '</div>'
+    + '</div>';
   return `<div style="margin-top:6px;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:10px">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px">
       <span style="font-size:10px;font-weight:700;color:var(--color-text-primary)">${esc(key)}</span>
@@ -19658,6 +19669,7 @@ function discoveryInfoCardHtml(key, state) {
     </div>
     ${inner}
     ${linkRow}
+    ${suggHtml}
     ${noteField}
   </div>`;
 }
@@ -19706,6 +19718,68 @@ function saveDiscoveryNote(ticker, text) {
   if (!tickerInfo[key]) tickerInfo[key] = { name: '', sector: '', description: '', marketCap: null, homepage: '', fetchedDate: '', userNote: '' };
   tickerInfo[key].userNote = text;
   if (typeof scheduleSave === 'function') scheduleSave();
+}
+
+// AI "where does this land" classifier. Reasons in the investor's OWN thematic buckets (not GICS),
+// using the cached profile as context. Cached on tickerInfo[ticker].themeSuggestion so it's generated
+// once and glanceable everywhere, re-costing nothing. Web search is opt-in (only needed for a ticker
+// the model doesn't recognize), keeping it ~5-15c a press, fired deliberately.
+let tickerClassifyBusy = false;
+function buildTickerClassifyPrompt(ticker, useWeb) {
+  const info = (typeof tickerInfo !== 'undefined' && tickerInfo[ticker]) ? tickerInfo[ticker] : {};
+  const themes = (typeof THEMES !== 'undefined') ? Object.keys(THEMES) : [];
+  const profile = [];
+  if (info.name) profile.push('Name: ' + info.name);
+  if (info.sector) profile.push('Polygon sector: ' + info.sector);
+  if (info.marketCap) profile.push('Market cap (raw): ' + info.marketCap);
+  if (info.description) profile.push('Description: ' + info.description);
+  const lines = [
+    'Classify the ticker ' + ticker + ' into the investor\'s OWN thematic buckets listed below. Their taxonomy is THEMATIC, not GICS \u2014 reason from what the company or fund actually does and HOW IT TRADES, not just its GICS sector label (the GICS sector is often technically correct but misleading, e.g. an equipment maker labeled "Industrials" that really trades on the grid-capex theme).',
+    '',
+    'The investor\'s buckets: ' + (themes.length ? themes.join(', ') : '(none defined)') + '.',
+    '',
+    'What is on file about ' + ticker + (profile.length ? ':\n' + profile.join('\n') : ': (no profile cached \u2014 you may not have much to go on).'),
+    '',
+    useWeb
+      ? 'You MAY run 1-2 quick web searches if you are unsure what this ticker is; anything current you state must be FROM SEARCH with a source.'
+      : 'Do NOT use web search. Reason from the profile above plus your own knowledge. If you do not actually recognize this ticker, SAY SO plainly rather than guessing.',
+    '',
+    'Answer in 3 tight parts, no preamble:',
+    '1. BEST FIT \u2014 the single bucket from the list it most belongs in (use the exact bucket name). If two are genuinely defensible, name the second and the line between them.',
+    '2. WHY \u2014 one or two sentences: what the business/fund actually is, plus the "trades like X, not Y" tell that decides the bucket.',
+    '3. CONFIDENCE \u2014 high / medium / low, and flag explicitly if you are unsure or do not recognize the ticker. This is a SUGGESTION for the investor to accept or override, never a verdict.',
+    'Tag anything you are not certain of as [inference] and anything unverifiable as \u26a0UNVERIFIED.'
+  ];
+  return lines.join('\n');
+}
+
+async function suggestTickerClassification(ticker, safeBase) {
+  const key = (ticker || '').toUpperCase();
+  if (!key || tickerClassifyBusy) return;
+  const outId = safeBase + '_out', webId = safeBase + '_web', btnId = safeBase + '_btn';
+  const useWeb = !!(document.getElementById(webId) && document.getElementById(webId).checked);
+  const btn = document.getElementById(btnId);
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  const render = function (html) { const o = document.getElementById(outId); if (o) o.innerHTML = html; };
+  if (!aiWorkerUrl) { render('<span style="color:#fbbf24;font-size:9px">No AI worker URL set \u2014 set it on the New Position Evaluation tab.</span>'); return; }
+  tickerClassifyBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = useWeb ? 'Searching\u2026' : 'Thinking\u2026'; }
+  render('<span style="color:var(--color-text-tertiary);font-style:italic;font-size:9px">' + (useWeb ? 'Searching + classifying ' : 'Classifying ') + esc(key) + '\u2026</span>');
+  const prompt = buildTickerClassifyPrompt(key, useWeb);
+  try {
+    let _last = 0;
+    const onDelta = function (t) { const now = Date.now(); if (now - _last < 60) return; _last = now; render('<span style="white-space:pre-wrap">' + esc(t) + '<span style="opacity:.45">\u258c</span></span>'); };
+    const r = await aiWorkerCall(prompt, onDelta, useWeb ? { web: true } : {});
+    if (!tickerInfo[key]) tickerInfo[key] = { name: '', sector: '', description: '', marketCap: null, homepage: '', fetchedDate: '', userNote: '' };
+    tickerInfo[key].themeSuggestion = { text: r.text, at: new Date().toISOString(), web: useWeb };
+    if (typeof scheduleSave === 'function') scheduleSave();
+    render(linkifyResearch(r.text));
+  } catch (err) {
+    const info2 = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { detail: (err && err.message) || 'failed', color: 'var(--color-text-danger)' };
+    render('<span style="color:' + info2.color + ';font-size:9px">' + esc(info2.detail || 'failed') + '</span>');
+  }
+  tickerClassifyBusy = false;
+  if (btn) { btn.disabled = false; btn.textContent = (tickerInfo[key] && tickerInfo[key].themeSuggestion) ? '\u21bb Re-run' : 'Suggest theme'; }
 }
 
 // Fetch 1-month AND 1-year return for one ticker in a SINGLE Polygon call. The range-aggregates
