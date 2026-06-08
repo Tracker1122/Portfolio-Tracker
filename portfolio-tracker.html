@@ -10500,11 +10500,20 @@ function buildQrAiPrompt(candidate) {
     if (_tr && _tr.text) {
       let _txt = String(_tr.text);
       if (_txt.length > 12000) _txt = _txt.slice(0, 12000) + '\n…[dossier truncated for length]';
+      // Fold in any on-demand news passes the user pulled later — already in the tracker, so free to
+      // include and strictly more current. Same quarantine/skepticism rule below covers them.
+      let _news = '';
+      if (Array.isArray(_tr.newsPasses) && _tr.newsPasses.length) {
+        _news = _tr.newsPasses.map(function (np, i) { return '[additional news pass ' + (i + 1) + (np.at ? ', pulled ' + new Date(np.at).toLocaleDateString() : '') + ']\n' + String(np.text || ''); }).join('\n\n');
+        if (_news.length > 6000) _news = _news.slice(0, 6000) + '\n…[additional news truncated]';
+      }
+      const _body = _txt + (_news ? '\n\n--- ADDITIONAL NEWS the user pulled after the dossier (same skepticism applies; these are dated, FROM SEARCH items) ---\n' + _news : '');
       themeResearchBlock = '\n\nPRIOR THEME RESEARCH (treat with skepticism — see the rule above):\n'
         + 'The user previously generated an AI research dossier for the "' + candidate.theme + '" theme'
         + (_tr.at ? ' on ' + new Date(_tr.at).toLocaleDateString() : '')
         + (_tr.edited ? ', user-edited' : '')
-        + '. It is reproduced between «». CRITICAL: it is itself AI-generated — it carries its own [inference] tags and ⚠UNVERIFIED claims and may be stale, so it is NOT verified fact. Use it ONLY as a prior hypothesis to pressure-test against this specific candidate; do not inherit its conclusions or its framing, and where the user\'s inputs or the COMPUTED FACTS conflict with it, they win.\n«' + _txt + '»';
+        + (_news ? ', plus one or more later news passes' : '')
+        + '. It is reproduced between «». CRITICAL: it is itself AI-generated — it carries its own [inference] tags and ⚠UNVERIFIED claims and may be stale, so it is NOT verified fact. Use it ONLY as a prior hypothesis to pressure-test against this specific candidate; do not inherit its conclusions or its framing, and where the user\'s inputs or the COMPUTED FACTS conflict with it, they win.\n«' + _body + '»';
     }
   } catch (e) { /* additive only — never block the prompt */ }
 
@@ -20944,6 +20953,19 @@ function themeResearchFactsLine(theme) {
   return bits.join(' \u00b7 ');
 }
 
+// Staleness cue for saved research. Reuses _livePxAge for the text; adds a severity color because
+// news ages fast — neutral under a week, amber after, red + ⚠ past a month.
+function researchAgeBadge(at) {
+  if (!at) return '';
+  const ms = new Date(at).getTime();
+  if (!ms) return '';
+  const days = (Date.now() - ms) / 86400000;
+  let color = 'var(--color-text-tertiary)', warn = '';
+  if (days >= 30) { color = 'var(--color-text-danger)'; warn = ' \u26a0'; }
+  else if (days >= 7) { color = '#fbbf24'; }
+  return '<span style="color:' + color + '">' + _livePxAge(ms) + warn + '</span>';
+}
+
 // Split a dossier so the news passes + "Pull more news" button can sit right after CURRENT NEWS,
 // above the trailing CLAIMS TO VERIFY block. Splits at the CLAIMS header (backing up over a preceding
 // "---" separator). If no claims section is found (e.g. a truncated brief), `after` is '' and the
@@ -20974,7 +20996,7 @@ function themeResearchCard(theme) {
   const facts = themeResearchFactsLine(theme);
   const arrow = open ? '\u25be' : '\u25b8';
   const bodyId = trKey(theme) + '_body';
-  const meta = isBusy ? 'researching\u2026' : (entry ? ('generated ' + esc(new Date(entry.at).toLocaleString()) + (entry.edited ? ' \u00b7 edited' : '') + (entry.truncated ? ' \u00b7 \u26a0 cut off' : '')) : '');
+  const meta = isBusy ? 'researching\u2026' : (entry ? ('generated ' + esc(new Date(entry.at).toLocaleString()) + ' \u00b7 ' + researchAgeBadge(entry.at) + (entry.edited ? ' \u00b7 edited' : '') + (entry.truncated ? ' \u00b7 \u26a0 cut off' : '')) : '');
   const truncBanner = (entry && entry.truncated && !isBusy)
     ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;margin-bottom:8px;background:rgba(251,191,36,0.10);font-size:9.5px;color:var(--color-text-secondary);line-height:1.55">\u26a0 <strong style="color:#fbbf24">This brief was cut off before it finished</strong> \u2014 the model hit its output-token limit' + (entry.stopReason === 'pause_turn' ? ' (paused mid web-search)' : '') + '. <span onclick="event.stopPropagation();continueThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info);text-decoration:underline">Continue from where it stopped</span>, or raise MAX_TOKENS in your worker and re-run for a clean full pass.</div>'
     : '';
@@ -21012,14 +21034,15 @@ function themeResearchCard(theme) {
       pHtml += '<div style="margin-top:10px;border-top:1px dashed var(--color-border-tertiary);padding-top:8px">'
         + '<div style="display:flex;gap:8px;align-items:center">'
         +   '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#34d399">Additional news</span>'
-        +   '<span style="font-size:8px;color:var(--color-text-tertiary)">' + esc(new Date(np.at).toLocaleString()) + '</span>'
+        +   '<span style="font-size:8px;color:var(--color-text-tertiary)">' + esc(new Date(np.at).toLocaleString()) + ' \u00b7 </span>' + researchAgeBadge(np.at)
         +   '<span onclick="event.stopPropagation();removeThemeNewsPass(\'' + escq(theme) + '\',' + i + ')" title="remove this news pass" style="cursor:pointer;color:var(--color-text-tertiary);font-size:10px;margin-left:auto">\u2715</span>'
         + '</div>'
         + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-secondary);margin-top:4px">' + linkifyResearch(np.text) + '</div>'
         + '</div>';
     });
     const k = trKey(theme);
-    newsHtml = pHtml
+    const newsAge = '<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;font-style:italic">CURRENT NEWS above was gathered when the dossier was generated \u00b7 ' + researchAgeBadge(entry.at) + '</div>';
+    newsHtml = newsAge + pHtml
       + '<div style="margin-top:10px"><div id="' + k + '_news"></div>'
       + '<button id="' + k + '_newsbtn" class="btn btn-sm" onclick="event.stopPropagation();runThemeNewsDeepDive(\'' + escq(theme) + '\')" style="font-size:10px">Pull more news</button>'
       + '<span style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-left:8px">A fresh web search for news beyond this brief \u2014 costs one web-search pass, and is deeper than the initial run because the whole search budget goes to news.</span>'
