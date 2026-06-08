@@ -20367,6 +20367,7 @@ function saveBookAiReview() {
 let themeResearch = {};        // theme -> { text, at, edited }
 let themeResearchSel = null;   // theme currently shown
 let themeResearchBusy = false;
+let themeAskBusy = false; // separate from themeResearchBusy: a follow-up streams into its own element and must NOT blank the visible dossier
 try { const _tr = localStorage.getItem('portfolio-theme-research-v1'); if (_tr) themeResearch = JSON.parse(_tr) || {}; } catch (e) { themeResearch = {}; }
 function saveThemeResearch() {
   try { localStorage.setItem('portfolio-theme-research-v1', JSON.stringify(themeResearch)); } catch (e) { /* non-fatal */ }
@@ -20380,8 +20381,20 @@ function themeResearchFacts(theme) {
   try { const cl = computeThemeClusters(); if (cl && cl.fullBook > 0 && cl.byTheme && cl.byTheme[theme] != null) weightPct = cl.byTheme[theme] / cl.fullBook * 100; } catch (e) {}
   let perf1Y = null;
   try { const p = themePerf(theme); if (p != null && !isNaN(p)) perf1Y = p; } catch (e) {}
-  const held = positions.filter(p => !p.closed && p.ticker && canonicalThemeName(p.theme) === theme).map(p => String(p.ticker).toUpperCase());
-  return { bench, weightPct, perf1Y, held: Array.from(new Set(held)) };
+  const heldPos = positions.filter(p => !p.closed && p.ticker && canonicalThemeName(p.theme) === theme);
+  const held = Array.from(new Set(heldPos.map(p => String(p.ticker).toUpperCase())));
+  // Per-name identity so the brief never has to GUESS what a held ticker is (e.g. which fund GRID is).
+  // Prefer the fetched fund/company name in tickerInfo; fall back to any name on the position itself.
+  const _seenHd = {};
+  const heldDetail = [];
+  heldPos.forEach(function(p) {
+    const t = String(p.ticker).toUpperCase();
+    if (_seenHd[t]) return; _seenHd[t] = 1;
+    const info = (typeof tickerInfo !== 'undefined' && tickerInfo && tickerInfo[t]) ? tickerInfo[t] : null;
+    const nm = (info && info.name) ? info.name : (p.name || '');
+    heldDetail.push({ ticker: t, name: nm, isETF: !!p.isETF });
+  });
+  return { bench, weightPct, perf1Y, held: held, heldDetail: heldDetail };
 }
 
 // Render AI text → HTML: {SYM|stock|etf} → StockAnalysis links, bare source URLs → links,
@@ -20455,11 +20468,14 @@ function themeSearchPlan(theme) {
 
 function buildThemeResearchPrompt(theme) {
   const f = themeResearchFacts(theme);
+  const heldStr = (f.heldDetail && f.heldDetail.length)
+    ? f.heldDetail.map(function(h){ return h.ticker + (h.isETF ? ' (ETF)' : ' (stock)') + (h.name ? ' = ' + h.name : ' \u2014 fund/company name NOT on file'); }).join('; ')
+    : 'none \u2014 they have no direct position tagged to this theme';
   const ctx = [
     'Theme benchmark ETF (a yardstick used to MEASURE this theme \u2014 NOT necessarily owned by the investor): ' + (f.bench || 'n/a'),
     'Investor true-exposure weight in this theme: ' + (f.weightPct != null ? f.weightPct.toFixed(1) + '%' : 'unknown'),
     'That benchmark\'s 1-year return: ' + (f.perf1Y != null ? (f.perf1Y >= 0 ? '+' : '') + f.perf1Y.toFixed(1) + '%' : 'unknown'),
-    'The investor\'s ONLY direct holdings tagged to this theme: ' + (f.held.length ? f.held.join(', ') : 'none \u2014 they have no direct position tagged to this theme')
+    'The investor\'s ONLY direct holdings tagged to this theme (each shown as TICKER = its real fund/company name exactly as the investor holds it; this identity is AUTHORITATIVE \u2014 use it, do not second-guess or substitute it): ' + heldStr
   ];
   const hints = (typeof THEME_SEARCH_HINTS !== 'undefined' && THEME_SEARCH_HINTS[theme]) ? THEME_SEARCH_HINTS[theme] : [];
   const safetyNet = hints.length ? ' If a search is still in budget, glance for anything material in: ' + hints.slice(0, 5).join(', ') + '.' : '';
@@ -20475,7 +20491,7 @@ function buildThemeResearchPrompt(theme) {
     '- Tag claims by basis: FROM SEARCH (a web result you found THIS run \u2014 cite the full https:// URL; all current facts, figures, dates, and news MUST be FROM SEARCH), FROM YOUR DATA (the context above), or [inference] (your reasoning).',
     '- Any specific figure or date you did NOT get from a search this run is UNVERIFIED \u2014 omit it or list it under CLAIMS TO VERIFY tagged \u26a0UNVERIFIED. Never recite numbers from memory as current.',
     '- Bull/bear points are positions, not truths. Past returns and the 1Y are history, not forecasts. Only name a ticker you are sure is real, and wrap every one as {TICKER|stock} or {TICKER|etf}.',
-    '- HOLDINGS RULE: the benchmark ETF above is a YARDSTICK, not a position. Do NOT say the investor owns it. Their ONLY holdings in this theme are the tickers in the "direct holdings" line above; never promote the benchmark, a big player, or any researched name into something they own.',
+    '- HOLDINGS RULE: the benchmark ETF above is a YARDSTICK, not a position. Do NOT say the investor owns it. Their ONLY holdings in this theme are the tickers in the "direct holdings" line above; never promote the benchmark, a big player, or any researched name into something they own. The name shown next to each held ticker is its TRUE identity \u2014 use it verbatim and never substitute a different issuer or fund. Do NOT guess, recall, or invent the issuer, full name, mandate, or holdings of a held fund from memory: if a name is given above, that IS the fund; if it says the name is NOT on file, refer to that holding by TICKER ONLY and put any description of what it is under CLAIMS TO VERIFY tagged \u26a0UNVERIFIED (or confirm it with one search). A wrong fund identity is worse than admitting you don\'t have it.',
     '',
     'Output these sections, each an ALL-CAPS header on its own line, each within its cap:',
     '1. CURRENT STATE — the key recent developments, what changed, and why it matters. PRIORITY — give it substance: up to ~6 sentences or 5 bullets. FROM SEARCH with sources.',
@@ -20591,6 +20607,76 @@ function saveThemeResearchEdit(theme) {
   renderThemeResearch();
 }
 
+// Follow-up Q&A against a saved dossier. The dossier is prior AI output (inference + unverified claims),
+// so the answer is told to treat it skeptically, not as confirmed fact. Web search is OPT-IN per question:
+// off (default) = answer from the dossier + reasoning only, cheap; on = a few targeted searches, pricier.
+function buildThemeFollowupPrompt(theme, question, useWeb) {
+  const entry = themeResearch[theme] || {};
+  const dossier = entry.text || '';
+  const thread = entry.thread || [];
+  const hist = thread.map(function (turn, i) { return 'Q' + (i + 1) + ': ' + turn.q + '\nA' + (i + 1) + ': ' + turn.a; });
+  const lines = [
+    'You are continuing as the markets analyst who wrote the theme dossier below. The investor is asking a FOLLOW-UP question about the "' + theme + '" segment. Answer it directly and concisely.',
+    '',
+    useWeb
+      ? 'You MAY use web search for this question. Any current fact, figure, or news MUST be FROM SEARCH with a full https:// source URL; be economical \u2014 at most 2-3 targeted searches.'
+      : 'Do NOT use web search. Answer ONLY from the dossier below plus your own reasoning. You CANNOT cite anything new this turn, so anything you cannot ground in the dossier must be tagged [inference], and any current figure or date you are unsure of must be omitted or listed \u26a0UNVERIFIED. Never recite numbers from memory as current.',
+    'Keep the dossier\'s epistemic discipline: tag claims FROM SEARCH (with URL) / FROM YOUR DATA / [inference]; wrap every stock or ETF ticker as {TICKER|stock} or {TICKER|etf}. IMPORTANT: the dossier itself is PRIOR AI output that may contain inference, unverified, or stale claims \u2014 do NOT treat its statements as confirmed fact; if the question probes one, say plainly what is and isn\'t verified rather than defending the dossier.',
+    'Be focused: a few tight paragraphs or a short list, NOT a new full dossier. No preamble, do not restate the question.',
+    '',
+    'THEME DOSSIER (between \u00ab\u00bb):',
+    '\u00ab' + dossier + '\u00bb'
+  ];
+  if (hist.length) { lines.push('', 'EARLIER FOLLOW-UPS in this thread (for context):', hist.join('\n\n')); }
+  lines.push('', 'THE INVESTOR\'S NEW QUESTION:', question);
+  return lines.join('\n');
+}
+
+async function askThemeResearch(theme) {
+  if (themeAskBusy || themeResearchBusy) return;
+  const entry = themeResearch[theme];
+  if (!entry) return;
+  const inEl = document.getElementById(trKey(theme) + '_ask');
+  const webEl = document.getElementById(trKey(theme) + '_askweb');
+  const btn = document.getElementById(trKey(theme) + '_askbtn');
+  const ansId = trKey(theme) + '_ans';
+  const question = inEl ? inEl.value.trim() : '';
+  if (!question) { if (inEl) inEl.focus(); return; }
+  const useWeb = !!(webEl && webEl.checked);
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  const render = function (html) { const o = document.getElementById(ansId); if (o) o.innerHTML = html; };
+  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then retry.</div>'); return; }
+  themeAskBusy = true;
+  if (inEl) inEl.disabled = true;
+  if (btn) { btn.disabled = true; btn.textContent = useWeb ? 'Searching\u2026' : 'Thinking\u2026'; }
+  render('<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">' + (useWeb ? 'Searching the web and answering' : 'Answering from the dossier') + '\u2026</div>');
+  const prompt = buildThemeFollowupPrompt(theme, question, useWeb);
+  try {
+    let _last = 0;
+    const onDelta = function (t) { const now = Date.now(); if (now - _last < 60) return; _last = now; render('<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + esc(t) + '<span style="opacity:.45">\u258c</span></div>'); };
+    const r = await aiWorkerCall(prompt, onDelta, useWeb ? { web: true } : {});
+    if (!themeResearch[theme].thread) themeResearch[theme].thread = [];
+    themeResearch[theme].thread.push({ q: question, a: r.text, web: useWeb, at: new Date().toISOString() });
+    saveThemeResearch();
+  } catch (err) {
+    themeAskBusy = false;
+    const info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed', color: 'var(--color-text-danger)' };
+    render('<div style="border:1px solid ' + info.color + ';border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:' + info.color + '"><strong>' + esc(info.title) + ':</strong> <span style="color:var(--color-text-secondary)">' + esc(info.detail) + '</span> Your question is kept below \u2014 retry when ready.</div>');
+    if (inEl) inEl.disabled = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Ask'; }
+    return;
+  }
+  themeAskBusy = false;
+  renderThemeResearch();
+}
+
+function removeThemeThreadTurn(theme, idx) {
+  const entry = themeResearch[theme];
+  if (!entry || !entry.thread || !entry.thread[idx]) return;
+  entry.thread.splice(idx, 1);
+  saveThemeResearch(); renderThemeResearch();
+}
+
 function themeResearchFactsLine(theme) {
   const f = themeResearchFacts(theme);
   const bits = [];
@@ -20613,7 +20699,33 @@ function themeResearchCard(theme) {
   const truncBanner = (entry && entry.truncated && !isBusy)
     ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;margin-bottom:8px;background:rgba(251,191,36,0.10);font-size:9.5px;color:var(--color-text-secondary);line-height:1.55">\u26a0 <strong style="color:#fbbf24">This brief was cut off before it finished</strong> \u2014 the model hit its output-token limit' + (entry.stopReason === 'pause_turn' ? ' (paused mid web-search)' : '') + '. <span onclick="event.stopPropagation();continueThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info);text-decoration:underline">Continue from where it stopped</span>, or raise MAX_TOKENS in your worker and re-run for a clean full pass.</div>'
     : '';
-  const bodyInner = (entry && !isBusy) ? (truncBanner + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(entry.text) + '</div>' + THEME_RESEARCH_DISCLAIMER) : '';
+  let threadHtml = '';
+  if (entry && !isBusy) {
+    const thread = entry.thread || [];
+    let turns = '';
+    thread.forEach(function (turn, i) {
+      turns += '<div style="margin-top:10px;border-top:1px dashed var(--color-border-tertiary);padding-top:8px">'
+        + '<div style="display:flex;gap:8px;align-items:flex-start">'
+        +   '<span style="font-size:10px;font-weight:700;color:var(--color-text-info)">Q</span>'
+        +   '<span style="font-size:10.5px;color:var(--color-text-primary);flex:1;font-weight:600">' + esc(turn.q) + (turn.web ? ' <span style="font-size:8px;font-weight:400;color:var(--color-text-tertiary)">\u00b7 web</span>' : '') + '</span>'
+        +   '<span onclick="event.stopPropagation();removeThemeThreadTurn(\'' + escq(theme) + '\',' + i + ')" title="remove this Q&amp;A" style="cursor:pointer;color:var(--color-text-tertiary);font-size:10px">\u2715</span>'
+        + '</div>'
+        + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-secondary);margin-top:4px">' + linkifyResearch(turn.a) + '</div>'
+        + '</div>';
+    });
+    const k = trKey(theme);
+    const askBox = '<div style="margin-top:12px;border-top:1px solid var(--color-border-tertiary);padding-top:10px">'
+      + '<div id="' + k + '_ans"></div>'
+      + '<textarea id="' + k + '_ask" placeholder="Ask a follow-up about ' + esc(theme) + '\u2026" onclick="event.stopPropagation()" style="width:100%;min-height:46px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;line-height:1.5;padding:7px;box-sizing:border-box;margin-top:6px"></textarea>'
+      + '<div style="display:flex;gap:12px;align-items:center;margin-top:6px;flex-wrap:wrap">'
+      +   '<button id="' + k + '_askbtn" class="btn btn-sm btn-primary" onclick="event.stopPropagation();askThemeResearch(\'' + escq(theme) + '\')" style="font-size:10px">Ask</button>'
+      +   '<label onclick="event.stopPropagation()" style="display:flex;gap:5px;align-items:center;font-size:9.5px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="' + k + '_askweb" style="margin:0">Search the web for this (slower, costs more)</label>'
+      + '</div>'
+      + '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">Follow-ups answer from this dossier + reasoning and treat it skeptically (it\u2019s prior AI output). Without web search they can\u2019t pull anything newer than the dossier \u2014 tick the box to let one search.</div>'
+      + '</div>';
+    threadHtml = (turns ? '<div>' + turns + '</div>' : '') + askBox;
+  }
+  const bodyInner = (entry && !isBusy) ? (truncBanner + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(entry.text) + '</div>' + THEME_RESEARCH_DISCLAIMER + threadHtml) : '';
   let actions = '';
   if (!isBusy) {
     let a = '<span onclick="event.stopPropagation();runThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info)">\u21bb ' + (entry ? 'Re-run' : 'Research') + '</span>';
