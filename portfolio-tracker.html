@@ -27167,7 +27167,8 @@ init();
     { id: 'carry24', label: 'Aug-2024 Carry Unwind', from: '2024-08-01', to: '2024-08-08', stresses: 'Vol spike / leverage unwind' },
     { id: 'svb23', label: '2023 SVB / Regional Banks', from: '2023-03-08', to: '2023-03-13', stresses: 'Bank stress — a tech book may RISE here (informative)' },
     { id: 'q4rate18', label: 'Q4-2018 Rate Scare', from: '2018-09-20', to: '2018-12-24', stresses: 'Powell hikes, growth selloff (2022 rhyme)' },
-    { id: 'covid', label: 'COVID Crash', from: '2020-02-19', to: '2020-03-23', stresses: 'Everything-selloff / liquidity' }
+    { id: 'covid', label: 'COVID Crash', from: '2020-02-19', to: '2020-03-23', stresses: 'Everything-selloff / liquidity' },
+    { id: 'cycl1516', label: '2015-16 Industrial Slowdown', from: '2015-08-17', to: '2016-02-11', stresses: 'Cyclical / demand downturn \u2014 China shock, oil crash, factory recession' }
   ];
 
   /* ====================================================================
@@ -27210,15 +27211,16 @@ init();
     svb23:    ['credit'],
     covid:    ['liq', 'credit', 'posn'],
     tariff25: ['policy'],
-    carry24:  ['posn']
+    carry24:  ['posn'],
+    cycl1516: ['cycl']
   };
   var EVENT_SHORT = {
     tech2022: '2022 Tech', q4rate18: 'Q4-2018', svb23: 'SVB \u201923',
-    covid: 'COVID', tariff25: 'Tariff \u201925', carry24: 'Aug-24 Carry'
+    covid: 'COVID', tariff25: 'Tariff \u201925', carry24: 'Aug-24 Carry', cycl1516: '2015-16 Indl'
   };
   // Grid row order: rate-family together so the 2022/Q4-2018 rhyme is visible, then credit, the
   // multi-factor COVID, then the two recent single-factor shocks.
-  var GRID_ORDER = ['tech2022', 'q4rate18', 'svb23', 'covid', 'tariff25', 'carry24'];
+  var GRID_ORDER = ['tech2022', 'q4rate18', 'svb23', 'covid', 'tariff25', 'carry24', 'cycl1516'];
 
   // Authored briefings. recent:true => deliberately short, no padded "pattern" (honesty rule).
   var EVENT_BRIEFINGS = {
@@ -27262,6 +27264,13 @@ init();
       whatHappened: "In early August 2024, a wildly popular trade blew up. For years, investors had borrowed Japanese yen cheaply to buy higher-returning investments elsewhere. Japan\u2019s central bank then raised rates unexpectedly, and a weak U.S. jobs report landed two days later \u2014 both sent the yen sharply higher, which forced investors to unwind that crowded, borrowed bet all at once. On August 5, Japan\u2019s market fell more than 12% (its worst day since 1987) and the U.S. market dropped about 3%, with fear spiking. It recovered within a few weeks.",
       pattern: "A short, sharp shakeout \u2014 not the start of a new era \u2014 so we\u2019re keeping the lesson tentative on purpose. The plain read: when too many investors pile into the same borrowed bet, an ordinary piece of bad news can trigger a stampede for the exit far bigger than the news itself \u2014 and it tends to snap back once the crowd has cleared out.",
       watchFor: ['crowded bets made with borrowed money', 'sudden spikes in market fear']
+    },
+    cycl1516: {
+      whatHappened: "From mid-2015 into early 2016 the world had an industrial slowdown \u2014 not a financial crisis but a demand problem. China\u2019s growth visibly cooled and it surprised everyone by devaluing its currency in August 2015; oil collapsed from around $60 a barrel toward the mid-$20s as a glut met softening demand; and U.S. factory activity slipped into a shallow recession. Stocks fell in two waves \u2014 a sharp drop in August 2015, a bounce, then a second slide into February 2016 \u2014 and the damage piled up in the economy-sensitive corners: energy, materials, industrials, and chips. Steady defensives (utilities, household staples) held up far better. It wasn\u2019t a crash; it was a low-double-digit cyclical scare.",
+      droveDown: "A demand problem, plainly. With the global economy looking like it was slowing, investors marked down anything whose profits track the business cycle \u2014 commodities, factories, semiconductors \u2014 while interest rates and the banking system stayed largely out of it.",
+      droveUp: "Oil found a floor in February 2016 and turned up, China\u2019s scare faded, and the Federal Reserve backed off the rate hikes it had been signaling. As recession fear drained away, the same cyclical names that fell hardest led the rebound.",
+      pattern: "The cyclical drawdown \u2014 the one your economy-sensitive holdings feel most. When the market starts pricing in a slowing economy, the cyclical parts of a book (chips, energy, industrials, financials, consumer-discretionary) sell off together while defensives hold. It runs on the demand outlook, not interest rates or a bank failure, so it can strike with rates flat and the financial system perfectly healthy. It cuts both ways: the same demand-sensitivity that makes those names fall hardest here is what makes them lead when growth fears lift.",
+      watchFor: ['signs the global economy is slowing', 'oil and copper prices rolling over', 'cyclical names falling while defensives hold up']
     }
   };
 
@@ -27459,7 +27468,7 @@ init();
       '</div></details>';
   }
 
-  // Standalone, always-available reference: the six events fully explained, plus the events×factors
+  // Standalone, always-available reference: the seven events fully explained, plus the events×factors
   // matrix once against the live book. Browsable WITHOUT running a replay (that's the whole point).
   function renderEventReference() {
     var matrix = renderRiskFactorGrid(null);
@@ -27476,7 +27485,7 @@ init();
         '<div style="margin:6px 0 2px;font-size:10.5px;line-height:1.5;color:var(--color-text-secondary)">' + _eventBriefingProse(win) + conf + '</div></details>';
     }
     var caveat = '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.4">Past behavior, not a forecast \u2014 the pattern names conditions that <em>rhyme</em>, never a buy/sell or timing signal. Hit a window button above to replay your own book through any of these.</div>';
-    return '<details open style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">The six stress events, explained</summary>' +
+    return '<details open style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">The seven stress events, explained</summary>' +
       '<div style="margin-top:6px">' +
       '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:4px">What each historical event was, what drove it down and back up, and the transferable pattern \u2014 plus which of the six risks it stressed. The matrix shows all six at a glance against your live book; expand any event below for the full read.</div>' +
       matrix + '<div style="margin-top:8px">' + items + '</div>' + _legendHtml() + caveat +
@@ -27484,6 +27493,21 @@ init();
   }
   function _paintEventRef() {
     try { var el = document.getElementById('risk-event-ref'); if (el) el.innerHTML = renderEventReference(); } catch (e) {}
+  }
+  // Item 1: "most revealing for your book" line under the window buttons. Ranks events against the
+  // live book's per-factor exposure (factorExposureLive) using the same engine as the scenario recommender.
+  function _paintBookRecos() {
+    try {
+      var el = document.getElementById('risk-book-recos'); if (!el) return;
+      var fe = factorExposureLive();
+      if (!fe || !fe.ok || !fe.byFactor) { el.innerHTML = ''; return; }
+      var fw = {}; for (var k in fe.byFactor) if (fe.byFactor.hasOwnProperty(k)) fw[k] = fe.byFactor[k].pct;
+      var recos = recommendStressEvents(fw, 3);
+      if (!recos.length) { el.innerHTML = ''; return; }
+      el.innerHTML = '<span style="color:var(--color-text-tertiary)">Most revealing for your book\u2019s exposures: </span>' + _recoChips(recos, 'your book');
+      var chips = el.querySelectorAll('.risk-reco-chip');
+      for (var i = 0; i < chips.length; i++) chips[i].addEventListener('click', function () { _runWindow(this.getAttribute('data-recowin')); });
+    } catch (e) {}
   }
 
   function windowCacheKey(windowId, ticker) { return 'risk-replay-bars-v2:' + windowId + ':' + ticker.toUpperCase(); }
@@ -28655,19 +28679,87 @@ init();
       _runWindow(winId);
     }, 80);
   }
+  // ---- Item 1: theme-aware stress-event recommender -------------------------------------------
+  function _factorCol(fid) {
+    for (var i = 0; i < RISK_FACTORS.length; i++) if (RISK_FACTORS[i].id === fid) return RISK_FACTORS[i].col;
+    return fid;
+  }
+  // Rank stress events by how hard they hit a per-factor exposure map. Score = the LARGEST single
+  // overlapping factor weight, so "most revealing" tracks your biggest exposure rather than a sum
+  // that would over-credit multi-factor events. Returns up to n, descending, score>0 only.
+  function recommendStressEvents(factorWeights, n) {
+    if (!factorWeights) return [];
+    n = n || 3;
+    var out = [];
+    STRESS_WINDOWS.forEach(function (w) {
+      var fs = EVENT_FACTORS[w.id] || [], score = 0, driver = null;
+      fs.forEach(function (f) { var v = factorWeights[f] || 0; if (v > score) { score = v; driver = f; } });
+      if (score > 0) out.push({ id: w.id, label: w.label, score: score, driver: driver });
+    });
+    out.sort(function (a, b) { return b.score - a.score; });
+    return out.slice(0, n);
+  }
+  // Staged scenario's per-factor exposure: staged dollars per theme (from _candQueue) -> factors
+  // (THEME_FACTORS), as a % of total staged dollars. Buys and trims both touch their theme's risk.
+  function scenarioFactorWeights() {
+    var q = (typeof _candQueue !== 'undefined' && _candQueue) ? _candQueue : null;
+    if (!q || !q.length) return null;
+    var td = {}, total = 0;
+    q.forEach(function (tr) {
+      if (!tr || !tr.theme || tr.theme === '(unassigned)' || tr.theme === '(untagged)') return;
+      var amt = (tr.kind === 'trim') ? (+tr.proceeds || 0) : (+tr.amount || 0);
+      if (amt <= 0) return;
+      td[tr.theme] = (td[tr.theme] || 0) + amt; total += amt;
+    });
+    if (total <= 0) return null;
+    var fw = {}, any = false;
+    for (var thm in td) {
+      if (!td.hasOwnProperty(thm)) continue;
+      var fs = THEME_FACTORS[thm]; if (!fs) continue;
+      var pct = td[thm] / total * 100;
+      fs.forEach(function (f) { fw[f] = (fw[f] || 0) + pct; any = true; });
+    }
+    return any ? fw : null;
+  }
+  // Clickable event chips (shared). data-recowin (not data-win) so these never collide with the real
+  // window-button wiring / active-highlight selectors.
+  function _recoChips(recos, ctxWord) {
+    return recos.map(function (r) {
+      var title = 'Stresses ' + _factorCol(r.driver) + ' \u2014 ~' + r.score.toFixed(0) + '% of ' + ctxWord;
+      return '<button class="btn btn-sm risk-reco-chip" data-recowin="' + r.id + '" title="' + title + '" style="font-size:9px;padding:3px 8px;margin:1px">' + r.label + '</button>';
+    }).join('');
+  }
+
+  // Cross-tab button (Evaluate-a-Trade): jumps to Risk Review and replays the staged scenario through
+  // the window that best stresses what the trade is exposed to. Recomputes its recommendation every
+  // call; the main button resolves the top window fresh at click time so it is right even if the chips
+  // were rendered before a later edit to the queue.
   function _mountCrossTabBtn(panelId) {
     var panel = document.getElementById(panelId);
-    if (!panel || panel.querySelector('.risk-stress-jump')) return;
-    var bar = document.createElement('div');
-    bar.style.cssText = 'margin:8px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
-    bar.innerHTML = '<button class="btn btn-sm risk-stress-jump" style="font-size:10px;padding:5px 12px">\u26a1 Stress-test this scenario in Risk Review \u2192</button>' +
-      '<span style="font-size:9px;color:var(--color-text-tertiary)">Replays your active sleeve + the staged moves through a real crash window, vs your actual sleeve.</span>';
-    bar.querySelector('button').addEventListener('click', function () { stressScenario('tech2022'); });
-    // Place it just above the AI section (#theme-ai-review), so it sits below the trade analysis
-    // (cluster shift / sleeve shift / G/L / tax) and right before the AI read. Fallback: top of panel.
-    var anchor = panel.querySelector('#theme-ai-review');
-    if (anchor) panel.insertBefore(bar, anchor);
-    else panel.insertBefore(bar, panel.firstChild);
+    if (!panel) return;
+    var bar = panel.querySelector('.risk-stress-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'risk-stress-bar';
+      bar.style.cssText = 'margin:8px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+      var anchor = panel.querySelector('#theme-ai-review');
+      if (anchor) panel.insertBefore(bar, anchor); else panel.insertBefore(bar, panel.firstChild);
+    }
+    var recos = recommendStressEvents(scenarioFactorWeights(), 3);
+    var recoLine = recos.length
+      ? '<div style="flex-basis:100%;font-size:9px;color:var(--color-text-tertiary);margin-top:2px">Most revealing for this trade: ' + _recoChips(recos, 'the staged trade') + '</div>'
+      : '<span style="font-size:9px;color:var(--color-text-tertiary)">Stage a buy to see which windows best stress it.</span>';
+    bar.innerHTML =
+      '<button class="btn btn-sm risk-stress-jump" style="font-size:10px;padding:5px 12px">\u26a1 Stress-test this scenario in Risk Review \u2192</button>' +
+      '<span style="font-size:9px;color:var(--color-text-tertiary)">Replays your sleeve + staged moves through the most relevant crash window, vs your actual sleeve.</span>' +
+      recoLine;
+    var jump = bar.querySelector('.risk-stress-jump');
+    if (jump) jump.addEventListener('click', function () {
+      var r = recommendStressEvents(scenarioFactorWeights(), 1);
+      stressScenario(r.length ? r[0].id : 'tech2022');
+    });
+    var chips = bar.querySelectorAll('.risk-reco-chip');
+    for (var i = 0; i < chips.length; i++) chips[i].addEventListener('click', function () { stressScenario(this.getAttribute('data-recowin')); });
   }
 
   function buildPanel() {
@@ -28687,6 +28779,7 @@ init();
         '<span id="risk-hypo-status" style="color:var(--color-text-tertiary)"></span>' +
       '</div>' +
       '<div style="margin-bottom:4px">' + btns + '</div>' +
+      '<div id="risk-book-recos" style="font-size:9px;margin:0 0 6px;min-height:13px"></div>' +
       '<div id="risk-replay-status" style="font-size:10px;color:var(--color-text-tertiary);min-height:14px"></div>' +
       '<div id="risk-replay-summary"></div>' +
       '<div id="risk-replay-out"></div>' + STANDING_CAVEAT;
@@ -28712,6 +28805,7 @@ init();
     }
     _paintEventRef();
     _paintThemeMap();
+    _paintBookRecos();
     _refreshHypoStatus();
     _mountCrossTabBtn('tab-evaltrade');
   }
@@ -28723,7 +28817,7 @@ init();
   // buttons re-mount if their panels were re-rendered.
   function onShow(name) {
     _mountCrossTabBtn('tab-evaltrade');
-    if (name === 'risk') { _refreshHypoStatus(); _paintThemeMap(); _paintEventRef(); }
+    if (name === 'risk') { _refreshHypoStatus(); _paintThemeMap(); _paintEventRef(); _paintBookRecos(); }
   }
 
   // READ-ONLY snapshot of what the Risk Review tab is CURRENTLY DISPLAYING, for the two AI
