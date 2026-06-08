@@ -10367,6 +10367,14 @@ function riskReviewAiFacts() {
       }).join('; ');
       if (prof) L.push(`The user's FULL live look-through risk profile across all six factors (binary factor tags × live theme weights; each is a share of the WHOLE book; "materially sensitive to," NOT directional; the UI labels them Rate / Liquidity / Credit / Policy / Crowding / Cyclical): ${prof}. The factor(s) this event stressed are flagged, but the rest matter for the book's overall tilt and for comparing across events. Tags are two-sided: the same exposure that fell in this stress is what would lead the rebound.`);
     }
+    if (c.recommended && c.recommended.list && c.recommended.list.length) {
+      const rl = c.recommended.list.map(r => `${r.label} (hits ${r.driver}, ~${Math.round(r.pct)}% of ${c.recommended.basis})`).join('; ');
+      let rec = `MOST-REVEALING STRESS WINDOWS for ${c.recommended.basis}, ranked by which historical events hit its biggest factor exposures hardest (a relevance ranking off the live factor profile \u2014 NOT a forecast or a return estimate): ${rl}.`;
+      if (c.recommended.viewedIsTop) rec += ` The window the user is viewing IS the single most-revealing one for this profile \u2014 good match.`;
+      else if (c.recommended.viewedListed) rec += ` The window being viewed is among the most relevant, though not the top one.`;
+      else rec += ` NOTE: the window being viewed is NOT among the most-relevant for this profile \u2014 its largest exposures are stressed harder by the windows listed above. If your read leans on stress behavior, say so and steer the user toward a more-revealing window rather than over-reading the current one.`;
+      L.push(rec);
+    }
     if (c.lookthroughCoverage) {
       L.push(`IMPORTANT framing for those exposure %s: they are computed off the ${c.lookthroughCoverage.namedPct.toFixed(0)}% of the book that is decomposed into identifiable, benchmarkable names; the other ${c.lookthroughCoverage.unnamedPct.toFixed(0)}% is diversified/unclassified tail (undecomposed index holdings + cash) with no factor signal. Because each % is a share of the WHOLE book, these figures UNDERSTATE rather than overstate — benchmarkable names sitting in the tail aren't counted until the look-through tables are refreshed. Treat the factor %s as a conservative floor, and if coverage is low, say so rather than implying the number is exhaustive.`);
     }
@@ -28879,6 +28887,27 @@ init();
               var e = fe.byFactor[f.id];
               return { col: f.col, label: f.label, pct: e ? e.pct : 0, themes: e ? e.themes : [], stressedHere: ev.indexOf(f.id) >= 0 };
             });
+          } catch (e) { return null; }
+        })(),
+        recommended: (function () {
+          try {
+            var fw = null;
+            if (isHypo) { fw = scenarioFactorWeights(); }
+            if (!fw) {
+              var fe = factorExposureLive();
+              if (fe && fe.ok && fe.byFactor) { fw = {}; for (var k in fe.byFactor) if (fe.byFactor.hasOwnProperty(k)) fw[k] = fe.byFactor[k].pct; }
+            }
+            if (!fw) return null;
+            var recs = recommendStressEvents(fw, 3);
+            if (!recs.length) return null;
+            var viewedRank = -1;
+            for (var i = 0; i < recs.length; i++) if (recs[i].id === entry.winId) viewedRank = i;
+            return {
+              basis: isHypo ? 'the staged scenario' : 'your live book',
+              list: recs.map(function (r) { var rf = _factorById(r.driver); return { label: r.label, driver: rf ? rf.col : r.driver, pct: r.score }; }),
+              viewedIsTop: recs[0].id === entry.winId,
+              viewedListed: viewedRank >= 0
+            };
           } catch (e) { return null; }
         })(),
         pairedBeta: (function () { try { return _pairedBetaData(m); } catch (e) { return null; } })(),
