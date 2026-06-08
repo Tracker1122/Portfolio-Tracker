@@ -20400,6 +20400,40 @@ function linkifyResearch(text) {
   return h;
 }
 
+// Per-theme search scaffolding. The model running server-side web_search picks its own queries by
+// default and drifts to the dominant narrative; this prescribes the actual searches it must run so
+// out-of-favor but market-moving stories (e.g. coal funding under Energy & Grid) get swept in.
+const THEME_SEARCH_HINTS = {
+  'Mag 7-ish': ['big tech antitrust', 'AI capex hyperscaler', 'megacap tech earnings'],
+  'Semiconductors': ['semiconductor export controls China', 'CHIPS Act funding', 'TSMC Nvidia AMD', 'memory chip pricing'],
+  'AI Infrastructure': ['data center power demand', 'Nvidia GPU supply', 'hyperscaler capex', 'AI data center cooling'],
+  'Cybersecurity': ['major data breach', 'federal cybersecurity policy', 'cybersecurity M&A'],
+  'Financials': ['Federal Reserve rate decision', 'bank regulation capital rules', 'bank credit losses'],
+  'Energy & Grid': ['coal plant funding', 'nuclear SMR', 'natural gas power plants', 'renewables policy subsidy', 'grid transmission funding', 'DOE FERC electricity'],
+  'Commodities': ['gold price', 'oil OPEC production', 'copper price', 'commodity tariffs'],
+  'Consumer Discretionary': ['consumer spending', 'retail earnings', 'import tariffs consumer'],
+  'Space & Defense': ['defense budget', 'Pentagon contract award', 'space launch contract'],
+  'Healthcare': ['drug pricing policy', 'FDA approval', 'Medicare drug', 'healthcare M&A'],
+  'Real Estate': ['REIT outlook', 'commercial real estate', 'office vacancy', 'data center REIT'],
+  'Bonds': ['Federal Reserve rate cut', 'treasury yields', 'bond market outlook'],
+  'Consumer Staples': ['consumer staples pricing', 'GLP-1 food impact', 'staples volume trends'],
+  'Emerging Markets': ['China stimulus', 'emerging markets dollar', 'EM tariffs'],
+  'International Developed': ['ECB rate decision', 'Japan BOJ', 'Europe equities outlook'],
+  'Small Caps': ['Russell 2000 outlook', 'small caps rate cuts', 'small cap M&A'],
+  'Utilities': ['utility rate case', 'data center electricity demand', 'nuclear power policy', 'coal plant funding']
+};
+// Build the explicit, date-stamped list of searches the model must run for a theme.
+function themeSearchPlan(theme) {
+  const now = new Date();
+  const my = now.toLocaleString('en-US', { month: 'long' }) + ' ' + now.getFullYear();
+  const yr = String(now.getFullYear());
+  const hints = (THEME_SEARCH_HINTS[theme] || []).slice(0, 6);
+  const q = [theme + ' latest news ' + my, theme + ' policy regulation funding subsidy ' + yr];
+  hints.forEach(h => q.push(h + ' ' + my));
+  q.push(theme + ' earnings M&A ' + my);
+  return q;
+}
+
 function buildThemeResearchPrompt(theme) {
   const f = themeResearchFacts(theme);
   const ctx = [
@@ -20408,25 +20442,41 @@ function buildThemeResearchPrompt(theme) {
     'Benchmark 1-year return: ' + (f.perf1Y != null ? (f.perf1Y >= 0 ? '+' : '') + f.perf1Y.toFixed(1) + '%' : 'unknown'),
     'Names held directly in this theme: ' + (f.held.length ? f.held.join(', ') : 'none directly')
   ];
+  const hints = (typeof THEME_SEARCH_HINTS !== 'undefined' && THEME_SEARCH_HINTS[theme]) ? THEME_SEARCH_HINTS[theme] : [];
+  const safetyNet = hints.length
+    ? ' As a safety net, before you finish make sure you have checked whether anything material is happening in these corners: ' + hints.join(', ') + '. Do NOT let that list cage you — chase whatever is actually driving the theme now, including stories no one told you to look for.'
+    : '';
   return [
-    'You are a markets research analyst. Write a concise, skimmable research brief on the "' + theme + '" market segment for an investor who already tracks it. Use web search to find CURRENT, recent news and developments — the news section depends on it.',
+    'You are a senior markets research analyst. Write a DEEP, current research dossier on the "' + theme + '" market segment for a sophisticated investor who already holds it. Your goal is to help them UNDERSTAND what is going on with this theme right now — the situation and the debate — not just inventory names. Depth over brevity: be thorough and specific. But every specific must be sourced (see EPISTEMIC RULES).',
     '',
-    "Investor context (use ONLY for the final section; do not restate it back):",
+    'HOW TO RESEARCH: search the web like an analyst building a current picture — run as many distinct searches as you need (you have budget); do not stop at one or two. Follow the actual story: what changed recently, why it moved, what the live debate is.' + safetyNet,
+    '',
+    'Investor context (their ACTUAL exposure — use it for the "in your book" section; do not merely restate it):',
     ctx.map(c => '- ' + c).join('\n'),
     '',
-    'Output EXACTLY these numbered sections, each header on its own line in ALL CAPS exactly as shown:',
-    '1. WHAT IT IS & HOW IT TRADES — define the segment, its secular drivers, and its character (rate-sensitive? cyclical? momentum-led? defensive?). 2-4 sentences.',
-    '2. BIG PLAYERS — the major public companies in the space.',
-    '3. THE ETFS — the main funds for this exposure and how they differ (cap- vs equal-weight, pure-play vs broad, notable expense gaps).',
-    '4. DRIVERS & CATALYSTS — what actually moves this segment.',
-    '5. RISKS / BEAR CASE — what tends to go wrong (concentration, valuation, regulation, cyclical downside).',
-    '6. CURRENT NEWS — the most significant recent developments (last ~3 months) found via web search. Sweep ACROSS the whole segment, not just the dominant narrative: run SEPARATE searches for (a) government / policy / regulatory / funding actions — DOE, FERC, federal grants, subsidies, executive orders — and INCLUDE out-of-favor or politically-driven sub-sectors (e.g. coal, nuclear, gas, renewables), not only the hot story; (b) major corporate, M&A, or earnings news; (c) notable fund flows or launches. Prefer the biggest market-moving items even when they cut against the theme\'s usual framing. For each item give the COMPLETE source URL starting with https:// on the same line; do NOT shorten, truncate, or add "..." to URLs. If web search is unavailable or returns nothing, write exactly: No recent items found.',
-    '7. HOW IT SITS IN YOUR BOOK — using the investor context above, whether they look over- or under-exposed and the diversification angle. 2-3 sentences.',
+    'EPISTEMIC RULES — this dossier mixes live web results, the investor\'s own data, and your analysis. Keep them visibly separate so nothing unverified reads as fact:',
+    '- Label substantive claims by basis: FROM SEARCH (backed by a web result you found THIS run — cite the full https:// source URL inline; ALL current facts, figures, dollar amounts, percentages, dates, and news MUST be FROM SEARCH with a URL), FROM YOUR DATA (the investor-context figures above), or [inference] (your own reasoning/synthesis/interpretation — tag it so it is not mistaken for fact).',
+    '- Any specific figure, statistic, dollar amount, %, or date you did NOT get from a search result this run is UNVERIFIED: confirm it with a search, omit it, or list it under CLAIMS TO VERIFY tagged \u26a0UNVERIFIED. NEVER recite numbers or "recent" events from memory as if current — your training is stale.',
+    '- Bull and bear points are POSITIONS investors hold, not settled truths — write "bulls argue\u2026 / bears counter\u2026"; where the recent evidence leans one way, say so and tag it [inference].',
+    '- Past returns and the benchmark 1Y are HISTORY, not forecasts — never extrapolate them into an expected future return.',
+    '- Tickers: only name one you are confident is real and correct; if unsure, omit it. Do NOT invent tickers, companies, holdings, or figures.',
+    '- If web search was unavailable or thin for a section, SAY SO plainly instead of backfilling from memory.',
     '',
-    'CRITICAL RULES:',
-    '- Every time you mention a stock or ETF ticker, wrap it as {TICKER|stock} or {TICKER|etf} using the real symbol — e.g. {NVDA|stock}, {SMH|etf}. This is parsed into links; an untagged ticker will not link, and a wrong symbol will 404.',
-    '- Do NOT invent tickers, companies, or holdings. If unsure a ticker is real and correct, omit it.',
-    '- Do NOT wrap tickers in markdown tables; plain lines are fine. No preamble or sign-off. Start at section 1. Keep each section tight.'
+    'Output these sections, each header on its own line in ALL CAPS exactly as shown. The investor weighted three things EQUALLY — give CURRENT STATE, the DEBATE, and YOUR BOOK comparable depth and lead with them:',
+    '1. CURRENT STATE \u2014 WHAT\'S GOING ON NOW — where the theme stands today and what has changed in recent weeks/months, and WHY it moved. FROM SEARCH with sources. Priority section — go deep.',
+    '2. THE BULL VS BEAR DEBATE — the genuine current disagreement: steel-man the strongest bull case AND the strongest bear case, then give an [inference] on which way recent evidence leans. Priority section.',
+    '3. HOW IT SITS IN YOUR BOOK — using the investor context, whether they look over/under-exposed, how their held names map to the segment\'s structure, and the concentration/diversification angle. Separate FROM YOUR DATA from [inference]. Priority section — be specific to their numbers.',
+    '4. WHAT IT IS & HOW IT TRADES — define the segment, its secular drivers, and its character (rate-sensitive? cyclical? momentum-led? defensive?).',
+    '5. BIG PLAYERS — the major public companies and the role each plays.',
+    '6. THE ETFS — the main funds and how they differ (cap- vs equal-weight, pure-play vs broad, notable expense gaps).',
+    '7. DRIVERS & CATALYSTS — the structural forces and the near-term catalysts worth watching.',
+    '8. RISKS — the bear case in detail (concentration, valuation, regulation, cyclical/rate downside).',
+    '9. CURRENT NEWS — the most significant recent developments (last ~3 months), swept broadly across the WHOLE segment including out-of-favor or politically-driven sub-sectors (e.g. policy/funding/regulatory actions, not just the hot story). Each item: dated, one line, with the COMPLETE https:// source URL (do not shorten or truncate). If search found nothing, write exactly: No recent items found.',
+    '10. CLAIMS TO VERIFY — bullet every specific figure, date, or named fact in this dossier you could NOT back with a cited search result this run, each tagged \u26a0UNVERIFIED. If everything material is cited, write exactly: Nothing material unverified.',
+    '',
+    'FORMATTING RULES:',
+    '- Every stock or ETF ticker must be wrapped as {TICKER|stock} or {TICKER|etf} with the real symbol — e.g. {NVDA|stock}, {SMH|etf}. This is parsed into StockAnalysis links; an untagged ticker will not link and a wrong symbol 404s.',
+    '- No markdown tables; plain lines. No preamble or sign-off. Start at section 1.'
   ].join('\n');
 }
 
