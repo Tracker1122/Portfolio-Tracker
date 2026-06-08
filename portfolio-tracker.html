@@ -20966,6 +20966,16 @@ function researchAgeBadge(at) {
   return '<span style="color:' + color + '">' + _livePxAge(ms) + warn + '</span>';
 }
 
+// Just the severity color (no text) — for the chip dot. Same thresholds as researchAgeBadge.
+function researchAgeColor(at) {
+  if (!at) return '#34d399';
+  const days = (Date.now() - new Date(at).getTime()) / 86400000;
+  if (isNaN(days)) return '#34d399';
+  if (days >= 30) return 'var(--color-text-danger)';
+  if (days >= 7) return '#fbbf24';
+  return '#34d399';
+}
+
 // Split a dossier so the news passes + "Pull more news" button can sit right after CURRENT NEWS,
 // above the trailing CLAIMS TO VERIFY block. Splits at the CLAIMS header (backing up over a preceding
 // "---" separator). If no claims section is found (e.g. a truncated brief), `after` is '' and the
@@ -21083,7 +21093,13 @@ function renderThemeResearch() {
   const sel = themeResearchSel;
   const chips = themeList.map(function (t) {
     const on = (t === sel), has = !!themeResearch[t];
-    return '<span onclick="selectThemeResearch(\'' + escq(t) + '\')" style="cursor:pointer;font-size:10px;padding:3px 10px;border-radius:12px;white-space:nowrap;border:1px solid ' + (on ? 'var(--color-text-info)' : 'var(--color-border-tertiary)') + ';background:' + (on ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)') + ';color:' + (on ? 'var(--color-text-info)' : 'var(--color-text-secondary)') + '">' + esc(t) + (has ? ' <span style="color:#34d399" title="saved">\u25cf</span>' : '') + '</span>';
+    let dot = '';
+    if (has) {
+      const _at = themeResearch[t].at;
+      const _age = _at ? _livePxAge(new Date(_at).getTime()) : '';
+      dot = ' <span style="color:' + researchAgeColor(_at) + '" title="saved' + (_age ? ' \u00b7 ' + esc(_age) + ' (green &lt;7d, amber &lt;30d, red older)' : '') + '">\u25cf</span>';
+    }
+    return '<span onclick="selectThemeResearch(\'' + escq(t) + '\')" style="cursor:pointer;font-size:10px;padding:3px 10px;border-radius:12px;white-space:nowrap;border:1px solid ' + (on ? 'var(--color-text-info)' : 'var(--color-border-tertiary)') + ';background:' + (on ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)') + ';color:' + (on ? 'var(--color-text-info)' : 'var(--color-text-secondary)') + '">' + esc(t) + dot + '</span>';
   }).join('');
   const chipWrap = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' + chips + '</div>';
 
