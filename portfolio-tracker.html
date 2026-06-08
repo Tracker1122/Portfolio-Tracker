@@ -25882,6 +25882,17 @@ init();
   // The grid: events (rows) x factors (cols), current event row highlighted, plus a LIVE
   // "your book" row. One renderer, reused by every card (collapsed inside the briefing details,
   // so no clutter cost), and it flows to PDF + mirror through renderReplayCard.
+  // Severity tint for a "% of book" concentration/exposure figure: low is calm (green), higher warms
+  // through amber/orange to red. Shared by the YOUR BOOK factor row and the theme "Your weight" column
+  // so both read on one scale. Thresholds are deliberately round and easy to tune.
+  function severityColor(pct) {
+    if (pct == null || isNaN(pct)) return 'var(--color-text-tertiary)';
+    if (pct >= 35) return 'var(--color-text-danger)';   // high concentration / exposure
+    if (pct >= 20) return '#fb923c';                     // elevated (orange)
+    if (pct >= 10) return '#fbbf24';                     // moderate (amber)
+    return 'var(--color-text-success)';                  // low / diversified (green)
+  }
+
   function renderRiskFactorGrid(currentWinId) {
     var dotOn = '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--color-text-secondary,#aaa)"></span>';
     var th = '<th style="font-size:8.5px;font-weight:600;color:var(--color-text-tertiary);padding:2px 4px;text-align:center;white-space:nowrap">';
@@ -25904,13 +25915,13 @@ init();
     var fe = factorExposureLive(), bookRow = '';
     bookRow += '<tr style="border-top:1px solid var(--color-border-tertiary)"><td style="font-size:9px;font-weight:700;color:var(--color-text-primary);padding:4px 6px 2px 4px;white-space:nowrap">YOUR BOOK</td>';
     RISK_FACTORS.forEach(function (f) {
-      var cell = '\u2014', tip = '';
+      var cell = '\u2014', tip = '', col = 'var(--color-text-tertiary)';
       if (fe.ok && fe.byFactor[f.id]) {
         var e = fe.byFactor[f.id];
-        cell = e.pct >= 0.5 ? e.pct.toFixed(0) + '%' : '\u2014';
+        if (e.pct >= 0.5) { cell = e.pct.toFixed(0) + '%'; col = severityColor(e.pct); }
         tip = e.themes.length ? (' title="summed: ' + e.themes.join(', ') + '"') : ' title="no held themes carry this factor"';
       }
-      bookRow += '<td style="text-align:center;font-size:9px;color:var(--color-text-secondary);padding:4px 4px 2px"' + tip + '>' + cell + '</td>';
+      bookRow += '<td style="text-align:center;font-size:9px;font-weight:600;color:' + col + ';padding:4px 4px 2px"' + tip + '>' + cell + '</td>';
     });
     bookRow += '</tr>';
     // Make the hover-only theme names visible: one line per factor, the held themes driving its %.
@@ -25977,7 +25988,11 @@ init();
       var held = haveW && weights[thm] > 0, wpct = held ? (weights[thm] / fullBook * 100) : 0;
       var nameColor = (!haveW || held) ? 'var(--color-text-secondary)' : 'var(--color-text-tertiary)';
       rows += '<tr style="border-top:1px solid var(--color-border-tertiary)"><td style="font-size:9.5px;color:' + nameColor + ';padding:3px 6px 3px 4px;white-space:nowrap">' + (LBL[thm] || thm) + '</td>';
-      if (haveW) rows += '<td style="font-size:9px;color:var(--color-text-tertiary);text-align:right;padding:3px 8px">' + (held ? (wpct >= 0.5 ? wpct.toFixed(0) + '%' : '&lt;1%') : '\u2014') + '</td>';
+      if (haveW) {
+        var wCol = held ? severityColor(wpct) : 'var(--color-text-tertiary)';
+        var wTxt = held ? (wpct >= 0.5 ? wpct.toFixed(0) + '%' : '&lt;1%') : '\u2014';
+        rows += '<td style="font-size:9px;font-weight:600;color:' + wCol + ';text-align:right;padding:3px 8px">' + wTxt + '</td>';
+      }
       RISK_FACTORS.forEach(function (f) { rows += '<td style="text-align:center;padding:3px 5px">' + (tags.indexOf(f.id) >= 0 ? dotOn : '') + '</td>'; });
       rows += '</tr>';
     }
