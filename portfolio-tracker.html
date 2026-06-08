@@ -20944,6 +20944,28 @@ function themeResearchFactsLine(theme) {
   return bits.join(' \u00b7 ');
 }
 
+// Split a dossier so the news passes + "Pull more news" button can sit right after CURRENT NEWS,
+// above the trailing CLAIMS TO VERIFY block. Splits at the CLAIMS header (backing up over a preceding
+// "---" separator). If no claims section is found (e.g. a truncated brief), `after` is '' and the
+// caller falls back to appending the button at the end.
+function splitDossierAtClaims(text) {
+  if (!text) return { before: '', after: '' };
+  const lines = text.split('\n');
+  let hi = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^[ \t]*(?:#+[ \t]*|\*+[ \t]*)?CLAIMS TO VERIFY\b/i.test(lines[i])) { hi = i; break; }
+  }
+  if (hi < 0) return { before: text, after: '' };
+  let splitAt = hi;
+  let j = hi - 1;
+  while (j >= 0 && lines[j].trim() === '') j--;            // skip blank lines above the header
+  if (j >= 0 && /^[ \t]*-{3,}[ \t]*$/.test(lines[j])) splitAt = j; // pull a "---" separator into `after`
+  return {
+    before: lines.slice(0, splitAt).join('\n').replace(/\s+$/, ''),
+    after: lines.slice(splitAt).join('\n').replace(/^\n+/, '')
+  };
+}
+
 // One saved (or in-progress) dossier as a collapsible card.
 function themeResearchCard(theme) {
   const entry = themeResearch[theme];
@@ -21003,7 +21025,13 @@ function themeResearchCard(theme) {
       + '<span style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-left:8px">A fresh web search for news beyond this brief \u2014 costs one web-search pass, and is deeper than the initial run because the whole search budget goes to news.</span>'
       + '</div>';
   }
-  const bodyInner = (entry && !isBusy) ? (truncBanner + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(entry.text) + '</div>' + newsHtml + THEME_RESEARCH_DISCLAIMER + threadHtml) : '';
+  let bodyInner = '';
+  if (entry && !isBusy) {
+    const _split = splitDossierAtClaims(entry.text);
+    const _top = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(_split.before) + '</div>';
+    const _claims = _split.after ? '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary);margin-top:2px">' + linkifyResearch(_split.after) + '</div>' : '';
+    bodyInner = truncBanner + _top + newsHtml + _claims + THEME_RESEARCH_DISCLAIMER + threadHtml;
+  }
   let actions = '';
   if (!isBusy) {
     let a = '<span onclick="event.stopPropagation();runThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info)">\u21bb ' + (entry ? 'Re-run' : 'Research') + '</span>';
