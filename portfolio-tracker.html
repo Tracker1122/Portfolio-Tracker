@@ -11107,6 +11107,82 @@ function renderQualityTab() {
   renderQrSavedList();
 }
 
+// Find the most recent saved Evaluate-a-Trade record for a ticker, to surface what the user bet going in.
+function findEvalForTicker(ticker) {
+  if (typeof qualityReviews === 'undefined' || !Array.isArray(qualityReviews) || !ticker) return null;
+  const norm = (t) => (typeof qrNormTicker === 'function') ? qrNormTicker(t) : String(t || '').toUpperCase();
+  const nt = norm(ticker);
+  const matches = qualityReviews.filter(q => q && q.ticker && norm(q.ticker) === nt);
+  if (!matches.length) return null;
+  matches.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  return matches[0];
+}
+
+// Exit review is stored ON the closed position, so it travels with positions through save/export/Drive
+// with no separate store. Mirrors setPriceToday's save/re-render.
+function setExitReview(id, key, value) {
+  const pos = positions.find(p => p.id === id);
+  if (!pos) return;
+  if (!pos.exitReview) pos.exitReview = {};
+  pos.exitReview[key] = value;
+  pos.exitReview.at = new Date().toISOString();
+  scheduleSave();
+  renderPostSell();
+}
+
+// Decision-quality × outcome 2x2 — separates skill (the diagonal you control) from variance (the
+// off-diagonal). Outcome axis = beat the index or not (same verdict the cards use). Process axis =
+// the user's own "sound decision given what you knew THEN?" answer, deliberately decoupled from result.
+function calibrationGrid(analysed) {
+  const ws = [], wl = [], ls = [], ll = [];
+  let ungraded = 0;
+  analysed.forEach(({ p, c }) => {
+    const won = c.result === 'Beat', lost = c.result === 'Trail';
+    if (!won && !lost) return; // tied / unscored vs index — not placed
+    const s = p.exitReview && p.exitReview.sound;
+    if (s !== 'yes' && s !== 'no') { ungraded++; return; }
+    const sound = s === 'yes';
+    if (won && sound) ws.push(p.ticker);
+    else if (won && !sound) wl.push(p.ticker);
+    else if (lost && sound) ls.push(p.ticker);
+    else ll.push(p.ticker);
+  });
+  const graded = ws.length + wl.length + ls.length + ll.length;
+  const nudge = ungraded > 0
+    ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:8px">${ungraded} closed trade${ungraded === 1 ? '' : 's'} not yet graded — answer "sound decision?" on the cards below to place ${ungraded === 1 ? 'it' : 'them'}.</div>`
+    : '';
+  if (graded === 0) {
+    return `<div style="margin:12px 0;padding:12px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg)">
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:6px">Decision-quality map</div>
+      <div style="font-size:10px;color:var(--color-text-secondary);line-height:1.55">Grade your closed trades below — the "sound decision given what you knew then?" question — to build this 2×2. It separates being <em>right</em> from being right <em>for the right reason</em>, so a lucky win and a skilled win stop looking the same.</div>
+      ${nudge}
+    </div>`;
+  }
+  const cell = (title, tickers, color, sub) => `<div style="padding:8px 10px;border-radius:var(--border-radius-md);background:var(--color-background-tertiary);border-left:3px solid ${color}">
+    <div style="font-size:10px;font-weight:700;color:${color}">${title} <span style="color:var(--color-text-secondary)">· ${tickers.length}</span></div>
+    <div style="font-size:9px;color:var(--color-text-secondary);margin-top:2px;line-height:1.45">${sub}</div>
+    ${tickers.length ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">${tickers.map(esc).join(', ')}</div>` : ''}
+  </div>`;
+  const rowLabel = (t) => `<div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);display:flex;align-items:center">${t}</div>`;
+  return `<div style="margin:12px 0;padding:12px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg)">
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px">Decision-quality map · ${graded} graded</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:10px">Rows = outcome vs the index. Columns = your own read of whether the call was sound given what you knew <em>then</em>.</div>
+    <div style="display:grid;grid-template-columns:74px 1fr 1fr;gap:8px;align-items:stretch">
+      <div></div>
+      <div style="font-size:9px;font-weight:700;text-align:center;color:var(--color-text-secondary)">Sound decision</div>
+      <div style="font-size:9px;font-weight:700;text-align:center;color:var(--color-text-secondary)">Flawed decision</div>
+      ${rowLabel('Beat index')}
+      ${cell('Earned it', ws, 'var(--color-text-success)', 'Skill and result agree. Repeat this.')}
+      ${cell('Got lucky', wl, '#fbbf24', 'Won despite a flawed call — the win does not validate the process.')}
+      ${rowLabel('Trailed index')}
+      ${cell('Right call, wrong result', ls, '#60a5fa', 'Sound process, bad variance. Resist over-correcting.')}
+      ${cell('Mistake', ll, 'var(--color-text-danger)', 'Flawed call and a loss — the real lessons live here.')}
+    </div>
+    <div style="font-size:9px;color:var(--color-text-secondary);margin-top:10px;line-height:1.5">Skill lives on the diagonal you control: repeat <strong>Earned it</strong>, fix <strong>Mistake</strong>. The other two are mostly variance — rewarding luck or punishing bad luck is how sound processes get abandoned.</div>
+    ${nudge}
+  </div>`;
+}
+
 function renderPostSell() {
   const summaryEl = document.getElementById('postsell-summary');
   const cardsEl = document.getElementById('postsell-cards');
@@ -11212,10 +11288,52 @@ function renderPostSell() {
     summaryEl.innerHTML += sleeveHtml;
   }
 
+  summaryEl.innerHTML += calibrationGrid(analysed);
+
   // Cards sorted worst vs S&P first
   analysed.sort((a, b) => (a.c.vsSpx ?? 0) - (b.c.vsSpx ?? 0));
 
   cardsEl.innerHTML = analysed.map(({ p, c, daysHeld, priceToday, valueIfHeld, glIfHeld, retIfHeld, costOfSelling, spxSinceSale, spxDollarsSinceSale, dollarAlpha }) => {
+    // Link back to the original Evaluate-a-Trade record (what the user bet, in their own words, before the outcome).
+    const ev = findEvalForTicker(p.ticker);
+    let evalHtml = '';
+    if (ev) {
+      const ef = ev.fields || {};
+      const eb = [];
+      if (ef.thesis) eb.push(['Thesis', ef.thesis]);
+      if (ef.exitIf) eb.push(['Pre-committed exit-if', ef.exitIf]);
+      if (ef.risks) eb.push(['Risks you named', ef.risks]);
+      if (eb.length) {
+        const ew = ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : '';
+        evalHtml = `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-info)">What you bet going in${ew ? ' · recorded ' + esc(ew) : ''}</summary>`
+          + `<div style="margin-top:6px;font-size:10px;line-height:1.55;color:var(--color-text-secondary)">`
+          + eb.map(b => `<div style="margin-bottom:6px"><span style="color:var(--color-text-tertiary);font-weight:600">${b[0]}:</span> ${esc(b[1])}</div>`).join('')
+          + `</div></details>`;
+      }
+    }
+    // Exit review: grade the decision separately from the result.
+    const er = p.exitReview || {};
+    const erSel = (key, opts) => `<select onchange="setExitReview(${p.id},'${key}',this.value)" style="width:100%;margin-top:3px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:3px 4px">`
+      + opts.map(o => `<option value="${o[0]}"${(er[key] || '') === o[0] ? ' selected' : ''}>${o[1]}</option>`).join('') + `</select>`;
+    const erHtml = `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-border-tertiary)">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-tertiary);margin-bottom:8px">Exit review — grade the decision, not the result</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div>
+            <div class="postsell-stat-label">Sound decision, given what you knew then?</div>
+            ${erSel('sound', [['', ''], ['yes', 'Yes — sound'], ['no', 'No — flawed']])}
+          </div>
+          <div>
+            <div class="postsell-stat-label">Did your thesis play out?</div>
+            ${erSel('played', [['', ''], ['yes', 'Yes'], ['partly', 'Partly'], ['no', 'No']])}
+          </div>
+          <div>
+            <div class="postsell-stat-label">Right for the reason you expected?</div>
+            ${erSel('reason', [['', ''], ['expected', 'As expected'], ['luck', 'Worked — other reason'], ['wrong', 'It didn\u2019t work']])}
+          </div>
+        </div>
+        <textarea onblur="setExitReview(${p.id},'lesson',this.value)" placeholder="One lesson to carry forward (optional)\u2026" style="width:100%;box-sizing:border-box;min-height:38px;margin-top:8px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;line-height:1.5;padding:6px">${esc(er.lesson || '')}</textarea>
+      </div>`;
     const verdictClass = c.result === 'Beat' ? 'verdict-beat' : c.result === 'Trail' ? 'verdict-trail' : 'verdict-tied';
     const glColor = c.gainLoss >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
     const vsColor = c.vsSpx === null ? 'var(--color-text-tertiary)' : c.vsSpx > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
@@ -11301,6 +11419,8 @@ function renderPostSell() {
                  width:140px;padding:2px 0;outline:none">
       </div>
       ${p.notes ? `<div class="postsell-notes">Note: ${esc(p.notes)}</div>` : ''}
+      ${evalHtml}
+      ${erHtml}
     </div>`;
   }).join('');
 }
