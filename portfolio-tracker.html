@@ -20437,10 +20437,10 @@ function themeSearchPlan(theme) {
 function buildThemeResearchPrompt(theme) {
   const f = themeResearchFacts(theme);
   const ctx = [
-    'Representative ETF: ' + (f.bench || 'n/a'),
+    'Theme benchmark ETF (a yardstick used to MEASURE this theme \u2014 NOT necessarily owned by the investor): ' + (f.bench || 'n/a'),
     'Investor true-exposure weight in this theme: ' + (f.weightPct != null ? f.weightPct.toFixed(1) + '%' : 'unknown'),
-    'Benchmark 1-year return: ' + (f.perf1Y != null ? (f.perf1Y >= 0 ? '+' : '') + f.perf1Y.toFixed(1) + '%' : 'unknown'),
-    'Names held directly in this theme: ' + (f.held.length ? f.held.join(', ') : 'none directly')
+    'That benchmark\'s 1-year return: ' + (f.perf1Y != null ? (f.perf1Y >= 0 ? '+' : '') + f.perf1Y.toFixed(1) + '%' : 'unknown'),
+    'The investor\'s ONLY direct holdings tagged to this theme: ' + (f.held.length ? f.held.join(', ') : 'none \u2014 they have no direct position tagged to this theme')
   ];
   const hints = (typeof THEME_SEARCH_HINTS !== 'undefined' && THEME_SEARCH_HINTS[theme]) ? THEME_SEARCH_HINTS[theme] : [];
   const safetyNet = hints.length ? ' While searching, glance for anything material in: ' + hints.slice(0, 5).join(', ') + '.' : '';
@@ -20456,11 +20456,12 @@ function buildThemeResearchPrompt(theme) {
     '- Tag claims by basis: FROM SEARCH (a web result you found THIS run \u2014 cite the full https:// URL; all current facts, figures, dates, and news MUST be FROM SEARCH), FROM YOUR DATA (the context above), or [inference] (your reasoning).',
     '- Any specific figure or date you did NOT get from a search this run is UNVERIFIED \u2014 omit it or list it under CLAIMS TO VERIFY tagged \u26a0UNVERIFIED. Never recite numbers from memory as current.',
     '- Bull/bear points are positions, not truths. Past returns and the 1Y are history, not forecasts. Only name a ticker you are sure is real, and wrap every one as {TICKER|stock} or {TICKER|etf}.',
+    '- HOLDINGS RULE: the benchmark ETF above is a YARDSTICK, not a position. Do NOT say the investor owns it. Their ONLY holdings in this theme are the tickers in the "direct holdings" line above; never promote the benchmark, a big player, or any researched name into something they own.',
     '',
     'Output these sections, each an ALL-CAPS header on its own line, each within its cap:',
     '1. CURRENT STATE — the key recent developments, what changed, and why it matters. PRIORITY — give it substance: up to ~6 sentences or 5 bullets. FROM SEARCH with sources.',
     '2. BULL VS BEAR — up to 4 steel-manned bullets per side, then ONE [inference] line on which way recent evidence leans. PRIORITY.',
-    '3. YOUR BOOK — over- or under-exposed, and how each held name maps to the theme (a sentence per holding is fine; not an essay). ~5-6 sentences; separate FROM YOUR DATA from [inference]. PRIORITY.',
+    '3. YOUR BOOK — over- or under-exposed, and how each held name (from the direct-holdings line only — the benchmark ETF is NOT a holding) maps to the theme; a sentence per holding is fine, not an essay. ~5-6 sentences; separate FROM YOUR DATA from [inference]. PRIORITY.',
     '4. HOW IT TRADES — its character (rate-sensitive? cyclical? momentum? defensive?) and the main drivers. \u22644 sentences.',
     '5. KEY PLAYERS & ETFS — the names that matter, each ticker tagged with a short note on its role. \u22648 lines; do not enumerate the whole field.',
     '6. RISKS — the bear case, up to 4 bullets.',
