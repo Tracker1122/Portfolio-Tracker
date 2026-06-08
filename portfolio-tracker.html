@@ -20367,19 +20367,35 @@ function themeResearchFacts(theme) {
 
 // Render AI text → HTML: {SYM|stock|etf} → StockAnalysis links, bare source URLs → links,
 // numbered ALL-CAPS section headers → bold. Escapes first so model text can't inject markup.
+function trKey(theme) { return 'tr_' + String(theme).replace(/[^A-Za-z0-9]+/g, '_'); }
+let themeResearchExpanded = {}; // theme -> bool (which saved cards are open); empty = all collapsed
+
+// Render AI text -> HTML. ORDER MATTERS: linkify every source URL FIRST (one pass, on escaped plain
+// text), THEN turn {SYM|stock|etf} tags into StockAnalysis links LAST. The earlier bug was the
+// reverse: ticker anchors were built first, then the URL pass re-matched the https:// inside their
+// freshly-built hrefs and double-wrapped them, corrupting the markup. A single URL pass before the
+// ticker pass means no anchor is ever re-scanned for URLs.
 function linkifyResearch(text) {
   let h = esc(text || '');
+  function mkLink(href, label) {
+    return '<a href="' + href + '" target="_blank" rel="noopener" style="color:var(--color-text-info)">' + esc(label) + '</a>';
+  }
+  function cleanUrl(u) { return u.replace(/&amp;/g, '&').replace(/[\u2026.,;:)]+$/, ''); } // drop trailing ellipsis / stray punctuation
+  function shortLabel(href) { var l = href.replace(/^https?:\/\/(www\.)?/, ''); return l.length > 44 ? l.slice(0, 44) + '\u2026' : l; }
+  // One pass: full scheme URLs OR bare domains with a path (the model often omits https://).
+  // .replace() never re-scans its own output, so anchors created here are safe from re-wrapping.
+  var URL_RE = /(https?:\/\/[^\s<>"')\]]+)|((?:^|[\s(]))((?:[a-z0-9-]+\.)+(?:com|org|net|gov|edu|io|co|us|ai|info)\/[^\s<>"')\]]+)/gi;
+  h = h.replace(URL_RE, function (m, full, pre, bare) {
+    if (full) { var hf = cleanUrl(full); return mkLink(hf, shortLabel(hf)); }
+    var hb = 'https://' + cleanUrl(bare);
+    return (pre || '') + mkLink(hb, shortLabel(hb));
+  });
+  // Ticker tags -> StockAnalysis (split paths: /stocks/ vs /etf/). LAST, so its hrefs aren't re-scanned.
   h = h.replace(/\{([A-Za-z][A-Za-z0-9.\-]{0,6})\|(stock|etf)\}/g, function (m, t, type) {
-    const T = t.toUpperCase();
-    const path = (type === 'etf') ? 'etf' : 'stocks';
+    var T = t.toUpperCase(), path = (type === 'etf') ? 'etf' : 'stocks';
     return '<a href="https://stockanalysis.com/' + path + '/' + encodeURIComponent(T) + '/" target="_blank" rel="noopener" style="color:var(--color-text-info);text-decoration:none;border-bottom:1px dotted var(--color-text-info)">' + T + '</a>';
   });
-  h = h.replace(/(https?:\/\/[^\s<)\]]+)/g, function (m) {
-    const href = m.replace(/&amp;/g, '&');
-    let label = href.replace(/^https?:\/\/(www\.)?/, '');
-    if (label.length > 40) label = label.slice(0, 40) + '…';
-    return '<a href="' + href + '" target="_blank" rel="noopener" style="color:var(--color-text-info)">' + esc(label) + '</a>';
-  });
+  // Bold the numbered ALL-CAPS section headers.
   h = h.replace(/^(\d+\.\s+[A-Z][A-Z0-9 &\/'\-]+)\s*$/gm, '<strong style="color:var(--color-text-primary)">$1</strong>');
   return h;
 }
@@ -20404,36 +20420,37 @@ function buildThemeResearchPrompt(theme) {
     '3. THE ETFS — the main funds for this exposure and how they differ (cap- vs equal-weight, pure-play vs broad, notable expense gaps).',
     '4. DRIVERS & CATALYSTS — what actually moves this segment.',
     '5. RISKS / BEAR CASE — what tends to go wrong (concentration, valuation, regulation, cyclical downside).',
-    '6. CURRENT NEWS — recent, dated developments found via web search; include a real source URL inline as a plain https:// link for each. If web search is unavailable or returns nothing, write exactly: No recent items found.',
+    '6. CURRENT NEWS — recent, dated developments found via web search. For each item give the COMPLETE source URL starting with https:// on the same line. Do NOT shorten, truncate, or add "..." to URLs — write the full link. If web search is unavailable or returns nothing, write exactly: No recent items found.',
     '7. HOW IT SITS IN YOUR BOOK — using the investor context above, whether they look over- or under-exposed and the diversification angle. 2-3 sentences.',
     '',
     'CRITICAL RULES:',
-    '- Every time you mention a stock or ETF ticker, wrap it as {TICKER|stock} or {TICKER|etf} using the real symbol — e.g. {NVDA|stock}, {SMH|etf}. This is parsed into links; an untagged ticker will not link.',
+    '- Every time you mention a stock or ETF ticker, wrap it as {TICKER|stock} or {TICKER|etf} using the real symbol — e.g. {NVDA|stock}, {SMH|etf}. This is parsed into links; an untagged ticker will not link, and a wrong symbol will 404.',
     '- Do NOT invent tickers, companies, or holdings. If unsure a ticker is real and correct, omit it.',
-    '- No preamble or sign-off. Start at section 1. Keep each section tight.'
+    '- Do NOT wrap tickers in markdown tables; plain lines are fine. No preamble or sign-off. Start at section 1. Keep each section tight.'
   ].join('\n');
 }
+
+const THEME_RESEARCH_DISCLAIMER = '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:10px">AI-generated; tickers link to StockAnalysis (a bad link 404s — that\'s your tell it got a symbol wrong). Verify holdings and news before acting — the model can be wrong or out of date. Not advice.</div>';
 
 async function runThemeResearch(theme) {
   if (themeResearchBusy) return;
   if (!aiWorkerUrl) loadAiWorkerUrl();
-  themeResearchBusy = true;
-  themeResearchSel = theme;
+  themeResearchBusy = true; themeResearchSel = theme; themeResearchExpanded[theme] = true;
   renderThemeResearch();
-  const out = document.getElementById('theme-research-body');
+  const bodyId = trKey(theme) + '_body';
+  const setBody = (html) => { const o = document.getElementById(bodyId); if (o) o.innerHTML = html; };
   if (!aiWorkerUrl) {
     themeResearchBusy = false;
-    if (out) out.innerHTML = '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">No AI worker URL set. Set it on the New Position Evaluation tab (the "AI worker URL" box), then retry.</div>';
+    setBody('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">No AI worker URL set. Set it on the New Position Evaluation tab (the "AI worker URL" box), then retry.</div>');
     return;
   }
-  if (out) out.innerHTML = '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Researching ' + esc(theme) + ' — pulling current news and the lay of the land (web search makes this a little slower)…</div>';
+  setBody('<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:4px 0">Researching ' + esc(theme) + ' — pulling current news and the lay of the land (web search makes this a little slower)\u2026</div>');
   const prompt = buildThemeResearchPrompt(theme);
   try {
     let _last = 0;
     const onDelta = function (t) {
       const now = Date.now(); if (now - _last < 60) return; _last = now;
-      const o = document.getElementById('theme-research-body');
-      if (o) o.innerHTML = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + esc(t) + '<span style="opacity:.45">▌</span></div>';
+      setBody('<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + esc(t) + '<span style="opacity:.45">\u258c</span></div>');
     };
     const r = await aiWorkerCall(prompt, onDelta, { web: true });
     themeResearch[theme] = { text: r.text, at: new Date().toISOString(), edited: false };
@@ -20441,27 +20458,75 @@ async function runThemeResearch(theme) {
   } catch (err) {
     themeResearchBusy = false;
     const info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed', color: 'var(--color-text-danger)', raw: '' };
-    const o = document.getElementById('theme-research-body');
-    if (o) o.innerHTML = '<div style="border:1px solid ' + info.color + ';border-radius:var(--border-radius-md);padding:10px 12px;font-size:10px;color:' + info.color + ';line-height:1.5"><strong>' + esc(info.title) + '</strong><br><span style="color:var(--color-text-secondary)">' + esc(info.detail) + '</span></div>';
+    setBody('<div style="border:1px solid ' + info.color + ';border-radius:var(--border-radius-md);padding:10px 12px;font-size:10px;color:' + info.color + ';line-height:1.5"><strong>' + esc(info.title) + '</strong><br><span style="color:var(--color-text-secondary)">' + esc(info.detail) + '</span></div>');
     return;
   }
   themeResearchBusy = false;
   renderThemeResearch();
 }
 
-function selectThemeResearch(theme) { themeResearchSel = theme; renderThemeResearch(); }
-
-function editThemeResearch() {
-  const theme = themeResearchSel; if (!theme || !themeResearch[theme]) return;
-  const body = document.getElementById('theme-research-body'); if (!body) return;
-  body.innerHTML = '<textarea id="theme-research-edit" style="width:100%;min-height:260px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;line-height:1.5;padding:8px;box-sizing:border-box">' + esc(themeResearch[theme].text) + '</textarea>' +
-    '<div style="margin-top:6px;display:flex;gap:8px"><button class="btn btn-sm btn-primary" onclick="saveThemeResearchEdit()" style="font-size:10px">Save</button><button class="btn btn-sm" onclick="renderThemeResearch()" style="font-size:10px">Cancel</button></div>' +
-    '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Ticker tags like {NVDA|stock} stay clickable after saving. Plain https:// links stay clickable too.</div>';
+function selectThemeResearch(theme) { themeResearchSel = theme; if (themeResearch[theme]) themeResearchExpanded[theme] = true; renderThemeResearch(); }
+function toggleThemeCard(theme) { themeResearchExpanded[theme] = !themeResearchExpanded[theme]; renderThemeResearch(); }
+function removeThemeResearch(theme) {
+  if (!themeResearch[theme]) return;
+  if (!confirm('Remove the saved research for "' + theme + '"? This cannot be undone.')) return;
+  delete themeResearch[theme]; delete themeResearchExpanded[theme];
+  if (themeResearchSel === theme) themeResearchSel = null;
+  saveThemeResearch(); renderThemeResearch();
 }
-function saveThemeResearchEdit() {
-  const theme = themeResearchSel; const ta = document.getElementById('theme-research-edit');
-  if (theme && themeResearch[theme] && ta) { themeResearch[theme].text = ta.value; themeResearch[theme].edited = true; saveThemeResearch(); }
+function editThemeResearch(theme) {
+  const entry = themeResearch[theme]; if (!entry) return;
+  themeResearchExpanded[theme] = true;
+  const o = document.getElementById(trKey(theme) + '_body'); if (!o) return;
+  o.innerHTML = '<textarea id="' + trKey(theme) + '_edit" style="width:100%;min-height:260px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;line-height:1.5;padding:8px;box-sizing:border-box">' + esc(entry.text) + '</textarea>' +
+    '<div style="margin-top:6px;display:flex;gap:8px"><button class="btn btn-sm btn-primary" onclick="saveThemeResearchEdit(\'' + escq(theme) + '\')" style="font-size:10px">Save</button><button class="btn btn-sm" onclick="renderThemeResearch()" style="font-size:10px">Cancel</button></div>' +
+    '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Ticker tags like {NVDA|stock} and full https:// links stay clickable after saving.</div>';
+}
+function saveThemeResearchEdit(theme) {
+  const ta = document.getElementById(trKey(theme) + '_edit');
+  if (themeResearch[theme] && ta) { themeResearch[theme].text = ta.value; themeResearch[theme].edited = true; saveThemeResearch(); }
   renderThemeResearch();
+}
+
+function themeResearchFactsLine(theme) {
+  const f = themeResearchFacts(theme);
+  const bits = [];
+  if (f.bench) bits.push('ETF ' + esc(f.bench));
+  bits.push((f.weightPct != null ? f.weightPct.toFixed(1) + '%' : '\u2014') + ' weight');
+  if (f.perf1Y != null) bits.push('1Y ' + (f.perf1Y >= 0 ? '+' : '') + f.perf1Y.toFixed(1) + '%');
+  if (f.held.length) bits.push('hold ' + esc(f.held.join(', ')));
+  return bits.join(' \u00b7 ');
+}
+
+// One saved (or in-progress) dossier as a collapsible card.
+function themeResearchCard(theme) {
+  const entry = themeResearch[theme];
+  const isBusy = themeResearchBusy && themeResearchSel === theme;
+  const open = !!themeResearchExpanded[theme] || isBusy;
+  const facts = themeResearchFactsLine(theme);
+  const arrow = open ? '\u25be' : '\u25b8';
+  const bodyId = trKey(theme) + '_body';
+  const meta = isBusy ? 'researching\u2026' : (entry ? ('generated ' + esc(new Date(entry.at).toLocaleString()) + (entry.edited ? ' \u00b7 edited' : '')) : '');
+  const bodyInner = (entry && !isBusy) ? ('<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(entry.text) + '</div>' + THEME_RESEARCH_DISCLAIMER) : '';
+  let actions = '';
+  if (!isBusy) {
+    let a = '<span onclick="event.stopPropagation();runThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info)">\u21bb ' + (entry ? 'Re-run' : 'Research') + '</span>';
+    if (entry) {
+      a += '<span onclick="event.stopPropagation();editThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info)">\u270e Edit</span>';
+      a += '<span onclick="event.stopPropagation();removeThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-danger)">\u2715 Remove</span>';
+    }
+    actions = '<div style="display:flex;gap:16px;padding:6px 12px;font-size:9px;border-top:1px solid var(--color-border-tertiary);background:var(--color-background-tertiary)">' + a + '</div>';
+  }
+  return '<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:8px;overflow:hidden">'
+    + '<div onclick="toggleThemeCard(\'' + escq(theme) + '\')" style="cursor:pointer;padding:9px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--color-background-secondary)">'
+    +   '<span style="font-weight:700;font-size:12px;color:var(--color-text-primary)">' + esc(theme) + '</span>'
+    +   '<span style="font-size:9px;color:var(--color-text-tertiary)">' + facts + '</span>'
+    +   '<span style="font-size:9px;color:var(--color-text-tertiary);margin-left:auto">' + meta + '</span>'
+    +   '<span style="font-size:10px;color:var(--color-text-tertiary)">' + arrow + '</span>'
+    + '</div>'
+    + actions
+    + '<div id="' + bodyId + '" style="padding:12px;display:' + (open ? 'block' : 'none') + '">' + bodyInner + '</div>'
+    + '</div>';
 }
 
 function renderThemeResearch() {
@@ -20471,33 +20536,31 @@ function renderThemeResearch() {
   const sel = themeResearchSel;
   const chips = themeList.map(function (t) {
     const on = (t === sel), has = !!themeResearch[t];
-    return '<span onclick="selectThemeResearch(\'' + escq(t) + '\')" style="cursor:pointer;font-size:10px;padding:3px 10px;border-radius:12px;white-space:nowrap;border:1px solid ' + (on ? 'var(--color-text-info)' : 'var(--color-border-tertiary)') + ';background:' + (on ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)') + ';color:' + (on ? 'var(--color-text-info)' : 'var(--color-text-secondary)') + '">' + esc(t) + (has ? ' <span style="color:#34d399" title="cached">●</span>' : '') + '</span>';
+    return '<span onclick="selectThemeResearch(\'' + escq(t) + '\')" style="cursor:pointer;font-size:10px;padding:3px 10px;border-radius:12px;white-space:nowrap;border:1px solid ' + (on ? 'var(--color-text-info)' : 'var(--color-border-tertiary)') + ';background:' + (on ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)') + ';color:' + (on ? 'var(--color-text-info)' : 'var(--color-text-secondary)') + '">' + esc(t) + (has ? ' <span style="color:#34d399" title="saved">\u25cf</span>' : '') + '</span>';
   }).join('');
-  let body;
-  if (!sel) {
-    body = '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px 2px">Pick a theme above to research it — what it is and how it trades, the big players, the ETFs, drivers, risks, current news, and how it sits in your book. Generated on demand and saved; the green dot marks themes you\'ve already researched.</div>';
-  } else {
-    const f = themeResearchFacts(sel);
-    const factBits = [];
-    if (f.bench) factBits.push('ETF <a href="https://stockanalysis.com/etf/' + encodeURIComponent(f.bench) + '/" target="_blank" rel="noopener" style="color:var(--color-text-info);text-decoration:none">' + esc(f.bench) + '</a>');
-    factBits.push('your weight ' + (f.weightPct != null ? f.weightPct.toFixed(1) + '%' : '—'));
-    if (f.perf1Y != null) factBits.push('benchmark 1Y ' + (f.perf1Y >= 0 ? '+' : '') + f.perf1Y.toFixed(1) + '%');
-    factBits.push('you hold ' + (f.held.length ? esc(f.held.join(', ')) : 'none directly'));
-    const facts = '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin:8px 0;line-height:1.7">' + factBits.join(' &nbsp;·&nbsp; ') + '</div>';
-    const cached = themeResearch[sel];
-    let action = '', content;
-    if (themeResearchBusy) { content = '<div id="theme-research-body"></div>'; }
-    else if (cached) {
-      action = '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px"><span onclick="runThemeResearch(\'' + escq(sel) + '\')" style="cursor:pointer;font-size:9px;color:var(--color-text-info)">↻ Re-run</span><span onclick="editThemeResearch()" style="cursor:pointer;font-size:9px;color:var(--color-text-info)">✎ Edit</span><span style="font-size:9px;color:var(--color-text-tertiary)">generated ' + esc(new Date(cached.at).toLocaleString()) + (cached.edited ? ' · edited' : '') + '</span></div>';
-      content = '<div id="theme-research-body"><div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(cached.text) + '</div></div>';
-    } else {
-      action = '<button class="btn btn-sm btn-primary" onclick="runThemeResearch(\'' + escq(sel) + '\')" style="font-size:10px;margin-bottom:8px">Research ' + esc(sel) + ' with AI</button>';
-      content = '<div id="theme-research-body"></div>';
-    }
-    body = facts + action + content + '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:10px">AI-generated; tickers link to StockAnalysis (a bad link 404s — that\'s your tell it got a symbol wrong). Verify holdings and news before acting — the model can be wrong or out of date. Not advice.</div>';
+  const chipWrap = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' + chips + '</div>';
+
+  // Generate prompt for the selected theme that has no saved card yet.
+  let gen = '';
+  if (sel && !themeResearch[sel] && !themeResearchBusy) {
+    gen = '<div style="border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;margin-bottom:10px">'
+      + '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:8px">' + esc(sel) + ' \u00b7 ' + themeResearchFactsLine(sel) + '</div>'
+      + '<button class="btn btn-sm btn-primary" onclick="runThemeResearch(\'' + escq(sel) + '\')" style="font-size:10px">Research ' + esc(sel) + ' with AI</button>'
+      + '</div>';
   }
-  host.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px">' + chips + '</div>' + body;
+
+  // Cards: in-progress (not yet saved) first, then saved newest-first.
+  let cards = '';
+  if (themeResearchBusy && sel && !themeResearch[sel]) cards += themeResearchCard(sel);
+  const saved = Object.keys(themeResearch).sort((a, b) => new Date(themeResearch[b].at) - new Date(themeResearch[a].at));
+  cards += saved.map(themeResearchCard).join('');
+
+  let empty = '';
+  if (!cards) empty = '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:6px 2px">Pick a theme above and Research it — what it is and how it trades, the big players, the ETFs, drivers, risks, current news, and how it sits in your book. Each one is saved here as a card you can re-open, re-run, edit, or remove.</div>';
+
+  host.innerHTML = chipWrap + gen + cards + empty;
 }
+
 // True when the staged trade or the private-deal basis differs from what the saved review ran against.
 // (Discovery selection is intentionally NOT a staleness input — clicking Discovery names no longer feeds
 // the review, so changing the selection does not stale it.)
