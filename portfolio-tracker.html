@@ -28488,6 +28488,7 @@ init();
     if (outEl) outEl.innerHTML = renderReplayCard(entry.model);
     _highlightActive();
     renderSummaryTable();
+    _refreshHypoStatus(); // keep the no-history flag pointed at the window now on screen
   }
   function renderSummaryTable() {
     var el = document.getElementById('risk-replay-summary');
@@ -28560,9 +28561,25 @@ init();
       return;
     }
     if (cb) cb.disabled = false;
+    // Flag any staged NEW names that can't be modeled in the window currently shown below: a name
+    // with no price history in that window lands in its hypo model's `excluded` list (it surfaces
+    // only as lower coverage, never a bar). Keys off the active window's hypo row so the flag
+    // tracks whatever window is on screen.
+    var hypoFlag = '';
+    var _ak = _activeRowKey || '';
+    var _he = _summaryRows[_ak.replace('::hypo', '') + '::hypo'];
+    if (_he && _he.model && _he.model.excluded && _he.model.excluded.length && hypo.newTickers.length) {
+      var _ex = _he.model.excluded;
+      var _un = hypo.newTickers.filter(function (t) { return _ex.indexOf(t) >= 0; });
+      if (_un.length) {
+        hypoFlag = ' \u00b7 <span style="color:#fbbf24" title="These staged new names have no price history in the window shown below, so they can\u2019t enter its returns math \u2014 they surface only as lower coverage, never a bar. Try a window after they began trading (e.g. a post-2024 replay for a recent spin-off).">\u26a0 ' +
+          _un.join(', ') + (_un.length > 1 ? ' have' : ' has') + ' no history in ' + (_he.label || 'this window') + '</span>';
+      }
+    }
     if (el) el.innerHTML = hypo.moveCount + ' staged move' + (hypo.moveCount > 1 ? 's' : '') +
       (hypo.newTickers.length ? ' \u00b7 new name' + (hypo.newTickers.length > 1 ? 's' : '') + ': ' + hypo.newTickers.join(', ') : '') +
-      (_hypoMode ? ' \u00b7 <strong style="color:var(--color-text-info, #60a5fa)">folding in</strong>' : '');
+      (_hypoMode ? ' \u00b7 <strong style="color:var(--color-text-info, #60a5fa)">folding in</strong>' : '') +
+      hypoFlag;
   }
   function _setHypoMode(on) {
     _hypoMode = !!on;
