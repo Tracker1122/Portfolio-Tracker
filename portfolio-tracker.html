@@ -11944,6 +11944,35 @@ function pmSparkline(points, w, h) {
     '" stroke-width="1.2" points="' + coords + '"/></svg>';
 }
 
+// Compact "biggest movers" block for the price-moves panel: top gainers + top decliners ranked by
+// the given $-impact field (the panel's headline metric), with the % shown alongside. To rank by
+// percent instead, pass a pct field as moveKey. Excludes new/missing/zero-move rows.
+function renderPmMovers(rows, moveKey, pctKey, n) {
+  n = n || 5;
+  var valid = (rows || []).filter(function (r) { return r && !r.isNew && !r.isMissing && typeof r[moveKey] === 'number' && r[moveKey] !== 0; });
+  var ups = valid.filter(function (r) { return r[moveKey] > 0; }).sort(function (a, b) { return b[moveKey] - a[moveKey]; }).slice(0, n);
+  var downs = valid.filter(function (r) { return r[moveKey] < 0; }).sort(function (a, b) { return a[moveKey] - b[moveKey]; }).slice(0, n);
+  if (!ups.length && !downs.length) return '';
+  var dC = function (v) { return v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)'; };
+  var chip = function (r) {
+    var mv = r[moveKey], pct = r[pctKey];
+    var pctStr = (typeof pct === 'number') ? ' <span style="color:var(--color-text-tertiary);font-size:9px">(' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%)</span>' : '';
+    return '<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0;font-size:11px">' +
+      '<span style="font-weight:600">' + _livePxTickerLabel(r.ticker) + '</span>' +
+      '<span style="color:' + dC(mv) + ';white-space:nowrap">' + (mv >= 0 ? '+' : '−') + '$' + Math.abs(mv).toFixed(0) + pctStr + '</span>' +
+    '</div>';
+  };
+  var col = function (title, arr) {
+    return '<div style="flex:1;min-width:160px">' +
+      '<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:var(--color-text-tertiary);margin-bottom:3px">' + title + '</div>' +
+      (arr.length ? arr.map(chip).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">none</div>') +
+    '</div>';
+  };
+  return '<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px;padding:10px 12px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md)">' +
+    col('▲ Biggest gainers', ups) + col('▼ Biggest decliners', downs) +
+  '</div>';
+}
+
 function renderPriceMoves() {
   const el = document.getElementById('price-moves-wrap');
   if (!el) return;
@@ -12081,7 +12110,7 @@ function renderPriceMoves() {
 
     // Build per-ticker rows (capped to the top PM_VISIBLE; the rest sit behind the toggle row)
     const pmHidden = Math.max(0, rows.length - PM_VISIBLE);
-    const pmRows = (priceMovesShowAll || pmHidden === 0) ? rows : rows.slice(0, PM_VISIBLE);
+    const pmRows = rows; // full list now lives inside the collapsible (biggest-movers redesign)
     const pmToggleRow = pmHidden > 0
       ? '<tr><td colspan="8" style="padding:7px 8px;text-align:center;border-top:1px dashed var(--color-border-tertiary)"><a href="javascript:void(0)" onclick="togglePriceMovesShowAll()" style="font-size:10px;color:var(--color-text-info);cursor:pointer">' + (priceMovesShowAll ? '▴ Show top ' + PM_VISIBLE + ' only' : '▾ Show ' + pmHidden + ' more') + '</a></td></tr>'
       : '';
@@ -12169,7 +12198,10 @@ function renderPriceMoves() {
       ? '&nbsp;&nbsp;·&nbsp;&nbsp;<span style="color:var(--color-text-tertiary)">Book vs VOO:</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>'
       : '';
 
-    body =
+    const pmMoversHtml = renderPmMovers(rows, 'moveOnPosition', 'pctChange');
+    const pmBookLine = '<div style="font-size:11px;margin-bottom:8px"><span style="color:var(--color-text-tertiary)">Book since last refresh:</span> ' + '<span style="color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(0) + '</span>' + (b.bookPct !== null ? ' <span style="color:' + pColor(b.bookPct) + '">(' + (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%)</span>' : '') + (b.vsVoo !== null ? ' &nbsp;·&nbsp; <span style="color:var(--color-text-tertiary)">vs VOO</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>' : '') + '</div>';
+    body = pmBookLine + pmMoversHtml +
+      '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;margin-bottom:8px;list-style:none">▸ Full table — all ' + rows.length + ' tickers</summary>' +
       '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
         '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
           sortableTh('ticker', 'Ticker', 'left') +
@@ -12181,9 +12213,9 @@ function renderPriceMoves() {
           sortableTh('pctChange', 'Price % change', 'right', 'Per-share price change as a percent') +
           sortableTh('bench', 'vs theme bench', 'right', 'Click to group rows by theme benchmark. Cells show fetched α — see button on each row. self-benchmarked rows sink to bottom.') +
         '</tr></thead>' +
-        '<tbody>' + rowHtml + pmToggleRow + bookRow + '</tbody>' +
+        '<tbody>' + rowHtml + bookRow + '</tbody>' +
       '</table>' +
-      '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>';
+      '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>' + '</details>';
   } else {
     // ── ACROSS ALL REFRESHES ──
     const at = result.allTime;
@@ -12220,7 +12252,7 @@ function renderPriceMoves() {
     '</div>';
 
     const pmHidden = Math.max(0, rows.length - PM_VISIBLE);
-    const pmRows = (priceMovesShowAll || pmHidden === 0) ? rows : rows.slice(0, PM_VISIBLE);
+    const pmRows = rows; // full list now lives inside the collapsible (biggest-movers redesign)
     const pmToggleRow = pmHidden > 0
       ? '<tr><td colspan="8" style="padding:7px 8px;text-align:center;border-top:1px dashed var(--color-border-tertiary)"><a href="javascript:void(0)" onclick="togglePriceMovesShowAll()" style="font-size:10px;color:var(--color-text-info);cursor:pointer">' + (priceMovesShowAll ? '▴ Show top ' + PM_VISIBLE + ' only' : '▾ Show ' + pmHidden + ' more') + '</a></td></tr>'
       : '';
@@ -12265,7 +12297,10 @@ function renderPriceMoves() {
       ' &nbsp;·&nbsp; ' + at.refreshCount + ' refreshes' +
     '</div>';
 
-    body = tsLine + disclosure +
+    const pmMoversHtml = renderPmMovers(rows, 'moveOnCurrent', 'pctChange');
+    const pmBookLine = '<div style="font-size:11px;margin-bottom:8px"><span style="color:var(--color-text-tertiary)">Book across all refreshes:</span> ' + '<span style="color:' + dColor(b.moveDollar) + ';font-weight:700">' + (b.moveDollar >= 0 ? '+' : '−') + '$' + Math.abs(b.moveDollar).toFixed(0) + '</span>' + (b.bookPct !== null ? ' <span style="color:' + pColor(b.bookPct) + '">(' + (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%)</span>' : '') + (b.vsVoo !== null ? ' &nbsp;·&nbsp; <span style="color:var(--color-text-tertiary)">vs VOO</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>' : '') + '</div>';
+    body = tsLine + disclosure + pmBookLine + pmMoversHtml +
+      '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;margin-bottom:8px;list-style:none">▸ Full table — all ' + rows.length + ' tickers</summary>' +
       '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
         '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
           sortableTh('ticker', 'Ticker', 'left') +
@@ -12278,9 +12313,9 @@ function renderPriceMoves() {
           // Trend (sparkline) is non-sortable — it's a per-row visualization, no scalar to sort by.
           '<th style="padding:4px 8px;text-align:right">Trend</th>' +
         '</tr></thead>' +
-        '<tbody>' + rowHtml + pmToggleRow + bookRow + '</tbody>' +
+        '<tbody>' + rowHtml + bookRow + '</tbody>' +
       '</table>' +
-      '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>';
+      '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>' + '</details>';
   }
 
   el.innerHTML = headerStrip + body;
