@@ -2547,6 +2547,7 @@ function mkPos() {
                                   // vs-S&P comparison (you'd pay fees buying the index too).
     closed: false, fetchState: 'idle',
     notes: '', priceToday: '', theme: '', sleeve: '', isETF: false,
+    entryThesis: null,            // structured buy-time thesis { why, horizon, exit, strategyNote, at } — the thing Post-Sell grades the sale against
     // Step 4a: theme-relative alpha math — historical benchmark prices anchored to position dates
     benchmarkAtBuy: null,         // ticker (e.g. "SMH") at the time of buy — sanity check against future map changes
     benchmarkPriceAtBuy: null,    // benchmark price on dateBought
@@ -11107,6 +11108,29 @@ function renderQualityTab() {
   renderQrSavedList();
 }
 
+// The buy-time thesis to grade a sale against. Prefers the structured entryThesis captured at entry;
+// for older trades that predate structured capture, parses the legacy concatenated notes string
+// ("Quality rationale: … | Why: … | Hold: … | Exit if: …") so the backlog lights up too.
+function getEntryThesis(p) {
+  if (p.entryThesis && typeof p.entryThesis === 'object') {
+    const e = p.entryThesis;
+    if (e.why || e.exit || e.horizon || e.strategyNote) return e;
+  }
+  const n = (p.notes || '').trim();
+  if (!n) return null;
+  const segs = n.split('|').map(s => s.trim());
+  const grab = (label) => {
+    const seg = segs.find(s => s.toLowerCase().indexOf(label.toLowerCase()) === 0);
+    return seg ? seg.slice(label.length).replace(/^[:\s]+/, '').trim() : '';
+  };
+  const why = grab('Why:');
+  const exit = grab('Exit if:');
+  const horizon = grab('Hold:');
+  const strategyNote = grab('Quality rationale:') || grab('Thesis:');
+  if (why || exit || horizon || strategyNote) return { why, exit, horizon, strategyNote, parsed: true };
+  return null;
+}
+
 // Find the most recent saved Evaluate-a-Trade record for a ticker, to surface what the user bet going in.
 function findEvalForTicker(ticker) {
   if (typeof qualityReviews === 'undefined' || !Array.isArray(qualityReviews) || !ticker) return null;
@@ -11311,20 +11335,38 @@ function renderPostSell() {
   analysed.sort((a, b) => (a.c.vsSpx ?? 0) - (b.c.vsSpx ?? 0));
 
   cardsEl.innerHTML = analysed.map(({ p, c, daysHeld, priceToday, valueIfHeld, glIfHeld, retIfHeld, costOfSelling, spxSinceSale, spxDollarsSinceSale, dollarAlpha, themeAlpha }) => {
-    // Link back to the original Evaluate-a-Trade record (what the user bet, in their own words, before the outcome).
-    const ev = findEvalForTicker(p.ticker);
+    // PRIMARY: what you bet at the BUY — the structured entry thesis on the position (or parsed from the
+    // legacy notes string for older trades). This is the thing you grade the sale against.
+    const entry = getEntryThesis(p);
     let evalHtml = '';
-    if (ev) {
-      const ef = ev.fields || {};
+    if (entry) {
       const eb = [];
-      if (ef.thesis) eb.push(['Thesis', ef.thesis]);
-      if (ef.exitIf) eb.push(['Pre-committed exit-if', ef.exitIf]);
-      if (ef.risks) eb.push(['Risks you named', ef.risks]);
+      if (entry.strategyNote) eb.push(['Rationale', entry.strategyNote]);
+      if (entry.why) eb.push(['Thesis', entry.why]);
+      if (entry.horizon) eb.push(['Intended hold', entry.horizon]);
+      if (entry.exit) eb.push(['Pre-committed exit-if', entry.exit]);
       if (eb.length) {
-        const ew = ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : '';
-        evalHtml = `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-info)">What you bet going in${ew ? ' · recorded ' + esc(ew) : ''}</summary>`
+        evalHtml = `<details style="margin-top:10px" open><summary style="cursor:pointer;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-info)">What you bet going in${entry.parsed ? ' · from entry notes' : ''}</summary>`
           + `<div style="margin-top:6px;font-size:10px;line-height:1.55;color:var(--color-text-secondary)">`
           + eb.map(b => `<div style="margin-bottom:6px"><span style="color:var(--color-text-tertiary);font-weight:600">${b[0]}:</span> ${esc(b[1])}</div>`).join('')
+          + `</div></details>`;
+      }
+    }
+    // SECONDARY (context only): a pre-buy candidate evaluation, if one exists. Deliberately de-emphasized —
+    // it's research, not the entry decision, so it is NOT what the sale is graded against.
+    let researchHtml = '';
+    const ev = findEvalForTicker(p.ticker);
+    if (ev) {
+      const ef = ev.fields || {};
+      const eb2 = [];
+      if (ef.thesis) eb2.push(['Thesis', ef.thesis]);
+      if (ef.exitIf) eb2.push(['Exit-if', ef.exitIf]);
+      if (ef.risks) eb2.push(['Risks', ef.risks]);
+      if (eb2.length) {
+        const ew = ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : '';
+        researchHtml = `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:9px;color:var(--color-text-tertiary)">Pre-buy candidate research${ew ? ' · ' + esc(ew) : ''} (context, not the entry decision)</summary>`
+          + `<div style="margin-top:6px;font-size:10px;line-height:1.55;color:var(--color-text-tertiary)">`
+          + eb2.map(b => `<div style="margin-bottom:6px"><span style="font-weight:600">${b[0]}:</span> ${esc(b[1])}</div>`).join('')
           + `</div></details>`;
       }
     }
@@ -11456,6 +11498,7 @@ function renderPostSell() {
       </div>
       ${p.notes ? `<div class="postsell-notes">Note: ${esc(p.notes)}</div>` : ''}
       ${evalHtml}
+      ${researchHtml}
       ${erHtml}
     </div>`;
   }).join('');
@@ -24030,12 +24073,16 @@ function confirmThesis() {
   const sleeve = pendingStrategy || '';
   window._pendingStrategy = '';
   document.getElementById('thesis-modal').classList.add('hidden');
-  createNewPosition(note, isETF, sleeve, balanceFlavor);
+  // Structured buy-time thesis, stored alongside the human-readable note so Post-Sell can grade the
+  // sale against discrete fields (thesis / hold / exit-if / rationale) instead of parsing a string.
+  const entryThesis = { why: why || '', horizon: horizon || '', exit: exit || '', strategyNote: stratNote || '', at: new Date().toISOString() };
+  createNewPosition(note, isETF, sleeve, balanceFlavor, entryThesis);
 }
 
-function createNewPosition(note, isETF = false, sleeve = '', balanceFlavor = null) {
+function createNewPosition(note, isETF = false, sleeve = '', balanceFlavor = null, entryThesis = null) {
   const p = mkPos();
   p.notes = note;
+  if (entryThesis && (entryThesis.why || entryThesis.exit || entryThesis.horizon || entryThesis.strategyNote)) p.entryThesis = entryThesis;
   p.isETF = isETF;
   if (sleeve) p.sleeve = sleeve;
   if (balanceFlavor) p.balanceFlavor = balanceFlavor;
