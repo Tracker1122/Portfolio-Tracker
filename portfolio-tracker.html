@@ -8372,7 +8372,7 @@ function renderQrForm() {
           <div style="display:flex;align-items:center;gap:4px"><span style="font-size:12px;color:var(--color-text-tertiary)">$</span><input id="qr-buy-amount" type="number" value="${esc(buyVal)}" oninput="qrRenderBuyImpact()" placeholder="e.g. 25000" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px"></div>
         </div>
       </div>
-      <div id="qr-form-info" style="margin-bottom:12px"></div>
+      <div id="qr-form-info" style="margin-bottom:12px" data-open="${(tickerInfo[(tickerVal||'').toUpperCase()] && tickerInfo[(tickerVal||'').toUpperCase()].fetchedDate) ? '1' : ''}">${(tickerInfo[(tickerVal||'').toUpperCase()] && tickerInfo[(tickerVal||'').toUpperCase()].fetchedDate) ? discoveryInfoCardHtml((tickerVal||'').toUpperCase(), null, { closeJs: "(function(){var s=document.getElementById('qr-form-info');if(s){s.innerHTML='';s.dataset.open='';}})()" }) : ''}</div>
       <div id="qr-buy-impact" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:12px"></div>
       <div id="qr-perf-form" style="padding:9px 11px;background:var(--color-background-tertiary);border:1px dashed var(--color-border-tertiary);border-radius:var(--border-radius-md);margin-bottom:12px"></div>
       ${stage1ExtraHtml}
@@ -9715,6 +9715,11 @@ function renderQrSavedList() {
       `<div style="margin-bottom:5px"><span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em">${f.label}</span><div style="font-size:11px;color:var(--color-text-primary);white-space:pre-wrap;line-height:1.4">${esc((c.fields[f.key] || '').toString())}</div></div>`
     ).join('');
     const updated = c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '';
+    // Auto-show the "what is this / where it lands" card when it's ALREADY cached (no fetch, no AI
+    // re-call) — so an expanded saved candidate shows its identity + theme read at a glance.
+    const _ik = (c.ticker || '').toUpperCase();
+    const _icached = !!(tickerInfo[_ik] && tickerInfo[_ik].fetchedDate);
+    const _ihtml = _icached ? discoveryInfoCardHtml(_ik, null, { closeJs: "(function(){var s=document.getElementById('qr-info-" + c.id + "');if(s){s.innerHTML='';s.dataset.open='';}})()" }) : '';
     return `<details style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${typeColor};border-radius:var(--border-radius-lg);padding:10px 14px;margin-bottom:10px">
       <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;list-style:none">
         <span style="font-size:13px;font-weight:700;color:var(--color-text-primary)">${esc(c.ticker)}</span>
@@ -9738,7 +9743,7 @@ function renderQrSavedList() {
           ${c.type === 'etf' ? `<button id="qr-analysis-btn-${c.id}" class="btn btn-sm" onclick="toggleQrCardAnalysis('${c.id}')" style="font-size:10px">🔍 View analysis (overlap)</button>` : ''}
           <button class="btn btn-sm" onclick="deleteQrCandidate('${c.id}')" style="font-size:10px;color:var(--color-text-danger)">Delete</button>
         </div>
-        <div id="qr-info-${c.id}" style="margin-top:10px"></div>
+        <div id="qr-info-${c.id}" style="margin-top:10px" data-open="${_icached ? '1' : ''}">${_ihtml}</div>
         ${c.type === 'etf' ? `<div id="qr-analysis-${c.id}" style="margin-top:10px;display:none"></div>` : ''}
         <div id="qr-flags-${c.id}" style="margin-top:10px">${renderQualityFlags(c)}</div>
         <div id="qr-ai-${c.id}" style="display:none"></div>
