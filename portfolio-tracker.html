@@ -1343,6 +1343,8 @@
 
   <!-- Trade Ideas Tab -->
   <div class="tab-panel" id="tab-tradeideas">
+    <div class="section-heading">Theme Research <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">— big players, the ETFs, how it trades, current news · AI-generated, cached &amp; editable</span></div>
+    <div id="theme-research-section" style="margin-bottom:28px"></div>
     <div class="section-heading">Price moves since you refreshed</div>
     <div id="price-moves-wrap" style="margin-bottom:24px"></div>
 
@@ -5589,7 +5591,7 @@ function switchTab(name) {
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); }
-  if (name === 'tradeideas') { safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
+  if (name === 'tradeideas') { safeRender('renderThemeResearch', renderThemeResearch); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
@@ -10693,14 +10695,15 @@ function aiErrorMessage(err) {
 // onDelta(textSoFar) (optional) fires as deltas arrive, for live rendering.
 // Back-compat: if the worker responds with JSON instead of a stream (i.e. not yet redeployed), this
 // transparently reads the old { content, usage, stop_reason } shape — so the page never hard-breaks.
-async function aiWorkerCall(prompt, onDelta) {
+async function aiWorkerCall(prompt, onDelta, opts) {
+  opts = opts || {};
   if (!aiWorkerUrl) loadAiWorkerUrl();
   let resp;
   try {
     resp = await fetch(aiWorkerUrl + '/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-      body: JSON.stringify({ prompt, stream: true })
+      body: JSON.stringify(Object.assign({ prompt, stream: true }, opts.web ? { web: true } : {}))
     });
   } catch (netErr) {
     const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
@@ -20335,6 +20338,165 @@ function saveBookAiReview() {
     if (bookAiReview) localStorage.setItem('portfolio-book-ai-review-v1', JSON.stringify(bookAiReview));
     else localStorage.removeItem('portfolio-book-ai-review-v1');
   } catch (e) { /* storage full / unavailable — non-fatal, review just won't persist */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THEME RESEARCH — per-theme AI dossier at the top of Trade Ideas.
+// On-demand, cached per theme, editable. Pulls CURRENT NEWS via the worker's web-search
+// passthrough ({web:true} → worker adds the web_search tool). Every ticker the model emits is
+// tagged {SYM|stock|etf} and post-processed into a StockAnalysis link (split paths: /stocks/ vs /etf/).
+let themeResearch = {};        // theme -> { text, at, edited }
+let themeResearchSel = null;   // theme currently shown
+let themeResearchBusy = false;
+try { const _tr = localStorage.getItem('portfolio-theme-research-v1'); if (_tr) themeResearch = JSON.parse(_tr) || {}; } catch (e) { themeResearch = {}; }
+function saveThemeResearch() {
+  try { localStorage.setItem('portfolio-theme-research-v1', JSON.stringify(themeResearch)); } catch (e) { /* non-fatal */ }
+}
+
+// Anchored facts straight from your data (accurate, no AI): representative ETF, your true-exposure
+// weight, the benchmark's 1Y, and the names you hold directly in this theme.
+function themeResearchFacts(theme) {
+  const bench = (typeof THEMES !== 'undefined' && THEMES[theme] && THEMES[theme].benchmark) || null;
+  let weightPct = null;
+  try { const cl = computeThemeClusters(); if (cl && cl.fullBook > 0 && cl.byTheme && cl.byTheme[theme] != null) weightPct = cl.byTheme[theme] / cl.fullBook * 100; } catch (e) {}
+  let perf1Y = null;
+  try { const p = themePerf(theme); if (p != null && !isNaN(p)) perf1Y = p; } catch (e) {}
+  const held = positions.filter(p => !p.closed && p.ticker && canonicalThemeName(p.theme) === theme).map(p => String(p.ticker).toUpperCase());
+  return { bench, weightPct, perf1Y, held: Array.from(new Set(held)) };
+}
+
+// Render AI text → HTML: {SYM|stock|etf} → StockAnalysis links, bare source URLs → links,
+// numbered ALL-CAPS section headers → bold. Escapes first so model text can't inject markup.
+function linkifyResearch(text) {
+  let h = esc(text || '');
+  h = h.replace(/\{([A-Za-z][A-Za-z0-9.\-]{0,6})\|(stock|etf)\}/g, function (m, t, type) {
+    const T = t.toUpperCase();
+    const path = (type === 'etf') ? 'etf' : 'stocks';
+    return '<a href="https://stockanalysis.com/' + path + '/' + encodeURIComponent(T) + '/" target="_blank" rel="noopener" style="color:var(--color-text-info);text-decoration:none;border-bottom:1px dotted var(--color-text-info)">' + T + '</a>';
+  });
+  h = h.replace(/(https?:\/\/[^\s<)\]]+)/g, function (m) {
+    const href = m.replace(/&amp;/g, '&');
+    let label = href.replace(/^https?:\/\/(www\.)?/, '');
+    if (label.length > 40) label = label.slice(0, 40) + '…';
+    return '<a href="' + href + '" target="_blank" rel="noopener" style="color:var(--color-text-info)">' + esc(label) + '</a>';
+  });
+  h = h.replace(/^(\d+\.\s+[A-Z][A-Z0-9 &\/'\-]+)\s*$/gm, '<strong style="color:var(--color-text-primary)">$1</strong>');
+  return h;
+}
+
+function buildThemeResearchPrompt(theme) {
+  const f = themeResearchFacts(theme);
+  const ctx = [
+    'Representative ETF: ' + (f.bench || 'n/a'),
+    'Investor true-exposure weight in this theme: ' + (f.weightPct != null ? f.weightPct.toFixed(1) + '%' : 'unknown'),
+    'Benchmark 1-year return: ' + (f.perf1Y != null ? (f.perf1Y >= 0 ? '+' : '') + f.perf1Y.toFixed(1) + '%' : 'unknown'),
+    'Names held directly in this theme: ' + (f.held.length ? f.held.join(', ') : 'none directly')
+  ];
+  return [
+    'You are a markets research analyst. Write a concise, skimmable research brief on the "' + theme + '" market segment for an investor who already tracks it. Use web search to find CURRENT, recent news and developments — the news section depends on it.',
+    '',
+    "Investor context (use ONLY for the final section; do not restate it back):",
+    ctx.map(c => '- ' + c).join('\n'),
+    '',
+    'Output EXACTLY these numbered sections, each header on its own line in ALL CAPS exactly as shown:',
+    '1. WHAT IT IS & HOW IT TRADES — define the segment, its secular drivers, and its character (rate-sensitive? cyclical? momentum-led? defensive?). 2-4 sentences.',
+    '2. BIG PLAYERS — the major public companies in the space.',
+    '3. THE ETFS — the main funds for this exposure and how they differ (cap- vs equal-weight, pure-play vs broad, notable expense gaps).',
+    '4. DRIVERS & CATALYSTS — what actually moves this segment.',
+    '5. RISKS / BEAR CASE — what tends to go wrong (concentration, valuation, regulation, cyclical downside).',
+    '6. CURRENT NEWS — recent, dated developments found via web search; include a real source URL inline as a plain https:// link for each. If web search is unavailable or returns nothing, write exactly: No recent items found.',
+    '7. HOW IT SITS IN YOUR BOOK — using the investor context above, whether they look over- or under-exposed and the diversification angle. 2-3 sentences.',
+    '',
+    'CRITICAL RULES:',
+    '- Every time you mention a stock or ETF ticker, wrap it as {TICKER|stock} or {TICKER|etf} using the real symbol — e.g. {NVDA|stock}, {SMH|etf}. This is parsed into links; an untagged ticker will not link.',
+    '- Do NOT invent tickers, companies, or holdings. If unsure a ticker is real and correct, omit it.',
+    '- No preamble or sign-off. Start at section 1. Keep each section tight.'
+  ].join('\n');
+}
+
+async function runThemeResearch(theme) {
+  if (themeResearchBusy) return;
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  themeResearchBusy = true;
+  themeResearchSel = theme;
+  renderThemeResearch();
+  const out = document.getElementById('theme-research-body');
+  if (!aiWorkerUrl) {
+    themeResearchBusy = false;
+    if (out) out.innerHTML = '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">No AI worker URL set. Set it on the New Position Evaluation tab (the "AI worker URL" box), then retry.</div>';
+    return;
+  }
+  if (out) out.innerHTML = '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px">Researching ' + esc(theme) + ' — pulling current news and the lay of the land (web search makes this a little slower)…</div>';
+  const prompt = buildThemeResearchPrompt(theme);
+  try {
+    let _last = 0;
+    const onDelta = function (t) {
+      const now = Date.now(); if (now - _last < 60) return; _last = now;
+      const o = document.getElementById('theme-research-body');
+      if (o) o.innerHTML = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + esc(t) + '<span style="opacity:.45">▌</span></div>';
+    };
+    const r = await aiWorkerCall(prompt, onDelta, { web: true });
+    themeResearch[theme] = { text: r.text, at: new Date().toISOString(), edited: false };
+    saveThemeResearch();
+  } catch (err) {
+    themeResearchBusy = false;
+    const info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed', color: 'var(--color-text-danger)', raw: '' };
+    const o = document.getElementById('theme-research-body');
+    if (o) o.innerHTML = '<div style="border:1px solid ' + info.color + ';border-radius:var(--border-radius-md);padding:10px 12px;font-size:10px;color:' + info.color + ';line-height:1.5"><strong>' + esc(info.title) + '</strong><br><span style="color:var(--color-text-secondary)">' + esc(info.detail) + '</span></div>';
+    return;
+  }
+  themeResearchBusy = false;
+  renderThemeResearch();
+}
+
+function selectThemeResearch(theme) { themeResearchSel = theme; renderThemeResearch(); }
+
+function editThemeResearch() {
+  const theme = themeResearchSel; if (!theme || !themeResearch[theme]) return;
+  const body = document.getElementById('theme-research-body'); if (!body) return;
+  body.innerHTML = '<textarea id="theme-research-edit" style="width:100%;min-height:260px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:11px;line-height:1.5;padding:8px;box-sizing:border-box">' + esc(themeResearch[theme].text) + '</textarea>' +
+    '<div style="margin-top:6px;display:flex;gap:8px"><button class="btn btn-sm btn-primary" onclick="saveThemeResearchEdit()" style="font-size:10px">Save</button><button class="btn btn-sm" onclick="renderThemeResearch()" style="font-size:10px">Cancel</button></div>' +
+    '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Ticker tags like {NVDA|stock} stay clickable after saving. Plain https:// links stay clickable too.</div>';
+}
+function saveThemeResearchEdit() {
+  const theme = themeResearchSel; const ta = document.getElementById('theme-research-edit');
+  if (theme && themeResearch[theme] && ta) { themeResearch[theme].text = ta.value; themeResearch[theme].edited = true; saveThemeResearch(); }
+  renderThemeResearch();
+}
+
+function renderThemeResearch() {
+  const host = document.getElementById('theme-research-section');
+  if (!host) return;
+  const themeList = (typeof THEMES !== 'undefined') ? Object.keys(THEMES).filter(t => THEMES[t] && THEMES[t].inUniverse) : [];
+  const sel = themeResearchSel;
+  const chips = themeList.map(function (t) {
+    const on = (t === sel), has = !!themeResearch[t];
+    return '<span onclick="selectThemeResearch(\'' + escq(t) + '\')" style="cursor:pointer;font-size:10px;padding:3px 10px;border-radius:12px;white-space:nowrap;border:1px solid ' + (on ? 'var(--color-text-info)' : 'var(--color-border-tertiary)') + ';background:' + (on ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)') + ';color:' + (on ? 'var(--color-text-info)' : 'var(--color-text-secondary)') + '">' + esc(t) + (has ? ' <span style="color:#34d399" title="cached">●</span>' : '') + '</span>';
+  }).join('');
+  let body;
+  if (!sel) {
+    body = '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:8px 2px">Pick a theme above to research it — what it is and how it trades, the big players, the ETFs, drivers, risks, current news, and how it sits in your book. Generated on demand and saved; the green dot marks themes you\'ve already researched.</div>';
+  } else {
+    const f = themeResearchFacts(sel);
+    const factBits = [];
+    if (f.bench) factBits.push('ETF <a href="https://stockanalysis.com/etf/' + encodeURIComponent(f.bench) + '/" target="_blank" rel="noopener" style="color:var(--color-text-info);text-decoration:none">' + esc(f.bench) + '</a>');
+    factBits.push('your weight ' + (f.weightPct != null ? f.weightPct.toFixed(1) + '%' : '—'));
+    if (f.perf1Y != null) factBits.push('benchmark 1Y ' + (f.perf1Y >= 0 ? '+' : '') + f.perf1Y.toFixed(1) + '%');
+    factBits.push('you hold ' + (f.held.length ? esc(f.held.join(', ')) : 'none directly'));
+    const facts = '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin:8px 0;line-height:1.7">' + factBits.join(' &nbsp;·&nbsp; ') + '</div>';
+    const cached = themeResearch[sel];
+    let action = '', content;
+    if (themeResearchBusy) { content = '<div id="theme-research-body"></div>'; }
+    else if (cached) {
+      action = '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px"><span onclick="runThemeResearch(\'' + escq(sel) + '\')" style="cursor:pointer;font-size:9px;color:var(--color-text-info)">↻ Re-run</span><span onclick="editThemeResearch()" style="cursor:pointer;font-size:9px;color:var(--color-text-info)">✎ Edit</span><span style="font-size:9px;color:var(--color-text-tertiary)">generated ' + esc(new Date(cached.at).toLocaleString()) + (cached.edited ? ' · edited' : '') + '</span></div>';
+      content = '<div id="theme-research-body"><div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(cached.text) + '</div></div>';
+    } else {
+      action = '<button class="btn btn-sm btn-primary" onclick="runThemeResearch(\'' + escq(sel) + '\')" style="font-size:10px;margin-bottom:8px">Research ' + esc(sel) + ' with AI</button>';
+      content = '<div id="theme-research-body"></div>';
+    }
+    body = facts + action + content + '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:10px">AI-generated; tickers link to StockAnalysis (a bad link 404s — that\'s your tell it got a symbol wrong). Verify holdings and news before acting — the model can be wrong or out of date. Not advice.</div>';
+  }
+  host.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px">' + chips + '</div>' + body;
 }
 // True when the staged trade or the private-deal basis differs from what the saved review ran against.
 // (Discovery selection is intentionally NOT a staleness input — clicking Discovery names no longer feeds
