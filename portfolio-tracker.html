@@ -1147,16 +1147,27 @@
             <input id="sp-price-input" class="modal-input" type="number" step="0.01" placeholder="654.26" style="width:84px;font-size:11px;padding:3px 8px" value="" oninput="setSpPrice(this.value)">
           </div>
         </div>
-        <div id="sp-bar-wrap" style="margin-bottom:4px;display:none">
-          <div id="sp-bar-inner" style="height:24px;background:#4a4a5a;border-radius:var(--border-radius-md);display:flex;align-items:center;padding:0 12px;justify-content:space-between">
-            <span style="font-size:10px;font-weight:600;color:#a0a0b8">Passive Core — VOO</span>
-            <span id="sp-bar-stats" style="font-size:10px;color:#a0a0b8"></span>
-          </div>
-        </div>
         <div id="theme-stacked-bar" style="margin-top:6px"></div>
       </div>
       <!-- True Exposure: full-width, sits directly under the overview row -->
       <div id="true-exposure-panel" style="grid-column:1 / -1;margin:4px 0 0"></div>
+      <!-- Industry Spotlight (moved: full-width band directly below True Exposure) -->
+      <div style="grid-column:1 / -1">
+    <!-- Industry Spotlight -->
+    <div class="section-heading">Industry Spotlight <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">— signals worth acting on · click to expand in Tax and Balance Impact</span>
+      <span style="margin-left:16px;font-weight:400;text-transform:none;letter-spacing:0" title="Filter theme alpha aggregates to positions held ≥180 days. Affects both Industry Intelligence and Industry Spotlight.">
+        <span id="indalpha-toggle-all-dash" onclick="toggleIndustryAlphaMature(false)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">All Open</span>
+        <span id="indalpha-toggle-mature-dash" onclick="toggleIndustryAlphaMature(true)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">Matured (≥180d)</span>
+      </span>
+    </div>
+    <div style="margin:6px 0 12px;padding:10px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px"><span style="font-size:13px;color:var(--color-text-info)">ⓘ</span><span style="font-weight:700;color:var(--color-text-primary);text-transform:uppercase;letter-spacing:0.05em;font-size:10px">Two pp methods, two different questions</span></div>
+      <div><strong style="color:var(--color-text-primary)">Industry-level pp</strong> (shown on Spotlight cards and Industry Reference headers) is <strong>capital-weighted across positions</strong> — total $ deficit ÷ total invested. It answers: "how much pp alpha did the capital deployed in this whole industry produce?"</div>
+      <div style="margin-top:4px"><strong style="color:var(--color-text-primary)">Per-position pp</strong> (shown in drill-downs and Strategy Reference rows) is just the position's actual deviation from its theme benchmark. It answers: "how is this single ticker performing vs its theme?"</div>
+      <div id="legend-example-spotlight" style="margin-top:6px;padding:7px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-sm);font-size:10px"></div>
+    </div>
+    <div id="dashboard-theme-spotlight" style="margin-bottom:20px"></div>
+      </div>
       <!-- ACTION TIER -->
       <div class="analytics-card" id="trim-watch-card" onclick="showCardOverlay('trim')" style="cursor:pointer">
         <div class="analytics-card-title">Top Laggards (vs S&P, $)</div>
@@ -1173,20 +1184,7 @@
     </div>
 
 
-    <!-- Industry Spotlight -->
-    <div class="section-heading">Industry Spotlight <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">— signals worth acting on · click to expand in Tax and Balance Impact</span>
-      <span style="margin-left:16px;font-weight:400;text-transform:none;letter-spacing:0" title="Filter theme alpha aggregates to positions held ≥180 days. Affects both Industry Intelligence and Industry Spotlight.">
-        <span id="indalpha-toggle-all-dash" onclick="toggleIndustryAlphaMature(false)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">All Open</span>
-        <span id="indalpha-toggle-mature-dash" onclick="toggleIndustryAlphaMature(true)" style="font-size:9px;cursor:pointer;padding:2px 8px;border-radius:10px;color:var(--color-text-tertiary);font-weight:400">Matured (≥180d)</span>
-      </span>
-    </div>
-    <div style="margin:6px 0 12px;padding:10px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px"><span style="font-size:13px;color:var(--color-text-info)">ⓘ</span><span style="font-weight:700;color:var(--color-text-primary);text-transform:uppercase;letter-spacing:0.05em;font-size:10px">Two pp methods, two different questions</span></div>
-      <div><strong style="color:var(--color-text-primary)">Industry-level pp</strong> (shown on Spotlight cards and Industry Reference headers) is <strong>capital-weighted across positions</strong> — total $ deficit ÷ total invested. It answers: "how much pp alpha did the capital deployed in this whole industry produce?"</div>
-      <div style="margin-top:4px"><strong style="color:var(--color-text-primary)">Per-position pp</strong> (shown in drill-downs and Strategy Reference rows) is just the position's actual deviation from its theme benchmark. It answers: "how is this single ticker performing vs its theme?"</div>
-      <div id="legend-example-spotlight" style="margin-top:6px;padding:7px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-sm);font-size:10px"></div>
-    </div>
-    <div id="dashboard-theme-spotlight" style="margin-bottom:20px"></div>
+
 
     <!-- Strategy Reference -->
     <div class="section-heading">Strategy Reference</div>
@@ -11376,7 +11374,7 @@ function renderStackedBar() {
         </div>
         <div style="display:flex;align-items:center;gap:8px;white-space:nowrap;flex-shrink:0">
           <span style="font-size:10px;color:var(--color-text-secondary);font-weight:600">${pct.toFixed(1)}%</span>
-          <span style="font-size:9px;color:var(--color-text-tertiary)">${fmtDollarWhole(d.value)}</span>
+          <span style="font-size:11px;color:var(--color-text-secondary);font-weight:600">${fmtDollarWhole(d.value)}</span>
           <span style="font-size:9px;color:${glColor}">${d.gl >= 0 ? '+' : ''}${fmtDollarWhole(d.gl)}</span>
         </div>
       </div>
