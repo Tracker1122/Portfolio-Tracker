@@ -1469,7 +1469,6 @@
   <div class="modal">
     <div class="modal-title">Marking as Sold — Exit Thesis</div>
     <div class="modal-subtitle">Confirm the sale, then record why. Both get saved on the closed position.</div>
-    <div id="sell-lockup-info"></div>
     <div class="modal-field">
       <label class="modal-label">Sale date</label>
       <input class="modal-input" id="sell-date" type="date" style="width:170px">
@@ -1777,40 +1776,6 @@
     <div class="modal-field">
       <label class="modal-label" title="Carried interest — the % of TOTAL gain (from your original basis) the GP takes when you SELL. Not paid until sale; shown on the card as a projected drag. Travels with the position through IPO.">Carry (% of total gain, paid at sale)</label>
       <input class="modal-input" id="add-pe-fee-carry" type="number" min="0" max="100" step="0.1" placeholder="e.g. 20" style="width:170px">
-    </div>
-
-    <div style="font-size:9px;color:var(--color-text-tertiary);margin:10px 0 4px;text-transform:uppercase;letter-spacing:0.04em">Lockup / share-release schedule (optional)</div>
-    <div class="modal-field">
-      <label class="modal-label" title="How these shares unlock after IPO. None = freely sellable at IPO. Single cliff = fully locked, then fully free on one date. Staggered = unlocks in tranches (e.g. an S-1 staged release).">Lockup structure</label>
-      <select class="modal-input" id="add-pe-lockup-type" style="width:300px" onchange="peLockupSetType(this.value)">
-        <option value="none">None — freely sellable at IPO</option>
-        <option value="cliff">Single cliff — fully locked, then fully free on one date</option>
-        <option value="staggered">Staggered — unlocks in tranches</option>
-      </select>
-    </div>
-    <div class="modal-field" id="add-pe-lockup-anchor-wrap" style="display:none">
-      <label class="modal-label" title="Lockup terms are usually written relative to the IPO date, which isn't known until the deal IPOs. Pick 'days after IPO' to enter offsets now and have exact dates frozen at conversion; pick 'specific dates' only if you already know them.">Timing measured from</label>
-      <select class="modal-input" id="add-pe-lockup-anchor" style="width:300px" onchange="peLockupSetAnchor(this.value)">
-        <option value="ipo">Days after IPO — dates resolved when the deal IPOs</option>
-        <option value="date">Specific calendar dates</option>
-      </select>
-    </div>
-    <div id="add-pe-lockup-cliff" style="display:none">
-      <div class="modal-field">
-        <label class="modal-label">Locked until</label>
-        <span class="lk-ipo-only"><input class="modal-input" id="add-pe-lockup-cliff-days" type="number" min="0" step="1" placeholder="180" style="width:90px"> <span style="font-size:10px;color:var(--color-text-tertiary)">days after IPO</span></span>
-        <span class="lk-date-only" style="display:none"><input class="modal-input" id="add-pe-lockup-cliff-date" type="date" style="width:170px"></span>
-      </div>
-    </div>
-    <div id="add-pe-lockup-staggered" style="display:none">
-      <div style="font-size:9px;color:var(--color-text-tertiary);margin:2px 0 4px">Each row is the slice of the position that unlocks at that point — enter the size of each release; they should add up to 100%. Tick "conditional" for a release with a condition the tracker can't auto-check (e.g. performance-based): it's captured but stays locked until you mark it released.</div>
-      <div id="add-pe-lockup-tranches"></div>
-      <button type="button" class="btn btn-sm" onclick="peLockupAddTrancheRow()" style="font-size:10px;padding:3px 8px;margin-top:2px">+ add tranche</button>
-      <div id="add-pe-lockup-cum" style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px"></div>
-    </div>
-    <div class="modal-field" id="add-pe-lockup-note-wrap" style="display:none">
-      <label class="modal-label" title="Anything the tracker can't model — performance-based early-release conditions, S-1 references, caveats.">Lockup notes (optional)</label>
-      <input class="modal-input" id="add-pe-lockup-note" type="text" placeholder="e.g. +10% early release if price 30%+ above IPO for 5 of 10 days" style="width:300px">
     </div>
 
     <div class="modal-field">
@@ -2603,16 +2568,7 @@ function mkPos() {
     // computed on the FULL gain from the pre-IPO basis. Folded into the eventual realized sale.
     peUpfrontFee: 0,
     peMaintenanceFee: 0,
-    peCarryPct: 0,
-    // PE lockup schedule (Stage A). peLockup = schedule as entered on the deal (carried at conversion).
-    // peLockupResolved = same schedule with ABSOLUTE dates, frozen at conversion vs the real IPO date.
-    // peLockupReleased maps a conditional tranche's resolved-index → true once the user manually marks
-    // it released (perf-based tranches the tracker can't auto-evaluate). peFullyUnlockedDate = the date
-    // the schedule reaches 100% (or the cliff date). All ride existing save/export with no new store.
-    peLockup: null,
-    peLockupResolved: null,
-    peLockupReleased: {},
-    peFullyUnlockedDate: null
+    peCarryPct: 0
   };
 }
 
@@ -4562,7 +4518,7 @@ function renderClosedRow(pos) {
   const d = v => v || '<span class="dash">—</span>';
   return `
   <tr class="closed-row" data-id="${pos.id}">
-    <td class="calc-cell" style="text-align:left">${benchmarkDivergenceBadge(pos)}${d(esc(pos.ticker))}${peConvertedBadge(pos)}${peLockupBadge(pos)}</td>
+    <td class="calc-cell" style="text-align:left">${benchmarkDivergenceBadge(pos)}${d(esc(pos.ticker))}${peConvertedBadge(pos)}</td>
     <td class="calc-cell" style="text-align:left">${d(esc(pos.account))}</td>
     <td class="calc-cell" style="text-align:left">${d(esc(pos.dateBought))}</td>
     <td class="calc-cell">${pos.shares || '<span class="dash">—</span>'}</td>
@@ -4628,7 +4584,7 @@ function renderRow(pos) {
 
   return `
   <tr class="${isClosed ? 'closed-row' : ''}" data-id="${pos.id}">
-    <td style="white-space:nowrap"><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.ticker) || '<span class="dash">—</span>'}</span>${benchmarkDivergenceBadge(pos)}${peConvertedBadge(pos)}${peLockupBadge(pos)}</td>
+    <td style="white-space:nowrap"><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.ticker) || '<span class="dash">—</span>'}</span>${benchmarkDivergenceBadge(pos)}${peConvertedBadge(pos)}</td>
     <td><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.account) || '<span class="dash">—</span>'}</span></td>
     <td><span class="locked-cell" title="Edit via the ✎ button">${esc(pos.dateBought) || '<span class="dash">—</span>'}</span></td>
     <td class="calc-cell held-cell" style="text-align:center;white-space:nowrap">${(() => {
@@ -10544,11 +10500,20 @@ function buildQrAiPrompt(candidate) {
     if (_tr && _tr.text) {
       let _txt = String(_tr.text);
       if (_txt.length > 12000) _txt = _txt.slice(0, 12000) + '\n…[dossier truncated for length]';
+      // Fold in any on-demand news passes the user pulled later — already in the tracker, so free to
+      // include and strictly more current. Same quarantine/skepticism rule below covers them.
+      let _news = '';
+      if (Array.isArray(_tr.newsPasses) && _tr.newsPasses.length) {
+        _news = _tr.newsPasses.map(function (np, i) { return '[additional news pass ' + (i + 1) + (np.at ? ', pulled ' + new Date(np.at).toLocaleDateString() : '') + ']\n' + String(np.text || ''); }).join('\n\n');
+        if (_news.length > 6000) _news = _news.slice(0, 6000) + '\n…[additional news truncated]';
+      }
+      const _body = _txt + (_news ? '\n\n--- ADDITIONAL NEWS the user pulled after the dossier (same skepticism applies; these are dated, FROM SEARCH items) ---\n' + _news : '');
       themeResearchBlock = '\n\nPRIOR THEME RESEARCH (treat with skepticism — see the rule above):\n'
         + 'The user previously generated an AI research dossier for the "' + candidate.theme + '" theme'
         + (_tr.at ? ' on ' + new Date(_tr.at).toLocaleDateString() : '')
         + (_tr.edited ? ', user-edited' : '')
-        + '. It is reproduced between «». CRITICAL: it is itself AI-generated — it carries its own [inference] tags and ⚠UNVERIFIED claims and may be stale, so it is NOT verified fact. Use it ONLY as a prior hypothesis to pressure-test against this specific candidate; do not inherit its conclusions or its framing, and where the user\'s inputs or the COMPUTED FACTS conflict with it, they win.\n«' + _txt + '»';
+        + (_news ? ', plus one or more later news passes' : '')
+        + '. It is reproduced between «». CRITICAL: it is itself AI-generated — it carries its own [inference] tags and ⚠UNVERIFIED claims and may be stale, so it is NOT verified fact. Use it ONLY as a prior hypothesis to pressure-test against this specific candidate; do not inherit its conclusions or its framing, and where the user\'s inputs or the COMPUTED FACTS conflict with it, they win.\n«' + _body + '»';
     }
   } catch (e) { /* additive only — never block the prompt */ }
 
@@ -14943,6 +14908,7 @@ function candAddToQueue() {
       candReadout(); candRenderQueue();
       if (_candQueue.length) candCompute(); else candClearScenario();
       saveCandQueue();
+      candSyncCandidateAmounts(); // a staged-buy trim-down changes the buy amount — keep the candidate in step
       return;
     }
     if (_candTrimUnit === 'usd') { const lots0 = lotId ? _candTickerLots(T).filter(p => String(p.id) === String(lotId)) : _candTickerLots(T); let hasPx = false; for (const p of lots0) { if ((parseFloat(p.exitPrice) || 0) > 0) { hasPx = true; break; } } if (!hasPx) { alert('No stored price for this lot — trim by % or shares instead.'); return; } }
@@ -14960,7 +14926,27 @@ function candAddToQueue() {
   candRenderQueue();
   candCompute();
   saveCandQueue();
+  candSyncCandidateAmounts(); // keep the saved candidate's buy amount in step with the staged queue
   candFetchPerf(); // auto: fill recent performance for any newly added ticker (gaps only)
+}
+
+// Push staged buy amounts back onto the matching saved candidate (by ticker) so the two never drift.
+// Value-guarded: only writes when different, so it can't loop or churn. Matches the most recent
+// candidate for a ticker (findEvalForTicker); does nothing if there's no candidate for that ticker.
+function candSyncCandidateAmounts() {
+  if (typeof qualityReviews === 'undefined' || !Array.isArray(qualityReviews)) return;
+  let changed = false;
+  _candQueue.forEach(function (tr) {
+    if (!tr || (tr.kind !== 'stock' && tr.kind !== 'etf') || !tr.ticker) return;
+    const amt = parseFloat(tr.amount) || 0;
+    if (amt <= 0) return;
+    const cand = (typeof findEvalForTicker === 'function') ? findEvalForTicker(tr.ticker) : null;
+    if (cand && (+cand.buyAmount || 0) !== amt) { cand.buyAmount = amt; changed = true; }
+  });
+  if (changed) {
+    if (typeof scheduleSave === 'function') scheduleSave();
+    if (typeof renderQualityTab === 'function') { try { renderQualityTab(); } catch (e) {} }
+  }
 }
 
 function candRemoveFromQueue(i) {
@@ -15550,7 +15536,7 @@ function candRenderQueue() {
     totalsLine +
     _candMomentumSummary() +
     _candQueue.map((tr, i) => `<div style="padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none">${tr.kind === 'trim' ? `<span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this trim back into the form to edit it">edit</span>` : `<span style="color:var(--color-text-tertiary);font-size:9px" title="Buys come from the checklist — remove this and re-stage from above to change it">checklist buy</span>`}<span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this ${tr.kind === 'trim' ? 'trim' : 'buy'} back into the form to edit it — replaces this staged item in place, no duplicate">edit</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
       ${_candPerfLineHtml(tr.ticker)}${_candBenchLineHtml(tr)}
     </div>`).join('') +
     _candPerfBenchParagraph() +
@@ -19686,6 +19672,17 @@ function discoveryInfoCardHtml(key, state) {
   ).join('') + `</div>`;
   const note = (info.userNote || '');
   const noteField = `<div style="margin-top:5px"><textarea data-info-note="${esc(key)}" placeholder="Your own note on ${esc(key)} (saved automatically)…" oninput="saveDiscoveryNote('${escq(key)}', this.value)" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:9px;background:var(--color-background-secondary);color:var(--color-text-primary);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:4px 6px;resize:vertical" rows="2">${esc(note)}</textarea></div>`;
+  const sugg = info.themeSuggestion;
+  const safe = 'tcls_' + key.replace(/[^A-Za-z0-9]/g, '_');
+  let suggHtml = '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+    +   '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-info)">Where it lands (AI)</span>'
+    +   (sugg && sugg.at ? '<span style="font-size:8px;color:var(--color-text-tertiary)">suggested ' + esc(_livePxAge(new Date(sugg.at).getTime())) + (sugg.web ? ' \u00b7 web' : '') + '</span>' : '')
+    +   '<button id="' + safe + '_btn" onclick="suggestTickerClassification(\'' + escq(key) + '\',\'' + safe + '\')" style="font-size:9px;color:var(--color-text-info);background:none;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:1px 7px;cursor:pointer;font-family:inherit">' + (sugg ? '\u21bb Re-run' : 'Suggest theme') + '</button>'
+    +   '<label style="display:flex;align-items:center;gap:4px;font-size:8px;color:var(--color-text-secondary);cursor:pointer" title="Let it run a web search if it doesn\u2019t recognize the ticker (costs a little more)"><input type="checkbox" id="' + safe + '_web" style="margin:0">web</label>'
+    + '</div>'
+    + '<div id="' + safe + '_out" style="margin-top:5px;font-size:10px;line-height:1.5;color:var(--color-text-secondary)">' + (sugg && sugg.text ? linkifyResearch(sugg.text) : '<span style="color:var(--color-text-tertiary);font-style:italic;font-size:9px">Reasons in your own theme buckets (not GICS) — a suggestion to accept or override.</span>') + '</div>'
+    + '</div>';
   return `<div style="margin-top:6px;padding:7px 9px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:10px">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px">
       <span style="font-size:10px;font-weight:700;color:var(--color-text-primary)">${esc(key)}</span>
@@ -19693,6 +19690,7 @@ function discoveryInfoCardHtml(key, state) {
     </div>
     ${inner}
     ${linkRow}
+    ${suggHtml}
     ${noteField}
   </div>`;
 }
@@ -19741,6 +19739,68 @@ function saveDiscoveryNote(ticker, text) {
   if (!tickerInfo[key]) tickerInfo[key] = { name: '', sector: '', description: '', marketCap: null, homepage: '', fetchedDate: '', userNote: '' };
   tickerInfo[key].userNote = text;
   if (typeof scheduleSave === 'function') scheduleSave();
+}
+
+// AI "where does this land" classifier. Reasons in the investor's OWN thematic buckets (not GICS),
+// using the cached profile as context. Cached on tickerInfo[ticker].themeSuggestion so it's generated
+// once and glanceable everywhere, re-costing nothing. Web search is opt-in (only needed for a ticker
+// the model doesn't recognize), keeping it ~5-15c a press, fired deliberately.
+let tickerClassifyBusy = false;
+function buildTickerClassifyPrompt(ticker, useWeb) {
+  const info = (typeof tickerInfo !== 'undefined' && tickerInfo[ticker]) ? tickerInfo[ticker] : {};
+  const themes = (typeof THEMES !== 'undefined') ? Object.keys(THEMES) : [];
+  const profile = [];
+  if (info.name) profile.push('Name: ' + info.name);
+  if (info.sector) profile.push('Polygon sector: ' + info.sector);
+  if (info.marketCap) profile.push('Market cap (raw): ' + info.marketCap);
+  if (info.description) profile.push('Description: ' + info.description);
+  const lines = [
+    'Classify the ticker ' + ticker + ' into the investor\'s OWN thematic buckets listed below. Their taxonomy is THEMATIC, not GICS \u2014 reason from what the company or fund actually does and HOW IT TRADES, not just its GICS sector label (the GICS sector is often technically correct but misleading, e.g. an equipment maker labeled "Industrials" that really trades on the grid-capex theme).',
+    '',
+    'The investor\'s buckets: ' + (themes.length ? themes.join(', ') : '(none defined)') + '.',
+    '',
+    'What is on file about ' + ticker + (profile.length ? ':\n' + profile.join('\n') : ': (no profile cached \u2014 you may not have much to go on).'),
+    '',
+    useWeb
+      ? 'You MAY run 1-2 quick web searches if you are unsure what this ticker is; anything current you state must be FROM SEARCH with a source.'
+      : 'Do NOT use web search. Reason from the profile above plus your own knowledge. If you do not actually recognize this ticker, SAY SO plainly rather than guessing.',
+    '',
+    'Answer in 3 tight parts, no preamble:',
+    '1. BEST FIT \u2014 the single bucket from the list it most belongs in (use the exact bucket name). If two are genuinely defensible, name the second and the line between them.',
+    '2. WHY \u2014 one or two sentences: what the business/fund actually is, plus the "trades like X, not Y" tell that decides the bucket.',
+    '3. CONFIDENCE \u2014 high / medium / low, and flag explicitly if you are unsure or do not recognize the ticker. This is a SUGGESTION for the investor to accept or override, never a verdict.',
+    'Tag anything you are not certain of as [inference] and anything unverifiable as \u26a0UNVERIFIED.'
+  ];
+  return lines.join('\n');
+}
+
+async function suggestTickerClassification(ticker, safeBase) {
+  const key = (ticker || '').toUpperCase();
+  if (!key || tickerClassifyBusy) return;
+  const outId = safeBase + '_out', webId = safeBase + '_web', btnId = safeBase + '_btn';
+  const useWeb = !!(document.getElementById(webId) && document.getElementById(webId).checked);
+  const btn = document.getElementById(btnId);
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  const render = function (html) { const o = document.getElementById(outId); if (o) o.innerHTML = html; };
+  if (!aiWorkerUrl) { render('<span style="color:#fbbf24;font-size:9px">No AI worker URL set \u2014 set it on the New Position Evaluation tab.</span>'); return; }
+  tickerClassifyBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = useWeb ? 'Searching\u2026' : 'Thinking\u2026'; }
+  render('<span style="color:var(--color-text-tertiary);font-style:italic;font-size:9px">' + (useWeb ? 'Searching + classifying ' : 'Classifying ') + esc(key) + '\u2026</span>');
+  const prompt = buildTickerClassifyPrompt(key, useWeb);
+  try {
+    let _last = 0;
+    const onDelta = function (t) { const now = Date.now(); if (now - _last < 60) return; _last = now; render('<span style="white-space:pre-wrap">' + esc(t) + '<span style="opacity:.45">\u258c</span></span>'); };
+    const r = await aiWorkerCall(prompt, onDelta, useWeb ? { web: true } : {});
+    if (!tickerInfo[key]) tickerInfo[key] = { name: '', sector: '', description: '', marketCap: null, homepage: '', fetchedDate: '', userNote: '' };
+    tickerInfo[key].themeSuggestion = { text: r.text, at: new Date().toISOString(), web: useWeb };
+    if (typeof scheduleSave === 'function') scheduleSave();
+    render(linkifyResearch(r.text));
+  } catch (err) {
+    const info2 = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { detail: (err && err.message) || 'failed', color: 'var(--color-text-danger)' };
+    render('<span style="color:' + info2.color + ';font-size:9px">' + esc(info2.detail || 'failed') + '</span>');
+  }
+  tickerClassifyBusy = false;
+  if (btn) { btn.disabled = false; btn.textContent = (tickerInfo[key] && tickerInfo[key].themeSuggestion) ? '\u21bb Re-run' : 'Suggest theme'; }
 }
 
 // Fetch 1-month AND 1-year return for one ticker in a SINGLE Polygon call. The range-aggregates
@@ -20920,6 +20980,64 @@ function removeThemeThreadTurn(theme, idx) {
   saveThemeResearch(); renderThemeResearch();
 }
 
+// On-demand DEEPER news pass: a fresh, news-only web search fired manually when a theme warrants it,
+// so news depth is paid for only when wanted. Dedupes against the dossier + prior passes. Note the
+// real depth comes from dedicating the whole search budget to news — the worker's max_uses still caps
+// total searches per call, so for an even deeper sweep the user raises max_uses in the worker.
+function buildThemeNewsPrompt(theme) {
+  const entry = themeResearch[theme] || {};
+  const dossier = entry.text || '';
+  const prior = (entry.newsPasses || []).map(function (np) { return np.text; }).join('\n');
+  const lines = [
+    'You are the markets analyst who wrote the dossier below for the "' + theme + '" theme. The investor wants a DEEPER, FRESH pass of CURRENT NEWS ONLY \u2014 beyond what the dossier (and any prior news pass) already covers. Use web search aggressively here; current news is the entire point of this request.',
+    'Return ONLY a dated news list: up to ~8 of the most significant and most recent items, ONE line each, newest first, each ending with a full https:// source URL. No preamble, no other sections, no summary.',
+    'Do NOT repeat items already present in the dossier or prior passes below \u2014 surface NEW or more-recent developments. If web search genuinely turns up nothing new, reply exactly: No new items beyond what is already captured.',
+    'Discipline: every item must be FROM SEARCH with a real https:// URL (never fabricate a link); wrap any stock or ETF ticker as {TICKER|stock} or {TICKER|etf}; tag any of your own interpretation [inference]; do not present undated or uncertain items as current.',
+    '',
+    'DOSSIER (already covered \u2014 do not repeat): \u00ab' + dossier + '\u00bb'
+  ];
+  if (prior) lines.push('', 'PRIOR NEWS PASSES (also already covered \u2014 do not repeat): \u00ab' + prior + '\u00bb');
+  return lines.join('\n');
+}
+
+async function runThemeNewsDeepDive(theme) {
+  if (themeAskBusy || themeResearchBusy) return;
+  const entry = themeResearch[theme];
+  if (!entry) return;
+  const btn = document.getElementById(trKey(theme) + '_newsbtn');
+  const outId = trKey(theme) + '_news';
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  const render = function (html) { const o = document.getElementById(outId); if (o) o.innerHTML = html; };
+  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then retry.</div>'); return; }
+  themeAskBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Searching news\u2026'; }
+  render('<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">Pulling a fresh news pass\u2026</div>');
+  const prompt = buildThemeNewsPrompt(theme);
+  try {
+    let _last = 0;
+    const onDelta = function (t) { const now = Date.now(); if (now - _last < 60) return; _last = now; render('<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + esc(t) + '<span style="opacity:.45">\u258c</span></div>'); };
+    const r = await aiWorkerCall(prompt, onDelta, { web: true });
+    if (!themeResearch[theme].newsPasses) themeResearch[theme].newsPasses = [];
+    themeResearch[theme].newsPasses.push({ text: r.text, at: new Date().toISOString() });
+    saveThemeResearch();
+  } catch (err) {
+    themeAskBusy = false;
+    const info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed', color: 'var(--color-text-danger)' };
+    render('<div style="border:1px solid ' + info.color + ';border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:' + info.color + '"><strong>' + esc(info.title) + ':</strong> <span style="color:var(--color-text-secondary)">' + esc(info.detail) + '</span> \u2014 retry when ready.</div>');
+    if (btn) { btn.disabled = false; btn.textContent = 'Pull more news'; }
+    return;
+  }
+  themeAskBusy = false;
+  renderThemeResearch();
+}
+
+function removeThemeNewsPass(theme, idx) {
+  const entry = themeResearch[theme];
+  if (!entry || !entry.newsPasses || !entry.newsPasses[idx]) return;
+  entry.newsPasses.splice(idx, 1);
+  saveThemeResearch(); renderThemeResearch();
+}
+
 function themeResearchFactsLine(theme) {
   const f = themeResearchFacts(theme);
   const bits = [];
@@ -20930,6 +21048,51 @@ function themeResearchFactsLine(theme) {
   return bits.join(' \u00b7 ');
 }
 
+// Staleness cue for saved research. Reuses _livePxAge for the text; adds a severity color because
+// news ages fast — neutral under a week, amber after, red + ⚠ past a month.
+function researchAgeBadge(at) {
+  if (!at) return '';
+  const ms = new Date(at).getTime();
+  if (!ms) return '';
+  const days = (Date.now() - ms) / 86400000;
+  let color = 'var(--color-text-tertiary)', warn = '';
+  if (days >= 30) { color = 'var(--color-text-danger)'; warn = ' \u26a0'; }
+  else if (days >= 7) { color = '#fbbf24'; }
+  return '<span style="color:' + color + '">' + _livePxAge(ms) + warn + '</span>';
+}
+
+// Just the severity color (no text) — for the chip dot. Same thresholds as researchAgeBadge.
+function researchAgeColor(at) {
+  if (!at) return '#34d399';
+  const days = (Date.now() - new Date(at).getTime()) / 86400000;
+  if (isNaN(days)) return '#34d399';
+  if (days >= 30) return 'var(--color-text-danger)';
+  if (days >= 7) return '#fbbf24';
+  return '#34d399';
+}
+
+// Split a dossier so the news passes + "Pull more news" button can sit right after CURRENT NEWS,
+// above the trailing CLAIMS TO VERIFY block. Splits at the CLAIMS header (backing up over a preceding
+// "---" separator). If no claims section is found (e.g. a truncated brief), `after` is '' and the
+// caller falls back to appending the button at the end.
+function splitDossierAtClaims(text) {
+  if (!text) return { before: '', after: '' };
+  const lines = text.split('\n');
+  let hi = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^[ \t]*(?:#+[ \t]*|\*+[ \t]*)?CLAIMS TO VERIFY\b/i.test(lines[i])) { hi = i; break; }
+  }
+  if (hi < 0) return { before: text, after: '' };
+  let splitAt = hi;
+  let j = hi - 1;
+  while (j >= 0 && lines[j].trim() === '') j--;            // skip blank lines above the header
+  if (j >= 0 && /^[ \t]*-{3,}[ \t]*$/.test(lines[j])) splitAt = j; // pull a "---" separator into `after`
+  return {
+    before: lines.slice(0, splitAt).join('\n').replace(/\s+$/, ''),
+    after: lines.slice(splitAt).join('\n').replace(/^\n+/, '')
+  };
+}
+
 // One saved (or in-progress) dossier as a collapsible card.
 function themeResearchCard(theme) {
   const entry = themeResearch[theme];
@@ -20938,7 +21101,7 @@ function themeResearchCard(theme) {
   const facts = themeResearchFactsLine(theme);
   const arrow = open ? '\u25be' : '\u25b8';
   const bodyId = trKey(theme) + '_body';
-  const meta = isBusy ? 'researching\u2026' : (entry ? ('generated ' + esc(new Date(entry.at).toLocaleString()) + (entry.edited ? ' \u00b7 edited' : '') + (entry.truncated ? ' \u00b7 \u26a0 cut off' : '')) : '');
+  const meta = isBusy ? 'researching\u2026' : (entry ? ('generated ' + esc(new Date(entry.at).toLocaleString()) + ' \u00b7 ' + researchAgeBadge(entry.at) + (entry.edited ? ' \u00b7 edited' : '') + (entry.truncated ? ' \u00b7 \u26a0 cut off' : '')) : '');
   const truncBanner = (entry && entry.truncated && !isBusy)
     ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;margin-bottom:8px;background:rgba(251,191,36,0.10);font-size:9.5px;color:var(--color-text-secondary);line-height:1.55">\u26a0 <strong style="color:#fbbf24">This brief was cut off before it finished</strong> \u2014 the model hit its output-token limit' + (entry.stopReason === 'pause_turn' ? ' (paused mid web-search)' : '') + '. <span onclick="event.stopPropagation();continueThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info);text-decoration:underline">Continue from where it stopped</span>, or raise MAX_TOKENS in your worker and re-run for a clean full pass.</div>'
     : '';
@@ -20968,7 +21131,35 @@ function themeResearchCard(theme) {
       + '</div>';
     threadHtml = (turns ? '<div>' + turns + '</div>' : '') + askBox;
   }
-  const bodyInner = (entry && !isBusy) ? (truncBanner + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(entry.text) + '</div>' + THEME_RESEARCH_DISCLAIMER + threadHtml) : '';
+  let newsHtml = '';
+  if (entry && !isBusy) {
+    const passes = entry.newsPasses || [];
+    let pHtml = '';
+    passes.forEach(function (np, i) {
+      pHtml += '<div style="margin-top:10px;border-top:1px dashed var(--color-border-tertiary);padding-top:8px">'
+        + '<div style="display:flex;gap:8px;align-items:center">'
+        +   '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#34d399">Additional news</span>'
+        +   '<span style="font-size:8px;color:var(--color-text-tertiary)">' + esc(new Date(np.at).toLocaleString()) + ' \u00b7 </span>' + researchAgeBadge(np.at)
+        +   '<span onclick="event.stopPropagation();removeThemeNewsPass(\'' + escq(theme) + '\',' + i + ')" title="remove this news pass" style="cursor:pointer;color:var(--color-text-tertiary);font-size:10px;margin-left:auto">\u2715</span>'
+        + '</div>'
+        + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-secondary);margin-top:4px">' + linkifyResearch(np.text) + '</div>'
+        + '</div>';
+    });
+    const k = trKey(theme);
+    const newsAge = '<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:8px;font-style:italic">CURRENT NEWS above was gathered when the dossier was generated \u00b7 ' + researchAgeBadge(entry.at) + '</div>';
+    newsHtml = newsAge + pHtml
+      + '<div style="margin-top:10px"><div id="' + k + '_news"></div>'
+      + '<button id="' + k + '_newsbtn" class="btn btn-sm" onclick="event.stopPropagation();runThemeNewsDeepDive(\'' + escq(theme) + '\')" style="font-size:10px">Pull more news</button>'
+      + '<span style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-left:8px">A fresh web search for news beyond this brief \u2014 costs one web-search pass, and is deeper than the initial run because the whole search budget goes to news.</span>'
+      + '</div>';
+  }
+  let bodyInner = '';
+  if (entry && !isBusy) {
+    const _split = splitDossierAtClaims(entry.text);
+    const _top = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(_split.before) + '</div>';
+    const _claims = _split.after ? '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary);margin-top:2px">' + linkifyResearch(_split.after) + '</div>' : '';
+    bodyInner = truncBanner + _top + newsHtml + _claims + THEME_RESEARCH_DISCLAIMER + threadHtml;
+  }
   let actions = '';
   if (!isBusy) {
     let a = '<span onclick="event.stopPropagation();runThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info)">\u21bb ' + (entry ? 'Re-run' : 'Research') + '</span>';
@@ -20997,7 +21188,13 @@ function renderThemeResearch() {
   const sel = themeResearchSel;
   const chips = themeList.map(function (t) {
     const on = (t === sel), has = !!themeResearch[t];
-    return '<span onclick="selectThemeResearch(\'' + escq(t) + '\')" style="cursor:pointer;font-size:10px;padding:3px 10px;border-radius:12px;white-space:nowrap;border:1px solid ' + (on ? 'var(--color-text-info)' : 'var(--color-border-tertiary)') + ';background:' + (on ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)') + ';color:' + (on ? 'var(--color-text-info)' : 'var(--color-text-secondary)') + '">' + esc(t) + (has ? ' <span style="color:#34d399" title="saved">\u25cf</span>' : '') + '</span>';
+    let dot = '';
+    if (has) {
+      const _at = themeResearch[t].at;
+      const _age = _at ? _livePxAge(new Date(_at).getTime()) : '';
+      dot = ' <span style="color:' + researchAgeColor(_at) + '" title="saved' + (_age ? ' \u00b7 ' + esc(_age) + ' (green &lt;7d, amber &lt;30d, red older)' : '') + '">\u25cf</span>';
+    }
+    return '<span onclick="selectThemeResearch(\'' + escq(t) + '\')" style="cursor:pointer;font-size:10px;padding:3px 10px;border-radius:12px;white-space:nowrap;border:1px solid ' + (on ? 'var(--color-text-info)' : 'var(--color-border-tertiary)') + ';background:' + (on ? 'rgba(96,165,250,0.15)' : 'var(--color-background-secondary)') + ';color:' + (on ? 'var(--color-text-info)' : 'var(--color-text-secondary)') + '">' + esc(t) + dot + '</span>';
   }).join('');
   const chipWrap = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' + chips + '</div>';
 
@@ -23025,294 +23222,6 @@ function renderPeDeals() {
 }
 
 // CRUD ─────────────
-// ─── PE lockup schedule (Stage A): capture-UI helpers + conversion resolver ───
-// The lockup is entered ON THE DEAL (private side), then frozen to absolute dates at IPO conversion.
-// deal.peLockup = { type:'none'|'cliff'|'staggered', anchor:'ipo'|'date', cliffDays:Int,
-//   cliffDate:'YYYY-MM-DD', tranches:[{pct,days,date,conditional,label}], note:'' }.
-// Timing anchors to days-after-IPO by default (exact dates unknown until IPO); 'date' = absolute dates.
-// Conditional tranches are captured but NOT auto-evaluated (Stage B keeps them locked until released).
-
-function peLockupSetType(type) {
-  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
-  const staged = (type === 'cliff' || type === 'staggered');
-  show('add-pe-lockup-anchor-wrap', staged);
-  show('add-pe-lockup-cliff', type === 'cliff');
-  show('add-pe-lockup-staggered', type === 'staggered');
-  show('add-pe-lockup-note-wrap', staged);
-  if (type === 'staggered') {
-    const cont = document.getElementById('add-pe-lockup-tranches');
-    if (cont && !cont.children.length) peLockupAddTrancheRow();
-    peLockupUpdateCum();
-  }
-}
-
-function peLockupSetAnchor(anchor) {
-  document.querySelectorAll('#add-pe-lockup-cliff .lk-ipo-only, #add-pe-lockup-staggered .lk-ipo-only')
-    .forEach(el => { el.style.display = (anchor === 'ipo') ? '' : 'none'; });
-  document.querySelectorAll('#add-pe-lockup-cliff .lk-date-only, #add-pe-lockup-staggered .lk-date-only')
-    .forEach(el => { el.style.display = (anchor === 'date') ? '' : 'none'; });
-}
-
-function peLockupAddTrancheRow(data) {
-  const cont = document.getElementById('add-pe-lockup-tranches');
-  if (!cont) return;
-  const anchor = (document.getElementById('add-pe-lockup-anchor') || {}).value || 'ipo';
-  const row = document.createElement('div');
-  row.className = 'lk-row';
-  row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap';
-  row.innerHTML =
-    '<input class="modal-input lk-pct" type="number" min="0" max="100" step="0.1" placeholder="%" style="width:62px" oninput="peLockupUpdateCum()">'
-    + '<span class="lk-ipo-only"' + (anchor === 'ipo' ? '' : ' style="display:none"') + '><input class="modal-input lk-days" type="number" min="0" step="1" placeholder="days" style="width:74px"> <span style="font-size:10px;color:var(--color-text-tertiary)">d after IPO</span></span>'
-    + '<span class="lk-date-only"' + (anchor === 'date' ? '' : ' style="display:none"') + '><input class="modal-input lk-date" type="date" style="width:150px"></span>'
-    + '<input class="modal-input lk-label" type="text" placeholder="label (optional)" style="width:140px">'
-    + '<label style="font-size:10px;display:flex;align-items:center;gap:3px" title="A release the tracker cannot auto-evaluate (e.g. performance-based). Captured, but stays locked until you manually mark it released."><input type="checkbox" class="lk-cond"> conditional</label>'
-    + '<button type="button" class="btn btn-sm" onclick="peLockupRemoveTrancheRow(this)" style="font-size:10px;padding:2px 6px">\u00d7</button>';
-  cont.appendChild(row);
-  if (data) {
-    row.querySelector('.lk-pct').value = (data.pct != null) ? data.pct : '';
-    row.querySelector('.lk-days').value = (data.days != null) ? data.days : '';
-    row.querySelector('.lk-date').value = data.date || '';
-    row.querySelector('.lk-label').value = data.label || '';
-    row.querySelector('.lk-cond').checked = !!data.conditional;
-  }
-  peLockupUpdateCum();
-}
-
-function peLockupRemoveTrancheRow(btn) {
-  const row = btn.closest('.lk-row');
-  if (row) row.remove();
-  peLockupUpdateCum();
-}
-
-function peLockupUpdateCum() {
-  const el = document.getElementById('add-pe-lockup-cum');
-  if (!el) return;
-  let sum = 0;
-  document.querySelectorAll('#add-pe-lockup-tranches .lk-pct').forEach(i => { const v = parseFloat(i.value); if (!isNaN(v)) sum += v; });
-  const rounded = Math.round(sum * 100) / 100;
-  if (rounded > 100.0001) {
-    el.style.color = 'var(--color-text-danger)';
-    el.textContent = 'Releases add up to ' + rounded + '% — over 100%. Trim a release.';
-  } else {
-    el.style.color = 'var(--color-text-tertiary)';
-    const locked = Math.round((100 - rounded) * 100) / 100;
-    el.textContent = 'Releases add up to ' + rounded + '% of 100%' + (locked > 0 ? ' — ' + locked + '% has no release listed (stays locked)' : ' \u2713 fully unlocks by the last release');
-  }
-}
-
-// Read + validate the lockup capture into a deal.peLockup object. Returns { lockup, error }.
-function peLockupReadFromForm() {
-  const typeEl = document.getElementById('add-pe-lockup-type');
-  const type = typeEl ? typeEl.value : 'none';
-  if (type === 'none' || !type) return { lockup: null, error: null };
-  const anchor = (document.getElementById('add-pe-lockup-anchor') || {}).value || 'ipo';
-  const note = ((document.getElementById('add-pe-lockup-note') || {}).value || '').trim();
-  const isISO = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T00:00:00').getTime());
-
-  if (type === 'cliff') {
-    if (anchor === 'ipo') {
-      const days = parseInt((document.getElementById('add-pe-lockup-cliff-days') || {}).value, 10);
-      if (isNaN(days) || days < 0) return { lockup: null, error: 'Lockup: enter the number of days after IPO (0 or more), or set the structure to None.' };
-      return { lockup: { type: 'cliff', anchor: 'ipo', cliffDays: days, note: note }, error: null };
-    }
-    const d = (document.getElementById('add-pe-lockup-cliff-date') || {}).value || '';
-    if (!isISO(d)) return { lockup: null, error: 'Lockup: enter a valid cliff date.' };
-    return { lockup: { type: 'cliff', anchor: 'date', cliffDate: d, note: note }, error: null };
-  }
-
-  // staggered
-  const rows = Array.from(document.querySelectorAll('#add-pe-lockup-tranches .lk-row'));
-  if (!rows.length) return { lockup: null, error: 'Lockup: add at least one tranche, or set the structure to None.' };
-  const tranches = [];
-  let cum = 0;
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const pct = parseFloat(r.querySelector('.lk-pct').value);
-    if (isNaN(pct) || pct <= 0 || pct > 100) return { lockup: null, error: 'Lockup tranche ' + (i + 1) + ': % must be greater than 0 and at most 100.' };
-    cum += pct;
-    const t = { pct: pct, conditional: r.querySelector('.lk-cond').checked, label: (r.querySelector('.lk-label').value || '').trim() };
-    if (anchor === 'ipo') {
-      const days = parseInt(r.querySelector('.lk-days').value, 10);
-      if (isNaN(days) || days < 0) return { lockup: null, error: 'Lockup tranche ' + (i + 1) + ': enter days after IPO (0 or more).' };
-      t.days = days;
-    } else {
-      const d = r.querySelector('.lk-date').value || '';
-      if (!isISO(d)) return { lockup: null, error: 'Lockup tranche ' + (i + 1) + ': enter a valid date.' };
-      t.date = d;
-    }
-    tranches.push(t);
-  }
-  if (Math.round(cum * 100) / 100 > 100.0001) return { lockup: null, error: 'Lockup: tranche percentages sum to more than 100%.' };
-  return { lockup: { type: 'staggered', anchor: anchor, tranches: tranches, note: note }, error: null };
-}
-
-// Repopulate the lockup UI from a saved deal.peLockup (or reset to None for a fresh add).
-function peLockupPopulate(lockup) {
-  const typeEl = document.getElementById('add-pe-lockup-type');
-  const anchorEl = document.getElementById('add-pe-lockup-anchor');
-  const cont = document.getElementById('add-pe-lockup-tranches');
-  const noteEl = document.getElementById('add-pe-lockup-note');
-  const cliffDaysEl = document.getElementById('add-pe-lockup-cliff-days');
-  const cliffDateEl = document.getElementById('add-pe-lockup-cliff-date');
-  if (cont) cont.innerHTML = '';
-  if (cliffDaysEl) cliffDaysEl.value = '';
-  if (cliffDateEl) cliffDateEl.value = '';
-  if (noteEl) noteEl.value = '';
-  const lk = lockup || { type: 'none' };
-  if (typeEl) typeEl.value = lk.type || 'none';
-  if (anchorEl) anchorEl.value = lk.anchor || 'ipo';
-  if (noteEl) noteEl.value = lk.note || '';
-  if (lk.type === 'cliff') {
-    if (lk.anchor === 'date' && cliffDateEl) cliffDateEl.value = lk.cliffDate || '';
-    else if (cliffDaysEl) cliffDaysEl.value = (lk.cliffDays != null) ? lk.cliffDays : '';
-  } else if (lk.type === 'staggered' && Array.isArray(lk.tranches)) {
-    lk.tranches.forEach(t => peLockupAddTrancheRow(t));
-  }
-  peLockupSetAnchor(lk.anchor || 'ipo');
-  peLockupSetType(lk.type || 'none');
-}
-
-// Freeze a deal's lockup schedule to absolute dates against a known IPO date. Returns
-// { resolved:[{date,pct,conditional,label}]|null, fullyUnlockedDate:'YYYY-MM-DD'|null }.
-function resolvePeLockup(lockup, ipoDate) {
-  if (!lockup || lockup.type === 'none' || !lockup.type) return { resolved: null, fullyUnlockedDate: null };
-  const addDays = (iso, n) => {
-    const d = new Date(iso + 'T00:00:00');
-    if (isNaN(d.getTime())) return null;
-    d.setDate(d.getDate() + n);
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  };
-  let resolved = [];
-  if (lockup.type === 'cliff') {
-    const date = (lockup.anchor === 'date') ? (lockup.cliffDate || null) : addDays(ipoDate, parseInt(lockup.cliffDays, 10) || 0);
-    resolved = [{ date: date, pct: 100, conditional: false, label: 'Lockup ends' }];
-  } else if (lockup.type === 'staggered' && Array.isArray(lockup.tranches)) {
-    resolved = lockup.tranches.map(t => ({
-      date: (lockup.anchor === 'date') ? (t.date || null) : addDays(ipoDate, parseInt(t.days, 10) || 0),
-      pct: parseFloat(t.pct) || 0,
-      conditional: !!t.conditional,
-      label: t.label || ''
-    }));
-  }
-  resolved = resolved.filter(t => t.date).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  // fullyUnlockedDate: earliest date at which cumulative pct (all tranches) reaches 100%.
-  let cum = 0, fully = null;
-  for (const t of resolved) { cum += t.pct; if (cum >= 99.9999) { fully = t.date; break; } }
-  return { resolved: resolved.length ? resolved : null, fullyUnlockedDate: fully };
-}
-
-// ─── PE lockup status (Stage B): the single read-model behind the row badge, the sell-modal
-// decomposition, the close guard, and (Stage C) the AI feed. Pure function of position + as-of date.
-function peLockupStatus(pos, asOf) {
-  if (!pos || !pos.peConverted || !Array.isArray(pos.peLockupResolved) || !pos.peLockupResolved.length) return null;
-  const today = asOf || (() => { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); })();
-  const released = pos.peLockupReleased || {};
-  let unlocked = 0;
-  let nextUnlock = null;
-  const conditionalPending = [];
-  pos.peLockupResolved.forEach((t, i) => {
-    if (t.conditional) {
-      if (released[i] === true) unlocked += t.pct;
-      else conditionalPending.push({ index: i, date: t.date, pct: t.pct, label: t.label });
-    } else if (t.date <= today) {
-      unlocked += t.pct;
-    } else if (!nextUnlock || t.date < nextUnlock.date) {
-      nextUnlock = { date: t.date, pct: t.pct, label: t.label };
-    }
-  });
-  unlocked = Math.min(100, Math.round(unlocked * 100) / 100);
-  const lockedPct = Math.round((100 - unlocked) * 100) / 100;
-  const state = unlocked >= 99.9999 ? 'unlocked' : (unlocked <= 0.0001 ? 'locked' : 'partial');
-
-  const currentPrice = parseFloat(pos.exitPrice) || 0;
-  const shares = parseFloat(pos.shares) || 0;
-  const basis = parseFloat(pos.pricePaid) || 0;        // pre-IPO basis
-  const ipoPrice = parseFloat(pos.peIpoPrice) || 0;    // public handoff mark
-  const carryPct = parseFloat(pos.peCarryPct) || 0;
-  const haveMark = currentPrice > 0 && shares > 0;
-  const currentValue = haveMark ? shares * currentPrice : 0;
-  const unlockedValue = currentValue * (unlocked / 100);
-  const lockedValue = currentValue - unlockedValue;
-  const totalGain = haveMark ? (currentPrice - basis) * shares : 0;            // full gain from pre-IPO basis
-  const sinceIpoGain = (haveMark && ipoPrice > 0) ? (currentPrice - ipoPrice) * shares : null; // public-era only
-  const privateEraGain = (haveMark && ipoPrice > 0) ? (ipoPrice - basis) * shares : null;      // pre-IPO appreciation
-  const projectedCarry = (carryPct > 0 && totalGain > 0) ? totalGain * (carryPct / 100) : 0;
-
-  return {
-    state, asOf: today, unlockedPct: unlocked, lockedPct, nextUnlock,
-    fullyUnlockedDate: pos.peFullyUnlockedDate || null,
-    conditionalPending, hasConditional: conditionalPending.length > 0,
-    haveMark, currentPrice, shares, basis, ipoPrice,
-    currentValue, unlockedValue, lockedValue,
-    totalGain, sinceIpoGain, privateEraGain, carryPct, projectedCarry
-  };
-}
-
-// At-a-glance row chip. Amber while anything is still locked; empty once fully unlocked.
-function peLockupBadge(pos) {
-  const s = peLockupStatus(pos);
-  if (!s || s.state === 'unlocked') return '';
-  const label = s.state === 'locked' ? 'Locked' : (s.unlockedPct + '% unlocked');
-  const tip = 'PE lockup: ' + s.unlockedPct + '% of this position is unlocked as of ' + s.asOf + '. '
-    + (s.nextUnlock ? 'Next release +' + s.nextUnlock.pct + '% on ' + s.nextUnlock.date + '. ' : '')
-    + (s.hasConditional ? s.conditionalPending.length + ' conditional release(s) not yet marked released. ' : '')
-    + (s.fullyUnlockedDate ? 'Fully unlocks by ' + s.fullyUnlockedDate + '.' : '');
-  return ' <span title="' + esc(tip) + '" style="cursor:help;font-size:8px;background:rgba(251,191,36,0.15);color:#fbbf24;padding:1px 5px;border-radius:3px;font-weight:700;white-space:nowrap">\uD83D\uDD12 ' + esc(label) + '</span>';
-}
-
-// Decomposition + close-before-unlock warning shown inside the sell modal.
-function renderSellLockupInfo(pos) {
-  const s = peLockupStatus(pos);
-  if (!s) return '';
-  const money = (v) => (v == null) ? '—' : fmtDollar(v);
-  const signed = (v) => (v == null) ? '—' : (v >= 0 ? '+' : '−') + fmtDollar(Math.abs(v));
-  let html = '';
-
-  if (s.state !== 'unlocked') {
-    html += '<div style="font-size:11px;padding:8px 10px;margin-bottom:8px;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);border-radius:var(--border-radius-md);color:var(--color-text-primary)">'
-      + '<strong style="color:#fbbf24">\uD83D\uDD12 Lockup — only ' + s.unlockedPct + '% sellable as of ' + s.asOf + '.</strong> '
-      + (s.nextUnlock ? 'Next release +' + s.nextUnlock.pct + '% on ' + s.nextUnlock.date + '. ' : '')
-      + 'This tracker records a <em>whole-position</em> close (partial-lot sales aren\'t built yet), so marking sold here logs more than you could actually transact today. Confirm against your broker.'
-      + '</div>';
-  }
-
-  if (s.haveMark) {
-    const rows = [
-      ['Total gain (from pre-IPO basis)', signed(s.totalGain), 'Your full paper gain — commingles private-era appreciation with public return. Carry applies to this.'],
-      ['— of which, since IPO', s.sinceIpoGain == null ? '—' : signed(s.sinceIpoGain), 'Pure public-market move since the IPO mark' + (s.ipoPrice > 0 ? ' (' + fmtDollar(s.ipoPrice) + '/sh)' : '') + '.'],
-      ['— of which, private-era', s.privateEraGain == null ? '—' : signed(s.privateEraGain), 'Appreciation banked before IPO (basis ' + fmtDollar(s.basis) + '/sh \u2192 IPO ' + (s.ipoPrice > 0 ? fmtDollar(s.ipoPrice) : '—') + '/sh).'],
-      ['Unlocked value (sellable now)', money(s.unlockedValue), s.unlockedPct + '% of ' + money(s.currentValue) + ' at the current mark.'],
-      ['Locked value', money(s.lockedValue), s.lockedPct + '% still locked.']
-    ];
-    if (s.carryPct > 0) rows.push(['Projected carry at this mark (' + s.carryPct + '%)', '−' + fmtDollar(s.projectedCarry), 'Carry on the full gain from pre-IPO basis — payable at sale, moves with the mark.']);
-    html += '<div style="font-size:10px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:6px 8px;margin-bottom:8px">'
-      + '<div style="text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary);font-size:9px;margin-bottom:4px">Lockup-window performance</div>'
-      + rows.map(r => '<div style="display:flex;justify-content:space-between;gap:8px" title="' + esc(r[2]) + '"><span style="color:var(--color-text-tertiary)">' + esc(r[0]) + '</span><span style="font-weight:600">' + r[1] + '</span></div>').join('')
-      + '</div>';
-  } else {
-    html += '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px">Refresh this position\'s price to see the locked/unlocked value split and the since-IPO vs total-gain breakdown.</div>';
-  }
-
-  if (s.hasConditional) {
-    html += '<div style="font-size:10px;margin-bottom:8px"><div style="color:var(--color-text-tertiary);margin-bottom:3px">Conditional releases (the tracker can\'t auto-verify these — tick when your broker confirms):</div>'
-      + s.conditionalPending.map(c => '<label style="display:flex;align-items:center;gap:5px;margin-bottom:2px"><input type="checkbox" onclick="peLockupToggleReleased(' + pos.id + ',' + c.index + ')"> +' + c.pct + '% ' + (c.label ? esc(c.label) : 'conditional release') + (c.date ? ' (earliest ' + c.date + ')' : '') + '</label>').join('')
-      + '</div>';
-  }
-  return html;
-}
-
-// Manual release of a conditional tranche (perf-based etc. the tracker can't auto-evaluate).
-function peLockupToggleReleased(posId, idx) {
-  const pos = positions.find(p => p.id === posId);
-  if (!pos) return;
-  if (!pos.peLockupReleased) pos.peLockupReleased = {};
-  pos.peLockupReleased[idx] = !pos.peLockupReleased[idx];
-  const box = document.getElementById('sell-lockup-info');
-  if (box) box.innerHTML = renderSellLockupInfo(pos);
-  scheduleSave();
-  if (typeof renderAll === 'function') renderAll();
-}
-
 function openAddPeDealModal(editId) {
   const modal = document.getElementById('add-pe-deal-modal');
   if (!modal) return;
@@ -23363,7 +23272,6 @@ function openAddPeDealModal(editId) {
   document.getElementById('add-pe-fee-maint').value = editing ? safe(editing.feeMaintenance) : '';
   document.getElementById('add-pe-fee-carry').value = editing ? safe(editing.carryPct) : '';
   document.getElementById('add-pe-notes').value = editing ? safe(editing.notes) : '';
-  peLockupPopulate(editing ? editing.peLockup : null);
   document.getElementById('add-pe-preview').textContent = '';
   document.getElementById('add-pe-shares-derived').textContent = '';
   document.getElementById('add-pe-error').style.display = 'none';
@@ -23489,10 +23397,6 @@ function confirmAddPeDeal() {
     ? todayStr2
     : (prior ? (prior.feesUpdatedDate || '') : '');
 
-  // Lockup schedule (Stage A) — read + validate the optional lockup capture.
-  const _lkRes = peLockupReadFromForm();
-  if (_lkRes.error) return showErr(_lkRes.error);
-
   const deal = {
     id: _peEditId !== null ? _peEditId : ('pe_' + Date.now() + '_' + Math.floor(Math.random() * 1000)),
     company,
@@ -23509,8 +23413,7 @@ function confirmAddPeDeal() {
     feeMaintenance: feeMaint !== null ? feeMaint : '',
     carryPct: carryPct !== null ? carryPct : '',
     feesUpdatedDate,
-    notes,
-    peLockup: _lkRes.lockup
+    notes
   };
 
   if (_peEditId !== null) {
@@ -24162,13 +24065,6 @@ function convertPeDealToPublic(id) {
   pos.peUpfrontFee = parseFloat(deal.feeUpfront) || 0;
   pos.peMaintenanceFee = parseFloat(deal.feeMaintenance) || 0;
   pos.peCarryPct = parseFloat(deal.carryPct) || 0;
-  // Freeze the lockup schedule to absolute dates against the real IPO date (Stage A). The schedule was
-  // captured on the private deal; here it becomes concrete now that the IPO date is known.
-  pos.peLockup = deal.peLockup || null;
-  pos.peLockupReleased = {};
-  const _peLk = resolvePeLockup(deal.peLockup, ipoDate);
-  pos.peLockupResolved = _peLk.resolved;
-  pos.peFullyUnlockedDate = _peLk.fullyUnlockedDate;
   pos.notes = (deal.notes ? deal.notes + ' · ' : '') + `Converted from private deal (${deal.company}) at IPO ${ipoDate}. Basis is pre-IPO cost; gain includes private-era appreciation.`;
 
   const confirmMsg = `Convert ${deal.company} → public ${ticker}?\n\n`
@@ -24483,7 +24379,6 @@ function toggleClosed(id) {
     document.getElementById('sell-verdict').value = '';
     document.getElementById('sell-proceeds').value = '';
     document.getElementById('sell-error').style.display = 'none';
-    document.getElementById('sell-lockup-info').innerHTML = renderSellLockupInfo(pos);
 
     // Prefill sale date with today
     const t = new Date();
@@ -24576,15 +24471,6 @@ let undoBarTimeout = null;
 function executeSell(id, sellNote, saleInfo) {
   const pos = positions.find(p => p.id === id);
   if (!pos) return;
-
-  // Close-before-unlock guard (Stage B). Whole-position close only for now (partial-lot sales = Piece 3),
-  // so warn if the lockup hasn't fully lifted — a full close records more than is sellable today.
-  const _lkGuard = (typeof peLockupStatus === 'function') ? peLockupStatus(pos) : null;
-  if (_lkGuard && _lkGuard.state !== 'unlocked') {
-    if (!confirm('Lockup: only ' + _lkGuard.unlockedPct + '% of ' + (pos.ticker || 'this position') + ' is unlocked as of ' + _lkGuard.asOf + '.\n\nPartial-lot sales aren\'t built yet, so this records a FULL close of the position — more than you could actually sell today. Record the full sale anyway?')) {
-      return;
-    }
-  }
 
   // saleInfo is { saleDate, salePrice } from the modal. Both may be missing if the
   // function is called from a legacy path; we fall back to today + current exitPrice.
