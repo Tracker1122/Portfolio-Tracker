@@ -11136,12 +11136,20 @@ function setExitReview(id, key, value) {
 function calibrationGrid(analysed) {
   const ws = [], wl = [], ls = [], ll = [];
   let ungraded = 0;
-  analysed.forEach(({ p, c }) => {
-    const won = c.result === 'Beat', lost = c.result === 'Trail';
-    if (!won && !lost) return; // tied / unscored vs index — not placed
+  let viaTheme = 0, viaSpx = 0;
+  analysed.forEach(({ p, c, themeAlpha }) => {
+    // Outcome axis: prefer the theme benchmark (sector beta removed) when available; else fall back to S&P.
+    let won, lost, basis;
+    if (themeAlpha && typeof themeAlpha.themeAlphaPct === 'number') {
+      won = themeAlpha.themeAlphaPct > 0; lost = themeAlpha.themeAlphaPct < 0; basis = 'theme';
+    } else {
+      won = c.result === 'Beat'; lost = c.result === 'Trail'; basis = 'spx';
+    }
+    if (!won && !lost) return; // exact tie / unscored — not placed
     const s = p.exitReview && p.exitReview.sound;
     if (s !== 'yes' && s !== 'no') { ungraded++; return; }
     const sound = s === 'yes';
+    if (basis === 'theme') viaTheme++; else viaSpx++;
     if (won && sound) ws.push(p.ticker);
     else if (won && !sound) wl.push(p.ticker);
     else if (lost && sound) ls.push(p.ticker);
@@ -11164,17 +11172,21 @@ function calibrationGrid(analysed) {
     ${tickers.length ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">${tickers.map(esc).join(', ')}</div>` : ''}
   </div>`;
   const rowLabel = (t) => `<div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);display:flex;align-items:center">${t}</div>`;
+  const basisNote = (viaTheme || viaSpx)
+    ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:10px">Outcome judged vs each trade\u2019s <strong>theme benchmark</strong> where available (${viaTheme}), else vs the S&amp;P (${viaSpx}). Theme-relative strips sector beta \u2014 the truer read of stock-picking. Run Get Benchmarks to backfill more trades onto the theme basis.</div>`
+    : '';
   return `<div style="margin:12px 0;padding:12px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg)">
     <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px">Decision-quality map · ${graded} graded</div>
-    <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:10px">Rows = outcome vs the index. Columns = your own read of whether the call was sound given what you knew <em>then</em>.</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px">Rows = did it beat the benchmark. Columns = your own read of whether the call was sound given what you knew <em>then</em>.</div>
+    ${basisNote}
     <div style="display:grid;grid-template-columns:74px 1fr 1fr;gap:8px;align-items:stretch">
       <div></div>
       <div style="font-size:9px;font-weight:700;text-align:center;color:var(--color-text-secondary)">Sound decision</div>
       <div style="font-size:9px;font-weight:700;text-align:center;color:var(--color-text-secondary)">Flawed decision</div>
-      ${rowLabel('Beat index')}
+      ${rowLabel('Beat bench')}
       ${cell('Earned it', ws, 'var(--color-text-success)', 'Skill and result agree. Repeat this.')}
       ${cell('Got lucky', wl, '#fbbf24', 'Won despite a flawed call — the win does not validate the process.')}
-      ${rowLabel('Trailed index')}
+      ${rowLabel('Lagged bench')}
       ${cell('Right call, wrong result', ls, '#60a5fa', 'Sound process, bad variance. Resist over-correcting.')}
       ${cell('Mistake', ll, 'var(--color-text-danger)', 'Flawed call and a loss — the real lessons live here.')}
     </div>
@@ -11224,7 +11236,12 @@ function renderPostSell() {
     const dollarAlpha = (spxRet !== null && c.invested > 0)
       ? (c.exitValue - c.invested) - (c.invested * spxRet) : null;
 
-    return { p, c, daysHeld, priceToday, valueIfHeld, glIfHeld, retIfHeld, costOfSelling, spxSinceSale, spxDollarsSinceSale, dollarAlpha };
+    // Theme-relative outcome (sharper than vs-S&P: strips sector beta). Reuses calcThemeAlpha, which
+    // anchors to the benchmark this lot was BOUGHT against. Null when no theme benchmark is mapped or
+    // the historical benchmark prices haven't been backfilled for this trade.
+    const themeAlpha = (typeof calcThemeAlpha === 'function') ? calcThemeAlpha(p) : null;
+
+    return { p, c, daysHeld, priceToday, valueIfHeld, glIfHeld, retIfHeld, costOfSelling, spxSinceSale, spxDollarsSinceSale, dollarAlpha, themeAlpha };
   });
 
   // Summary stats
@@ -11293,7 +11310,7 @@ function renderPostSell() {
   // Cards sorted worst vs S&P first
   analysed.sort((a, b) => (a.c.vsSpx ?? 0) - (b.c.vsSpx ?? 0));
 
-  cardsEl.innerHTML = analysed.map(({ p, c, daysHeld, priceToday, valueIfHeld, glIfHeld, retIfHeld, costOfSelling, spxSinceSale, spxDollarsSinceSale, dollarAlpha }) => {
+  cardsEl.innerHTML = analysed.map(({ p, c, daysHeld, priceToday, valueIfHeld, glIfHeld, retIfHeld, costOfSelling, spxSinceSale, spxDollarsSinceSale, dollarAlpha, themeAlpha }) => {
     // Link back to the original Evaluate-a-Trade record (what the user bet, in their own words, before the outcome).
     const ev = findEvalForTicker(p.ticker);
     let evalHtml = '';
@@ -11334,6 +11351,24 @@ function renderPostSell() {
         </div>
         <textarea onblur="setExitReview(${p.id},'lesson',this.value)" placeholder="One lesson to carry forward (optional)\u2026" style="width:100%;box-sizing:border-box;min-height:38px;margin-top:8px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;line-height:1.5;padding:6px">${esc(er.lesson || '')}</textarea>
       </div>`;
+    // Theme-relative line — the sharper comparison. Surfaces the cross-signal (beat the S&P but
+    // trailed its own sector, or vice versa), which is exactly what the vs-S&P number hides.
+    let themeRelHtml = '';
+    if (themeAlpha && typeof themeAlpha.themeAlphaPct === 'number') {
+      const taColor = themeAlpha.themeAlphaPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      const cross = (c.result === 'Beat' && themeAlpha.themeAlphaPct < 0)
+        ? ` <span style="color:#fbbf24">— beat the S&P but trailed its sector</span>`
+        : (c.result === 'Trail' && themeAlpha.themeAlphaPct > 0)
+        ? ` <span style="color:#34d399">— trailed the S&P but beat its sector</span>`
+        : '';
+      themeRelHtml = `<div style="margin-top:8px;padding:7px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;color:var(--color-text-secondary);line-height:1.5">
+        <span style="color:var(--color-text-tertiary)">vs theme ${esc(themeAlpha.benchTicker)} (same hold):</span>
+        ${esc(themeAlpha.benchTicker)} ${fmtPct(themeAlpha.benchReturn)} · you ${fmtPct(themeAlpha.yourReturn)} ·
+        <span style="color:${taColor};font-weight:700">theme α ${themeAlpha.themeAlphaPct >= 0 ? '+' : ''}${themeAlpha.themeAlphaPct.toFixed(1)}pp</span>${cross}
+      </div>`;
+    } else if (typeof getThemeBenchmark === 'function' && getThemeBenchmark(p.theme)) {
+      themeRelHtml = `<div style="margin-top:8px;font-size:9px;color:var(--color-text-tertiary);font-style:italic">vs theme ${esc(getThemeBenchmark(p.theme))}: not available — run Get Benchmarks to backfill this trade\u2019s benchmark prices.</div>`;
+    }
     const verdictClass = c.result === 'Beat' ? 'verdict-beat' : c.result === 'Trail' ? 'verdict-trail' : 'verdict-tied';
     const glColor = c.gainLoss >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
     const vsColor = c.vsSpx === null ? 'var(--color-text-tertiary)' : c.vsSpx > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
@@ -11400,6 +11435,7 @@ function renderPostSell() {
           <div class="postsell-stat-value" style="color:${alphaColor}">${dollarAlpha !== null ? fmtDollar(dollarAlpha) : '—'}</div>
         </div>
       </div>
+      ${themeRelHtml}
       <div class="postsell-holding">${holdingStr}</div>
       ${postSaleHtml}
       <div class="postsell-notes" style="margin-top:10px">
