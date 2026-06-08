@@ -10489,6 +10489,23 @@ function buildQrAiPrompt(candidate) {
   // PAST replayed behavior — additive framing for this candidate; never blocks the payload.
   try { const _rr = riskReviewAiFacts(); if (_rr) computed.push(_rr); } catch (e) { /* additive only */ }
   const computedBlock = computed.length ? computed.map(c=>`- ${c}`).join('\n') : '(none computed)';
+  // Prior AI theme dossier for this candidate's theme, if the user saved one in Trade Ideas → Theme Research.
+  // Injected as a HYPOTHESIS to interrogate, never as evidence: it is itself AI output, full of [inference]
+  // and ⚠UNVERIFIED claims and possibly stale. The skeptical framing + the rule above keep it quarantined.
+  let themeResearchBlock = '';
+  try {
+    const _trKey = (typeof canonicalThemeName === 'function') ? canonicalThemeName(candidate.theme) : candidate.theme;
+    const _tr = (typeof themeResearch !== 'undefined' && themeResearch && candidate.theme) ? (themeResearch[_trKey] || themeResearch[candidate.theme]) : null;
+    if (_tr && _tr.text) {
+      let _txt = String(_tr.text);
+      if (_txt.length > 12000) _txt = _txt.slice(0, 12000) + '\n…[dossier truncated for length]';
+      themeResearchBlock = '\n\nPRIOR THEME RESEARCH (treat with skepticism — see the rule above):\n'
+        + 'The user previously generated an AI research dossier for the "' + candidate.theme + '" theme'
+        + (_tr.at ? ' on ' + new Date(_tr.at).toLocaleDateString() : '')
+        + (_tr.edited ? ', user-edited' : '')
+        + '. It is reproduced between «». CRITICAL: it is itself AI-generated — it carries its own [inference] tags and ⚠UNVERIFIED claims and may be stale, so it is NOT verified fact. Use it ONLY as a prior hypothesis to pressure-test against this specific candidate; do not inherit its conclusions or its framing, and where the user\'s inputs or the COMPUTED FACTS conflict with it, they win.\n«' + _txt + '»';
+    }
+  } catch (e) { /* additive only — never block the prompt */ }
 
   return `You are a critical analyst helping someone pressure-test a potential investment they are considering. You are NOT an advisor and must NOT recommend buying, selling, or holding. Your job is to populate both sides of the debate and expose what's missing — the user weighs it, not you.
 
@@ -10512,6 +10529,7 @@ Rules:
 - IF A "RISK REVIEW" BLOCK IS PRESENT in the computed facts, it tells you which historical stress window the user is currently examining and how their book (and, if folded in, the hypothetical book) behaved through it. Use it as PORTFOLIO-LEVEL, PAST behavior to frame this candidate — e.g. whether adding it leans further into a theme that already drove the book's drawdown in that window, or whether its character differs from what already got hit. It is FROM INPUTS (computed from the user's holdings), so you may cite it, but: it is PAST replayed behavior, NOT a forecast and NOT a per-name figure for this candidate; never use it as a reason to buy or sell. The folded-in scenario may or may not include this candidate — do not assume it does unless the listed moves say so.
 - Be specific to THIS candidate using THEIR inputs — no generic boilerplate.
 - WRITE FOR A LEARNER — EXPAND ACRONYMS, DON'T DEFINE THEM. The reader is coming up to speed on fundamentals. EVERY time you use a metric acronym, write its expansion in parentheses: "ROIC (return on invested capital)", "PEG (price/earnings-to-growth ratio)", "P/E (price-to-earnings ratio)", "ROE (return on equity)", "FCF (free cash flow)", "D/E (debt-to-equity)", "TTM (trailing twelve months)", "NAV (net asset value)", "AUM (assets under management)", "SG&A (selling, general & administrative)". Expand on every occurrence, not just the first — the reader shouldn't have to scroll back. CRITICAL: only EXPAND the letters — do NOT explain what the metric means, how to read it, or where to look it up. No definitions, no "see the explainer" pointers, nothing beyond the parenthetical expansion of the letters (definitions you generate can drift; the static explainers are the authoritative source, and the reader knows where they are). Also avoid the bare word "Financials" as a section label for the entered numbers — say "the entered metrics" or "the financial figures".
+- A "PRIOR THEME RESEARCH" block, if present, is a previously AI-generated theme dossier — itself full of [inference] and ⚠UNVERIFIED claims and possibly stale. Do NOT treat it as fact or let it anchor your view, and do NOT cite it as a source. Use it ONLY as a hypothesis to interrogate: does THIS candidate actually fit the thesis that dossier lays out, and is that thesis even sound on its own terms? Surface where its trade-relevant claims are inferential or unverified, and flag any conflict with the user's inputs or the COMPUTED FACTS (which outrank it). Any external fact you carry over from it still goes in CLAIMS TO VERIFY, marked ⚠UNVERIFIED.
 - Keep each section tight.
 
 CANDIDATE: ${candidate.ticker} (${candidate.type}${candidate.theme?', theme: '+candidate.theme:''}${candidate.sleeve?', sleeve: '+candidate.sleeve:''})
@@ -10523,6 +10541,7 @@ BLANK / NOT PROVIDED: ${blank}
 
 COMPUTED FACTS:
 ${computedBlock}
+${themeResearchBlock}
 
 Begin your output with this exact line:
 NOTE ON EXTERNAL FACTS: anything in CLAIMS TO VERIFY is recalled from training (bounded by my knowledge cutoff), unverified, and possibly stale — confirm before relying on it.
