@@ -11306,6 +11306,17 @@ function renderPostSell() {
 // ─────────────────────────────────────────────
 // Stacked Bar Concentration
 // ─────────────────────────────────────────────
+// Managed Composition — themes as labeled rows (mirrors Strategy Allocation's grammar, adapted:
+// themes have no target bands, so the right-hand slot carries the live signal instead — % of managed
+// book, $ value, theme-level G/L). Bars scale to the largest theme for easy comparison. Click a row
+// to expand its holdings (per-name G/L + alpha — the detail the old hover tooltip carried). Cash is
+// excluded here; it lives in its own card. Expansion persists across the frequent renderAll repaints.
+const compExpanded = new Set();
+function toggleCompTheme(theme) {
+  if (compExpanded.has(theme)) compExpanded.delete(theme); else compExpanded.add(theme);
+  renderStackedBar();
+}
+
 function renderStackedBar() {
   const el = document.getElementById('theme-stacked-bar');
   if (!el) return;
@@ -11313,105 +11324,75 @@ function renderStackedBar() {
   const open = positions.filter(p => !p.closed && p.ticker && p.theme);
   if (open.length === 0) { el.innerHTML = ''; return; }
 
-  const totalValue = open.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
-  if (totalValue === 0) { el.innerHTML = ''; return; }
-
   const themes = {};
   open.forEach(p => {
     const c = calcPos(p);
     const v = c.exitValue || 0;
     const spxRet = c.spxReturn !== null ? c.spxReturn / 100 : null;
     const alpha = (spxRet !== null && c.invested > 0) ? (c.exitValue - c.invested) - (c.invested * spxRet) : null;
-    if (!themes[p.theme]) themes[p.theme] = { value: 0, tickers: [] };
+    if (!themes[p.theme]) themes[p.theme] = { value: 0, gl: 0, tickers: [] };
     themes[p.theme].value += v;
-    themes[p.theme].tickers.push({ ticker: p.ticker, value: v, gl: c.gainLoss, alpha });
+    themes[p.theme].gl += (c.gainLoss || 0);
+    themes[p.theme].tickers.push({ ticker: p.ticker, value: v, gl: c.gainLoss || 0, alpha });
   });
 
-  const totalCash = (cashBuckets.Taxable || 0) + (cashBuckets.IRA || 0);
-  const grandTotal = totalValue + totalCash;
-  if (grandTotal === 0) { el.innerHTML = ''; return; }
+  const managedTotal = Object.values(themes).reduce((s, d) => s + d.value, 0);
+  if (managedTotal === 0) { el.innerHTML = ''; return; }
 
   const sorted = Object.entries(themes).sort((a, b) => b[1].value - a[1].value);
+  const maxVal = sorted[0][1].value || 1;
 
-  // Add cash as final grey segment if non-zero
-  const allSegments = [...sorted];
-
-  const segments = allSegments.map(([theme, d]) => {
-    const pct = (d.value / grandTotal) * 100;
+  const rows = sorted.map(([theme, d]) => {
+    const pct = (d.value / managedTotal) * 100;
     const color = THEME_COLORS[theme] || '#94a3b8';
-    return `<div class="stacked-bar-segment" style="width:${pct.toFixed(2)}%;background:${color}"
-      data-theme="${esc(theme)}"></div>`;
-  }).join('') + (totalCash > 0 ? `<div class="stacked-bar-segment" style="width:${((totalCash/grandTotal)*100).toFixed(2)}%;background:#3a3a3a" data-theme="__cash__"></div>` : '');
+    const glColor = d.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    const barW = Math.max(2, (d.value / maxVal) * 100);
+    const expanded = compExpanded.has(theme);
+    const arrow = expanded ? '\u25be' : '\u25b8';
 
-  const legend = allSegments.map(([theme, d]) => {
-    const pct = (d.value / grandTotal) * 100;
-    const color = THEME_COLORS[theme] || '#94a3b8';
-    return `<div class="stacked-bar-legend-item">
-      <div class="stacked-bar-legend-dot" style="background:${color}"></div>
-      <span>${theme} <span style="color:var(--color-text-tertiary)">${pct.toFixed(1)}%</span></span>
-    </div>`;
-  }).join('') + (totalCash > 0 ? `<div class="stacked-bar-legend-item">
-    <div class="stacked-bar-legend-dot" style="background:#3a3a3a;border:1px solid #555"></div>
-    <span>Cash <span style="color:var(--color-text-tertiary)">${((totalCash/grandTotal)*100).toFixed(1)}%</span></span>
-  </div>` : '');
-
-  // The bar segments already carry theme + % + top holdings on hover, so the standalone legend
-  // row is redundant and just adds height in the condensed overview band. Show a hover hint instead.
-  el.innerHTML = `
-    <div class="stacked-bar-wrap">
-      <div class="stacked-bar" id="stacked-bar-inner">${segments}</div>
-    </div>
-    <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">hover a segment for theme, %, and top holdings</div>`;
-
-  // Wire up JS tooltip
-  const tooltip = document.getElementById('bar-tooltip');
-  el.querySelectorAll('.stacked-bar-segment').forEach(seg => {
-    seg.addEventListener('mouseenter', e => {
-      const theme = seg.dataset.theme;
-      if (theme === '__cash__') {
-        // Cash tooltip
-        tooltip.innerHTML = `
-          <div class="tip-industry" style="color:#888">Undeployed Cash</div>
-          <div class="tip-pct">${((totalCash/grandTotal)*100).toFixed(1)}% of total · ${fmtDollarWhole(totalCash)}</div>
-          <div class="tip-row">
-            <span class="tip-ticker">Taxable</span>
-            <span class="tip-val" style="color:var(--color-text-secondary)">${fmtDollarWhole(cashBuckets.Taxable||0)}</span>
-          </div>
-          <div class="tip-row">
-            <span class="tip-ticker">IRA</span>
-            <span class="tip-val" style="color:var(--color-text-secondary)">${fmtDollarWhole(cashBuckets.IRA||0)}</span>
-          </div>`;
-        tooltip.classList.add('visible');
-        positionTooltip(e);
-        return;
-      }
-      const d = themes[theme];
-      if (!d) return;
-      const pct = (d.value / grandTotal) * 100;
-      const top3 = [...d.tickers]
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 3);
-
-      const rows = top3.map(t => {
-        const glColor = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-        const aColor = t.alpha === null ? 'var(--color-text-tertiary)' : t.alpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-        return `<div class="tip-row">
-          <span class="tip-ticker">${esc(t.ticker)}</span>
-          <span class="tip-val" style="color:${glColor}">G/L ${fmtDollarWhole(t.gl)}</span>
-          <span class="tip-val" style="color:${aColor}">α ${t.alpha !== null ? fmtDollarWhole(t.alpha) : '—'}</span>
+    let detail = '';
+    if (expanded) {
+      const holdings = [...d.tickers].sort((a, b) => b.value - a.value).map(t => {
+        const tgl = t.gl >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+        const ta = t.alpha === null ? 'var(--color-text-tertiary)' : (t.alpha >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
+        return `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:2px 0 2px 10px;font-size:10px">
+          <span style="color:var(--color-text-secondary);font-weight:600">${esc(t.ticker)}</span>
+          <span style="display:flex;gap:12px;white-space:nowrap">
+            <span style="color:var(--color-text-tertiary)">${fmtDollarWhole(t.value)}</span>
+            <span style="color:${tgl}">G/L ${fmtDollarWhole(t.gl)}</span>
+            <span style="color:${ta}">\u03b1 ${t.alpha !== null ? fmtDollarWhole(t.alpha) : '\u2014'}</span>
+          </span>
         </div>`;
       }).join('');
+      detail = `<div style="margin:4px 0 8px;border-left:2px solid ${color};padding-left:8px">${holdings}</div>`;
+    }
 
-      tooltip.innerHTML = `
-        <div class="tip-industry" style="color:${THEME_COLORS[theme]||'#94a3b8'}">${theme}</div>
-        <div class="tip-pct">${pct.toFixed(1)}% of managed · ${fmtDollarWhole(d.value)}</div>
-        ${rows}`;
-      tooltip.classList.add('visible');
-      positionTooltip(e);
-    });
-    seg.addEventListener('mousemove', positionTooltip);
-    seg.addEventListener('mouseleave', () => tooltip.classList.remove('visible'));
-  });
+    return `<div style="margin-bottom:8px">
+      <div onclick="toggleCompTheme('${escq(theme)}')" style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px;cursor:pointer">
+        <div style="display:flex;align-items:center;gap:5px;min-width:0">
+          <span style="font-size:8px;color:var(--color-text-tertiary);width:8px;flex-shrink:0">${arrow}</span>
+          <div style="width:8px;height:8px;border-radius:2px;background:${color};flex-shrink:0"></div>
+          <span style="font-size:10px;font-weight:600;color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(theme)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;white-space:nowrap;flex-shrink:0">
+          <span style="font-size:10px;color:var(--color-text-secondary);font-weight:600">${pct.toFixed(1)}%</span>
+          <span style="font-size:9px;color:var(--color-text-tertiary)">${fmtDollarWhole(d.value)}</span>
+          <span style="font-size:9px;color:${glColor}">${d.gl >= 0 ? '+' : ''}${fmtDollarWhole(d.gl)}</span>
+        </div>
+      </div>
+      <div style="height:5px;background:var(--color-background-tertiary);border-radius:3px;overflow:hidden">
+        <div style="width:${barW.toFixed(1)}%;height:100%;background:${color};border-radius:3px;transition:width 0.3s"></div>
+      </div>
+      ${detail}
+    </div>`;
+  }).join('');
+
+  const untagged = positions.filter(p => !p.closed && p.ticker && !p.theme);
+  const footNote = untagged.length > 0
+    ? `<span style="color:var(--color-text-danger)">${untagged.length} untagged: ${untagged.map(p => esc(p.ticker)).join(', ')}</span>`
+    : 'click a theme for its holdings';
+
+  el.innerHTML = rows + `<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--color-border-tertiary);font-size:9px;color:var(--color-text-tertiary)">% of managed book \u00b7 ${footNote}</div>`;
 }
 
 function positionTooltip(e) {
