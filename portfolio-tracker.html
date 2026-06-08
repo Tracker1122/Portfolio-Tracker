@@ -21223,7 +21223,7 @@ function verifyBookReviewTickers(text) {
 // Build the prompt for an argue/challenge turn on the book review. Re-asserts the framing every turn
 // (models drift agreeable across a thread). Crucially encodes THREE modes so the user can both correct
 // facts AND argue substance without the model confusing them.
-function buildBookThreadPrompt(newChallenge) {
+function buildBookThreadPrompt(newChallenge, useWeb) {
   const r = bookAiReview;
   if (!r) return '';
   // Back-compat: a review saved before the argue feature has no thread/openingPrompt. Seed them so
@@ -21241,6 +21241,9 @@ function buildBookThreadPrompt(newChallenge) {
     else if (t.role === 'ai') { parts.push(`\n--- YOUR RESPONSE (round ${round}) ---\n${t.text}`); }
   });
   const thisRound = round + 1;
+  const evidenceRule = useWeb
+    ? 'Evidence discipline: you MAY use web search for THIS reply when current facts would genuinely help \u2014 be economical (about 2-3 targeted searches). Any current fact, figure, or news you state MUST be FROM SEARCH with a full https:// source URL; tag your own reasoning [inference]; never fabricate a citation, and if you did not search a given fact do not present it as current.'
+    : 'Same evidence discipline \u2014 any outside real-world fact is UNVERIFIED, flag it; never fabricate. You are NOT searching the web this turn, so you cannot introduce new current facts \u2014 reason from the review and the user\'s data, and tag anything you cannot ground as [inference] or \u26a0UNVERIFIED.';
   parts.push(`\n\n=== HOW TO ANSWER THIS NEXT MESSAGE (re-read every turn) ===
 The user is engaging with your review. Their message will be ONE of two kinds — identify which, and handle it correctly. Do not confuse them.
 
@@ -21250,7 +21253,7 @@ The user is engaging with your review. Their message will be ONE of two kinds �
 
 THE LINE: a correction about WHAT THE USER OWNS or what's in their data → accept, you were wrong about a fact. A disagreement about WHAT IT MEANS → argue it honestly. Never treat a judgment challenge as a fact you must cave to, and never argue back against a correction about the user's own holdings.
 
-Other rules, unchanged: This is a focused reply to THIS message, not a re-run of the full review — a few tight paragraphs. Same evidence discipline — any outside real-world fact is UNVERIFIED, flag it; never fabricate. Only name tickers that are the user's actual holdings or their selected candidates; do not introduce new tickers as if held.
+Other rules, unchanged: This is a focused reply to THIS message, not a re-run of the full review — a few tight paragraphs. ${evidenceRule} Only name tickers that are the user's actual holdings or their selected candidates; do not introduce new tickers as if held.
 
 --- USER (round ${thisRound}) ---
 ${newChallenge}
@@ -21267,20 +21270,22 @@ async function runBookAiChallenge() {
   const msg = (ta.value || '').trim();
   if (!msg) { ta.style.borderColor = '#fbbf24'; setTimeout(() => { if (ta) ta.style.borderColor = 'var(--color-border-tertiary)'; }, 800); return; }
   if (bookAiBusy) return;
+  const webEl = document.getElementById('book-ai-challenge-web');
+  const useWeb = !!(webEl && webEl.checked);
   bookAiBusy = true;
   if (!aiWorkerUrl) loadAiWorkerUrl();
   if (!aiWorkerUrl) { bookAiBusy = false; renderThemeAiReview(); return; }
 
   // Append the user turn now so the thread shows it immediately; the AI reply fills in after.
   r.thread = r.thread || [];
-  r.thread.push({ role: 'user', text: msg });
+  r.thread.push({ role: 'user', text: msg, web: useWeb });
   saveBookAiReview();
   ta.value = '';
   renderThemeAiReview();
 
-  const prompt = buildBookThreadPrompt(msg);
+  const prompt = buildBookThreadPrompt(msg, useWeb);
   try {
-    const _r = await aiWorkerCall(prompt); // streamed; classified errors as before
+    const _r = await aiWorkerCall(prompt, null, useWeb ? { web: true } : {}); // streamed; classified errors as before
     const text = _r.text;
     const usage = _r.usage;
     r.thread.push({
@@ -21372,7 +21377,7 @@ function renderThemeAiReview() {
     const turns = (bookAiReview.thread || []).slice(1); // skip opening analysis
     const turnHtml = turns.map(t => {
       if (t.role === 'user') {
-        return `<div style="margin:8px 0 4px;padding:7px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;color:var(--color-text-primary)"><span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">You</span><br>${esc(t.text)}</div>`;
+        return `<div style="margin:8px 0 4px;padding:7px 10px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;color:var(--color-text-primary)"><span style="font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em">You${t.web ? ' · web' : ''}</span><br>${esc(t.text)}</div>`;
       }
       if (t.error) {
         return `<div style="margin:4px 0 8px;padding:7px 10px;border:1px solid #f87171;border-radius:var(--border-radius-md);font-size:10px;color:#f87171">${esc(t.text)} <span style="cursor:pointer;text-decoration:underline" onclick="renderThemeAiReview()">dismiss</span></div>`;
@@ -21404,6 +21409,7 @@ function renderThemeAiReview() {
         <textarea id="book-ai-challenge-input" placeholder="e.g. I don't hold LMT — re-check what that changes. Or: I think you're underweighting how correlated my semis are." style="width:100%;box-sizing:border-box;min-height:48px;margin-top:4px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-size:10px;padding:6px 8px;font-family:inherit"></textarea>
         <div style="display:flex;align-items:center;gap:10px;margin-top:4px;flex-wrap:wrap">
           <button class="btn btn-sm btn-primary" onclick="runBookAiChallenge()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Sending…' : 'Send'}</button>
+          <label style="display:flex;align-items:center;gap:5px;font-size:9px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="book-ai-challenge-web" ${bookAiBusy ? 'disabled' : ''} style="margin:0">Search the web for this (slower, costs more)</label>
           <span style="font-size:8px;color:var(--color-text-tertiary)">${argueRounds} round${argueRounds === 1 ? '' : 's'} · thread total ${(totalIn + totalOut).toLocaleString()} tokens · ~$${totalCost.toFixed(3)} so far. Each turn resends the full conversation, so cost grows per round.</span>
         </div>
       </div>`;
