@@ -5594,7 +5594,7 @@ function switchTab(name) {
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
   if (name === 'trends') safeRender('renderTrends', renderTrends);
-  if (name === 'themes') safeRender('renderThemeUniverse', renderThemeUniverse);
+  if (name === 'themes') { clusterExpandedIdx = -1; safeRender('renderThemeUniverse', renderThemeUniverse); }
   if (name === 'dashboard') safeRender('syncFixedScrollbar', syncFixedScrollbar);
   // Risk & Stress Lens (injected block) hook: refresh staged-scenario status on entering
   // Risk Review, and (re)mount the "stress-test in Risk Review" buttons on Themes / Quality.
@@ -18941,7 +18941,7 @@ function setBenchmarkFee(ticker, val) {
 // ─────────────────────────────────────────────
 let clusterEditExpanded = false;
 function toggleClusterEdit() { clusterEditExpanded = !clusterEditExpanded; renderThemeClusters(); }
-let clusterExpandedIdx = 0; // which cluster's names are expanded under the bar (one at a time); 0 = biggest open by default
+let clusterExpandedIdx = -1; // which cluster's names are expanded under the bar (one at a time); -1 = none open
 function toggleClusterExpand(i) { clusterExpandedIdx = (clusterExpandedIdx === i) ? -1 : i; renderThemeClusters(); }
 function reassignCluster(key, theme) {
   const o = loadClusterOverrides();
