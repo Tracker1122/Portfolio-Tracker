@@ -1056,8 +1056,8 @@
     <button class="tab-btn" onclick="switchTab('distribution')">True Exposure</button>
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
     <button class="tab-btn" onclick="switchTab('tradeideas')">Trade Ideas</button>
-    <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
     <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
+    <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
     <button class="tab-btn" onclick="switchTab('risk')">Risk Review</button>
     <button class="tab-btn" onclick="switchTab('rebalance')">Holdings &amp; Tax</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
@@ -1344,8 +1344,6 @@
     <div id="sleeve-valueadd-wrap" style="margin-bottom:24px"></div>
     <div class="section-heading">Industry Intelligence</div>
     <div id="theme-intel-wrap" style="margin-bottom:20px"></div>
-    <div class="section-heading">Price moves since you refreshed</div>
-    <div id="price-moves-wrap" style="margin-bottom:24px"></div>
 
     <div class="section-heading" style="margin-top:24px">Book Performance — Isolate &amp; Compare</div>
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
@@ -1358,6 +1356,9 @@
 
   <!-- Trade Ideas Tab -->
   <div class="tab-panel" id="tab-tradeideas">
+    <div class="section-heading">Price moves since you refreshed</div>
+    <div id="price-moves-wrap" style="margin-bottom:24px"></div>
+
     <div class="section-heading">Add Candidates</div>
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
       Positions beating both SPX and theme by ≥+$300. Tier 1 = past sleeve soak, fair to consider for adding. Tier 2 = early strength, still in soak — informational only, not action-eligible. Portfolio Balance Plays excluded.
@@ -5175,6 +5176,14 @@ let priceMovesView = 'sinceLast'; // 'sinceLast' or 'allTime' — view toggle fo
 // not present on the current tab, we fall back to the default unsort (null). On null, the default
 // is "biggest movers first" — absolute moveOnPosition descending, matching the prior behavior.
 let priceMovesSort = { col: null, dir: 'desc' };
+// Footprint: by default the panel shows only the top PM_VISIBLE rows (in the current sort order —
+// default sort is biggest absolute $ move, so "top 8 by move size"); the rest sit behind a toggle.
+let priceMovesShowAll = false;
+const PM_VISIBLE = 8;
+function togglePriceMovesShowAll() {
+  priceMovesShowAll = !priceMovesShowAll;
+  renderPriceMoves();
+}
 function setPriceMovesSort(col) {
   if (priceMovesSort.col === col) {
     priceMovesSort.dir = (priceMovesSort.dir === 'asc') ? 'desc' : 'asc';
@@ -5642,8 +5651,8 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
-  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeIntel', renderThemeIntel); }
-  if (name === 'tradeideas') { safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
+  if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); }
+  if (name === 'tradeideas') { safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
   if (name === 'rebalance') { safeRender('renderRebalance', renderRebalance); if (typeof renderTaxSection === 'function') safeRender('renderTaxSection', renderTaxSection); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
@@ -11863,8 +11872,13 @@ function renderPriceMoves() {
     const prevDateLbl = _shortDate(sl.tsPrev);
     const nowDateLbl  = _shortDate(sl.tsNow);
 
-    // Build per-ticker rows
-    const rowHtml = rows.map(r => {
+    // Build per-ticker rows (capped to the top PM_VISIBLE; the rest sit behind the toggle row)
+    const pmHidden = Math.max(0, rows.length - PM_VISIBLE);
+    const pmRows = (priceMovesShowAll || pmHidden === 0) ? rows : rows.slice(0, PM_VISIBLE);
+    const pmToggleRow = pmHidden > 0
+      ? '<tr><td colspan="8" style="padding:7px 8px;text-align:center;border-top:1px dashed var(--color-border-tertiary)"><a href="javascript:void(0)" onclick="togglePriceMovesShowAll()" style="font-size:10px;color:var(--color-text-info);cursor:pointer">' + (priceMovesShowAll ? '▴ Show top ' + PM_VISIBLE + ' only' : '▾ Show ' + pmHidden + ' more') + '</a></td></tr>'
+      : '';
+    const rowHtml = pmRows.map(r => {
       if (r.isNew) {
         return '<tr><td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker) + '</td>' +
           '<td colspan="7" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">new this refresh — no prior price to compare</td></tr>';
@@ -11960,7 +11974,7 @@ function renderPriceMoves() {
           sortableTh('pctChange', 'Price % change', 'right', 'Per-share price change as a percent') +
           sortableTh('bench', 'vs theme bench', 'right', 'Click to group rows by theme benchmark. Cells show fetched α — see button on each row. self-benchmarked rows sink to bottom.') +
         '</tr></thead>' +
-        '<tbody>' + rowHtml + bookRow + '</tbody>' +
+        '<tbody>' + rowHtml + pmToggleRow + bookRow + '</tbody>' +
       '</table>' +
       '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>';
   } else {
@@ -11998,7 +12012,12 @@ function renderPriceMoves() {
       'A "(N sh now)" tag appears when your current share count differs from when the ticker first showed up in this history.' +
     '</div>';
 
-    const rowHtml = rows.map(r => {
+    const pmHidden = Math.max(0, rows.length - PM_VISIBLE);
+    const pmRows = (priceMovesShowAll || pmHidden === 0) ? rows : rows.slice(0, PM_VISIBLE);
+    const pmToggleRow = pmHidden > 0
+      ? '<tr><td colspan="8" style="padding:7px 8px;text-align:center;border-top:1px dashed var(--color-border-tertiary)"><a href="javascript:void(0)" onclick="togglePriceMovesShowAll()" style="font-size:10px;color:var(--color-text-info);cursor:pointer">' + (priceMovesShowAll ? '▴ Show top ' + PM_VISIBLE + ' only' : '▾ Show ' + pmHidden + ' more') + '</a></td></tr>'
+      : '';
+    const rowHtml = pmRows.map(r => {
       const dateStr = fmtPmTs(r.tsFirst);
       const spark = pmSparkline(r.spark, 60, 18);
       return '<tr>' +
@@ -12052,7 +12071,7 @@ function renderPriceMoves() {
           // Trend (sparkline) is non-sortable — it's a per-row visualization, no scalar to sort by.
           '<th style="padding:4px 8px;text-align:right">Trend</th>' +
         '</tr></thead>' +
-        '<tbody>' + rowHtml + bookRow + '</tbody>' +
+        '<tbody>' + rowHtml + pmToggleRow + bookRow + '</tbody>' +
       '</table>' +
       '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>';
   }
@@ -20311,7 +20330,7 @@ function renderThemeDiscovery() {
   };
 
   // Lead with NICHE-fund buckets (the genuine finds), then broad-fund buckets; within each group keep
-  // gap-ascending (lightest theme first). Open the niche buckets by default — that's the real signal.
+  // gap-ascending (lightest theme first). All buckets start collapsed — click a bucket to expand it.
   const orderedThemes = themeOrder.slice().sort((a, b) => {
     const na = bucketSource(buckets[a]).isNiche ? 0 : 1;
     const nb = bucketSource(buckets[b]).isNiche ? 0 : 1;
@@ -20334,7 +20353,7 @@ function renderThemeDiscovery() {
         <div style="flex-basis:100%;font-size:9px;color:var(--color-text-tertiary);line-height:1.45">These ${discoverySelected.size} selected name${discoverySelected.size === 1 ? '' : 's'} ${discoverySelected.size === 1 ? 'is' : 'are'} queued for a data fetch (1M/1Y, with deeper windows on demand) — this is a browse/fetch tool and does <strong>not</strong> feed the AI analysis. To have the AI weigh a name, stage it as a buy in Evaluate a Trade. 📊 on any fetched chip shows its full window set — no new API call. Selection survives refresh.</div>
         <div id="disc-fetch-status" style="flex-basis:100%;margin-top:2px"></div>
       </div>` : ''}
-      ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, bucketSource(buckets[t]).isNiche)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
+      ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, false)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
 
