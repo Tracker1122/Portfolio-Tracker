@@ -20503,7 +20503,8 @@ async function runThemeResearch(theme) {
       setBody('<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + esc(t) + '<span style="opacity:.45">\u258c</span></div>');
     };
     const r = await aiWorkerCall(prompt, onDelta, { web: true });
-    themeResearch[theme] = { text: r.text, at: new Date().toISOString(), edited: false };
+    const truncated = (r.stopReason === 'max_tokens' || r.stopReason === 'pause_turn');
+    themeResearch[theme] = { text: r.text, at: new Date().toISOString(), edited: false, stopReason: r.stopReason || null, truncated: truncated };
     saveThemeResearch();
   } catch (err) {
     themeResearchBusy = false;
@@ -20515,7 +20516,48 @@ async function runThemeResearch(theme) {
   renderThemeResearch();
 }
 
+// Resume a brief that was cut off (max_tokens / web-search pause): continue from where it stopped and append.
+async function continueThemeResearch(theme) {
+  if (themeResearchBusy) return;
+  const entry = themeResearch[theme];
+  if (!entry) return;
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  themeResearchBusy = true; themeResearchSel = theme; themeResearchExpanded[theme] = true;
+  renderThemeResearch();
+  const bodyId = trKey(theme) + '_body';
+  const base = entry.text;
+  const baseHtml = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(base);
+  const setBody = (tailRaw, caret) => { const o = document.getElementById(bodyId); if (o) o.innerHTML = baseHtml + esc(tailRaw) + (caret ? '<span style="opacity:.45">\u258c</span>' : '') + '</div>'; };
+  if (!aiWorkerUrl) { themeResearchBusy = false; setBody('\n\n[No AI worker URL set — cannot continue.]', false); return; }
+  setBody('\n\n\u2026continuing\u2026', true);
+  const prompt = [
+    'You are CONTINUING a research dossier that was cut off mid-output. Below, between \u00ab\u00bb, is everything written so far. Continue from EXACTLY where it stops — do NOT repeat or re-summarize any of it, do NOT restart, no preamble. Just produce the remaining text/sections to finish the dossier.',
+    'Keep the SAME rules: wrap every stock/ETF ticker as {TICKER|stock} or {TICKER|etf}; current facts, figures, and news must be FROM SEARCH with a full https:// source URL; tag your own reasoning [inference]; never recite uncertain numbers from memory; and make sure the final CLAIMS TO VERIFY section appears if it has not yet. Use web search as needed to finish.',
+    '',
+    'DOSSIER SO FAR:',
+    '\u00ab' + base + '\u00bb'
+  ].join('\n');
+  try {
+    let _last = 0, acc = '';
+    const onDelta = function (t) { acc = t; const now = Date.now(); if (now - _last < 60) return; _last = now; setBody('\n' + t, true); };
+    const r = await aiWorkerCall(prompt, onDelta, { web: true });
+    const joined = base.replace(/\s+$/, '') + '\n' + r.text.replace(/^\s+/, '');
+    const truncated = (r.stopReason === 'max_tokens' || r.stopReason === 'pause_turn');
+    themeResearch[theme] = { text: joined, at: entry.at, edited: entry.edited, stopReason: r.stopReason || null, truncated: truncated, continued: true };
+    saveThemeResearch();
+  } catch (err) {
+    themeResearchBusy = false;
+    const info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed', color: 'var(--color-text-danger)', raw: '' };
+    const o = document.getElementById(bodyId);
+    if (o) o.innerHTML = baseHtml + '</div><div style="border:1px solid ' + info.color + ';border-radius:var(--border-radius-md);padding:8px 10px;margin-top:8px;font-size:10px;color:' + info.color + '"><strong>Continue failed:</strong> <span style="color:var(--color-text-secondary)">' + esc(info.detail) + '</span> The partial brief above is kept.</div>';
+    return;
+  }
+  themeResearchBusy = false;
+  renderThemeResearch();
+}
+
 function selectThemeResearch(theme) { themeResearchSel = theme; if (themeResearch[theme]) themeResearchExpanded[theme] = true; renderThemeResearch(); }
+function toggleThemeCard(theme) { themeResearchExpanded[theme] = !themeResearchExpanded[theme]; renderThemeResearch(); }
 function toggleThemeCard(theme) { themeResearchExpanded[theme] = !themeResearchExpanded[theme]; renderThemeResearch(); }
 function removeThemeResearch(theme) {
   if (!themeResearch[theme]) return;
@@ -20556,8 +20598,11 @@ function themeResearchCard(theme) {
   const facts = themeResearchFactsLine(theme);
   const arrow = open ? '\u25be' : '\u25b8';
   const bodyId = trKey(theme) + '_body';
-  const meta = isBusy ? 'researching\u2026' : (entry ? ('generated ' + esc(new Date(entry.at).toLocaleString()) + (entry.edited ? ' \u00b7 edited' : '')) : '');
-  const bodyInner = (entry && !isBusy) ? ('<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(entry.text) + '</div>' + THEME_RESEARCH_DISCLAIMER) : '';
+  const meta = isBusy ? 'researching\u2026' : (entry ? ('generated ' + esc(new Date(entry.at).toLocaleString()) + (entry.edited ? ' \u00b7 edited' : '') + (entry.truncated ? ' \u00b7 \u26a0 cut off' : '')) : '');
+  const truncBanner = (entry && entry.truncated && !isBusy)
+    ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;margin-bottom:8px;background:rgba(251,191,36,0.10);font-size:9.5px;color:var(--color-text-secondary);line-height:1.55">\u26a0 <strong style="color:#fbbf24">This brief was cut off before it finished</strong> \u2014 the model hit its output-token limit' + (entry.stopReason === 'pause_turn' ? ' (paused mid web-search)' : '') + '. <span onclick="event.stopPropagation();continueThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info);text-decoration:underline">Continue from where it stopped</span>, or raise MAX_TOKENS in your worker and re-run for a clean full pass.</div>'
+    : '';
+  const bodyInner = (entry && !isBusy) ? (truncBanner + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(entry.text) + '</div>' + THEME_RESEARCH_DISCLAIMER) : '';
   let actions = '';
   if (!isBusy) {
     let a = '<span onclick="event.stopPropagation();runThemeResearch(\'' + escq(theme) + '\')" style="cursor:pointer;color:var(--color-text-info)">\u21bb ' + (entry ? 'Re-run' : 'Research') + '</span>';
