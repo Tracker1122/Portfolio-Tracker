@@ -15364,11 +15364,20 @@ function candEditQueueItem(i) {
   _candEditIdx = i;
   candRenderQueue();
   candReadout();
+  // The form lives inside the collapsed "Build & adjust the trade" <details>. We just filled its fields,
+  // but unless that section is OPEN the user sees nothing happen \u2014 which was the bug. Open it first,
+  // then (after layout settles) scroll the right row into view and focus the key field.
+  const panel = document.getElementById('theme-candidate-panel');
+  const det = panel && panel.closest ? panel.closest('details') : null;
+  if (det) det.open = true;
   const rowId = tr.kind === 'stock' ? 'cand-stock-row' : tr.kind === 'etf' ? 'cand-etf-row' : 'cand-trim-row';
-  const anchor = document.getElementById(rowId) || document.getElementById('theme-candidate-panel');
-  if (anchor && anchor.scrollIntoView) { try { anchor.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {} }
-  const focusId = tr.kind === 'stock' ? 'cand-ticker' : tr.kind === 'etf' ? 'cand-etf-ticker' : 'cand-trim-amt';
-  const fe = document.getElementById(focusId); if (fe) { try { fe.focus(); } catch (_) {} }
+  const reveal = () => {
+    const anchor = document.getElementById(rowId) || panel;
+    if (anchor && anchor.scrollIntoView) { try { anchor.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {} }
+    const focusId = tr.kind === 'stock' ? 'cand-ticker' : tr.kind === 'etf' ? 'cand-etf-ticker' : 'cand-trim-amt';
+    const fe = document.getElementById(focusId); if (fe) { try { fe.focus({ preventScroll: true }); } catch (_) { try { fe.focus(); } catch (__) {} } }
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(reveal); else reveal();
 }
 
 function candClearScenario() {
@@ -29513,6 +29522,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09g</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09h</div>
 </body>
 </html>
