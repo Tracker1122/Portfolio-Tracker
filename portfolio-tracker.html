@@ -12106,7 +12106,14 @@ let _pmRangeBase = '';    // ISO baseline date ('' → end − active window)
 let _pmRangeWin = '1M';   // active quick window, or 'custom'
 let _pmRangeBusy = false;
 let _pmRangeData = null;  // computed result for the current window
+let _pmShowAll = false;   // table: false = 5 gainers + 5 laggards, true = full ranked list
 const _pmBarsCache = {};  // 'TICKER|from|to' -> [{t,c}] (success) or {nodata:true}
+// Wide-range history cache: fetch ~2y of daily closes ONCE per name, then compute every
+// window (and any custom date in range) locally by slicing — no re-fetch on window switch,
+// and weekend/holiday-proof because we anchor to real trading bars in a complete local history.
+const _pmHist = {};                        // TICKER -> [{t,c}] over the cached range
+let _pmHistRange = { from: '', to: '' };   // the [from,to] currently held in _pmHist
+let _pmFetchFlags = {};                    // { anyRate, anyNet } from the last network pull
 
 function _pmToday() { return new Date().toISOString().slice(0, 10); }
 function _pmShiftISO(endISO, win) {
@@ -12156,13 +12163,18 @@ function pmSetWindow(win) {
 function pmSetDate(which, val) {
   if (which === 'base') _pmRangeBase = val; else _pmRangeEnd = val;
   _pmRangeWin = 'custom';
-  renderPriceMoves();
+  _pmRunRange();            // recompute (instant if the range is already cached)
 }
 function pmGo() { _pmRunRange(); }
+function pmToggleAll() { _pmShowAll = !_pmShowAll; renderPriceMoves(); }
 
+// Pull ~2y of daily closes once per name, cache, then compute the requested window locally.
+// Switching windows / picking in-range custom dates = zero extra fetches. A second click
+// retries ONLY names missing from the cache (rate-limited or not-yet-fetched).
 async function _pmRunRange() {
   if (_pmRangeBusy) return;
-  const end = _pmRangeEnd || _pmToday();
+  const today = _pmToday();
+  const end = _pmRangeEnd || today;
   const base = _pmRangeBase || _pmShiftISO(end, _pmRangeWin === 'custom' ? '1M' : _pmRangeWin);
   _pmRangeEnd = end; _pmRangeBase = base;
   if (base >= end) { _pmRangeData = { error: 'The baseline date has to be before the end date.' }; renderPriceMoves(); return; }
@@ -12173,39 +12185,60 @@ async function _pmRunRange() {
   });
   const tickers = Object.keys(bookTk);
   if (!tickers.length) { _pmRangeData = { error: 'No open holdings to measure.' }; renderPriceMoves(); return; }
-  const fetchList = tickers.slice(); if (fetchList.indexOf('VOO') === -1) fetchList.push('VOO');
-  _pmRangeBusy = true; _pmRangeData = null; renderPriceMoves();
-  const rows = []; const excluded = []; let vooA = null, vooB = null;
-  let noworker = false, anyRate = false, anyNet = false, idx = 0;
-  for (const t of fetchList) {
-    if (idx++ > 0) await new Promise(r => setTimeout(r, 150)); // polite pacing; worker edge-caches a day
-    let bars = null;
-    try { bars = await _pmFetchBars(t, _pmMinusDays(base, 10), end); }
-    catch (err) {
-      const m = err.message;
-      if (m === 'noworker') { noworker = true; break; }
-      if (m === 'rate') anyRate = true;
-      else if (m === 'net') anyNet = true;
+  const need = tickers.slice(); if (need.indexOf('VOO') === -1) need.push('VOO');
+
+  // Cache range: cover 2Y (for the 2Y button) or an older custom baseline, through today.
+  const twoYWin = _pmMinusDays(today, 745);
+  const fetchFrom = base < twoYWin ? _pmMinusDays(base, 15) : twoYWin;
+  const fetchTo = today;
+  const rangeChanged = (_pmHistRange.from !== fetchFrom || _pmHistRange.to !== fetchTo);
+  if (rangeChanged) { for (const k in _pmHist) delete _pmHist[k]; }
+  const toFetch = rangeChanged ? need.slice() : need.filter(t => !_pmHist[t]);
+
+  if (toFetch.length) {
+    _pmRangeBusy = true; _pmRangeData = null; renderPriceMoves();
+    let noworker = false, anyRate = false, anyNet = false, idx = 0;
+    for (const t of toFetch) {
+      if (idx++ > 0) await new Promise(r => setTimeout(r, 150)); // polite pacing; worker edge-caches a day
+      try { _pmHist[t] = await _pmFetchBars(t, fetchFrom, fetchTo); }
+      catch (err) {
+        const m = err.message;
+        if (m === 'noworker') { noworker = true; break; }
+        if (m === 'rate') anyRate = true; else if (m === 'net') anyNet = true;
+        // nodata → leave _pmHist[t] unset (too young / unavailable)
+      }
     }
+    _pmRangeBusy = false;
+    if (noworker) { _pmRangeData = { error: 'noworker' }; renderPriceMoves(); return; }
+    _pmHistRange = { from: fetchFrom, to: fetchTo };
+    _pmFetchFlags = { anyRate, anyNet };
+  }
+  _pmComputeFromCache(bookTk, base, end);
+  renderPriceMoves();
+}
+
+function _pmComputeFromCache(bookTk, base, end) {
+  const rows = [], excluded = [];
+  let vooA = null, vooB = null;
+  const vbars = _pmHist['VOO'];
+  if (vbars) { vooA = _pmCloseAtOrBefore(vbars, base); vooB = _pmCloseAtOrBefore(vbars, end); }
+  Object.keys(bookTk).forEach(t => {
+    const bars = _pmHist[t]; const sh = bookTk[t];
     const cA = bars ? _pmCloseAtOrBefore(bars, base) : null;
     const cB = bars ? _pmCloseAtOrBefore(bars, end) : null;
-    if (t === 'VOO') { vooA = cA; vooB = cB; if (tickers.indexOf('VOO') === -1) continue; }
-    const sh = bookTk[t]; if (sh == null) continue;
-    if (cA == null || cB == null) { excluded.push(t); continue; }
+    if (cA == null || cB == null) { excluded.push(t); return; }
     const moveOnPos = sh * (cB - cA);
     rows.push({ ticker: t, shares: sh, cA, cB, pct: cA > 0 ? (cB - cA) / cA * 100 : null, moveOnPos, valA: sh * cA, valB: sh * cB });
-  }
-  if (noworker) { _pmRangeBusy = false; _pmRangeData = { error: 'noworker' }; renderPriceMoves(); return; }
+  });
   const bookValA = rows.reduce((s, r) => s + r.valA, 0);
   const bookValB = rows.reduce((s, r) => s + r.valB, 0);
   const bookMove = bookValB - bookValA;
   const bookPct = bookValA > 0 ? bookMove / bookValA * 100 : null;
   const vooPct = (vooA != null && vooB != null && vooA > 0) ? (vooB - vooA) / vooA * 100 : null;
   const vsVoo = (bookPct != null && vooPct != null) ? bookPct - vooPct : null;
-  rows.sort((a, b) => Math.abs(b.moveOnPos) - Math.abs(a.moveOnPos));
-  _pmRangeBusy = false;
-  _pmRangeData = { base, end, rows, excluded, bookMove, bookPct, vooPct, vsVoo, anyRate, anyNet, at: Date.now() };
-  renderPriceMoves();
+  rows.sort((a, b) => b.moveOnPos - a.moveOnPos); // signed desc: gainers top, laggards bottom
+  const fl = _pmFetchFlags || {};
+  _pmRangeData = { base, end, rows, excluded, bookMove, bookPct, vooPct, vsVoo, anyRate: fl.anyRate, anyNet: fl.anyNet, at: Date.now() };
 }
 
 function renderPriceMoves() {
@@ -12232,7 +12265,7 @@ function renderPriceMoves() {
   if (_pmRangeBusy) {
     body = '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic">Pulling daily closes for your book (paced ~0.15s/name; cached after the first pull)…</div>';
   } else if (!_pmRangeData) {
-    body = '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic">Pick a quick window or set the dates, then Go. Fetches daily closes on demand — back as far as each name has listed.</div>';
+    body = '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic">Pick a quick window or set dates, then Go. Pulls ~2 years of daily closes once, then switching windows or picking in-range dates is instant.</div>';
   } else if (_pmRangeData.error === 'noworker') {
     body = '<div style="font-size:11px;color:#fbbf24">No bars-worker URL is set. This card uses the same Tiingo daily-bars worker the Risk Lens uses — set it in Settings, then hit Go.</div>';
   } else if (_pmRangeData.error) {
@@ -12244,21 +12277,33 @@ function renderPriceMoves() {
       : '';
     const headline = '<div style="font-size:12px;color:var(--color-text-primary);margin-bottom:6px">Over <b>' + esc(D.base) + ' → ' + esc(D.end) + '</b>, the value of your current holdings moved ' + _pmUsd(D.bookMove) + ' (' + _pmPct(D.bookPct) + ')' + vooStr + '.</div>';
     const notes = [];
-    if (D.excluded.length) notes.push('No history back to ' + esc(D.base) + ' for ' + D.excluded.map(esc).join(', ') + ' — excluded from the book figure.');
-    if (D.anyRate) notes.push('Some names hit the worker rate limit (free tier ~50/hr); hit Go again shortly to backfill.');
+    if (D.excluded.length) notes.push('No usable history back to ' + esc(D.base) + ' for ' + D.excluded.map(esc).join(', ') + ' — too young or not returned this pull, excluded from the book figure.');
+    if (D.anyRate) notes.push('Some names hit the worker rate limit (free tier ~50/hr); click Go again to backfill just the missing ones.');
     if (D.anyNet) notes.push('A network/worker error skipped some names.');
     const noteHtml = notes.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">' + notes.map(esc).join(' · ') + '</div>' : '';
-    const rowsHtml = D.rows.map(r =>
+    const mkRow = (r) =>
       '<tr><td style="padding:2px 8px 2px 0;font-weight:600">' + esc(r.ticker) + '</td>' +
       '<td style="padding:2px 8px;text-align:right">' + _pmPct(r.pct) + '</td>' +
       '<td style="padding:2px 8px;text-align:right">' + _pmUsd(r.moveOnPos) + '</td>' +
-      '<td style="padding:2px 0 2px 8px;text-align:right;color:var(--color-text-tertiary)">$' + r.cA.toFixed(2) + ' → $' + r.cB.toFixed(2) + '</td></tr>'
-    ).join('');
-    const table = '<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:4px">' +
-      '<thead><tr style="color:var(--color-text-tertiary);text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em">' +
-      '<th style="text-align:left;padding-bottom:3px">Name</th><th style="padding-bottom:3px">%</th><th style="padding-bottom:3px">$ impact</th><th style="padding-bottom:3px">close A → B</th></tr></thead>' +
-      '<tbody>' + rowsHtml + '</tbody></table>';
-    body = headline + noteHtml + '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:2px">By name — current shares × the price change, ranked by dollar impact:</div>' + table;
+      '<td style="padding:2px 0 2px 8px;text-align:right;color:var(--color-text-tertiary)">$' + r.cA.toFixed(2) + ' → $' + r.cB.toFixed(2) + '</td></tr>';
+    const thead = '<thead><tr style="color:var(--color-text-tertiary);text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em">' +
+      '<th style="text-align:left;padding-bottom:3px">Name</th><th style="padding-bottom:3px">%</th><th style="padding-bottom:3px">$ impact</th><th style="padding-bottom:3px">close A → B</th></tr></thead>';
+    const tableOf = (list) => '<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:2px">' + thead + '<tbody>' + list.map(mkRow).join('') + '</tbody></table>';
+    const grpHdr = (label, color) => '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:' + color + ';margin:8px 0 1px">' + label + '</div>';
+    let tableBlock, toggle = '';
+    if (_pmShowAll) {
+      tableBlock = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:1px">All ' + D.rows.length + ' names — current shares × price change, ranked by dollar impact (gainers first):</div>' + tableOf(D.rows);
+      toggle = '<span onclick="pmToggleAll()" style="cursor:pointer;color:var(--color-accent-blue);font-size:10px">← Show top movers only</span>';
+    } else {
+      const gainers = D.rows.filter(r => r.moveOnPos > 0).slice(0, 5);
+      const laggards = D.rows.filter(r => r.moveOnPos < 0).reverse().slice(0, 5);
+      const hidden = D.rows.length - gainers.length - laggards.length;
+      tableBlock =
+        (gainers.length ? grpHdr('Top gainers — biggest $ added', 'var(--color-text-success)') + tableOf(gainers) : '') +
+        (laggards.length ? grpHdr('Top laggards — biggest $ lost', 'var(--color-text-danger)') + tableOf(laggards) : '');
+      if (hidden > 0) toggle = '<span onclick="pmToggleAll()" style="cursor:pointer;color:var(--color-accent-blue);font-size:10px">Show all ' + D.rows.length + ' names (' + hidden + ' more) →</span>';
+    }
+    body = headline + noteHtml + tableBlock + (toggle ? '<div style="margin-top:7px">' + toggle + '</div>' : '');
   }
 
   el.innerHTML = '<div style="padding:8px 11px;border-left:3px solid var(--color-accent-blue);background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">' + controls + body + '</div>';
@@ -29051,6 +29096,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08p</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08q</div>
 </body>
 </html>
