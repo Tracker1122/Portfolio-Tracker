@@ -15850,8 +15850,17 @@ function _candPerfBenchParagraph() {
     if (typeof p.annVol === 'number' && typeof b.annVol === 'number') riskBits.push(`vol ${p.annVol.toFixed(0)}% vs ${b.annVol.toFixed(0)}%`);
     if (typeof p.maxDrawdown === 'number' && typeof b.maxDrawdown === 'number') riskBits.push(`maxDD ${p.maxDrawdown.toFixed(0)}% vs ${b.maxDrawdown.toFixed(0)}%`);
     const riskSub = riskBits.length ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">risk (${esc(T)} vs ${esc(bench)}): ${riskBits.join(' · ')}</div>` : '';
+    // The name's OWN absolute return over the same windows — so the card shows how the stock is doing
+    // now (absolute) AND vs its index (the gap) AND its risk, stacked. Same windows as the gap row so
+    // they line up. shortHist marks a sub-1Y "1Y" figure with a *.
+    const absStr = _CAND_REL_WINDOWS.filter(([lbl, k]) => typeof p[k] === 'number').map(([lbl, k]) => {
+      const cell = (k === 'y1' && p.shortHist) ? _candFmtPctHtml(p[k]) + '<span style="color:#fbbf24" title="under ~1yr of history">*</span>' : _candFmtPctHtml(p[k]);
+      return lbl + ' ' + cell;
+    }).join(' · ') || '—';
+    const absSub = '<div style="font-size:9px;color:var(--color-text-secondary);margin-top:1px">' + esc(T) + ' return: ' + absStr + '</div>';
     rows.push(`<div style="margin-top:5px">
       <strong>${esc(T)}</strong> (${tag} · ${themeStr}) — ${verdict(gh, bench)}${headPhrase}.
+      ${absSub}
       <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">by window (${esc(T)} − ${esc(bench)}): ${chips || '—'}</div>
       ${riskSub}
     </div>`);
@@ -29280,6 +29289,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08i</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08j</div>
 </body>
 </html>
