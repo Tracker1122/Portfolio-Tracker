@@ -1441,9 +1441,13 @@
     <div id="cand-queue" style="margin-top:18px"></div>
     <!-- ONE collapsed tab: build & adjust the trade + the stress test -->
     <details style="margin-top:14px">
-      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);padding:6px 0">Build &amp; adjust the trade &middot; stress test</summary>
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);padding:6px 0">Build &amp; adjust the trade</summary>
       <div id="theme-candidate-panel" style="margin-top:6px"></div>
-      <div id="evaltrade-risk-mirror" style="margin-top:18px"></div>
+    </details>
+    <!-- Stress test: its own collapsed tab -->
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);padding:6px 0">Stress test</summary>
+      <div id="evaltrade-risk-mirror" style="margin-top:6px"></div>
     </details>
     <!-- AI analysis: its own collapsed tab (long, so it gets its own toggle) -->
     <details style="margin-top:14px">
@@ -14684,6 +14688,7 @@ function _candShellHtml() {
       <button class="btn btn-sm" onclick="candClearScenario()" style="font-size:11px">Clear trade</button>
       <button class="btn btn-sm" onclick="candExportPdf()" style="font-size:11px" title="Open a print-friendly report (staged trade, combined impact, both private-deal bases, the risk-review chart, and the AI analysis) — then use your browser’s Save as PDF.">⤓ Export PDF</button>
     </div>
+    <div id="cand-relperf" style="margin-top:10px"></div>
     <div id="cand-output" style="margin-top:12px"></div>
   `;
 }
@@ -15631,7 +15636,7 @@ function _candPerfBenchParagraph() {
 
 function candRenderQueue() {
   const el = document.getElementById('cand-queue'); if (!el) return;
-  if (!_candQueue.length) { el.innerHTML = '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No moves staged yet. Add one or more above — they combine into a single scenario.</div>'; return; }
+  if (!_candQueue.length) { el.innerHTML = '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No moves staged yet. Add one or more above — they combine into a single scenario.</div>'; const _rp0 = document.getElementById('cand-relperf'); if (_rp0) _rp0.innerHTML = ''; return; }
   const _perfTickers = _candScenarioTickers();
   const _perfGaps = _perfTickers.filter(t => { const p = _candPerf[t]; return !p || p.error; });
   const _perfForce = _perfGaps.length === 0; // gaps present → fetch ONLY those (the rate-limited ones); all captured → full re-pull
@@ -15652,8 +15657,8 @@ function candRenderQueue() {
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this ${tr.kind === 'trim' ? 'trim' : 'buy'} back into the form to edit it — replaces this staged item in place, no duplicate">edit</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
       ${_candPerfLineHtml(tr.ticker)}${_candBenchLineHtml(tr)}
     </div>`).join('') +
-    _candPerfBenchParagraph() +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">Recent performance via Polygon daily bars; * = under ~1Y of history. Informational — not a return forecast.</div>`;
+  const _rp = document.getElementById('cand-relperf'); if (_rp) _rp.innerHTML = _candPerfBenchParagraph();
 }
 
 // Build the per-name true-exposure adjustments for the whole staged scenario.
