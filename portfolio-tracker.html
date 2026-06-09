@@ -4282,19 +4282,19 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
       <div class="summary-card-value ${colorClass(s.gainLoss)}">${fmtDollar(s.gainLoss)}</div>
     </div>
     <div class="summary-card">
-      <div class="summary-card-label">Your Return %</div>
+      <div class="summary-card-label">Your Return %${sleeveSub}</div>
       <div class="summary-card-value ${colorClass(s.yourReturn)}">${fmtPct(s.yourReturn)}</div>
     </div>
     <div class="summary-card" title="What the S&P 500 returned on the same capital over the same holding periods — your apples-to-apples benchmark.">
-      <div class="summary-card-label">S&P's return</div>
+      <div class="summary-card-label">S&P's return${sleeveSub}</div>
       <div class="summary-card-value ${colorClass(s.weightedSpx)}">${fmtPct(s.weightedSpx)}</div>
     </div>
     <div class="summary-card" title="Your return minus the S&P's return over the same capital and periods, in percentage points.">
-      <div class="summary-card-label">Edge vs S&P</div>
+      <div class="summary-card-label">Edge vs S&P${sleeveSub}</div>
       <div class="summary-card-value ${colorClass(s.vsSpx)}">${fmtPp(s.vsSpx)}</div>
     </div>
     ${isOpen ? `<div class="summary-card" title="Dollar alpha = the dollars you generated above (or below) what the S&P 500 would have returned on the same capital over the same holding periods.">
-      <div class="summary-card-label">Dollar Alpha vs S&P</div>
+      <div class="summary-card-label">Dollar Alpha vs S&P${sleeveSub}</div>
       <div class="summary-card-value ${s.dollarAlpha >= 0 ? 'success' : 'danger'}">${fmtDollarWhole(s.dollarAlpha)}${fmtAlphaPct(s.dollarAlpha, s.totalInvested)}</div>
     </div>` : ''}
     <div class="summary-card" ${isOpen ? `onclick="showCardOverlay('beating')" style="cursor:pointer" title="Click to see which positions are beating the S&P"` : ''}>
@@ -29645,6 +29645,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09m</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09n</div>
 </body>
 </html>
