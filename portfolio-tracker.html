@@ -9742,7 +9742,7 @@ function renderQrSavedList() {
     const _ik = (c.ticker || '').toUpperCase();
     const _icached = !!(tickerInfo[_ik] && tickerInfo[_ik].fetchedDate);
     const _ihtml = _icached ? discoveryInfoCardHtml(_ik, null, { closeJs: "(function(){var s=document.getElementById('qr-info-" + c.id + "');if(s){s.innerHTML='';s.dataset.open='';}})()" }) : '';
-    return `<details style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${typeColor};border-radius:var(--border-radius-lg);padding:10px 14px;margin-bottom:10px">
+    return `<details ontoggle="qrCardInfoOnToggle('${c.id}','${escq(c.ticker)}', this)" style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-left:3px solid ${typeColor};border-radius:var(--border-radius-lg);padding:10px 14px;margin-bottom:10px">
       <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;list-style:none">
         <span style="font-size:13px;font-weight:700;color:var(--color-text-primary)">${esc(c.ticker)}</span>
         <span style="font-size:8px;color:${typeColor};border:1px solid ${typeColor};border-radius:8px;padding:1px 7px;text-transform:uppercase;font-weight:700">${c.type}</span>
@@ -14379,6 +14379,7 @@ function simulateQueue(trades) {
 let _candMode = 'stock';      // 'stock' | 'etf' | 'trim'
 let _candTrimUnit = 'pct';    // 'pct' | 'sh' | 'usd'
 let _candQueue = [];          // linked moves: {kind:'stock'|'etf'|'trim', ...}
+let _candEditIdx = null;       // index of the queue item being edited in place (null = adding new)
 let _candScenario = null;     // last computed result, fed to the book AI: {sig, ...}
 let _candTempHoldings = {};   // ETF paste, card-local (never persisted): { ETF: [{ticker,weight}] }
 let _candPerf = {};           // recent-performance windows per ticker (from fetchTickerWindows): { TICKER: {m1,m3,m6,y1,ytd,maxDrawdown,annVol,shortHist,fetchedAt,error} }
@@ -15008,13 +15009,22 @@ function candReadout() {
   }
 }
 
+function _candPushOrReplace(item) {
+  if (_candEditIdx !== null && _candEditIdx >= 0 && _candEditIdx < _candQueue.length) {
+    _candQueue.splice(_candEditIdx, 1, item);
+  } else {
+    _candQueue.push(item);
+  }
+  _candEditIdx = null;
+}
+
 function candAddToQueue() {
   if (_candMode === 'stock') {
     const ticker = ((document.getElementById('cand-ticker') || {}).value || '').trim().toUpperCase();
     const amount = parseFloat((document.getElementById('cand-amount') || {}).value) || 0;
     if (!ticker) { alert('Enter a ticker to add.'); return; }
     if (amount <= 0) { alert('Enter a dollar amount to add.'); return; }
-    _candQueue.push({ kind: 'stock', ticker, amount, theme: (document.getElementById('cand-theme') || {}).value || '', sleeve: (document.getElementById('cand-sleeve') || {}).value || '' });
+    _candPushOrReplace({ kind: 'stock', ticker, amount, theme: (document.getElementById('cand-theme') || {}).value || '', sleeve: (document.getElementById('cand-sleeve') || {}).value || '' });
     ['cand-ticker', 'cand-amount'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     const th = document.getElementById('cand-theme'); if (th) th.value = ''; const sl = document.getElementById('cand-sleeve'); if (sl) sl.value = '';
   } else if (_candMode === 'etf') {
@@ -15028,7 +15038,7 @@ function candAddToQueue() {
     const coverage = holdings.reduce((s, h) => s + h.weight, 0);
     const theme = (document.getElementById('cand-etf-theme') || {}).value || '';
     if (!holdings.length && !theme) { alert('Paste the ETF\'s holdings (ticker + %weight), or pick a "theme for the rest" so the opaque add can be bucketed. Otherwise it just lands in the diversified base.'); return; }
-    _candQueue.push({ kind: 'etf', ticker, amount, theme, sleeve: (document.getElementById('cand-etf-sleeve') || {}).value || '', holdings, coverage });
+    _candPushOrReplace({ kind: 'etf', ticker, amount, theme, sleeve: (document.getElementById('cand-etf-sleeve') || {}).value || '', holdings, coverage });
     ['cand-etf-ticker', 'cand-etf-amount', 'cand-etf-paste'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     const th = document.getElementById('cand-etf-theme'); if (th) th.value = ''; const sl = document.getElementById('cand-etf-sleeve'); if (sl) sl.value = '';
     const pv = document.getElementById('cand-etf-preview'); if (pv) pv.innerHTML = '';
@@ -15058,6 +15068,7 @@ function candAddToQueue() {
       if (_candQueue.length) candCompute(); else candClearScenario();
       saveCandQueue();
       candSyncCandidateAmounts(); // a staged-buy trim-down changes the buy amount — keep the candidate in step
+      _candEditIdx = null;
       return;
     }
     if (_candTrimUnit === 'usd') { const lots0 = lotId ? _candTickerLots(T).filter(p => String(p.id) === String(lotId)) : _candTickerLots(T); let hasPx = false; for (const p of lots0) { if ((parseFloat(p.exitPrice) || 0) > 0) { hasPx = true; break; } } if (!hasPx) { alert('No stored price for this lot — trim by % or shares instead.'); return; } }
@@ -15067,7 +15078,7 @@ function candAddToQueue() {
     const chosen = lotId ? lots.find(p => String(p.id) === String(lotId)) : null;
     const src = chosen || lots[0];
     const tax = _candResolveTrimTax(T, lotId, r.sh);
-    _candQueue.push({ kind: 'trim', ticker: T, shares: r.sh, totalSh: r.totalSh, proceeds: r.proceeds, lotId: lotId || null, lotLabel: chosen ? _candLotLabel(chosen) : '', sleeve: (src && src.sleeve) ? src.sleeve : '(unassigned)', theme: (src && src.theme) ? src.theme : '(unassigned)', tax });
+    _candPushOrReplace({ kind: 'trim', ticker: T, shares: r.sh, totalSh: r.totalSh, proceeds: r.proceeds, lotId: lotId || null, lotLabel: chosen ? _candLotLabel(chosen) : '', sleeve: (src && src.sleeve) ? src.sleeve : '(unassigned)', theme: (src && src.theme) ? src.theme : '(unassigned)', tax });
     const amt = document.getElementById('cand-trim-amt'); if (amt) amt.value = '';
     const lotSel = document.getElementById('cand-lot'); if (lotSel) lotSel.value = '';
   }
@@ -15099,6 +15110,7 @@ function candSyncCandidateAmounts() {
 }
 
 function candRemoveFromQueue(i) {
+  _candEditIdx = null;
   _candQueue.splice(i, 1);
   saveCandQueue();
   candRenderQueue();
@@ -15122,15 +15134,20 @@ function candEditQueueItem(i) {
   } else if (tr.kind === 'trim') {
     setVal('cand-holding', tr.ticker); candPopulateLots(); setVal('cand-lot', tr.lotId || ''); candSetTrimUnit('sh'); setVal('cand-trim-amt', Math.round((tr.shares || 0) * 1e6) / 1e6);
   }
-  _candQueue.splice(i, 1);
-  if (_candQueue.length) { saveCandQueue(); candRenderQueue(); candCompute(); }
-  else candClearScenario();
+  // Edit IN PLACE: the item stays in the queue (marked as editing); re-adding REPLACES this slot,
+  // never duplicates and never makes it disappear. Scroll the loaded form into view so it's obvious.
+  _candEditIdx = i;
+  candRenderQueue();
   candReadout();
+  const rowId = tr.kind === 'stock' ? 'cand-stock-row' : tr.kind === 'etf' ? 'cand-etf-row' : 'cand-trim-row';
+  const anchor = document.getElementById(rowId) || document.getElementById('theme-candidate-panel');
+  if (anchor && anchor.scrollIntoView) { try { anchor.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {} }
   const focusId = tr.kind === 'stock' ? 'cand-ticker' : tr.kind === 'etf' ? 'cand-etf-ticker' : 'cand-trim-amt';
   const fe = document.getElementById(focusId); if (fe) { try { fe.focus(); } catch (_) {} }
 }
 
 function candClearScenario() {
+  _candEditIdx = null;
   _candQueue = []; _candScenario = null; _candTempHoldings = {}; _candPerf = {};
   saveCandQueue();
   saveCandPerf();
@@ -15756,8 +15773,8 @@ function candRenderQueue() {
   el.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px"><span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Scenario (${_candQueue.length} move${_candQueue.length === 1 ? '' : 's'})</span>${refreshBtn}</div>` +
     totalsLine +
     _candMomentumSummary() +
-    _candQueue.map((tr, i) => `<div style="padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this ${tr.kind === 'trim' ? 'trim' : 'buy'} back into the form to edit it — replaces this staged item in place, no duplicate">edit</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
+    _candQueue.map((tr, i) => `<div style="padding:3px 8px;background:${i === _candEditIdx ? 'rgba(96,165,250,0.16)' : 'var(--color-background-tertiary)'};border-radius:var(--border-radius-md);margin-bottom:3px${i === _candEditIdx ? ';outline:1px solid var(--color-text-info)' : ''}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}${i === _candEditIdx ? ' <span style="color:var(--color-text-info);font-size:8px">· editing in form ↑</span>' : ''}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this ${tr.kind === 'trim' ? 'trim' : 'buy'} into the form to edit — it stays here and your re-add updates it in place (no duplicate, never disappears)">${i === _candEditIdx ? 'editing ↑' : 'edit'}</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
       ${_candPositionEffectHtml(tr)}
     </div>`).join('') +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">Recent performance via Polygon daily bars; * = under ~1Y of history. Informational — not a return forecast.</div>`;
@@ -19998,6 +20015,18 @@ function qrToggleCardInfo(id, ticker) {
   const slot = document.getElementById('qr-info-' + id);
   if (!slot) return;
   if (slot.dataset.open === '1') { slot.dataset.open = ''; slot.innerHTML = ''; return; }
+  slot.dataset.open = '1';
+  showTickerInfoInto(ticker, 'qr-info-' + id);
+}
+
+// Expanding a saved candidate card auto-shows its identity profile (name, sector/category, description,
+// research links, AI "where it lands") — same card as Discovery, for ETFs AND single stocks alike.
+// Fetches from Polygon only if uncached; collapsed cards cost nothing.
+function qrCardInfoOnToggle(id, ticker, det) {
+  if (!det || !det.open) return;
+  const slot = document.getElementById('qr-info-' + id);
+  if (!slot) return;
+  if (slot.dataset.open === '1' && slot.innerHTML.trim() !== '') return; // already populated
   slot.dataset.open = '1';
   showTickerInfoInto(ticker, 'qr-info-' + id);
 }
@@ -29096,6 +29125,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08q</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08r</div>
 </body>
 </html>
