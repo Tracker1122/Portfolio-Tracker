@@ -22177,7 +22177,7 @@ function renderEvaltradeRiskMirror() {
   if (!host) return;
   let r = null, restored = false;
   try {
-    if (window._riskReplay && typeof window._riskReplay.riskReviewReportHtml === 'function') r = window._riskReplay.riskReviewReportHtml();
+    if (window._riskReplay && typeof window._riskReplay.riskReviewReportHtml === 'function') r = window._riskReplay.riskReviewReportHtml({ noLadder: true });
   } catch (e) { r = null; }
   if (r && r.active && (r.eventHtml || r.hypoHtml)) {
     // Live state from Risk Review — render it AND persist a snapshot so it survives a page refresh.
@@ -22186,7 +22186,7 @@ function renderEvaltradeRiskMirror() {
     try {
       localStorage.setItem(EVALTRADE_RISK_MIRROR_KEY, JSON.stringify({
         windowId: r.windowId, windowLabel: r.windowLabel, dateRange: r.dateRange,
-        hasHypothetical: r.hasHypothetical, eventHtml: r.eventHtml, hypoHtml: r.hypoHtml, savedAt: Date.now()
+        hasHypothetical: r.hasHypothetical, eventHtml: r.eventHtml, hypoHtml: r.hypoHtml, summaryHtml: r.summaryHtml, savedAt: Date.now()
       }));
     } catch (e) { /* storage disabled/full — non-fatal; it just won't persist */ }
   } else {
@@ -22208,6 +22208,7 @@ function renderEvaltradeRiskMirror() {
   if (r.hasHypothetical && r.hypoHtml) {
     body += `<div style="font-size:10px;font-weight:600;color:var(--color-text-secondary);margin:12px 0 2px">With the staged trade folded in</div>` + r.hypoHtml;
   }
+  body += (r.summaryHtml || '');
   host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 5px">${note}</div>` + body;
 }
 
@@ -28621,7 +28622,7 @@ init();
       (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
       replaySummaryText(model) +
       pairedBetaLine(model) +
-      (ladder || chart) +
+      ((opts && opts.noLadder) ? '' : (ladder || chart)) +
       (model.compare
         ? renderCompareJunctionTable(model) + renderScenarioDiffText(model)
         : (model.junctions ? renderJunctionTable(model) :
@@ -28671,13 +28672,15 @@ init();
   }
   function renderSummaryTable() {
     var el = document.getElementById('risk-replay-summary');
-    if (!el) return;
+    if (el) el.innerHTML = summaryTableHtml();
+  }
+  function summaryTableHtml() {
     var keys = [];
     STRESS_WINDOWS.forEach(function (w) {
       if (_summaryRows[w.id]) keys.push(w.id);
       if (_summaryRows[w.id + '::hypo']) keys.push(w.id + '::hypo');
     });
-    if (!keys.length) { el.innerHTML = ''; return; }
+    if (!keys.length) return '';
     var header =
       '<tr style="font-size:9px;color:var(--color-text-tertiary)">' +
         '<th style="text-align:left;font-weight:600;padding:2px 6px 2px 0">Window</th>' +
@@ -28724,8 +28727,7 @@ init();
         '<td style="text-align:center;padding:3px 0 3px 6px">' + spark + '</td>' +
       '</tr>';
     }).join('');
-    el.innerHTML =
-      '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
+    return '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
       '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed \u2014 click a window button to add or refresh it, or click a row to bring its chart back up. A \u201c\u21b3 hypothetical\u201d row is the same window run on your active sleeve <em>plus</em> the staged scenario, so you can read the scenario\u2019s effect against the actual sleeve directly above it. \u201cvs Mkt\u201d = sleeve return minus VOO over the same window; blue path = VOO. \u201cRec\u201d = sleeve level vs its pre-event high at 6mo / 1Y / 2Y after the window low.</div>' +
       '<table style="border-collapse:collapse;width:100%;max-width:640px">' + header + rows + '</table>';
   }
@@ -29094,7 +29096,8 @@ init();
   // scenario card when one has been run for that window. Pure — reads cached models, renders, never
   // fetches. Returns {active:false} when no window has been opened. Card HTML uses var(--color-…)
   // throughout, so the exporters' light :root recolors it for white paper with no extra work.
-  function riskReviewReportHtml() {
+  function riskReviewReportHtml(opts) {
+    opts = opts || {};
     try {
       if (!_activeRowKey) return { active: false };
       var winId = _winIdOf(_activeRowKey);
@@ -29112,8 +29115,9 @@ init();
         dateRange: ref.dateRange || '',
         stresses: win ? (win.stresses || '') : '',
         hasHypothetical: !!hypoModel,
-        eventHtml: curModel ? renderReplayCard(curModel) : '',
-        hypoHtml: hypoModel ? renderReplayCard(hypoModel, { noBriefing: !!curModel, noTitle: !!curModel }) : '',
+        eventHtml: curModel ? renderReplayCard(curModel, { noLadder: opts.noLadder }) : '',
+        hypoHtml: hypoModel ? renderReplayCard(hypoModel, { noBriefing: !!curModel, noTitle: !!curModel, noLadder: opts.noLadder }) : '',
+        summaryHtml: summaryTableHtml(),
         themeMapHtml: (function () { try { return renderThemeFactorGrid(); } catch (e) { return ''; } })()
       };
     } catch (e) { return { active: false }; }
@@ -29124,6 +29128,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08v</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08w</div>
 </body>
 </html>
