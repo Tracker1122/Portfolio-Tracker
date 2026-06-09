@@ -5136,7 +5136,7 @@ let intelSortKey = 'truePct';  // default sort: true exposure descending (bigges
 let intelSortDir = 'desc';
 let intelOpenKey = null;        // which theme row is currently expanded (one at a time)
 let distOpenKey = null;         // which Top Holdings full-table row is currently expanded
-let priceMovesView = 'sinceLast'; // 'sinceLast' or 'allTime' — view toggle for the price-moves panel
+let priceMovesView = 'allTime'; // 'sinceLast' or 'allTime' — view toggle for the price-moves panel (opens to all-refreshes by request)
 // Sort state for the price-moves table. col = column key, dir = 'asc' | 'desc'.
 // Keys are deliberately stable across both tabs where possible (ticker, perShare, moveOnPosition,
 // pctChange); priceFrom / priceTo / bench / trend are tab-specific. When the user clicks a column
@@ -11943,6 +11943,16 @@ function fmtPmTs(iso) {
   } catch (e) { return iso; }
 }
 
+// Format the true market "as of" trading date from a ms epoch (Polygon /prev bar timestamp).
+// Rendered in US Eastern (market) time so the date reflects the trading day regardless of the
+// viewer's timezone. Returns e.g. "Fri, Jun 6"; '' when no usable timestamp is present.
+function fmtAsOfDate(ms) {
+  if (typeof ms !== 'number' || !(ms > 0)) return '';
+  try {
+    return new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' });
+  } catch (e) { return ''; }
+}
+
 // Tiny inline sparkline. Returns an SVG string. Renders flat-line if all same value.
 function pmSparkline(points, w, h) {
   if (!Array.isArray(points) || points.length < 2) return '';
@@ -12045,6 +12055,17 @@ function renderPriceMoves() {
       ' &nbsp;·&nbsp; <a href="javascript:void(0)" onclick="resetPriceHistory()" style="color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="Wipe history and re-seed from current prices">Reset</a>' +
     '</div>' +
   '</div>';
+
+  // ── "As of" line: the true market date the latest prices belong to (B3). Reads the
+  // as-of stamp captured at refresh; falls back gracefully for entries captured before this. ──
+  const _pmLast = priceHistory[priceHistory.length - 1];
+  const _pmAsOf = _pmLast ? fmtAsOfDate(_pmLast.asOf) : '';
+  const _pmPulled = _pmLast ? fmtPmTs(_pmLast.ts) : '';
+  const asOfStrip = '<div style="font-size:10px;color:var(--color-text-tertiary);margin:-4px 0 10px 0;line-height:1.4">' +
+    (_pmAsOf
+      ? 'Latest prices as of <b style="color:var(--color-text-secondary)">' + _pmAsOf + '</b> close &nbsp;\u00b7&nbsp; pulled ' + _pmPulled
+      : 'Latest prices pulled ' + _pmPulled + ' &nbsp;\u00b7&nbsp; <span style="font-style:italic">market date not captured yet \u2014 refresh again to start stamping it</span>') +
+    '</div>';
 
   // Helper for colored signed dollar
   const dColor = (v) => v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
@@ -12340,7 +12361,7 @@ function renderPriceMoves() {
       '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>' + '</details>';
   }
 
-  el.innerHTML = headerStrip + body;
+  el.innerHTML = headerStrip + asOfStrip + body;
 }
 
 function renderSleeveValueAdd() {
@@ -13001,7 +13022,7 @@ function _resolveBenchForRow(rowTicker) {
 // captured (don't pollute history with empty rows from a failed fetch). Enforces
 // MAX_PRICE_HISTORY rolling cap via FIFO eviction.
 // ─────────────────────────────────────────────
-function capturePriceHistoryPoint() {
+function capturePriceHistoryPoint(asOfMs) {
   try {
     const open = positions.filter(p => !p.closed && p.ticker);
     if (open.length === 0) return; // nothing to snapshot
@@ -13024,6 +13045,7 @@ function capturePriceHistoryPoint() {
     if (Object.keys(pricesByTicker).length === 0) return;
     const entry = {
       ts: new Date().toISOString(),
+      asOf: (typeof asOfMs === 'number' && asOfMs > 0) ? asOfMs : null,
       prices: pricesByTicker,
       shares: sharesByTicker,
       spxLive: (typeof spxLive === 'number' && isFinite(spxLive) && spxLive > 0) ? spxLive : null,
@@ -13077,9 +13099,13 @@ async function refreshAllPrices() {
     try {
       const res = await fetchWithTimeout(url, 8000);
       const data = await res.json();
-      if (data.results && data.results.length > 0) return { ticker, price: data.results[0].c };
-      return { ticker, price: null };
-    } catch(e) { return { ticker, price: null }; }
+      if (data.results && data.results.length > 0) {
+        const bar = data.results[0];
+        const asOfMs = (typeof bar.t === 'number' && bar.t > 0) ? bar.t : null;
+        return { ticker, price: bar.c, asOfMs };
+      }
+      return { ticker, price: null, asOfMs: null };
+    } catch(e) { return { ticker, price: null, asOfMs: null }; }
   }
 
   // Try fetching SPX from Yahoo Finance — best effort, falls through silently if blocked
@@ -13180,7 +13206,12 @@ async function refreshAllPrices() {
     status.textContent = 'Failed \u2014 check API key, network, or try again';
     status.style.color = 'var(--color-text-danger)';
   }
-  capturePriceHistoryPoint();
+  // Representative "as of" trading date for this refresh: the most recent bar timestamp
+  // across successful Polygon /prev results. All /prev bars from one refresh share a
+  // trading day; take the max defensively. Stays null if nothing usable came back.
+  let refreshAsOfMs = null;
+  results.forEach(r => { if (r && typeof r.asOfMs === 'number' && r.asOfMs > 0 && (refreshAsOfMs === null || r.asOfMs > refreshAsOfMs)) refreshAsOfMs = r.asOfMs; });
+  capturePriceHistoryPoint(refreshAsOfMs);
   renderAll(); scheduleSave();
   setTimeout(() => { if (status) { status.textContent = ''; status.style.color = ''; } }, 20000);
 }
@@ -28990,6 +29021,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08c</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08e</div>
 </body>
 </html>
