@@ -20997,6 +20997,7 @@ function themeResearchFacts(theme) {
 // numbered ALL-CAPS section headers → bold. Escapes first so model text can't inject markup.
 function trKey(theme) { return 'tr_' + String(theme).replace(/[^A-Za-z0-9]+/g, '_'); }
 let themeResearchExpanded = {}; // theme -> bool (which saved cards are open); empty = all collapsed
+let themeResearchAutoOpened = false; // open the most recently researched card once per session, on first render
 
 // Render AI text -> HTML. ORDER MATTERS: linkify every source URL FIRST (one pass, on escaped plain
 // text), THEN turn {SYM|stock|etf} tags into StockAnalysis links LAST. The earlier bug was the
@@ -21331,6 +21332,65 @@ function removeThemeNewsPass(theme, idx) {
   saveThemeResearch(); renderThemeResearch();
 }
 
+// On-demand DEEPER KEY-PLAYERS pass, mirror of the news deep-dive: the dossier's KEY PLAYERS & ETFS
+// section is capped short (so it misses names \u2014 most notably broad sector ETFs like XLU). This fires a
+// focused pass that hunts for the names the brief skipped, dedupes against the dossier + prior passes,
+// and appends them as their own block. Paid for only when the user asks.
+function buildThemePlayersPrompt(theme) {
+  const entry = themeResearch[theme] || {};
+  const dossier = entry.text || '';
+  const prior = (entry.playerPasses || []).map(function (pp) { return pp.text; }).join('\n');
+  const lines = [
+    'You are the markets analyst who wrote the dossier below for the "' + theme + '" theme. The investor wants a DEEPER pass on KEY PLAYERS & ETFS ONLY \u2014 additional notable names the dossier (and any prior players pass) did not already list. The dossier\'s KEY PLAYERS section was deliberately capped short, so it routinely misses names \u2014 most notably broad SECTOR or INDEX ETFs (for example a utilities sector ETF like XLU for a grid/utilities theme), thematic ETFs, and sizable operators outside the obvious megacap leaders.',
+    'Return ONLY an additional key-players list: up to ~10 names the brief omitted, ONE line each, each LEADING with the ticker wrapped as {TICKER|stock} or {TICKER|etf} then a short note on its role/relevance. No preamble, no other sections, no summary.',
+    'Deliberately cover the field the first pass skipped: the major SECTOR / INDEX / thematic ETFs that track this theme, sub-industry leaders, picks-and-shovels suppliers, and notable mid-caps \u2014 not just the megacaps everyone already knows.',
+    'Do NOT repeat any name already present in the dossier or prior passes below. If you genuinely cannot find a notable name that is not already listed, reply exactly: No additional key players beyond what is already captured.',
+    'Discipline: only name a ticker you are SURE is real \u2014 a wrong or mistyped ticker that 404s on StockAnalysis is worse than omitting it; wrap EVERY ticker as {TICKER|stock} or {TICKER|etf}; key players are largely evergreen, so lean on your own knowledge and tag interpretation [inference], using at most one or two web searches only to confirm a ticker or a fund\'s mandate; never invent a fund\'s holdings or mandate.',
+    '',
+    'DOSSIER (already covered \u2014 do not repeat its names): \u00ab' + dossier + '\u00bb'
+  ];
+  if (prior) lines.push('', 'PRIOR PLAYERS PASSES (also already covered \u2014 do not repeat): \u00ab' + prior + '\u00bb');
+  return lines.join('\n');
+}
+
+async function runThemePlayersDeepDive(theme) {
+  if (themeAskBusy || themeResearchBusy) return;
+  const entry = themeResearch[theme];
+  if (!entry) return;
+  const btn = document.getElementById(trKey(theme) + '_playersbtn');
+  const outId = trKey(theme) + '_players';
+  if (!aiWorkerUrl) loadAiWorkerUrl();
+  const render = function (html) { const o = document.getElementById(outId); if (o) o.innerHTML = html; };
+  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then retry.</div>'); return; }
+  themeAskBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Searching\u2026'; }
+  render('<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">Hunting for more key players \u0026 ETFs the brief missed\u2026</div>');
+  const prompt = buildThemePlayersPrompt(theme);
+  try {
+    let _last = 0;
+    const onDelta = function (t) { const now = Date.now(); if (now - _last < 60) return; _last = now; render('<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + esc(t) + '<span style="opacity:.45">\u258c</span></div>'); };
+    const r = await aiWorkerCall(prompt, onDelta, { web: true });
+    if (!themeResearch[theme].playerPasses) themeResearch[theme].playerPasses = [];
+    themeResearch[theme].playerPasses.push({ text: r.text, at: new Date().toISOString() });
+    saveThemeResearch();
+  } catch (err) {
+    themeAskBusy = false;
+    const info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed', color: 'var(--color-text-danger)' };
+    render('<div style="border:1px solid ' + info.color + ';border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:' + info.color + '"><strong>' + esc(info.title) + ':</strong> <span style="color:var(--color-text-secondary)">' + esc(info.detail) + '</span> \u2014 retry when ready.</div>');
+    if (btn) { btn.disabled = false; btn.textContent = 'Find more key players'; }
+    return;
+  }
+  themeAskBusy = false;
+  renderThemeResearch();
+}
+
+function removeThemePlayersPass(theme, idx) {
+  const entry = themeResearch[theme];
+  if (!entry || !entry.playerPasses || !entry.playerPasses[idx]) return;
+  entry.playerPasses.splice(idx, 1);
+  saveThemeResearch(); renderThemeResearch();
+}
+
 function themeResearchFactsLine(theme) {
   const f = themeResearchFacts(theme);
   const bits = [];
@@ -21446,12 +21506,33 @@ function themeResearchCard(theme) {
       + '<span style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-left:8px">A fresh web search for news beyond this brief \u2014 costs one web-search pass, and is deeper than the initial run because the whole search budget goes to news.</span>'
       + '</div>';
   }
+  let playersHtml = '';
+  if (entry && !isBusy) {
+    const ppasses = entry.playerPasses || [];
+    let ppHtml = '';
+    ppasses.forEach(function (pp, i) {
+      ppHtml += '<div style="margin-top:10px;border-top:1px dashed var(--color-border-tertiary);padding-top:8px">'
+        + '<div style="display:flex;gap:8px;align-items:center">'
+        +   '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#a78bfa">Additional key players</span>'
+        +   '<span style="font-size:8px;color:var(--color-text-tertiary)">' + esc(new Date(pp.at).toLocaleString()) + '</span>'
+        +   '<span onclick="event.stopPropagation();removeThemePlayersPass(\'' + escq(theme) + '\',' + i + ')" title="remove this players pass" style="cursor:pointer;color:var(--color-text-tertiary);font-size:10px;margin-left:auto">\u2715</span>'
+        + '</div>'
+        + '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-secondary);margin-top:4px">' + linkifyResearch(pp.text) + '</div>'
+        + '</div>';
+    });
+    const kp = trKey(theme);
+    playersHtml = ppHtml
+      + '<div style="margin-top:10px"><div id="' + kp + '_players"></div>'
+      + '<button id="' + kp + '_playersbtn" class="btn btn-sm" onclick="event.stopPropagation();runThemePlayersDeepDive(\'' + escq(theme) + '\')" style="font-size:10px">Find more key players</button>'
+      + '<span style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-left:8px">A fresh pass that hunts for notable names \u0026 ETFs the brief left out (e.g. broad sector ETFs like XLU) \u2014 costs one web-search pass.</span>'
+      + '</div>';
+  }
   let bodyInner = '';
   if (entry && !isBusy) {
     const _split = splitDossierAtClaims(entry.text);
     const _top = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(_split.before) + '</div>';
     const _claims = _split.after ? '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary);margin-top:2px">' + linkifyResearch(_split.after) + '</div>' : '';
-    bodyInner = truncBanner + _top + newsHtml + _claims + THEME_RESEARCH_DISCLAIMER + threadHtml;
+    bodyInner = truncBanner + _top + playersHtml + newsHtml + _claims + THEME_RESEARCH_DISCLAIMER + threadHtml;
   }
   let actions = '';
   if (!isBusy) {
@@ -21477,6 +21558,13 @@ function themeResearchCard(theme) {
 function renderThemeResearch() {
   const host = document.getElementById('theme-research-section');
   if (!host) return;
+  // First render of the session: land the user on their most recently researched card (newest `at`)
+  // expanded, instead of an all-collapsed list. Once-per-session, so a later manual collapse sticks.
+  if (!themeResearchAutoOpened) {
+    themeResearchAutoOpened = true;
+    const _recent = Object.keys(themeResearch).sort((a, b) => new Date(themeResearch[b].at) - new Date(themeResearch[a].at))[0];
+    if (_recent && !themeResearchSel) { themeResearchSel = _recent; themeResearchExpanded[_recent] = true; }
+  }
   const themeList = (typeof THEMES !== 'undefined') ? Object.keys(THEMES).filter(t => THEMES[t] && THEMES[t].inUniverse) : [];
   const sel = themeResearchSel;
   const chips = themeList.map(function (t) {
@@ -29128,6 +29216,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08x</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08y</div>
 </body>
 </html>
