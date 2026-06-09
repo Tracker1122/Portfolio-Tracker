@@ -8051,12 +8051,15 @@ function parseHoldings(text) {
   const seen = {};
 
   // Validate a candidate symbol as a clean, mappable US ticker. Rejects exchange-prefixed
-  // foreign listings whether glued (KRX: 000660) or split into a bare exchange code (TSX, ETR),
+  // foreign listings whether glued (KRX: 000660) or split into a bare exchange code (TSX, KRX),
   // foreign-exchange suffixes (FTC.L = London, .TO = Toronto), "n/a" swap markers, Treasury
   // codes, and anything with a space/colon/digit form. Accepts 1-5 all-caps letters with an
   // optional single US class suffix (BRK.B, FGXXX, SNDK, MU).
   // Known non-US exchange MICs/codes that appear as a symbol prefix on stockanalysis listings.
-  const EXCHANGE_CODES = new Set(['TSX','TSXV','ETR','FRA','KRX','TYO','TPE','LSE','HKG','SHA','SHE','SWX','EPA','BIT','BME','AMS','STO','CPH','HEL','OSL','ASX','NSE','BSE','SGX','TSE','JPX','MIL','VIE','WSE']);
+  // NOTE: 'ETR' (Frankfurt/Xetra) is deliberately NOT here — it collides with Entergy Corporation
+  // (NYSE: ETR), a real US holding. Genuine foreign formats like "ETR: BMW" are already caught by
+  // the colon/space guard below, so a bare "ETR" is treated as Entergy.
+  const EXCHANGE_CODES = new Set(['TSX','TSXV','FRA','KRX','TYO','TPE','LSE','HKG','SHA','SHE','SWX','EPA','BIT','BME','AMS','STO','CPH','HEL','OSL','ASX','NSE','BSE','SGX','TSE','JPX','MIL','VIE','WSE']);
   // Foreign single-letter/short exchange suffixes after a dot (London .L, Toronto .TO, etc.).
   const FOREIGN_SUFFIX = /\.(L|TO|V|HK|T|F|DE|PA|MI|AS|SW|ST|CO|HE|OL|AX|SI|KS|KQ|TW|TWO|SS|SZ|BO|NS)$/i;
   const isCleanTicker = (s) => {
@@ -8064,7 +8067,7 @@ function parseHoldings(text) {
     let t = s.trim().replace(/:$/, '');               // strip a trailing colon ("TSX:" → "TSX")
     if (/[:\s]/.test(t)) return false;                // still has a colon/space → exchange prefix or multi-word
     if (/^n\/?a$/i.test(t)) return false;             // "n/a"
-    if (EXCHANGE_CODES.has(t.toUpperCase())) return false; // bare exchange code (TSX, ETR, KRX…)
+    if (EXCHANGE_CODES.has(t.toUpperCase())) return false; // bare exchange code (TSX, KRX, FRA…)
     if (FOREIGN_SUFFIX.test(t)) return false;         // foreign-listing suffix (FTC.L, X.TO…)
     return /^[A-Z]{1,5}([.\-][A-Z]{1,2})?$/.test(t.toUpperCase()) && /[A-Z]/i.test(t);
   };
@@ -29125,6 +29128,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08r</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08s</div>
 </body>
 </html>
