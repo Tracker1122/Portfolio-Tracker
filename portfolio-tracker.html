@@ -22204,11 +22204,11 @@ function renderEvaltradeRiskMirror() {
   const note = restored
     ? 'Saved from your last stress test (Risk Review rebuilds its own state each session) — re-run via the stress-test button below to refresh it.'
     : 'Mirrored from Risk Review — to change the window, use the stress-test button below.';
-  let body = r.eventHtml || '';
+  let body = (r.summaryHtml || '');
+  body += r.eventHtml || '';
   if (r.hasHypothetical && r.hypoHtml) {
     body += `<div style="font-size:10px;font-weight:600;color:var(--color-text-secondary);margin:12px 0 2px">With the staged trade folded in</div>` + r.hypoHtml;
   }
-  body += (r.summaryHtml || '');
   host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 5px">${note}</div>` + body;
 }
 
@@ -29128,6 +29128,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08w</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08x</div>
 </body>
 </html>
