@@ -13196,19 +13196,11 @@ function capturePriceHistoryPoint(asOfMs) {
       const sameDay = haveDates ? (_asOfDayKey(asOf) === _asOfDayKey(last.asOf)) : false;
       const samePrices = !haveDates ? _pricesIdentical(pricesByTicker, last.prices) : false;
       if (sameDay || samePrices) {
-        const dayStr = asOf ? fmtAsOfDate(asOf) : (last.asOf ? fmtAsOfDate(last.asOf) : 'the same trading day');
-        const why = sameDay
-          ? 'These prices are from the same trading day (' + dayStr + ') as your last refresh — no new market close has printed since.'
-          : 'These prices look identical to your last refresh — no new market data appears to have printed.';
-        const ok = confirm(why + '\n\n' +
-          'Adding this as a new snapshot would create a comparison with zero movement and could push your last genuine baseline out of view.\n\n' +
-          'OK — update the existing snapshot in place (recommended; no new comparison point)\n' +
-          'Cancel — leave your snapshots untouched');
-        if (ok) {
-          priceHistory[priceHistory.length - 1] = buildEntry();
-          return 'replaced';
-        }
-        return 'skipped';
+        // Same trading day as the last snapshot (or identical prices) — no new close has printed. Silently
+        // update the last entry in place instead of prompting; appending would only create a zero-movement
+        // duplicate, and priceHistory now just backs the benchmark-alpha cache. (Confirm removed by request.)
+        priceHistory[priceHistory.length - 1] = buildEntry();
+        return 'replaced';
       }
     }
 
@@ -29101,6 +29093,25 @@ init();
     var el = document.getElementById('risk-replay-summary');
     if (el) el.innerHTML = summaryTableHtml();
   }
+  // Drop one window from the cross-window summary (and its hypothetical twin). Session-scoped, so this
+  // also clears it from the Evaluate-a-Trade risk mirror, which renders the same rows read-only.
+  function _removeSummaryRow(key) {
+    delete _summaryRows[key];
+    if (key.indexOf('::hypo') < 0) delete _summaryRows[key + '::hypo'];
+    if (_activeRowKey === key || (key.indexOf('::hypo') < 0 && _activeRowKey === key + '::hypo')) {
+      _activeRowKey = null;
+      var o = document.getElementById('risk-replay-out'); if (o) o.innerHTML = '';
+    }
+    renderSummaryTable();
+    _highlightActive();
+  }
+  function _clearSummary() {
+    _summaryRows = {};
+    _activeRowKey = null;
+    var o = document.getElementById('risk-replay-out'); if (o) o.innerHTML = '';
+    renderSummaryTable();
+    _highlightActive();
+  }
   function summaryTableHtml(noClickHint) {
     var keys = [];
     STRESS_WINDOWS.forEach(function (w) {
@@ -29117,6 +29128,7 @@ init();
         '<th style="text-align:right;font-weight:600;padding:2px 6px">Cov</th>' +
         '<th style="text-align:center;font-weight:600;padding:2px 6px">Rec 6m\u00b71y\u00b72y</th>' +
         '<th style="text-align:center;font-weight:600;padding:2px 0 2px 6px">Path</th>' +
+        (noClickHint ? '' : '<th style="padding:2px 0 2px 4px"></th>') +
       '</tr>';
     var rows = keys.map(function (key) {
       var entry = _summaryRows[key], m = entry.model, isHypo = (entry.variant === 'hypo'), has = m.hasData;
@@ -29152,9 +29164,10 @@ init();
         '<td style="text-align:right;padding:3px 6px;color:' + covColor + '">' + m.coveragePct.toFixed(0) + '%</td>' +
         '<td style="text-align:center;padding:3px 6px;font-size:9px;white-space:nowrap">' + recCell + '</td>' +
         '<td style="text-align:center;padding:3px 0 3px 6px">' + spark + '</td>' +
+        (noClickHint ? '' : '<td style="text-align:center;padding:3px 0 3px 4px"><span data-remove="' + key + '" title="Remove this window from the summary" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1">\u00d7</span></td>') +
       '</tr>';
     }).join('');
-    return '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
+    return '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary' + (noClickHint ? '' : ' <span data-clear-summary="1" title="Remove all windows from the summary" style="cursor:pointer;font-size:9px;font-weight:400;color:var(--color-text-info, #60a5fa);text-decoration:underline;margin-left:6px">clear</span>') + '</div>' +
       '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed' + (noClickHint ? '' : ' \u2014 click a window button to add or refresh it, or click a row to bring its chart back up') + '. A \u201c\u21b3 hypothetical\u201d row is the same window run on your active sleeve <em>plus</em> the staged scenario, so you can read the scenario\u2019s effect against the actual sleeve directly above it. \u201cvs Mkt\u201d = sleeve return minus VOO over the same window; blue path = VOO. \u201cRec\u201d = sleeve level vs its pre-event high at 6mo / 1Y / 2Y after the window low.</div>' +
       '<table style="border-collapse:collapse;width:100%;max-width:640px">' + header + rows + '</table>';
   }
@@ -29370,7 +29383,13 @@ init();
     var summaryEl = section.querySelector('#risk-replay-summary');
     // Click a summary row to bring that card back up (from cache, no re-fetch).
     summaryEl.addEventListener('click', function (e) {
-      var tr = e.target && e.target.closest ? e.target.closest('tr[data-show]') : null;
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var rm = t.closest('[data-remove]');
+      if (rm) { e.stopPropagation(); _removeSummaryRow(rm.getAttribute('data-remove')); return; }
+      var cl = t.closest('[data-clear-summary]');
+      if (cl) { e.stopPropagation(); _clearSummary(); return; }
+      var tr = t.closest('tr[data-show]');
       if (tr) _showCard(tr.getAttribute('data-show'));
     });
     var toggle = section.querySelector('#risk-hypo-toggle');
@@ -29555,6 +29574,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09j</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09k</div>
 </body>
 </html>
