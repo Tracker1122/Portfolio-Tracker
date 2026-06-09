@@ -3031,6 +3031,102 @@ function _livePxAge(ms) {
   return Math.round(s / 86400) + 'd ago';
 }
 
+// ── Shared data-freshness engine ────────────────────────────────────────────
+// One vocabulary for "how fresh is this number, really" across every surface. The
+// honest principle: lead with the DATA's OWN moment (quote time or bar date), never
+// our fetch clock, and add US market-session context so a viewer (esp. West-coast,
+// pre-open) can tell whether a newer print can even exist yet. Holidays are NOT
+// modeled \u2014 only weekends + regular hours \u2014 so session is ADVISORY; the data's own
+// date is the source of truth.
+function usMarketSession(nowMs) {
+  var dt = (typeof nowMs === 'number' && nowMs > 0) ? new Date(nowMs) : new Date();
+  var wd = '', h = 0, m = 0;
+  try {
+    var parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(dt);
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].type === 'weekday') wd = parts[i].value;
+      else if (parts[i].type === 'hour') h = parseInt(parts[i].value, 10);
+      else if (parts[i].type === 'minute') m = parseInt(parts[i].value, 10);
+    }
+  } catch (e) { return { state: 'unknown', phrase: '' }; }
+  if (h === 24) h = 0;
+  var mins = h * 60 + m;
+  var weekend = (wd === 'Sat' || wd === 'Sun');
+  var state = weekend ? 'weekend' : (mins < 570 ? 'pre' : (mins < 960 ? 'open' : 'post')); // 9:30 / 16:00 ET
+  var phrase = state === 'weekend' ? 'weekend \u00b7 markets closed'
+    : state === 'pre' ? 'pre-market \u00b7 opens 9:30a ET'
+    : state === 'open' ? 'market open'
+    : 'after close';
+  return { state: state, phrase: phrase, weekday: wd, etMins: mins };
+}
+// ET trading date "Fri Jun 6" from a ms epoch OR a 'YYYY-MM-DD' string.
+function _etDateLabel(v) {
+  try {
+    var dd;
+    if (typeof v === 'number') dd = new Date(v);
+    else if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) dd = new Date(v.slice(0, 10) + 'T12:00:00Z'); // noon UTC keeps the ET date stable
+    else return '';
+    if (isNaN(dd.getTime())) return '';
+    return dd.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' });
+  } catch (e) { return ''; }
+}
+function _etDayKey(ms) { try { return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); } catch (e) { return ''; } }
+function _localTimeLabel(ms) {
+  try {
+    var tt = new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    var zz = new Date(ms).toLocaleTimeString('en-US', { timeZoneName: 'short' });
+    var mz = zz.match(/[A-Z]{2,5}$/);
+    return tt + (mz ? ' ' + mz[0] : '');
+  } catch (e) { return ''; }
+}
+function _etTimeLabel(ms) { try { return new Date(ms).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) + ' ET'; } catch (e) { return ''; } }
+
+// The one freshness label. opts: { dataMs, source:'live'|'prev', barDate:'YYYY-MM-DD', now }
+// Returns { short, full, title }: a tight table cell takes .short; a header takes .full; .title is the
+// full "whole story" sentence for a tooltip.
+function freshnessLabel(opts) {
+  opts = opts || {};
+  var now = (typeof opts.now === 'number' && opts.now > 0) ? opts.now : Date.now();
+  var sess = usMarketSession(now);
+  var kind, moment, title, sp;
+
+  if (opts.barDate) {
+    var bd = _etDateLabel(opts.barDate);
+    var isToday = (String(opts.barDate).slice(0, 10) === _etDayKey(now));
+    kind = isToday ? "Today's close" : 'Latest close';
+    moment = bd;
+    sp = (!isToday && sess.state === 'open') ? "market open \u00b7 today's close not final yet" : sess.phrase;
+    title = (isToday ? "Today's finalized daily close" : 'Most recent finalized daily close') + (bd ? ' (' + bd + ')' : '') + '. ' +
+      (sess.state === 'open' ? (isToday ? 'Market is open; this is the prior close until today settles.' : "Market is open now \u2014 today's bar won't exist until after the close.")
+       : sess.state === 'pre' ? "US market is pre-open, so today's close doesn't exist yet."
+       : sess.state === 'post' ? 'US market has closed for the day.'
+       : 'Weekend \u2014 US markets are closed.');
+    return { short: kind + (moment ? ' \u00b7 ' + moment : ''), full: kind + (moment ? ' \u00b7 ' + moment : '') + ' \u00b7 ' + sp, title: title };
+  }
+
+  if (opts.source === 'prev') {
+    var pd = opts.dataMs ? _etDateLabel(opts.dataMs) : '';
+    title = 'Previous trading day\u2019s close' + (pd ? ' (' + pd + ')' : '') + ' \u2014 a fallback, not a live quote. ' +
+      (sess.state === 'open' ? 'Market is open now, so this is stale vs a live print.' : sess.state === 'pre' ? 'Market is pre-open.' : sess.state === 'post' ? 'Market has closed for the day.' : 'Weekend \u2014 markets closed.');
+    return { short: 'Prev close' + (pd ? ' \u00b7 ' + pd : ''), full: 'Prev close' + (pd ? ' \u00b7 ' + pd : '') + ' \u00b7 ' + sess.phrase, title: title };
+  }
+
+  if (opts.source === 'live' && opts.dataMs) {
+    if (sess.state === 'open') {
+      var lt = _localTimeLabel(opts.dataMs), et = _etTimeLabel(opts.dataMs);
+      title = 'Real-time quote at ' + (lt || '?') + (et ? ' (' + et + ')' : '') + '. US market is open.';
+      return { short: 'Live \u00b7 ' + lt, full: 'Live \u00b7 ' + lt + (et ? ' / ' + et : '') + ' \u00b7 market open', title: title };
+    }
+    var cd = _etDateLabel(opts.dataMs);
+    title = 'Most recent trade/close from the live feed' + (cd ? ' (' + cd + ')' : '') + '. ' +
+      (sess.state === 'pre' ? "US market is pre-open \u2014 no newer print today yet." : sess.state === 'post' ? 'US market has closed for the day.' : 'Weekend \u2014 markets closed.');
+    return { short: 'Last close' + (cd ? ' \u00b7 ' + cd : ''), full: 'Last close' + (cd ? ' \u00b7 ' + cd : '') + ' \u00b7 ' + sess.phrase, title: title };
+  }
+
+  var fm = opts.dataMs ? (_localTimeLabel(opts.dataMs) || _etDateLabel(opts.dataMs)) : '';
+  return { short: fm ? 'As of ' + fm : '', full: (fm ? 'As of ' + fm : '') + (sess.phrase ? ' \u00b7 ' + sess.phrase : ''), title: 'Data timestamp; source unspecified. ' + sess.phrase + '.' };
+}
+
 // "Live" table cell. Colored vs the snapshot "now" price only to show direction of drift since the
 // snapshot — not a performance judgment.
 function _livePxCell(ticker, snapshotNow) {
@@ -3039,9 +3135,10 @@ function _livePxCell(ticker, snapshotNow) {
   const col = (snapshotNow != null && c.price > snapshotNow) ? 'var(--color-text-success)'
             : (snapshotNow != null && c.price < snapshotNow) ? 'var(--color-text-danger)'
             : 'var(--color-text-primary)';
-  const tag = (c.source === 'prev' ? 'prev close · ' : '') + _livePxAge(c.fetchedAt);
-  return '<td style="padding:5px 8px;text-align:right;color:' + col + '">$' + c.price.toFixed(2) +
-    '<div style="font-size:9px;color:var(--color-text-tertiary)">' + tag + '</div></td>';
+  const _fl = freshnessLabel({ dataMs: c.marketTime, source: c.source, now: c.fetchedAt });
+  const _ft = (_fl.title || '') + ' \u00b7 fetched ' + _livePxAge(c.fetchedAt);
+  return '<td style="padding:5px 8px;text-align:right;color:' + col + '" title="' + esc(_ft) + '">$' + c.price.toFixed(2) +
+    '<div style="font-size:9px;color:var(--color-text-tertiary)">' + esc(_fl.short) + '</div></td>';
 }
 
 // Clickable ticker label for Price Moves rows (suffixHtml stays OUTSIDE the clickable span).
@@ -3072,7 +3169,7 @@ async function _livePxFetch(ticker) {
       const clean = T.replace('-', '.');
       const r = await fetch('https://api.polygon.io/v2/aggs/ticker/' + clean + '/prev?adjusted=true&apiKey=' + encodeURIComponent(polygonKey));
       const d = await r.json();
-      if (d.results && d.results.length) return { price: d.results[0].c, source: 'prev', marketTime: null, prevClose: null };
+      if (d.results && d.results.length) return { price: d.results[0].c, source: 'prev', marketTime: (typeof d.results[0].t === 'number' && d.results[0].t > 0) ? d.results[0].t : null, prevClose: null };
     } catch (e) { /* fall through to error */ }
   }
   throw new Error((typeof finnhubKey !== 'undefined' && finnhubKey)
@@ -3162,9 +3259,8 @@ function _livePxRenderBody(ticker, ctx) {
   const shares = ctx.shares, basis = ctx.basis, storedPx = ctx.storedPx, isVoo = ctx.isVoo, res = ctx.res;
   const benchT = ctx.benchT, isSelfBench = ctx.isSelfBench, benchRes = ctx.benchRes, benchErr = ctx.benchErr;
   const live = res.price;
-  const srcLabel = res.source === 'live'
-    ? 'Finnhub real-time' + (res.marketTime ? ' · as of ' + new Date(res.marketTime).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '')
-    : 'Polygon previous close (no live quote)';
+  const _flN = freshnessLabel({ dataMs: res.marketTime, source: res.source });
+  const srcLabel = (res.source === 'live' ? 'Finnhub' : 'Polygon') + ' \u00b7 ' + _flN.full;
   const dCol = (v) => v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
 
   let rows = '';
@@ -29216,6 +29312,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08y</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08z</div>
 </body>
 </html>
