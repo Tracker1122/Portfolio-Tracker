@@ -19504,6 +19504,46 @@ function pePdfBasisNote() {
 }
 
 // Render the full Theme Universe tab.
+// View state for the Theme universe table. When sortCol is null we show the curated top-5 gainers /
+// top-5 laggards by 1Y (mid-pack + not-yet-ranked themes hidden behind a toggle). Click any column
+// header and we flip to FULL mode: every theme sorted by that column. Sort UX mirrors the holdings
+// table (.sortable th + arrow indicator) for house consistency.
+let themeUniverseSort = { col: null, dir: 'desc' };
+let themeUniverseShowMiddle = false;
+
+function themeUniverseSetSort(col) {
+  if (themeUniverseSort.col === col) {
+    themeUniverseSort.dir = themeUniverseSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    themeUniverseSort.col = col;
+    themeUniverseSort.dir = (col === 'name' || col === 'ticker') ? 'asc' : 'desc'; // text A->Z, numbers high->low first
+  }
+  renderThemeUniverse();
+}
+function themeUniverseClearSort() { themeUniverseSort.col = null; renderThemeUniverse(); }
+function themeUniverseToggleMiddle() { themeUniverseShowMiddle = !themeUniverseShowMiddle; renderThemeUniverse(); }
+
+// Comparator for FULL-mode sorting. Numeric nulls always sink to the bottom regardless of direction
+// (an un-fetched return isn't "the worst", it's unknown). No-exposure counts as 0%.
+function tuCompare(col, dir) {
+  return function (a, b) {
+    if (col === 'name' || col === 'ticker') {
+      const c = String(a[col]).localeCompare(String(b[col]));
+      return dir === 'asc' ? c : -c;
+    }
+    let av, bv;
+    if (col === 'ytd') { av = a.returns.ytd; bv = b.returns.ytd; }
+    else if (col === '1y') { av = a.returns['1y']; bv = b.returns['1y']; }
+    else if (col === 'exposure') { av = a.exposure.hasPositions ? a.exposure.percentOfActive : 0; bv = b.exposure.hasPositions ? b.exposure.percentOfActive : 0; }
+    const an = (av === null || av === undefined || isNaN(av));
+    const bn = (bv === null || bv === undefined || isNaN(bv));
+    if (an && bn) return 0;
+    if (an) return 1;
+    if (bn) return -1;
+    return dir === 'asc' ? av - bv : bv - av;
+  };
+}
+
 function renderThemeUniverse() {
   const el = document.getElementById('theme-universe-tab-content');
   if (!el) return;
@@ -19512,46 +19552,78 @@ function renderThemeUniverse() {
   const fmtRet = (n) => n === null ? '<span style="color:var(--color-text-tertiary)">—</span>' :
     `<span style="color:${n >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'}">${n >= 0 ? '+' : ''}${n.toFixed(1)}%</span>`;
 
-  // Cell shown for existing themes — we deliberately don't fetch historical anchors for them
-  // because their alpha math uses different price points (theme alpha vs your buy/sell dates,
-  // not arbitrary YTD/1Y/5Y/10Y windows). Show a non-alarming "—" with explanatory tooltip.
-  const notTrackedCell = `<span style="color:var(--color-text-tertiary);opacity:0.4" title="Historical windows not tracked for themes you currently own — your existing positions use position-specific theme alpha math instead. See Industry Reference / Industry Spotlight for those.">·</span>`;
-
-  // 5Y / 10Y cells permanently show "—" because Polygon free tier returns 403 for dates >2 years back.
-  // To enable, upgrade to Polygon Stocks Starter and re-add those windows to the backfill list.
-  const longWindowCell = `<span style="color:var(--color-text-tertiary);opacity:0.4" title="5Y and 10Y windows require Polygon Stocks Starter ($30/mo) — free tier rejects dates older than 2 years.">—</span>`;
-
   const _ltClusters = computeThemeClusters(); // one cluster pass; per-theme look-through read from it below
-  const rows = all.map(t => {
+
+  // One data object per theme; both row HTML and full-mode sorting read from these.
+  const tuData = all.map(t => {
     const isExisting = THEME_UNIVERSE.existing.some(e => e.name === t.name);
     const exposure = computeThemeExposureLookthrough(t.name, _ltClusters);
     const returns = computeThemeReturns(t.ticker);
+    return { name: t.name, ticker: t.ticker, isExisting, exposure, returns };
+  });
 
-    const exposureCell = exposure.hasPositions
-      ? `<span style="color:var(--color-text-secondary)">${fmtDollarWhole(exposure.dollars)}</span> <span style="color:var(--color-text-tertiary);font-size:9px">(${exposure.percentOfActive.toFixed(1)}%)</span>`
+  // YTD/1Y are BENCHMARK window returns (comparable across every row for screening) — NOT your
+  // entry-timed alpha. Owned themes show real benchmark returns too; until backfill runs for a
+  // ticker, returns.* is null and fmtRet shows an honest "—". 5Y/10Y dropped (free tier 403s >2yr).
+  const rowHtml = (dd) => {
+    const exposureCell = dd.exposure.hasPositions
+      ? `<span style="color:var(--color-text-secondary)">${fmtDollarWhole(dd.exposure.dollars)}</span> <span style="color:var(--color-text-tertiary);font-size:9px">(${dd.exposure.percentOfActive.toFixed(1)}%)</span>`
       : `<span style="color:var(--color-text-tertiary);font-style:italic">no exposure</span>`;
-
-    // YTD/1Y now show real BENCHMARK returns for owned themes too (not just unowned), so the
-    // performance column is comparable across every row for the diversification screen. These are
-    // benchmark-level window returns — NOT your entry-timed alpha; the column header says so. Until
-    // the user re-runs backfill for the newly-included owned tickers, returns.* is null and fmtRet
-    // shows "—" (honest "not fetched yet", not a hidden value). 5Y/10Y remain free-tier-limited for all.
-    const ytdCell = fmtRet(returns.ytd);
-    const oneyCell = fmtRet(returns['1y']);
-    const fiveyCell = longWindowCell;
-    const tenyCell = longWindowCell;
-
-    const rowOpacity = isExisting ? '' : 'background:var(--color-background-secondary);';
-    return `<tr style="${rowOpacity}">
-      <td><strong>${esc(t.name)}</strong></td>
-      <td><span style="font-size:10px;color:var(--color-text-tertiary)">${t.ticker}</span></td>
-      <td class="r">${ytdCell}</td>
-      <td class="r">${oneyCell}</td>
-      <td class="r">${fiveyCell}</td>
-      <td class="r">${tenyCell}</td>
+    const rowBg = dd.isExisting ? '' : 'background:var(--color-background-secondary);';
+    return `<tr style="${rowBg}">
+      <td><strong>${esc(dd.name)}</strong></td>
+      <td><span style="font-size:10px;color:var(--color-text-tertiary)">${dd.ticker}</span></td>
+      <td class="r">${fmtRet(dd.returns.ytd)}</td>
+      <td class="r">${fmtRet(dd.returns['1y'])}</td>
       <td class="r">${exposureCell}</td>
     </tr>`;
-  }).join('');
+  };
+
+  // Spanning rows (5 columns now: Theme, Benchmark, YTD, 1Y, Exposure).
+  const labelRow = (txt, color) => `<tr><td colspan="5" style="padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:${color};background:var(--color-background-primary);border-bottom:1px solid var(--color-border-tertiary)">${txt}</td></tr>`;
+
+  let tbody;
+  if (themeUniverseSort.col) {
+    // FULL mode — every theme, sorted by the clicked column.
+    tbody = tuData.slice().sort(tuCompare(themeUniverseSort.col, themeUniverseSort.dir)).map(rowHtml).join('');
+  } else {
+    // CURATED mode — top-5 gainers + top-5 laggards by 1Y; mid-pack + not-yet-ranked tucked behind
+    // a toggle. Nulls (no 1Y fetched) are never miscounted as "laggards".
+    const withData = tuData.filter(dd => dd.returns['1y'] !== null && dd.returns['1y'] !== undefined)
+      .sort((a, b) => b.returns['1y'] - a.returns['1y']);
+    const nullData = tuData.filter(dd => dd.returns['1y'] === null || dd.returns['1y'] === undefined);
+
+    if (withData.length === 0) {
+      // Nothing backfilled yet — show all rows by name with an honest prompt rather than empty groups.
+      const note = `<tr><td colspan="5" style="padding:6px 8px;font-size:10px;color:var(--color-text-tertiary)">No 1Y returns fetched yet — run <strong>Backfill Theme Universe</strong> to rank themes by performance. Showing all themes by name.</td></tr>`;
+      tbody = note + tuData.slice().sort((a, b) => a.name.localeCompare(b.name)).map(rowHtml).join('');
+    } else {
+      const gainers = withData.slice(0, 5);
+      const lagStart = Math.max(5, withData.length - 5); // guards against gainers/laggards overlap when <=10 ranked
+      const laggards = withData.slice(lagStart);
+      const middle = withData.slice(5, lagStart);
+      const rest = middle.concat(nullData);
+
+      const toggleRow = rest.length
+        ? `<tr><td colspan="5" style="padding:4px 8px;text-align:center;background:var(--color-background-primary)"><button class="btn btn-sm" style="font-size:10px;padding:3px 10px" onclick="themeUniverseToggleMiddle()">${themeUniverseShowMiddle ? '▴ Hide ' + rest.length + ' more' : '▾ Show ' + rest.length + ' more (mid-pack + not yet ranked)'}</button></td></tr>`
+        : '';
+
+      tbody =
+        labelRow('▲ Top gainers · best 1Y', 'var(--color-text-success)') +
+        gainers.map(rowHtml).join('') +
+        toggleRow +
+        (themeUniverseShowMiddle ? rest.map(rowHtml).join('') : '') +
+        (laggards.length
+          ? labelRow('▼ Top laggards · worst 1Y', 'var(--color-text-danger)') + laggards.map(rowHtml).join('')
+          : '');
+    }
+  }
+
+  const tuSortLabels = { name: 'Theme', ticker: 'Benchmark', ytd: 'YTD', '1y': '1Y', exposure: 'Your Exposure' };
+  const tuArrow = (col) => themeUniverseSort.col === col ? (themeUniverseSort.dir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
+  const tuCaption = themeUniverseSort.col
+    ? `Showing all ${tuData.length} themes sorted by ${tuSortLabels[themeUniverseSort.col]}${tuArrow(themeUniverseSort.col)}. <a href="#" onclick="themeUniverseClearSort();return false" style="color:#60a5fa;text-decoration:none">\u21bb back to gainers / laggards</a>`
+    : `Top 5 gainers &amp; top 5 laggards by 1Y. Click any column header to sort all ${tuData.length} themes.`;
 
   el.innerHTML = `
     <div id="theme-diversification-analysis" style="margin-bottom:18px"></div>
@@ -19562,7 +19634,7 @@ function renderThemeUniverse() {
       <strong style="color:var(--color-text-primary)">Awareness surface, not recommendation.</strong>
       Shows performance of theme benchmarks across windows alongside your current exposure. Helps surface "what you don't know you don't know" without prescribing action. Highlighted rows are themes you currently own; unhighlighted rows are theme universe additions for context.
       <div style="margin-top:6px;font-size:10px;color:var(--color-text-tertiary);line-height:1.5">YTD/1Y are the <strong>benchmark's</strong> window returns (e.g. QQQ's YTD) — <em>not</em> your own return, which depends on when you bought. They're here so every theme is comparable for screening, not to tell you how your positions did. For your entry-timed performance, see Industry Reference / Industry Spotlight.</div>
-      <div style="margin-top:4px;font-size:10px;color:var(--color-text-tertiary);font-style:italic">YTD and 1Y are populated via Polygon free tier. 5Y and 10Y require Polygon Stocks Starter ($30/mo) — free tier rejects dates older than 2 years.</div>
+      <div style="margin-top:4px;font-size:10px;color:var(--color-text-tertiary);font-style:italic">YTD and 1Y are populated via Polygon free tier. (5Y/10Y windows are no longer shown — the free tier rejects dates older than two years.)</div>
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
       <button class="btn btn-sm" onclick="backfillThemeUniverse()" style="font-size:10px;padding:5px 12px">⟳ Backfill Theme Universe</button>
@@ -19595,20 +19667,19 @@ function renderThemeUniverse() {
       })()}
     </div>
     <div id="benchmark-fees-editor" style="margin-bottom:14px"></div>
+    <div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:6px;line-height:1.5">${tuCaption}</div>
     <div class="rebal-table-wrap">
       <table class="rebal-table">
         <thead>
           <tr>
-            <th>Theme</th>
-            <th>Benchmark</th>
-            <th class="r">YTD</th>
-            <th class="r">1Y</th>
-            <th class="r">5Y</th>
-            <th class="r">10Y</th>
-            <th class="r" title="True (look-through) exposure: your direct positions PLUS everything you hold inside the funds you own (VOO core, theme ETFs, etc.), as % of your whole book. Reconciles to the same look-through truth as the concentration view and its diversified-base figure.">Your Exposure <span style="font-weight:400;font-size:9px;color:var(--color-text-tertiary)">(look-through)</span></th>
+            <th class="sortable" onclick="themeUniverseSetSort('name')">Theme${tuArrow('name')}</th>
+            <th class="sortable" onclick="themeUniverseSetSort('ticker')">Benchmark${tuArrow('ticker')}</th>
+            <th class="sortable r" onclick="themeUniverseSetSort('ytd')">YTD${tuArrow('ytd')}</th>
+            <th class="sortable r" onclick="themeUniverseSetSort('1y')">1Y${tuArrow('1y')}</th>
+            <th class="sortable r" onclick="themeUniverseSetSort('exposure')" title="True (look-through) exposure: your direct positions PLUS everything you hold inside the funds you own (VOO core, theme ETFs, etc.), as % of your whole book. Reconciles to the same look-through truth as the concentration view and its diversified-base figure.">Your Exposure <span style="font-weight:400;font-size:9px;color:var(--color-text-tertiary)">(look-through)</span>${tuArrow('exposure')}</th>
           </tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody>${tbody}</tbody>
       </table>
     </div>
     </details>
@@ -29574,6 +29645,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09k</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09l</div>
 </body>
 </html>
