@@ -12099,434 +12099,166 @@ function renderPmMovers(rows, moveKey, pctKey, n) {
   '</div>';
 }
 
+// ── Price movement over a date range (replaces the old refresh-snapshot panel). ──
+// "Book performance between two dates" = your CURRENT holdings priced at A vs B, price-only
+// (current shares × close change). On-demand daily closes via the Tiingo bars worker (deep
+// history; limited per name by its listing date). VOO fetched alongside for a benchmark line.
+let _pmRangeEnd = '';     // ISO end date ('' → today)
+let _pmRangeBase = '';    // ISO baseline date ('' → end − active window)
+let _pmRangeWin = '1M';   // active quick window, or 'custom'
+let _pmRangeBusy = false;
+let _pmRangeData = null;  // computed result for the current window
+const _pmBarsCache = {};  // 'TICKER|from|to' -> [{t,c}] (success) or {nodata:true}
+
+function _pmToday() { return new Date().toISOString().slice(0, 10); }
+function _pmShiftISO(endISO, win) {
+  const d2 = new Date(endISO + 'T00:00:00Z');
+  const y = d2.getUTCFullYear();
+  if (win === 'YTD') return y + '-01-01';
+  const months = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12, '2Y': 24 }[win];
+  if (months == null) return endISO;
+  const nd = new Date(Date.UTC(y, d2.getUTCMonth() - months, d2.getUTCDate()));
+  return nd.toISOString().slice(0, 10);
+}
+function _pmCloseAtOrBefore(bars, iso) {
+  const ms = new Date(iso + 'T23:59:59Z').getTime();
+  let best = null;
+  for (const b of bars) { if (b.t <= ms && (!best || b.t > best.t)) best = b; }
+  return best ? best.c : null;
+}
+async function _pmFetchBars(ticker, fromISO, toISO) {
+  const T = ticker.toUpperCase();
+  const key = T + '|' + fromISO + '|' + toISO;
+  const cached = _pmBarsCache[key];
+  if (cached) { if (cached.nodata) throw new Error('nodata'); return cached; }
+  if (!barsWorkerUrl && typeof loadBarsWorkerUrl === 'function') loadBarsWorkerUrl();
+  if (!barsWorkerUrl) throw new Error('noworker');
+  const url = barsWorkerUrl + '/bars?s=' + encodeURIComponent(T) + '&from=' + fromISO + '&to=' + toISO;
+  let res;
+  try { res = await fetch(url, { headers: { 'Accept': 'application/json' } }); }
+  catch (e) { throw new Error('net'); }
+  if (res.status === 429) throw new Error('rate');
+  if (!res.ok) throw new Error('err');
+  const data = await res.json();
+  if (!data.bars || !data.bars.length) { _pmBarsCache[key] = { nodata: true }; throw new Error('nodata'); }
+  _pmBarsCache[key] = data.bars;
+  return data.bars;
+}
+
+function pmSetWindow(win) {
+  const end = _pmRangeEnd || _pmToday();
+  _pmRangeEnd = end; _pmRangeWin = win; _pmRangeBase = _pmShiftISO(end, win);
+  _pmRunRange();
+}
+function pmSetDate(which, val) {
+  if (which === 'base') _pmRangeBase = val; else _pmRangeEnd = val;
+  _pmRangeWin = 'custom';
+  renderPriceMoves();
+}
+function pmGo() { _pmRunRange(); }
+
+async function _pmRunRange() {
+  if (_pmRangeBusy) return;
+  const end = _pmRangeEnd || _pmToday();
+  const base = _pmRangeBase || _pmShiftISO(end, _pmRangeWin === 'custom' ? '1M' : _pmRangeWin);
+  _pmRangeEnd = end; _pmRangeBase = base;
+  if (base >= end) { _pmRangeData = { error: 'The baseline date has to be before the end date.' }; renderPriceMoves(); return; }
+  const bookTk = {};
+  positions.filter(p => !p.closed && p.ticker).forEach(p => {
+    const t = (p.ticker || '').toUpperCase().trim(); const sh = parseFloat(p.shares) || 0;
+    if (t && sh > 0) bookTk[t] = (bookTk[t] || 0) + sh;
+  });
+  const tickers = Object.keys(bookTk);
+  if (!tickers.length) { _pmRangeData = { error: 'No open holdings to measure.' }; renderPriceMoves(); return; }
+  const fetchList = tickers.slice(); if (fetchList.indexOf('VOO') === -1) fetchList.push('VOO');
+  _pmRangeBusy = true; _pmRangeData = null; renderPriceMoves();
+  const rows = []; const excluded = []; let vooA = null, vooB = null;
+  let noworker = false, anyRate = false, anyNet = false, idx = 0;
+  for (const t of fetchList) {
+    if (idx++ > 0) await new Promise(r => setTimeout(r, 150)); // polite pacing; worker edge-caches a day
+    let bars = null;
+    try { bars = await _pmFetchBars(t, base, end); }
+    catch (err) {
+      const m = err.message;
+      if (m === 'noworker') { noworker = true; break; }
+      if (m === 'rate') anyRate = true;
+      else if (m === 'net') anyNet = true;
+    }
+    const cA = bars ? _pmCloseAtOrBefore(bars, base) : null;
+    const cB = bars ? _pmCloseAtOrBefore(bars, end) : null;
+    if (t === 'VOO') { vooA = cA; vooB = cB; if (tickers.indexOf('VOO') === -1) continue; }
+    const sh = bookTk[t]; if (sh == null) continue;
+    if (cA == null || cB == null) { excluded.push(t); continue; }
+    const moveOnPos = sh * (cB - cA);
+    rows.push({ ticker: t, shares: sh, cA, cB, pct: cA > 0 ? (cB - cA) / cA * 100 : null, moveOnPos, valA: sh * cA, valB: sh * cB });
+  }
+  if (noworker) { _pmRangeBusy = false; _pmRangeData = { error: 'noworker' }; renderPriceMoves(); return; }
+  const bookValA = rows.reduce((s, r) => s + r.valA, 0);
+  const bookValB = rows.reduce((s, r) => s + r.valB, 0);
+  const bookMove = bookValB - bookValA;
+  const bookPct = bookValA > 0 ? bookMove / bookValA * 100 : null;
+  const vooPct = (vooA != null && vooB != null && vooA > 0) ? (vooB - vooA) / vooA * 100 : null;
+  const vsVoo = (bookPct != null && vooPct != null) ? bookPct - vooPct : null;
+  rows.sort((a, b) => Math.abs(b.moveOnPos) - Math.abs(a.moveOnPos));
+  _pmRangeBusy = false;
+  _pmRangeData = { base, end, rows, excluded, bookMove, bookPct, vooPct, vsVoo, anyRate, anyNet, at: Date.now() };
+  renderPriceMoves();
+}
+
 function renderPriceMoves() {
-  const el = document.getElementById('price-moves-wrap');
-  if (!el) return;
+  const el = document.getElementById('price-moves-wrap'); if (!el) return;
+  const end = _pmRangeEnd || _pmToday();
+  const base = _pmRangeBase || _pmShiftISO(end, _pmRangeWin === 'custom' ? '1M' : _pmRangeWin);
+  const _pmUsd = (v) => (v == null || !isFinite(v)) ? '<span style="color:var(--color-text-tertiary)">—</span>'
+    : '<span style="color:' + (v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)') + '">' + (v >= 0 ? '+' : '−') + fmtDollarWhole(Math.abs(v)) + '</span>';
+  const _pmPct = (v) => (v == null || !isFinite(v)) ? '<span style="color:var(--color-text-tertiary)">—</span>'
+    : '<span style="color:' + (v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)') + '">' + (v >= 0 ? '+' : '') + v.toFixed(1) + '%</span>';
 
-  // Empty / not-enough-yet states
-  if (!Array.isArray(priceHistory) || priceHistory.length === 0) {
-    el.innerHTML = '<div style="padding:14px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:11px;color:var(--color-text-tertiary);line-height:1.5">' +
-      'No price history yet. Hit <b>Refresh Prices</b> on the home tab — each refresh captures a snapshot of prices. After your second refresh, this panel will show what moved between them.' +
-      '</div>';
-    return;
-  }
-  if (priceHistory.length === 1) {
-    el.innerHTML = '<div style="padding:14px;background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:11px;color:var(--color-text-tertiary);line-height:1.5">' +
-      'First snapshot captured ' + fmtPmTs(priceHistory[0].ts) + '. Hit <b>Refresh Prices</b> again to see what moved.' +
-      ' &nbsp;·&nbsp; <a href="javascript:void(0)" onclick="resetPriceHistory()" style="color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer">Reset</a>' +
-      '</div>';
-    return;
-  }
-
-  const result = computePriceMoves(priceHistory, positions);
-  if (!result.hasEnough) {
-    el.innerHTML = '<div style="padding:14px;font-size:11px;color:var(--color-text-tertiary)">Not enough data yet.</div>';
-    return;
-  }
-
-  // ── Build view-switcher buttons ──
-  const isSince = priceMovesView !== 'allTime';
-  const tabBtn = (label, active, onclick) => {
-    const bg = active ? 'var(--color-accent-blue)' : 'var(--color-background-tertiary)';
-    const fg = active ? '#fff' : 'var(--color-text-secondary)';
-    return '<button onclick="' + onclick + '" style="background:' + bg + ';color:' + fg +
-      ';border:1px solid var(--color-border-tertiary);padding:4px 12px;font-size:11px;border-radius:var(--border-radius-sm);cursor:pointer;font-weight:' +
-      (active ? '600' : '400') + '">' + label + '</button>';
-  };
-
-  // ── Header strip (always shown) ──
-  const histCount = priceHistory.length;
-  const capNote = histCount >= MAX_PRICE_HISTORY
-    ? ' · <span style="color:#fbbf24" title="At cap; oldest entries are being dropped">at cap</span>'
-    : '';
-  const headerStrip = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">' +
-    '<div style="display:flex;gap:6px">' +
-      tabBtn('Since last refresh', priceMovesView === 'sinceLast', "setPriceMovesView('sinceLast')") +
-      tabBtn('Across all refreshes', priceMovesView === 'allTime', "setPriceMovesView('allTime')") +
-      tabBtn('Compare two', priceMovesView === 'compare', "setPriceMovesView('compare')") +
-    '</div>' +
-    '<div style="font-size:10px;color:var(--color-text-tertiary)">' +
-      histCount + ' / ' + MAX_PRICE_HISTORY + ' refreshes captured' + capNote +
-      ' &nbsp;·&nbsp; <a href="javascript:void(0)" onclick="resetPriceHistory()" style="color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="Wipe history and re-seed from current prices">Reset</a>' +
-    '</div>' +
-  '</div>';
-
-  // ── "As of" line: the true market date the latest prices belong to (B3). Reads the
-  // as-of stamp captured at refresh; falls back gracefully for entries captured before this. ──
-  const _pmLast = priceHistory[priceHistory.length - 1];
-  const _pmAsOf = _pmLast ? fmtAsOfDate(_pmLast.asOf) : '';
-  const _pmPulled = _pmLast ? fmtPmTs(_pmLast.ts) : '';
-  const asOfStrip = '<div style="font-size:10px;color:var(--color-text-tertiary);margin:-4px 0 10px 0;line-height:1.4">' +
-    (_pmAsOf
-      ? 'Latest prices as of <b style="color:var(--color-text-secondary)">' + _pmAsOf + '</b> close &nbsp;\u00b7&nbsp; pulled ' + _pmPulled
-      : 'Latest prices pulled ' + _pmPulled + ' &nbsp;\u00b7&nbsp; <span style="font-style:italic">market date not captured yet \u2014 refresh again to start stamping it</span>') +
+  const wins = ['1M', '3M', '6M', 'YTD', '1Y', '2Y'];
+  const winBtn = (w) => '<button onclick="pmSetWindow(\'' + w + '\')" style="background:' + (_pmRangeWin === w ? 'var(--color-accent-blue)' : 'var(--color-background-tertiary)') + ';border:1px solid var(--color-border-tertiary);color:' + (_pmRangeWin === w ? '#fff' : 'var(--color-text-secondary)') + ';padding:3px 9px;font-size:11px;border-radius:var(--border-radius-sm);cursor:pointer;font-weight:600">' + w + '</button>';
+  const dInput = (which, val) => '<input type="date" value="' + esc(val) + '" max="' + esc(_pmToday()) + '" onchange="pmSetDate(\'' + which + '\', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:3px 6px">';
+  const controls = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--color-text-tertiary);margin-bottom:10px">' +
+    '<span>Baseline</span>' + dInput('base', base) +
+    '<span style="color:var(--color-text-secondary)">→</span>' +
+    '<span>End</span>' + dInput('end', end) +
+    '<button onclick="pmGo()"' + (_pmRangeBusy ? ' disabled' : '') + ' style="background:var(--color-accent-blue);border:none;color:#fff;padding:3px 14px;font-size:11px;border-radius:var(--border-radius-sm);cursor:' + (_pmRangeBusy ? 'default' : 'pointer') + ';font-weight:600">' + (_pmRangeBusy ? 'Pulling…' : 'Go') + '</button>' +
+    '<span style="margin-left:4px;color:var(--color-text-secondary)">Quick:</span>' + wins.map(winBtn).join('') +
     '</div>';
 
-  // Helper for colored signed dollar
-  const dColor = (v) => v > 0 ? 'var(--color-text-success)' : v < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
-  const pColor = dColor;
-
-  // Sortable header builder. Renders a <th> with click handler + arrow indicator when active.
-  // Unsorted columns show no arrow (avoids visual noise on every header) but still get the
-  // click cursor. The chevron uses ▲/▼ — small but unambiguous.
-  const sortableTh = (colKey, label, align, extraTitle) => {
-    const active = priceMovesSort.col === colKey;
-    const arrow = active ? (priceMovesSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
-    const activeStyle = active ? ';color:var(--color-text-primary);font-weight:600' : '';
-    const titleAttr = extraTitle ? ' title="' + esc(extraTitle) + '"' : '';
-    return '<th onclick="setPriceMovesSort(\'' + colKey + '\')" style="padding:4px 8px;text-align:' + align + ';cursor:pointer;user-select:none' + activeStyle + '"' + titleAttr + '>' + label + arrow + '</th>';
-  };
-
-  // ── Compare-two: resolve the chosen A/B snapshots and compute the custom window. ──
-  let cmpResult = null;
-  let cmpControls = '';
-  if (priceMovesView === 'compare') {
-    const sortedH = [...priceHistory].sort((a, b) => new Date(a.ts) - new Date(b.ts));
-    const findByTs = (ts) => sortedH.find(e => e.ts === ts) || null;
-    let eA = findByTs(priceMovesCmpA);
-    let eB = findByTs(priceMovesCmpB);
-    if (!eA) eA = sortedH[sortedH.length - 2]; // default baseline = second-to-last
-    if (!eB) eB = sortedH[sortedH.length - 1]; // default compare-to = latest
-    priceMovesCmpA = eA ? eA.ts : null;
-    priceMovesCmpB = eB ? eB.ts : null;
-    if (priceMovesCmpLive && eA) {
-      // Compare-to = LIVE: synthesize a "B" from the live cache, restricted to open-position
-      // tickers. computePriceMovesPair still uses shares held at the baseline (A).
-      const openTk = new Set(positions.filter(p => !p.closed && p.ticker).map(p => (p.ticker || '').toUpperCase().trim()));
-      const livePrices = {};
-      Object.keys(livePxCache).forEach(t => { if (openTk.has(t)) { const c = livePxCache[t]; if (c && c.price > 0) livePrices[t] = c.price; } });
-      const liveEntry = { ts: new Date().toISOString(), asOf: null, prices: livePrices, shares: {}, vooPrice: null, spxLive: null };
-      cmpResult = computePriceMovesPair(eA, liveEntry, positions);
-    } else if (eA && eB) {
-      cmpResult = computePriceMovesPair(eA, eB, positions);
-    }
-    const optLabel = (e) => {
-      const dd = fmtAsOfDate(e.asOf);
-      return dd ? (dd + ' · pulled ' + fmtPmTs(e.ts)) : ('pulled ' + fmtPmTs(e.ts));
-    };
-    const optionsFor = (selTs) => sortedH.map(e =>
-      '<option value="' + esc(e.ts) + '"' + (e.ts === selTs ? ' selected' : '') + '>' + esc(optLabel(e)) + '</option>'
-    ).join('');
-    const selStyle = 'background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:3px 6px';
-    const liveBtnLabel = _pmLiveBusy ? 'Fetching live…' : (priceMovesCmpLive ? '↻ Refresh live' : '→ Compare to live');
-    const liveBtnBg = priceMovesCmpLive ? 'var(--color-accent-blue)' : 'var(--color-background-tertiary)';
-    const liveBtnFg = priceMovesCmpLive ? '#fff' : 'var(--color-text-secondary)';
-    const liveBtn = '<button onclick="priceMovesFetchLive()"' + (_pmLiveBusy ? ' disabled' : '') + ' style="background:' + liveBtnBg + ';border:1px solid var(--color-border-tertiary);color:' + liveBtnFg + ';padding:3px 10px;font-size:11px;border-radius:var(--border-radius-sm);cursor:' + (_pmLiveBusy ? 'default' : 'pointer') + ';font-weight:600">' + liveBtnLabel + '</button>';
-    const bSelOpen = priceMovesCmpLive
-      ? '<select onchange="setPriceMovesCmp(\'B\', this.value)" title="Comparing to live — pick a snapshot to switch back" style="opacity:0.5;' + selStyle + '">'
-      : '<select onchange="setPriceMovesCmp(\'B\', this.value)" style="' + selStyle + '">';
-    cmpControls = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;font-size:11px;color:var(--color-text-tertiary)">' +
-      '<span>Baseline</span>' +
-      '<select onchange="setPriceMovesCmp(\'A\', this.value)" style="' + selStyle + '">' + optionsFor(priceMovesCmpA) + '</select>' +
-      '<span style="color:var(--color-text-secondary)">→</span>' +
-      '<span>Compare to</span>' +
-      bSelOpen + optionsFor(priceMovesCmpB) + '</select>' +
-      liveBtn +
-      '<span style="font-style:italic">· $ impact uses shares held at the baseline</span>' +
-    '</div>';
-    if (priceMovesCmpLive) {
-      const s = _pmLiveSummary;
-      let bTxt, bCol;
-      if (_pmLiveBusy) {
-        bTxt = 'Fetching live quotes for every open position…'; bCol = 'var(--color-text-tertiary)';
-      } else if (!s) {
-        bTxt = 'Comparing the baseline to cached live prices. Hit Refresh live to pull fresh quotes for every position.'; bCol = 'var(--color-text-tertiary)';
-      } else if (s.live === 0 && s.prev === 0) {
-        bTxt = '⚠ No live quote returned for any position' + (s.failed.length ? ' (' + s.failed.join(', ') + ')' : '') + '. Check your network or API key.'; bCol = '#fbbf24';
-      } else if (s.live === 0) {
-        bTxt = '⚠ Not live — every value is a previous close (no Finnhub key, or no real-time quote available). Add a key under the API Keys panel for real-time.'; bCol = '#fbbf24';
-      } else if (s.prev > 0 || s.failed.length) {
-        const bits = [s.live + ' real-time'];
-        if (s.prev > 0) bits.push(s.prev + ' previous-close (NOT live)');
-        if (s.failed.length) bits.push(s.failed.length + ' failed: ' + s.failed.join(', '));
-        bTxt = '⚠ Mixed as of ' + fmtPmTs(new Date(s.at).toISOString()) + ' — ' + bits.join(' · ') + '. Names without a real-time quote fell back to previous close.'; bCol = '#fbbf24';
-      } else {
-        bTxt = '✓ Live — all ' + s.live + ' quotes real-time as of ' + fmtPmTs(new Date(s.at).toISOString()) + '.'; bCol = 'var(--color-text-success)';
-      }
-      cmpControls += '<div style="font-size:10px;color:' + bCol + ';background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:6px 10px;margin-bottom:10px;line-height:1.4">' + bTxt + '</div>';
-    }
-  }
-
-  let body = '';
-
-  if (isSince) {
-    // ── SINCE LAST REFRESH (also renders the Compare-two custom window) ──
-    const sl = (priceMovesView === 'compare' && cmpResult) ? cmpResult : result.sinceLast;
-
-    // Resolve a row's bench ticker for sort-by-theme. "self"-benchmarked rows go to the
-    // bottom intentionally — they're a different category (no theme to group with), and the
-    // point of theme-sort is grouping rows that share a benchmark.
-    const _rowBenchTicker = (ticker) => {
-      const info = _resolveBenchForRow(ticker);
-      if (!info) return ''; // no benchmark configured
-      return info.isSelf ? '' : (info.benchTicker || '');
-    };
-
-    const rows = [...sl.rows].sort((a, b) => {
-      // NEW / MISSING sentinel rows always sink to the bottom regardless of sort, since their
-      // values are undefined for any column except ticker.
-      const aSentinel = (a.isNew || a.isMissing);
-      const bSentinel = (b.isNew || b.isMissing);
-      if (aSentinel !== bSentinel) return aSentinel ? 1 : -1;
-      if (aSentinel && bSentinel) return (a.ticker || '').localeCompare(b.ticker || '');
-
-      const col = priceMovesSort.col;
-      const dir = priceMovesSort.dir === 'asc' ? 1 : -1;
-      // Default (null col): biggest movers first by absolute $ move — matches prior behavior.
-      if (!col) {
-        return Math.abs(b.moveOnPosition || 0) - Math.abs(a.moveOnPosition || 0);
-      }
-      let av, bv, isStr = false;
-      switch (col) {
-        case 'ticker':   av = a.ticker || ''; bv = b.ticker || ''; isStr = true; break;
-        case 'pricePrev': av = a.pricePrev || 0; bv = b.pricePrev || 0; break;
-        case 'priceNow':  av = a.priceNow  || 0; bv = b.priceNow  || 0; break;
-        case 'perShare':  av = a.perShare  || 0; bv = b.perShare  || 0; break;
-        case 'moveOnPosition': av = a.moveOnPosition || 0; bv = b.moveOnPosition || 0; break;
-        case 'pctChange': av = a.pctChange || 0; bv = b.pctChange || 0; break;
-        case 'bench': {
-          // Sort by bench ticker (groups by theme). Empty (no-bench / self) sinks to bottom
-          // independent of direction — they're not part of any theme group.
-          const at = _rowBenchTicker(a.ticker), bt = _rowBenchTicker(b.ticker);
-          if (!at && bt) return 1;
-          if (at && !bt) return -1;
-          if (!at && !bt) return (a.ticker || '').localeCompare(b.ticker || '');
-          const cmp = at.localeCompare(bt);
-          if (cmp !== 0) return cmp * dir;
-          // Tie-break within a theme group: by abs $ move desc, so the biggest mover in each
-          // theme block is on top — readable when scanning a group.
-          return Math.abs(b.moveOnPosition || 0) - Math.abs(a.moveOnPosition || 0);
-        }
-        default:
-          return Math.abs(b.moveOnPosition || 0) - Math.abs(a.moveOnPosition || 0);
-      }
-      if (isStr) return av.localeCompare(bv) * dir;
-      return (av - bv) * dir;
-    });
-
-    // Short date labels for the "Price [date]" column headers. Full timestamp
-    // appears in the title tooltip on the th itself.
-    const _shortDate = (iso) => {
-      try {
-        const d = new Date(iso);
-        return d.toLocaleString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
-          String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
-      } catch (e) { return iso; }
-    };
-    const prevDateLbl = _shortDate(sl.tsPrev);
-    const nowDateLbl  = (priceMovesView === 'compare' && priceMovesCmpLive) ? 'live' : _shortDate(sl.tsNow);
-
-    // Build per-ticker rows (capped to the top PM_VISIBLE; the rest sit behind the toggle row)
-    const pmHidden = Math.max(0, rows.length - PM_VISIBLE);
-    const pmRows = rows; // full list now lives inside the collapsible (biggest-movers redesign)
-    const pmToggleRow = pmHidden > 0
-      ? '<tr><td colspan="8" style="padding:7px 8px;text-align:center;border-top:1px dashed var(--color-border-tertiary)"><a href="javascript:void(0)" onclick="togglePriceMovesShowAll()" style="font-size:10px;color:var(--color-text-info);cursor:pointer">' + (priceMovesShowAll ? '▴ Show top ' + PM_VISIBLE + ' only' : '▾ Show ' + pmHidden + ' more') + '</a></td></tr>'
-      : '';
-    const rowHtml = pmRows.map(r => {
-      if (r.isNew) {
-        return '<tr><td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker) + '</td>' +
-          '<td colspan="7" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">new this refresh — no prior price to compare</td></tr>';
-      }
-      if (r.isMissing) {
-        return '<tr><td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker) + '</td>' +
-          '<td colspan="7" style="padding:5px 8px;color:var(--color-text-tertiary);font-style:italic;font-size:10px">price not fetched this refresh</td></tr>';
-      }
-      const shTag = r.sharesChanged
-        ? ' <span style="color:var(--color-text-tertiary);font-size:9px">(' + (Math.round(r.sharesThen * 100) / 100) + ' sh then)</span>'
-        : '';
-
-      // Bench-alpha cell content
-      const benchInfo = _resolveBenchForRow(r.ticker);
-      let benchCell = '';
-      if (!benchInfo) {
-        benchCell = '<td style="padding:5px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px" title="No theme benchmark configured for this position">—</td>';
-      } else if (benchInfo.isSelf) {
-        benchCell = '<td style="padding:5px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px" title="This position IS its own theme benchmark, so α = 0 by construction">self (' + esc(benchInfo.benchTicker) + ')<br><span style="font-size:9px">α = 0</span></td>';
-      } else {
-        const ckey = _benchCacheKey(r.ticker, benchInfo.benchTicker, sl.tsPrev, sl.tsNow);
-        const cached = _benchCacheRead(benchInfo.benchTicker, sl.tsPrev, sl.tsNow);
-        if (!cached) {
-          benchCell = '<td style="padding:5px 8px;text-align:right">' +
-            '<button onclick="triggerBenchAlphaFetch(\'' + r.ticker + '\',\'' + benchInfo.benchTicker + '\',\'' + sl.tsPrev + '\',\'' + sl.tsNow + '\')" style="background:transparent;border:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);padding:2px 8px;font-size:10px;border-radius:3px;cursor:pointer" title="Fetch ' + esc(benchInfo.benchTicker) + ' close for the window — one API call">fetch vs ' + esc(benchInfo.benchTicker) + '</button>' +
-          '</td>';
-        } else if (cached.pending) {
-          benchCell = '<td style="padding:5px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px;font-style:italic">fetching ' + esc(cached.benchTicker) + '…</td>';
-        } else if (cached.error) {
-          benchCell = '<td style="padding:5px 8px;text-align:right;font-size:10px">' +
-            '<span style="color:var(--color-text-danger)">' + esc(cached.benchTicker) + ' — ' + esc(cached.error) + '</span><br>' +
-            '<a href="javascript:void(0)" onclick="retryBenchAlphaFetch(\'' + r.ticker + '\',\'' + benchInfo.benchTicker + '\',\'' + sl.tsPrev + '\',\'' + sl.tsNow + '\')" style="font-size:9px;color:var(--color-text-info);text-decoration:underline">retry</a>' +
-          '</td>';
-        } else {
-          // Success: bench %, alpha pp, bar dates
-          const alphaPp = r.pctChange - cached.benchPct;
-          const benchSign = cached.benchPct >= 0 ? '+' : '';
-          const alphaSign = alphaPp >= 0 ? '+' : '';
-          const aColor = alphaPp >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-          const benchColor = cached.benchPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
-          const bPrevD = cached.barPrevDate ? new Date(cached.barPrevDate).toLocaleDateString('en-US', {month:'numeric',day:'numeric'}) : '?';
-          const bNowD  = cached.barNowDate  ? new Date(cached.barNowDate).toLocaleDateString('en-US', {month:'numeric',day:'numeric'})  : '?';
-          const sourceTag = cached.fromHistory ? 'from your refresh history' : ('from Polygon daily close · bars ' + bPrevD + ' → ' + bNowD);
-          const tipText = esc(cached.benchTicker) + ': $' + cached.benchPrev.toFixed(2) + ' → $' + cached.benchNow.toFixed(2) + '\nyour window: ' + prevDateLbl + ' → ' + nowDateLbl + '\n' + sourceTag;
-          benchCell = '<td style="padding:5px 8px;text-align:right;font-size:10px" title="' + tipText + '">' +
-            '<div style="color:var(--color-text-secondary)">' + esc(cached.benchTicker) + ' <span style="color:' + benchColor + '">' + benchSign + cached.benchPct.toFixed(2) + '%</span></div>' +
-            '<div style="color:' + aColor + ';font-weight:600">α ' + alphaSign + alphaPp.toFixed(2) + 'pp</div>' +
-            '<div style="color:var(--color-text-tertiary);font-size:9px">bars ' + bPrevD + ' → ' + bNowD + '</div>' +
-          '</td>';
-        }
-      }
-
-      return '<tr>' +
-        '<td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker, shTag) + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">$' + r.pricePrev.toFixed(2) + '</td>' +
-        '<td style="padding:5px 8px;text-align:right">$' + r.priceNow.toFixed(2) + '</td>' +
-        _livePxCell(r.ticker, r.priceNow) +
-        '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.perShare) + '">' + (r.perShare >= 0 ? '+' : '') + '$' + Math.abs(r.perShare).toFixed(2) + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.moveOnPosition) + ';font-weight:600">' + (r.moveOnPosition >= 0 ? '+' : '−') + '$' + Math.abs(r.moveOnPosition).toFixed(2) + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:' + pColor(r.pctChange) + '">' + (r.pctChange >= 0 ? '+' : '') + r.pctChange.toFixed(2) + '%</td>' +
-        benchCell +
-      '</tr>';
-    }).join('');
-
-    const b = sl.book;
-    const bookRow = '<tr style="background:var(--color-background-secondary);border-top:1px solid var(--color-border-secondary)">' +
-      '<td style="padding:7px 8px;font-weight:700">Book total</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-secondary)">$' + b.bookThen.toFixed(2) + '</td>' +
-      '<td style="padding:7px 8px;text-align:right;font-weight:600">$' + b.bookNow.toFixed(2) + '</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(2) + '</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:' + pColor(b.bookPct) + ';font-weight:600">' + (b.bookPct !== null ? (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%' : '—') + '</td>' +
-      '<td style="padding:7px 8px"></td>' +
-    '</tr>';
-
-    const vooLine = (b.vooPct !== null)
-      ? '<span style="color:var(--color-text-tertiary)">VOO over the same window:</span> <span style="color:' + pColor(b.vooPct) + '">' + (b.vooPct >= 0 ? '+' : '') + b.vooPct.toFixed(2) + '%</span>'
-      : '<span style="color:var(--color-text-tertiary)">VOO % unavailable (need VOO price in both refreshes)</span>';
-    const vsVooLine = (b.vsVoo !== null)
-      ? '&nbsp;&nbsp;·&nbsp;&nbsp;<span style="color:var(--color-text-tertiary)">Book vs VOO:</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>'
-      : '';
-
-    const pmMoversHtml = renderPmMovers(rows, 'moveOnPosition', 'pctChange');
-    const pmBookLine = '<div style="font-size:11px;margin-bottom:8px"><span style="color:var(--color-text-tertiary)">' + (priceMovesView === 'compare' ? (priceMovesCmpLive ? 'Book: baseline → live:' : 'Book over selected window:') : 'Book since last refresh:') + '</span> ' + '<span style="color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(0) + '</span>' + (b.bookPct !== null ? ' <span style="color:' + pColor(b.bookPct) + '">(' + (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%)</span>' : '') + (b.vsVoo !== null ? ' &nbsp;·&nbsp; <span style="color:var(--color-text-tertiary)">vs VOO</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>' : '') + '</div>';
-    body = pmBookLine + pmMoversHtml +
-      '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;margin-bottom:8px;list-style:none">▸ Full table — all ' + rows.length + ' tickers</summary>' +
-      '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
-        '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
-          sortableTh('ticker', 'Ticker', 'left') +
-          sortableTh('pricePrev', 'Price ' + prevDateLbl, 'right', sl.tsPrev) +
-          sortableTh('priceNow', 'Price ' + nowDateLbl, 'right', sl.tsNow) +
-          '<th style="padding:4px 8px;text-align:right" title="Live price fetched on demand — tap a ticker. Does not change the snapshot columns.">Live</th>' +
-          sortableTh('perShare', 'Per-share Δ', 'right') +
-          sortableTh('moveOnPosition', '$ on your position', 'right') +
-          sortableTh('pctChange', 'Price % change', 'right', 'Per-share price change as a percent') +
-          sortableTh('bench', 'vs theme bench', 'right', 'Click to group rows by theme benchmark. Cells show fetched α — see button on each row. self-benchmarked rows sink to bottom.') +
-        '</tr></thead>' +
-        '<tbody>' + rowHtml + bookRow + '</tbody>' +
-      '</table>' +
-      '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>' + '</details>';
+  let body;
+  if (_pmRangeBusy) {
+    body = '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic">Pulling daily closes for your book (paced ~0.15s/name; cached after the first pull)…</div>';
+  } else if (!_pmRangeData) {
+    body = '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic">Pick a quick window or set the dates, then Go. Fetches daily closes on demand — back as far as each name has listed.</div>';
+  } else if (_pmRangeData.error === 'noworker') {
+    body = '<div style="font-size:11px;color:#fbbf24">No bars-worker URL is set. This card uses the same Tiingo daily-bars worker the Risk Lens uses — set it in Settings, then hit Go.</div>';
+  } else if (_pmRangeData.error) {
+    body = '<div style="font-size:11px;color:#fbbf24">' + esc(_pmRangeData.error) + '</div>';
   } else {
-    // ── ACROSS ALL REFRESHES ──
-    const at = result.allTime;
-
-    const rows = [...at.rows].sort((a, b) => {
-      const col = priceMovesSort.col;
-      const dir = priceMovesSort.dir === 'asc' ? 1 : -1;
-      if (!col) {
-        return Math.abs(b.moveOnCurrent || 0) - Math.abs(a.moveOnCurrent || 0);
-      }
-      let av, bv, isStr = false;
-      switch (col) {
-        // Note: column keys here map to allTime's row fields. Some keys overlap with sinceLast
-        // (ticker, perShare, pctChange) so toggling tabs preserves a sensible sort when possible.
-        // 'pricePrev' / 'priceNow' map to allTime's firstSeenPrice / latestPrice — same idea.
-        // 'moveOnPosition' (sinceLast) maps to 'moveOnCurrent' (allTime) — same conceptual column.
-        case 'ticker':   av = a.ticker || ''; bv = b.ticker || ''; isStr = true; break;
-        case 'pricePrev': av = a.firstSeenPrice || 0; bv = b.firstSeenPrice || 0; break;
-        case 'priceNow':  av = a.latestPrice    || 0; bv = b.latestPrice    || 0; break;
-        case 'perShare':  av = a.perShare       || 0; bv = b.perShare       || 0; break;
-        case 'moveOnPosition': av = a.moveOnCurrent || 0; bv = b.moveOnCurrent || 0; break;
-        case 'pctChange': av = a.pctChange      || 0; bv = b.pctChange      || 0; break;
-        // 'bench' and 'trend' don't apply to allTime — fall back to default for those.
-        default:
-          return Math.abs(b.moveOnCurrent || 0) - Math.abs(a.moveOnCurrent || 0);
-      }
-      if (isStr) return av.localeCompare(bv) * dir;
-      return (av - bv) * dir;
-    });
-
-    const disclosure = '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:8px;font-style:italic;line-height:1.5">' +
-      'Uses your <b>current share counts</b> against price history. Strips out buys, sells, and cash flows — this is price drift only, <b>not</b> realized gain or loss. ' +
-      'A "(N sh now)" tag appears when your current share count differs from when the ticker first showed up in this history.' +
-    '</div>';
-
-    const pmHidden = Math.max(0, rows.length - PM_VISIBLE);
-    const pmRows = rows; // full list now lives inside the collapsible (biggest-movers redesign)
-    const pmToggleRow = pmHidden > 0
-      ? '<tr><td colspan="8" style="padding:7px 8px;text-align:center;border-top:1px dashed var(--color-border-tertiary)"><a href="javascript:void(0)" onclick="togglePriceMovesShowAll()" style="font-size:10px;color:var(--color-text-info);cursor:pointer">' + (priceMovesShowAll ? '▴ Show top ' + PM_VISIBLE + ' only' : '▾ Show ' + pmHidden + ' more') + '</a></td></tr>'
+    const D = _pmRangeData;
+    const vooStr = D.vooPct != null
+      ? ', vs VOO ' + _pmPct(D.vooPct) + (D.vsVoo != null ? ' <span style="color:' + (D.vsVoo >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)') + '">(' + (D.vsVoo >= 0 ? 'beat by ' : 'lagged by ') + Math.abs(D.vsVoo).toFixed(1) + 'pp)</span>' : '')
       : '';
-    const rowHtml = pmRows.map(r => {
-      const dateStr = fmtPmTs(r.tsFirst);
-      const spark = pmSparkline(r.spark, 60, 18);
-      return '<tr>' +
-        '<td style="padding:5px 8px;font-weight:600">' + _livePxTickerLabel(r.ticker) + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:var(--color-text-secondary)">$' + r.priceFirst.toFixed(2) +
-          '<div style="font-size:9px;color:var(--color-text-tertiary)">' + dateStr + '</div></td>' +
-        '<td style="padding:5px 8px;text-align:right">$' + r.priceNow.toFixed(2) +
-          '<div style="font-size:9px;color:var(--color-text-tertiary)">' + (Math.round(r.sharesNow * 100) / 100) + ' sh now</div></td>' +
-        _livePxCell(r.ticker, r.priceNow) +
-        '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.perShare) + '">' + (r.perShare >= 0 ? '+' : '') + '$' + Math.abs(r.perShare).toFixed(2) + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:' + dColor(r.moveOnCurrent) + ';font-weight:600">' + (r.moveOnCurrent >= 0 ? '+' : '−') + '$' + Math.abs(r.moveOnCurrent).toFixed(2) + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:' + pColor(r.pctChange) + '">' + (r.pctChange >= 0 ? '+' : '') + r.pctChange.toFixed(2) + '%</td>' +
-        '<td style="padding:5px 8px;text-align:right">' + spark + '</td>' +
-      '</tr>';
-    }).join('');
-
-    const b = at.book;
-    const bookRow = '<tr style="background:var(--color-background-secondary);border-top:1px solid var(--color-border-secondary)">' +
-      '<td style="padding:7px 8px;font-weight:700">Book total</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:var(--color-text-tertiary);font-size:10px">—</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:' + dColor(b.moveDollar) + ';font-weight:700">' + (b.moveDollar >= 0 ? '+' : '−') + '$' + Math.abs(b.moveDollar).toFixed(2) + '</td>' +
-      '<td style="padding:7px 8px;text-align:right;color:' + pColor(b.bookPct) + ';font-weight:600">' + (b.bookPct !== null ? (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%' : '—') + '</td>' +
-      '<td style="padding:7px 8px"></td>' +
-    '</tr>';
-
-    const vooLine = (b.vooPct !== null)
-      ? '<span style="color:var(--color-text-tertiary)">VOO over window:</span> <span style="color:' + pColor(b.vooPct) + '">' + (b.vooPct >= 0 ? '+' : '') + b.vooPct.toFixed(2) + '%</span>'
-      : '<span style="color:var(--color-text-tertiary)">VOO % unavailable</span>';
-    const vsVooLine = (b.vsVoo !== null)
-      ? '&nbsp;&nbsp;·&nbsp;&nbsp;<span style="color:var(--color-text-tertiary)">Book vs VOO:</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>'
-      : '';
-
-    const tsLine = '<div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:6px">' +
-      'First refresh ' + fmtPmTs(at.tsFirst) + ' &nbsp;→&nbsp; latest ' + fmtPmTs(at.tsNow) +
-      ' &nbsp;·&nbsp; ' + at.refreshCount + ' refreshes' +
-    '</div>';
-
-    const pmMoversHtml = renderPmMovers(rows, 'moveOnCurrent', 'pctChange');
-    const pmBookLine = '<div style="font-size:11px;margin-bottom:8px"><span style="color:var(--color-text-tertiary)">Book across all refreshes:</span> ' + '<span style="color:' + dColor(b.moveDollar) + ';font-weight:700">' + (b.moveDollar >= 0 ? '+' : '−') + '$' + Math.abs(b.moveDollar).toFixed(0) + '</span>' + (b.bookPct !== null ? ' <span style="color:' + pColor(b.bookPct) + '">(' + (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%)</span>' : '') + (b.vsVoo !== null ? ' &nbsp;·&nbsp; <span style="color:var(--color-text-tertiary)">vs VOO</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>' : '') + '</div>';
-    body = tsLine + disclosure + pmBookLine + pmMoversHtml +
-      '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;margin-bottom:8px;list-style:none">▸ Full table — all ' + rows.length + ' tickers</summary>' +
-      '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
-        '<thead><tr style="border-bottom:1px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-size:10px">' +
-          sortableTh('ticker', 'Ticker', 'left') +
-          sortableTh('pricePrev', 'First-seen price', 'right') +
-          sortableTh('priceNow', 'Latest price', 'right') +
-          '<th style="padding:4px 8px;text-align:right" title="Live price fetched on demand — tap a ticker.">Live</th>' +
-          sortableTh('perShare', 'Per-share Δ', 'right') +
-          sortableTh('moveOnPosition', '$ on current position', 'right', 'Current shares × price change since first seen. Price drift only — not realized gain.') +
-          sortableTh('pctChange', 'Price % change', 'right', 'Per-share price change as a percent') +
-          // Trend (sparkline) is non-sortable — it's a per-row visualization, no scalar to sort by.
-          '<th style="padding:4px 8px;text-align:right">Trend</th>' +
-        '</tr></thead>' +
-        '<tbody>' + rowHtml + bookRow + '</tbody>' +
-      '</table>' +
-      '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>' + '</details>';
+    const headline = '<div style="font-size:12px;color:var(--color-text-primary);margin-bottom:6px">Over <b>' + esc(D.base) + ' → ' + esc(D.end) + '</b>, the value of your current holdings moved ' + _pmUsd(D.bookMove) + ' (' + _pmPct(D.bookPct) + ')' + vooStr + '.</div>';
+    const notes = [];
+    if (D.excluded.length) notes.push('No history back to ' + esc(D.base) + ' for ' + D.excluded.map(esc).join(', ') + ' — excluded from the book figure.');
+    if (D.anyRate) notes.push('Some names hit the worker rate limit (free tier ~50/hr); hit Go again shortly to backfill.');
+    if (D.anyNet) notes.push('A network/worker error skipped some names.');
+    const noteHtml = notes.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">' + notes.map(esc).join(' · ') + '</div>' : '';
+    const rowsHtml = D.rows.map(r =>
+      '<tr><td style="padding:2px 8px 2px 0;font-weight:600">' + esc(r.ticker) + '</td>' +
+      '<td style="padding:2px 8px;text-align:right">' + _pmPct(r.pct) + '</td>' +
+      '<td style="padding:2px 8px;text-align:right">' + _pmUsd(r.moveOnPos) + '</td>' +
+      '<td style="padding:2px 0 2px 8px;text-align:right;color:var(--color-text-tertiary)">$' + r.cA.toFixed(2) + ' → $' + r.cB.toFixed(2) + '</td></tr>'
+    ).join('');
+    const table = '<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:4px">' +
+      '<thead><tr style="color:var(--color-text-tertiary);text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em">' +
+      '<th style="text-align:left;padding-bottom:3px">Name</th><th style="padding-bottom:3px">%</th><th style="padding-bottom:3px">$ impact</th><th style="padding-bottom:3px">close A → B</th></tr></thead>' +
+      '<tbody>' + rowsHtml + '</tbody></table>';
+    body = headline + noteHtml + '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:2px">By name — current shares × the price change, ranked by dollar impact:</div>' + table;
   }
 
-  el.innerHTML = headerStrip + asOfStrip + cmpControls + body;
+  el.innerHTML = '<div style="padding:8px 11px;border-left:3px solid var(--color-accent-blue);background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">' + controls + body + '</div>';
 }
 
 function renderSleeveValueAdd() {
@@ -29313,6 +29045,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08m</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08n</div>
 </body>
 </html>
