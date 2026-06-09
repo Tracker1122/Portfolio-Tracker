@@ -21524,6 +21524,31 @@ function researchAgeColor(at) {
 // above the trailing CLAIMS TO VERIFY block. Splits at the CLAIMS header (backing up over a preceding
 // "---" separator). If no claims section is found (e.g. a truncated brief), `after` is '' and the
 // caller falls back to appending the button at the end.
+// Split the pre-claims dossier right AFTER the KEY PLAYERS & ETFS section (i.e. before the next
+// section header), so the "more key players" block sits with the players \u2014 not dangling after
+// CURRENT NEWS. If the section can't be located, `after` is '' and the caller falls back to placing
+// the block at the end of the body (same graceful fallback as the news block).
+function splitAfterKeyPlayers(text) {
+  if (!text) return { before: '', after: '' };
+  const lines = text.split('\n');
+  const isHeader = (s) => /^[ \t]*(?:#+[ \t]*|\*+[ \t]*)?(?:\d+\.[ \t]*)?[A-Z][A-Z0-9 &\/'\u2019\-]{3,}[ \t]*$/.test(s);
+  let kp = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^[ \t]*(?:#+[ \t]*|\*+[ \t]*)?(?:\d+\.[ \t]*)?KEY PLAYERS\b/i.test(lines[i])) { kp = i; break; }
+  }
+  if (kp < 0) return { before: text, after: '' };
+  let nh = -1;
+  for (let j = kp + 1; j < lines.length; j++) { if (isHeader(lines[j])) { nh = j; break; } }
+  if (nh < 0) return { before: text, after: '' };
+  let splitAt = nh, k = nh - 1;
+  while (k > kp && lines[k].trim() === '') k--;                 // skip blanks above the next header
+  if (k > kp && /^[ \t]*-{3,}[ \t]*$/.test(lines[k])) splitAt = k; // pull a "---" separator into `after`
+  return {
+    before: lines.slice(0, splitAt).join('\n').replace(/\s+$/, ''),
+    after: lines.slice(splitAt).join('\n').replace(/^\n+/, '')
+  };
+}
+
 function splitDossierAtClaims(text) {
   if (!text) return { before: '', after: '' };
   const lines = text.split('\n');
@@ -21626,9 +21651,11 @@ function themeResearchCard(theme) {
   let bodyInner = '';
   if (entry && !isBusy) {
     const _split = splitDossierAtClaims(entry.text);
-    const _top = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(_split.before) + '</div>';
+    const _kp = splitAfterKeyPlayers(_split.before);
+    const _topA = '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary)">' + linkifyResearch(_kp.before) + '</div>';
+    const _topB = _kp.after ? '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary);margin-top:2px">' + linkifyResearch(_kp.after) + '</div>' : '';
     const _claims = _split.after ? '<div style="white-space:pre-wrap;font-size:11px;line-height:1.6;color:var(--color-text-primary);margin-top:2px">' + linkifyResearch(_split.after) + '</div>' : '';
-    bodyInner = truncBanner + _top + playersHtml + newsHtml + _claims + THEME_RESEARCH_DISCLAIMER + threadHtml;
+    bodyInner = truncBanner + _topA + playersHtml + _topB + newsHtml + _claims + THEME_RESEARCH_DISCLAIMER + threadHtml;
   }
   let actions = '';
   if (!isBusy) {
@@ -22361,7 +22388,7 @@ function renderEvaltradeRiskMirror() {
   if (!host) return;
   let r = null, restored = false;
   try {
-    if (window._riskReplay && typeof window._riskReplay.riskReviewReportHtml === 'function') r = window._riskReplay.riskReviewReportHtml({ noLadder: true });
+    if (window._riskReplay && typeof window._riskReplay.riskReviewReportHtml === 'function') r = window._riskReplay.riskReviewReportHtml({ noLadder: true, summaryInline: true });
   } catch (e) { r = null; }
   if (r && r.active && (r.eventHtml || r.hypoHtml)) {
     // Live state from Risk Review — render it AND persist a snapshot so it survives a page refresh.
@@ -22388,8 +22415,7 @@ function renderEvaltradeRiskMirror() {
   const note = restored
     ? 'Saved from your last stress test (Risk Review rebuilds its own state each session) — re-run via the stress-test button below to refresh it.'
     : 'Mirrored from Risk Review — to change the window, use the stress-test button below.';
-  let body = (r.summaryHtml || '');
-  body += r.eventHtml || '';
+  let body = r.eventHtml || '';
   if (r.hasHypothetical && r.hypoHtml) {
     body += `<div style="font-size:10px;font-weight:600;color:var(--color-text-secondary);margin:12px 0 2px">With the staged trade folded in</div>` + r.hypoHtml;
   }
@@ -28803,6 +28829,7 @@ init();
         (model.dateRange ? '<span style="font-size:10px;color:var(--color-text-tertiary)">' + model.dateRange + '</span>' : '') +
       '</div>') +
       briefing +
+      ((opts && opts.injectAfterBriefing) ? opts.injectAfterBriefing : '') +
       (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
       replaySummaryText(model) +
       pairedBetaLine(model) +
@@ -29299,7 +29326,7 @@ init();
         dateRange: ref.dateRange || '',
         stresses: win ? (win.stresses || '') : '',
         hasHypothetical: !!hypoModel,
-        eventHtml: curModel ? renderReplayCard(curModel, { noLadder: opts.noLadder }) : '',
+        eventHtml: curModel ? renderReplayCard(curModel, { noLadder: opts.noLadder, injectAfterBriefing: (opts.summaryInline ? summaryTableHtml() : '') }) : '',
         hypoHtml: hypoModel ? renderReplayCard(hypoModel, { noBriefing: !!curModel, noTitle: !!curModel, noLadder: opts.noLadder }) : '',
         summaryHtml: summaryTableHtml(),
         themeMapHtml: (function () { try { return renderThemeFactorGrid(); } catch (e) { return ''; } })()
@@ -29312,6 +29339,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08z</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09a</div>
 </body>
 </html>
