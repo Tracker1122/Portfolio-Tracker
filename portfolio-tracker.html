@@ -15402,7 +15402,7 @@ function qrBuyDualBasisPdfBlock(c, parsed, esc2) {
 function riskReviewPdfSection(cleanFn, esc2) {
   try {
     if (!(typeof window !== 'undefined' && window._riskReplay && typeof window._riskReplay.riskReviewReportHtml === 'function')) return '';
-    const r = window._riskReplay.riskReviewReportHtml();
+    const r = window._riskReplay.riskReviewReportHtml({ noLadder: true, summaryInline: true });
     if (!r || !r.active) {
       return '<p class="note">No stress window was open in Risk Review when this was exported. Open one in the Risk &amp; Stress Lens (and tick \u201cfold in staged scenario\u201d if you want the hypothetical), then re-export to include the chart(s) here.</p>';
     }
@@ -28919,7 +28919,7 @@ init();
     var el = document.getElementById('risk-replay-summary');
     if (el) el.innerHTML = summaryTableHtml();
   }
-  function summaryTableHtml() {
+  function summaryTableHtml(noClickHint) {
     var keys = [];
     STRESS_WINDOWS.forEach(function (w) {
       if (_summaryRows[w.id]) keys.push(w.id);
@@ -28973,7 +28973,7 @@ init();
       '</tr>';
     }).join('');
     return '<div style="font-size:11px;font-weight:700;color:var(--color-text-primary, #eee);margin:10px 0 3px">Cross-window summary</div>' +
-      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed \u2014 click a window button to add or refresh it, or click a row to bring its chart back up. A \u201c\u21b3 hypothetical\u201d row is the same window run on your active sleeve <em>plus</em> the staged scenario, so you can read the scenario\u2019s effect against the actual sleeve directly above it. \u201cvs Mkt\u201d = sleeve return minus VOO over the same window; blue path = VOO. \u201cRec\u201d = sleeve level vs its pre-event high at 6mo / 1Y / 2Y after the window low.</div>' +
+      '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px;line-height:1.4">One row per window you\u2019ve replayed' + (noClickHint ? '' : ' \u2014 click a window button to add or refresh it, or click a row to bring its chart back up') + '. A \u201c\u21b3 hypothetical\u201d row is the same window run on your active sleeve <em>plus</em> the staged scenario, so you can read the scenario\u2019s effect against the actual sleeve directly above it. \u201cvs Mkt\u201d = sleeve return minus VOO over the same window; blue path = VOO. \u201cRec\u201d = sleeve level vs its pre-event high at 6mo / 1Y / 2Y after the window low.</div>' +
       '<table style="border-collapse:collapse;width:100%;max-width:640px">' + header + rows + '</table>';
   }
 
@@ -29360,7 +29360,7 @@ init();
         dateRange: ref.dateRange || '',
         stresses: win ? (win.stresses || '') : '',
         hasHypothetical: !!hypoModel,
-        eventHtml: curModel ? renderReplayCard(curModel, { noLadder: opts.noLadder, injectAfterBriefing: (opts.summaryInline ? summaryTableHtml() : '') }) : '',
+        eventHtml: curModel ? renderReplayCard(curModel, { noLadder: opts.noLadder, injectAfterBriefing: (opts.summaryInline ? summaryTableHtml(true) : '') }) : '',
         hypoHtml: hypoModel ? renderReplayCard(hypoModel, { noBriefing: !!curModel, noTitle: !!curModel, noLadder: opts.noLadder }) : '',
         summaryHtml: summaryTableHtml(),
         themeMapHtml: (function () { try { return renderThemeFactorGrid(); } catch (e) { return ''; } })()
@@ -29373,6 +29373,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09b</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09d</div>
 </body>
 </html>
