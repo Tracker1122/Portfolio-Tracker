@@ -992,14 +992,17 @@
   <span class="spx-manual-hint">↑ update daily — feeds all open positions</span>
   <a class="spx-link" href="https://multpl.com/s-p-500-historical-prices/table/by-month" target="_blank" rel="noopener">↗ Historical S&P (multpl.com)</a>
   <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
-    <button id="refresh-prices-btn" class="btn btn-sm btn-primary" onclick="refreshAllPrices()" style="font-size:10px;padding:4px 12px">⟳ Refresh Prices</button>
-    <span id="refresh-prices-stale" style="font-size:9px;color:var(--color-text-tertiary)"></span>
-    <button id="get-benchmarks-btn" class="btn btn-sm" onclick="getBenchmarkPrices()" style="font-size:10px;padding:4px 12px" title="Fetches benchmark ETF prices (QQQ, SMH, CIBR, XLF, XLE, GLD, XLY, ITA, SPHQ) — needed for snapshots and benchmark display">⟳ Get Benchmarks</button>
-    <span id="get-benchmarks-stale" style="font-size:9px;color:var(--color-text-tertiary)"></span>
+    <button id="update-closes-btn" class="btn btn-sm btn-primary" onclick="updateMarketCloses()" style="font-size:10px;padding:4px 12px" title="Pulls the latest daily CLOSING prices for your holdings AND every benchmark ETF in a single market-wide call (Polygon grouped-daily, with per-ticker fallback). Previous-close data — not a live quote.">⟳ Update Prices &amp; Benchmarks</button>
+    <span id="market-closes-stale" style="font-size:9px;color:var(--color-text-tertiary)"></span>
+    <span id="update-closes-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
     <button id="backfill-btn" class="btn btn-sm" onclick="backfillThemeBenchmarks()" style="font-size:10px;padding:4px 12px" title="One-time historical fetch of benchmark prices on each position's buy/sell dates. Enables theme-relative alpha math.">⟳ Backfill Theme Benchmarks</button>
-    <span id="refresh-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
-    <span id="benchmark-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
     <span id="backfill-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
+    <button id="refresh-prices-btn" onclick="refreshAllPrices()" style="display:none"></button>
+    <span id="refresh-prices-stale" style="display:none"></span>
+    <span id="refresh-status" style="display:none"></span>
+    <button id="get-benchmarks-btn" onclick="getBenchmarkPrices()" style="display:none"></button>
+    <span id="get-benchmarks-stale" style="display:none"></span>
+    <span id="benchmark-status" style="display:none"></span>
     <span id="polygon-key-toggle" style="font-size:10px;color:var(--color-text-secondary);cursor:pointer;text-decoration:underline" onclick="togglePolygonKey()">🔑 API Keys</span>
   </div>
 </div>
@@ -5859,7 +5862,19 @@ async function getBenchmarkPrices() {
     return out;
   }
 
-  let results = await runBatches(tickers, false);
+  const _grp = await _fetchGroupedCloses();
+  let results = [];
+  let _toFetch = tickers;
+  if (_grp && _grp.map) {
+    const _gdMs = Date.parse(_grp.date + 'T00:00:00Z');
+    _toFetch = [];
+    tickers.forEach(t => {
+      const _hit = _grp.map[t.replace('-', '.')] || _grp.map[t];
+      if (_hit && _hit.c != null) results.push({ ticker: t, price: _hit.c, asOfMs: _gdMs });
+      else _toFetch.push(t);
+    });
+  }
+  if (_toFetch.length) results = results.concat(await runBatches(_toFetch, false));
   const failedFirst = results.filter(r => !r.price).map(r => r.ticker);
   if (failedFirst.length > 0) {
     status.textContent = `${results.length - failedFirst.length}/${tickers.length} done · waiting ${waitMs/1000}s before retrying ${failedFirst.length}…`;
@@ -6763,6 +6778,7 @@ function renderStaleTags() {
     el.title = 'Yahoo S&P 500 level, fetched ' + (ago || 'recently') + ' \u2014 a live snapshot during market hours, the last close otherwise.';
   };
 
+  setTag('market-closes-stale', mostRecentPosFetch || benchmarkPricesDate, 'Never', 'prevclose', refreshPricesAsOfMs || benchmarkAsOfMs);
   setTag('refresh-prices-stale', mostRecentPosFetch, 'Never', 'prevclose', refreshPricesAsOfMs);
   setTag('get-benchmarks-stale', benchmarkPricesDate, 'Never', 'prevclose', benchmarkAsOfMs);
   setTag('spx-stale', spxLiveDate, 'Manual entry', 'quote');
@@ -6809,7 +6825,7 @@ function renderStaleBanner() {
       <div style="font-weight:700;margin-bottom:2px">Stale position prices — alpha numbers may be unreliable</div>
       <div style="font-size:10px;color:var(--color-text-secondary)">${allStale.length} position${allStale.length>1?'s':''} (${esc(sample)}${moreStr}) ${noStamp.length === allStale.length ? 'have never been refreshed' : 'are older than the latest benchmark fetch'}.</div>
     </div>
-    <button class="btn btn-sm btn-primary" onclick="refreshAllPrices()" style="font-size:10px">⟳ Refresh Prices</button>
+    <button class="btn btn-sm btn-primary" onclick="updateMarketCloses()" style="font-size:10px">⟳ Update Prices &amp; Benchmarks</button>
   `;
 }
 
@@ -12410,7 +12426,19 @@ function renderPriceMoves() {
       const _eff = new Date(D.endBarMs).toISOString().slice(0, 10);
       const _flE = freshnessLabel({ barDate: _eff });
       const _mismatch = (_eff && D.end && _eff < D.end) ? ' \u00b7 you asked through ' + esc(D.end) + ', but the freshest close available is ' + esc(_eff) : '';
-      pmFresh = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px" title="' + esc(_flE.title) + '">Closes through <b style="color:var(--color-text-secondary);font-weight:600">' + esc(_flE.full) + '</b>' + _mismatch + '</div>';
+      // Baseline side too: show which close the START date actually resolved to. If you picked a weekend or
+      // holiday (no close that day), the math uses the prior trading day's close \u2014 surface it so a Sat/Sun
+      // baseline isn't a silent assumption. (Same UTC read as the end, for the same midnight-marker reason.)
+      let _baseLine = '';
+      if (D.baseBarMs) {
+        const _effB = new Date(D.baseBarMs).toISOString().slice(0, 10);
+        const _flB = freshnessLabel({ barDate: _effB });
+        const _baseMis = (_effB && D.base && _effB < D.base) ? ' \u00b7 your baseline ' + esc(D.base) + ' had no close that day (weekend/holiday), so it uses ' + esc(_effB)
+                       : (_effB && D.base && _effB > D.base) ? ' \u00b7 no close as early as ' + esc(D.base) + '; baseline uses the earliest available, ' + esc(_effB)
+                       : '';
+        _baseLine = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px" title="' + esc(_flB.title) + '">Baseline close \u00b7 <b style="color:var(--color-text-secondary);font-weight:600">' + esc(_flB.full) + '</b>' + _baseMis + '</div>';
+      }
+      pmFresh = _baseLine + '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px" title="' + esc(_flE.title) + '">Closes through <b style="color:var(--color-text-secondary);font-weight:600">' + esc(_flE.full) + '</b>' + _mismatch + '</div>';
     }
     const notes = [];
     if (D.excluded.length) notes.push('No usable history back to ' + esc(D.base) + ' for ' + D.excluded.map(esc).join(', ') + ' — too young or not returned this pull, excluded from the book figure.');
@@ -13196,6 +13224,54 @@ function capturePriceHistoryPoint(asOfMs) {
   }
 }
 
+// One Polygon "grouped daily" call returns the close for EVERY US stock/ETF on a given date, so a
+// whole-book refresh becomes ONE request instead of dozens of throttled per-ticker /prev calls. We step
+// back from today to the latest session that has data (skipping weekends), and cache the result briefly
+// so the holdings pass and the benchmark pass share a single network call. Returns null on ANY failure
+// (e.g. the endpoint isn't on this key's tier) so callers fall back to the proven per-ticker path.
+let _groupedClosesCache = null; // { date:'YYYY-MM-DD', map:{ TICKER:{c,t} }, fetchedAt }
+async function _fetchGroupedCloses() {
+  if (_groupedClosesCache && (Date.now() - _groupedClosesCache.fetchedAt) < 120000) return _groupedClosesCache;
+  if (!polygonKey) return null;
+  for (let back = 0; back <= 6; back++) {
+    const dayKey = _etDayKey(Date.now() - back * 86400000);
+    const dow = new Date(dayKey + 'T12:00:00Z').getUTCDay(); // 0 Sun, 6 Sat — skip weekends
+    if (dow === 0 || dow === 6) continue;
+    try {
+      const url = `https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/${dayKey}?adjusted=true&apiKey=${polygonKey}`;
+      const res = await fetch(url);
+      if (!res.ok) { if (res.status === 401 || res.status === 403) return null; continue; }
+      const data = await res.json();
+      if (data && Array.isArray(data.results) && data.results.length > 0) {
+        const map = {};
+        data.results.forEach(r => { if (r && r.T) map[r.T] = { c: r.c, t: r.t }; });
+        _groupedClosesCache = { date: dayKey, map, fetchedAt: Date.now() };
+        return _groupedClosesCache;
+      }
+    } catch (e) { /* network/parse — try the prior day */ }
+  }
+  return null;
+}
+
+// Single user-facing action: pull the latest daily closes for holdings AND benchmark ETFs. Both passes
+// share one grouped-daily call (cached above), so it's one request total when the fast path works.
+async function updateMarketCloses() {
+  const btn = document.getElementById('update-closes-btn');
+  const out = document.getElementById('update-closes-status');
+  if (btn) { btn.disabled = true; btn.textContent = '\u27f3 Updating\u2026'; }
+  if (out) { out.textContent = 'Fetching latest closes (holdings + benchmarks)\u2026'; out.style.color = '#fbbf24'; }
+  try { await refreshAllPrices(); } catch (e) { /* surfaced via its own status */ }
+  try { await getBenchmarkPrices(); } catch (e) { /* surfaced via its own status */ }
+  if (btn) { btn.disabled = false; btn.textContent = '\u27f3 Update Prices & Benchmarks'; }
+  if (out) {
+    const rs = document.getElementById('refresh-status');
+    out.textContent = (rs && rs.textContent) ? rs.textContent : '\u2713 Updated';
+    out.style.color = 'var(--color-text-success)';
+    setTimeout(() => { if (out) { out.textContent = ''; out.style.color = ''; } }, 20000);
+  }
+  if (typeof renderStaleTags === 'function') renderStaleTags();
+}
+
 async function refreshAllPrices() {
   const keyInput = document.getElementById('polygon-key-input');
   if (keyInput && keyInput.value.trim()) polygonKey = keyInput.value.trim();
@@ -13275,8 +13351,20 @@ async function refreshAllPrices() {
   // Fire SPX fetch in parallel with the first batch — non-blocking, runs while Polygon batches go
   const spxPromise = tryFetchSpx();
 
-  // First pass
-  let results = await runBatches(tickers, false);
+  // Fast path: one grouped-daily market call covers nearly everything; only stragglers hit /prev.
+  const _grp = await _fetchGroupedCloses();
+  let results = [];
+  let _toFetch = tickers;
+  if (_grp && _grp.map) {
+    const _gdMs = Date.parse(_grp.date + 'T00:00:00Z');
+    _toFetch = [];
+    tickers.forEach(t => {
+      const _hit = _grp.map[t.replace('-', '.')] || _grp.map[t];
+      if (_hit && _hit.c != null) results.push({ ticker: t, price: _hit.c, asOfMs: _gdMs });
+      else _toFetch.push(t);
+    });
+  }
+  if (_toFetch.length) results = results.concat(await runBatches(_toFetch, false));
 
   // Retry failed tickers once after a 60s cooldown (rate limit window resets)
   const failedFirst = results.filter(r => !r.price).map(r => r.ticker);
@@ -21606,6 +21694,53 @@ function splitDossierAtClaims(text) {
 }
 
 // One saved (or in-progress) dossier as a collapsible card.
+// Export ONE theme's research dossier (saved brief + key players + news + claims + any deep-dive passes
+// and follow-up Q&A) as a clean, light-themed printable PDF on the Harlan Shelby letterhead \u2014 same
+// scaffold as the Scenario Review. Grabs the already-rendered card body so deep-dive passes travel into
+// the file, strips interactive controls, forces <details> open, and recolors dark accents for white paper.
+function exportThemeResearchPdf(theme) {
+  const entry = themeResearch[theme];
+  if (!entry) { alert('Research this theme first, then export.'); return; }
+  const esc2 = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const cleanFrag = (html) => {
+    const t = document.createElement('div');
+    t.innerHTML = html || '';
+    t.querySelectorAll('[onclick]').forEach(el => el.remove());          // buttons, \u2715, edit/remove, ask box
+    t.querySelectorAll('textarea, input, button').forEach(el => el.remove());
+    t.querySelectorAll('details').forEach(x => x.setAttribute('open', ''));
+    t.querySelectorAll('summary').forEach(s => { const h = document.createElement('div'); h.textContent = s.textContent; h.style.cssText = 'font-weight:700;margin:4px 0 2px'; s.replaceWith(h); });
+    return t.innerHTML
+      .replace(/#fbbf24/g, '#b45309')
+      .replace(/#34d399/g, '#15803d')
+      .replace(/#a78bfa/g, '#7c3aed')
+      .replace(/#f87171/g, '#dc2626');
+  };
+  let bodyHtml = '';
+  const bodyEl = document.getElementById(trKey(theme) + '_body');
+  if (bodyEl && bodyEl.innerHTML) bodyHtml = cleanFrag(bodyEl.innerHTML);
+  else bodyHtml = '<div style="white-space:pre-wrap;font-size:12px;line-height:1.6">' + esc2(entry.text || '') + '</div>';
+  const facts = (typeof themeResearchFactsLine === 'function') ? themeResearchFactsLine(theme) : '';
+  const genWhen = entry.at ? new Date(entry.at).toLocaleString() : '';
+  const title = 'Theme Research \u2014 ' + theme;
+  const doc =
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc2(title)}</title><style>` +
+    `:root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}` +
+    `*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
+    `.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}` +
+    `.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}` +
+    `table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}` +
+    `</style></head><body><div class="doc"><div class="letterhead"><img src="${HS_LOGO}" alt="Harlan Shelby"></div>` +
+    `<h1>${esc2(title)}</h1>` +
+    `<div class="sub">${esc2(facts)}</div>` +
+    `<div class="note">AI-generated research dossier${genWhen ? ' \u00b7 generated ' + esc2(genWhen) : ''}. Prior AI output \u2014 observations for discussion, not advice. Verify specific claims independently.</div>` +
+    `<div style="margin-top:14px">${bodyHtml}</div>` +
+    `</div></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('Allow pop-ups for this site to export the PDF, then try again.'); return; }
+  w.document.open(); w.document.write(doc); w.document.close();
+  setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 400);
+}
+
 function themeResearchCard(theme) {
   const entry = themeResearch[theme];
   const isBusy = themeResearchBusy && themeResearchSel === theme;
@@ -21708,6 +21843,7 @@ function themeResearchCard(theme) {
     + '<div onclick="toggleThemeCard(\'' + escq(theme) + '\')" style="cursor:pointer;padding:9px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--color-background-secondary)">'
     +   '<span style="font-weight:700;font-size:12px;color:var(--color-text-primary)">' + esc(theme) + '</span>'
     +   '<span style="font-size:9px;color:var(--color-text-tertiary)">' + facts + '</span>'
+    +   ((entry && !isBusy) ? '<span onclick="event.stopPropagation();exportThemeResearchPdf(\'' + escq(theme) + '\')" title="Export this theme\u2019s research to a PDF (Harlan Shelby letterhead)" style="cursor:pointer;font-size:9px;color:var(--color-text-info);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:2px 8px;white-space:nowrap">\u2193 Export PDF</span>' : '')
     +   '<span style="font-size:9px;color:var(--color-text-tertiary);margin-left:auto">' + meta + '</span>'
     +   '<span style="font-size:10px;color:var(--color-text-tertiary)">' + arrow + '</span>'
     + '</div>'
@@ -29377,6 +29513,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09f</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09g</div>
 </body>
 </html>
