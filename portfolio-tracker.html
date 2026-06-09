@@ -13260,41 +13260,49 @@ async function updateMarketCloses() {
   const out = document.getElementById('update-closes-status');
   const t0 = Date.now();
   let phase = 'Starting';
+  let done = false;
   if (btn) { btn.disabled = true; btn.textContent = '\u27f3 Updating\u2026'; }
   // Heartbeat: tick elapsed seconds every second so a stall is visible. If this number stops climbing
   // while the button still reads Updating, the fetch is wedged \u2014 not silently doing nothing. (A modal
-  // confirm mid-run, e.g. the same-day snapshot prompt, will briefly freeze the tick \u2014 expected.)
-  const paint = function () { if (out) { out.style.color = '#fbbf24'; out.textContent = '\u27f3 ' + phase + '\u2026 \u00b7 ' + Math.round((Date.now() - t0) / 1000) + 's'; } };
+  // confirm mid-run, e.g. the same-day snapshot prompt, briefly freezes the tick \u2014 expected.)
+  const paint = function () { if (out && !done) { out.style.color = '#fbbf24'; out.textContent = '\u27f3 ' + phase + '\u2026 \u00b7 ' + Math.round((Date.now() - t0) / 1000) + 's'; } };
   paint();
   const timer = setInterval(paint, 1000);
+  // Restore + verdict ALWAYS runs once the awaits settle (resolve OR throw) \u2014 a thrown error or a Cancel
+  // on the snapshot prompt can never leave the button stuck on "Updating". Only a never-settling fetch
+  // keeps it spinning, and then the heartbeat above shows the seconds still climbing so you can tell.
+  const finish = function () {
+    if (done) return; done = true;
+    clearInterval(timer);
+    const secs = Math.round((Date.now() - t0) / 1000);
+    const grouped = !!(_groupedClosesCache && (Date.now() - _groupedClosesCache.fetchedAt) < 130000 && _groupedClosesCache.map);
+    const closeDate = (grouped && _groupedClosesCache.date) ? fmtAsOfDate(Date.parse(_groupedClosesCache.date + 'T12:00:00Z')) : '';
+    const rs = ((document.getElementById('refresh-status') || {}).textContent || '').trim();
+    const bs = ((document.getElementById('benchmark-status') || {}).textContent || '').trim();
+    const failed = /fail/i.test(rs) || /fail/i.test(bs);
+    if (btn) { btn.disabled = false; btn.textContent = '\u27f3 Update Prices & Benchmarks'; }
+    if (out) {
+      if (failed) {
+        out.style.color = 'var(--color-text-danger)';
+        out.textContent = '\u26a0 Finished in ' + secs + 's, but some names did not update \u2014 ' + (rs || bs || 'check API key / network, then try again');
+      } else {
+        out.style.color = 'var(--color-text-success)';
+        out.textContent = '\u2713 Done in ' + secs + 's \u00b7 ' + (grouped ? 'one fast market-wide call' : 'per-ticker fallback (grouped not on this key \u2014 slower)') + (closeDate ? ' \u00b7 close ' + closeDate : '') + (rs ? ' \u00b7 ' + rs.replace(/^[\u2713\s]+/, '') : '');
+      }
+      setTimeout(function () { if (out && /Done in|did not update/.test(out.textContent)) { out.textContent = ''; out.style.color = ''; } }, 30000);
+    }
+    if (typeof renderStaleTags === 'function') renderStaleTags();
+  };
   try {
     phase = 'Pulling market closes'; paint();
-    try { await refreshAllPrices(); } catch (e) { /* detail held in its own status */ }
+    await refreshAllPrices();
     phase = 'Updating benchmarks'; paint();
-    try { await getBenchmarkPrices(); } catch (e) { /* detail held in its own status */ }
+    await getBenchmarkPrices();
+  } catch (e) {
+    /* sub-status holds the detail; finish() still runs below */
   } finally {
-    clearInterval(timer);
+    finish();
   }
-  const secs = Math.round((Date.now() - t0) / 1000);
-  // Which path served this run? A warm grouped cache means ONE market-wide call did it (fast). Cold means
-  // every name went through the per-ticker /prev fallback (grouped not on this key \u2014 slow but works).
-  const grouped = !!(_groupedClosesCache && (Date.now() - _groupedClosesCache.fetchedAt) < 130000 && _groupedClosesCache.map);
-  const closeDate = (grouped && _groupedClosesCache.date) ? fmtAsOfDate(Date.parse(_groupedClosesCache.date + 'T12:00:00Z')) : '';
-  const rs = ((document.getElementById('refresh-status') || {}).textContent || '').trim();
-  const bs = ((document.getElementById('benchmark-status') || {}).textContent || '').trim();
-  const failed = /fail/i.test(rs) || /fail/i.test(bs);
-  if (btn) { btn.disabled = false; btn.textContent = '\u27f3 Update Prices & Benchmarks'; }
-  if (out) {
-    if (failed) {
-      out.style.color = 'var(--color-text-danger)';
-      out.textContent = '\u26a0 Finished in ' + secs + 's, but some names did not update \u2014 ' + (rs || bs || 'check API key / network, then try again');
-    } else {
-      out.style.color = 'var(--color-text-success)';
-      out.textContent = '\u2713 Done in ' + secs + 's \u00b7 ' + (grouped ? 'one fast market-wide call' : 'per-ticker fallback (grouped not on this key \u2014 slower)') + (closeDate ? ' \u00b7 close ' + closeDate : '') + (rs ? ' \u00b7 ' + rs.replace(/^[\u2713\s]+/, '') : '');
-    }
-    setTimeout(function () { if (out && /Done in|did not update/.test(out.textContent)) { out.textContent = ''; out.style.color = ''; } }, 30000);
-  }
-  if (typeof renderStaleTags === 'function') renderStaleTags();
 }
 
 async function refreshAllPrices() {
@@ -29547,6 +29555,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09i</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09j</div>
 </body>
 </html>
