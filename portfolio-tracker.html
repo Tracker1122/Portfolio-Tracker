@@ -15776,8 +15776,8 @@ function candRenderQueue() {
   el.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px"><span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Scenario (${_candQueue.length} move${_candQueue.length === 1 ? '' : 's'})</span>${refreshBtn}</div>` +
     totalsLine +
     _candMomentumSummary() +
-    _candQueue.map((tr, i) => `<div style="padding:3px 8px;background:${i === _candEditIdx ? 'rgba(96,165,250,0.16)' : 'var(--color-background-tertiary)'};border-radius:var(--border-radius-md);margin-bottom:3px${i === _candEditIdx ? ';outline:1px solid var(--color-text-info)' : ''}">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}${i === _candEditIdx ? ' <span style="color:var(--color-text-info);font-size:8px">· editing in form ↑</span>' : ''}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this ${tr.kind === 'trim' ? 'trim' : 'buy'} into the form to edit — it stays here and your re-add updates it in place (no duplicate, never disappears)">${i === _candEditIdx ? 'editing ↑' : 'edit'}</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
+    _candQueue.map((tr, i) => `<div style="padding:3px 8px 4px;background:${i === _candEditIdx ? 'rgba(96,165,250,0.16)' : (tr.kind === 'trim' ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)')};border-left:3px solid ${tr.kind === 'trim' ? 'var(--color-text-danger)' : 'var(--color-text-success)'};border-radius:var(--border-radius-md);margin-bottom:3px${i === _candEditIdx ? ';outline:1px solid var(--color-text-info)' : ''}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr)).replace(/^(Add|Trim)\b/, '<span style="color:' + (tr.kind === 'trim' ? 'var(--color-text-danger)' : 'var(--color-text-success)') + ';font-weight:700">$1</span>')}${i === _candEditIdx ? ' <span style="color:var(--color-text-info);font-size:8px">· editing in form ↑</span>' : ''}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this ${tr.kind === 'trim' ? 'trim' : 'buy'} into the form to edit — it stays here and your re-add updates it in place (no duplicate, never disappears)">${i === _candEditIdx ? 'editing ↑' : 'edit'}</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
       ${_candPositionEffectHtml(tr)}
     </div>`).join('') +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">Recent performance via Polygon daily bars; * = under ~1Y of history. Informational — not a return forecast.</div>`;
@@ -28594,8 +28594,8 @@ init();
                 rows: _labs.map(function (l) { return { label: l, a: _pick(_cp[l], 'blendedPct'), b: _pick(_hp[l], 'blendedPct'), voo: _voo(l) }; }) }
             : null;
           var _legCmp = '<div style="font-size:9px;color:var(--color-text-tertiary);margin:6px 0 0;display:flex;gap:14px;flex-wrap:wrap">' +
-            '<span>' + _legendDot(null, true) + 'current</span><span>' + _legendDot('var(--color-text-success, #22c55e)', false) + 'with trades</span><span>' + _vooKey + '</span>' +
-            '<span style="opacity:.75">gap = what the trades changed</span></div>';
+            '<span>' + _legendDot(null, true) + 'current</span><span>' + _legendDot('var(--color-text-secondary, #aaa)', false) + 'with trades</span><span>' + _vooKey + '</span>' +
+            '<span style="opacity:.75">gap = what the trades changed \u00b7 dot is <span style="color:var(--color-text-success, #22c55e)">green</span> where the trades helped, <span style="color:var(--color-text-danger, #ef4444)">red</span> where they hurt</span></div>';
           // Sleeve graph, then the book paragraph as a visual break, then the book graph.
           ladder = _legCmp + renderRecoveryLadder([_sleevePanel]) +
             (_bookPanel ? bookSummaryText(model) + renderRecoveryLadder([_bookPanel]) : '');
@@ -29128,6 +29128,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08s</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08t</div>
 </body>
 </html>
