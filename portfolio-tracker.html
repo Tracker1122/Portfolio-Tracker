@@ -6741,11 +6741,25 @@ function renderStaleTags() {
     if (!isoTimestamp) {
       el.textContent = neverLabel || '';
       el.style.color = 'var(--color-text-tertiary)';
+      el.removeAttribute('title');
       return;
     }
     const ago = fmtTimeAgo(isoTimestamp);
-    el.textContent = ago ? `Last: ${ago}` : '';
+    // Beyond "how long since YOU pulled", say what the data most likely IS, from the US market session
+    // at the moment of the pull (pre-open \u2192 prior close; open \u2192 intraday; after close \u2192 today's close),
+    // plus the session right now so you know whether a refresh could even get something newer.
+    const _nowSess = (typeof usMarketSession === 'function') ? usMarketSession(Date.now()) : { state: 'unknown' };
+    const _fetchSess = (typeof usMarketSession === 'function') ? usMarketSession(new Date(isoTimestamp).getTime()) : { state: 'unknown' };
+    const _nowShort = _nowSess.state === 'open' ? 'market open' : _nowSess.state === 'pre' ? 'pre-market' : _nowSess.state === 'post' ? 'after close' : _nowSess.state === 'weekend' ? 'weekend' : '';
+    const _repr = _fetchSess.state === 'open' ? 'an intraday price (market was open when you pulled)'
+                : _fetchSess.state === 'pre' ? "the prior session\u2019s close (pulled pre-market)"
+                : _fetchSess.state === 'post' ? "that day\u2019s close (pulled after the close)"
+                : _fetchSess.state === 'weekend' ? 'the prior Friday close (pulled on a weekend)'
+                : '';
+    el.textContent = ago ? ('Last: ' + ago + (_nowShort ? ' \u00b7 ' + _nowShort : '')) : '';
     el.style.color = staleColorFor(isoTimestamp);
+    const _nowSentence = _nowSess.state === 'open' ? 'open.' : _nowSess.state === 'weekend' ? 'closed (weekend).' : _nowSess.state === 'pre' ? 'pre-open.' : _nowSess.state === 'post' ? 'closed for the day.' : '';
+    el.title = (ago ? 'Pulled ' + ago + (_repr ? ', so this is likely ' + _repr + '.' : '.') : '') + (_nowSentence ? ' Right now the US market is ' + _nowSentence : '');
   };
 
   setTag('refresh-prices-stale', mostRecentPosFetch, 'Never');
@@ -12235,6 +12249,15 @@ function _pmCloseAtOrBefore(bars, iso) {
   for (const b of bars) { if (b.t <= ms && (!best || b.t > best.t)) best = b; }
   return best ? best.c : null;
 }
+// Sibling: the ms-timestamp of the last bar at/before `iso` \u2014 i.e. the EFFECTIVE trading date used for
+// that endpoint, so the card can show the real date its closes came from, not the date the user typed.
+function _pmBarMsAtOrBefore(bars, iso) {
+  if (!bars) return null;
+  const ms = new Date(iso + 'T23:59:59Z').getTime();
+  let best = null;
+  for (const b of bars) { if (b.t <= ms && (!best || b.t > best.t)) best = b; }
+  return best ? best.t : null;
+}
 async function _pmFetchBars(ticker, fromISO, toISO) {
   const T = ticker.toUpperCase();
   const key = T + '|' + fromISO + '|' + toISO;
@@ -12337,7 +12360,11 @@ function _pmComputeFromCache(bookTk, base, end) {
   const vsVoo = (bookPct != null && vooPct != null) ? bookPct - vooPct : null;
   rows.sort((a, b) => b.moveOnPos - a.moveOnPos); // signed desc: gainers top, laggards bottom
   const fl = _pmFetchFlags || {};
-  _pmRangeData = { base, end, rows, excluded, bookMove, bookPct, vooPct, vsVoo, anyRate: fl.anyRate, anyNet: fl.anyNet, at: Date.now() };
+  let _calBars = vbars;
+  if (!_calBars) { for (const _ct of Object.keys(bookTk)) { if (_pmHist[_ct]) { _calBars = _pmHist[_ct]; break; } } }
+  const endBarMs = _calBars ? _pmBarMsAtOrBefore(_calBars, end) : null;
+  const baseBarMs = _calBars ? _pmBarMsAtOrBefore(_calBars, base) : null;
+  _pmRangeData = { base, end, rows, excluded, bookMove, bookPct, vooPct, vsVoo, endBarMs, baseBarMs, anyRate: fl.anyRate, anyNet: fl.anyNet, at: Date.now() };
 }
 
 function renderPriceMoves() {
@@ -12375,6 +12402,13 @@ function renderPriceMoves() {
       ? ', vs VOO ' + _pmPct(D.vooPct) + (D.vsVoo != null ? ' <span style="color:' + (D.vsVoo >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)') + '">(' + (D.vsVoo >= 0 ? 'beat by ' : 'lagged by ') + Math.abs(D.vsVoo).toFixed(1) + 'pp)</span>' : '')
       : '';
     const headline = '<div style="font-size:12px;color:var(--color-text-primary);margin-bottom:6px">Over <b>' + esc(D.base) + ' → ' + esc(D.end) + '</b>, the value of your current holdings moved ' + _pmUsd(D.bookMove) + ' (' + _pmPct(D.bookPct) + ')' + vooStr + '.</div>';
+    let pmFresh = '';
+    if (D.endBarMs && typeof freshnessLabel === 'function') {
+      const _flE = freshnessLabel({ barDate: _etDayKey(D.endBarMs) });
+      const _eff = _etDayKey(D.endBarMs);
+      const _mismatch = (_eff && D.end && _eff < D.end) ? ' \u00b7 you asked through ' + esc(D.end) + ', but the freshest close available is ' + esc(_eff) : '';
+      pmFresh = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px" title="' + esc(_flE.title) + '">Closes through <b style="color:var(--color-text-secondary);font-weight:600">' + esc(_flE.full) + '</b>' + _mismatch + '</div>';
+    }
     const notes = [];
     if (D.excluded.length) notes.push('No usable history back to ' + esc(D.base) + ' for ' + D.excluded.map(esc).join(', ') + ' — too young or not returned this pull, excluded from the book figure.');
     if (D.anyRate) notes.push('Some names hit the worker rate limit (free tier ~50/hr); click Go again to backfill just the missing ones.');
@@ -12402,7 +12436,7 @@ function renderPriceMoves() {
         (laggards.length ? grpHdr('Top laggards — biggest $ lost', 'var(--color-text-danger)') + tableOf(laggards) : '');
       if (hidden > 0) toggle = '<span onclick="pmToggleAll()" style="cursor:pointer;color:var(--color-accent-blue);font-size:10px">Show all ' + D.rows.length + ' names (' + hidden + ' more) →</span>';
     }
-    body = headline + noteHtml + tableBlock + (toggle ? '<div style="margin-top:7px">' + toggle + '</div>' : '');
+    body = headline + pmFresh + noteHtml + tableBlock + (toggle ? '<div style="margin-top:7px">' + toggle + '</div>' : '');
   }
 
   el.innerHTML = '<div style="padding:8px 11px;border-left:3px solid var(--color-accent-blue);background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">' + controls + body + '</div>';
@@ -29339,6 +29373,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09a</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09b</div>
 </body>
 </html>
