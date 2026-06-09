@@ -12120,6 +12120,11 @@ function _pmShiftISO(endISO, win) {
   const nd = new Date(Date.UTC(y, d2.getUTCMonth() - months, d2.getUTCDate()));
   return nd.toISOString().slice(0, 10);
 }
+function _pmMinusDays(iso, n) {
+  const d2 = new Date(iso + 'T00:00:00Z');
+  d2.setUTCDate(d2.getUTCDate() - n);
+  return d2.toISOString().slice(0, 10);
+}
 function _pmCloseAtOrBefore(bars, iso) {
   const ms = new Date(iso + 'T23:59:59Z').getTime();
   let best = null;
@@ -12177,7 +12182,7 @@ async function _pmRunRange() {
   for (const t of fetchList) {
     if (idx++ > 0) await new Promise(r => setTimeout(r, 150)); // polite pacing; worker edge-caches a day
     let bars = null;
-    try { bars = await _pmFetchBars(t, base, end); }
+    try { bars = await _pmFetchBars(t, _pmMinusDays(base, 10), end); }
     catch (err) {
       const m = err.message;
       if (m === 'noworker') { noworker = true; break; }
@@ -29045,6 +29050,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08n</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08o</div>
 </body>
 </html>
