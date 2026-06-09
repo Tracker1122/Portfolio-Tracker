@@ -1057,7 +1057,8 @@
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
     <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
     <button class="tab-btn" onclick="switchTab('risk')">Risk Review</button>
-    <button class="tab-btn" onclick="switchTab('tradeideas')">Trade Ideas</button>
+    <button class="tab-btn" onclick="switchTab('tradeideas')">Signals Within the Book</button>
+    <button class="tab-btn" onclick="switchTab('pricetheme')">Price Movement and Theme Dissection</button>
     <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
@@ -1345,8 +1346,6 @@
   <div class="tab-panel" id="tab-tradeideas">
     <div class="section-heading">Theme Research <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">— big players, the ETFs, how it trades, current news · AI-generated, cached &amp; editable</span></div>
     <div id="theme-research-section" style="margin-bottom:28px"></div>
-    <div class="section-heading">Price moves since you refreshed</div>
-    <div id="price-moves-wrap" style="margin-bottom:24px"></div>
 
     <div class="section-heading">Add Candidates</div>
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
@@ -1356,8 +1355,6 @@
     <div id="add-candidates-tier2-wrap" style="margin-top:12px"></div>
 
     <div id="trim-watch-block" style="margin-top:24px;margin-bottom:18px"></div>
-
-    <div id="theme-discovery" style="margin-top:18px"></div>
 
     <div class="section-heading" style="margin-top:28px">Holdings — Signals &amp; Tax</div>
     <div class="rebal-controls">
@@ -1393,6 +1390,13 @@
     </div>
 
   </div><!-- end tab-tradeideas -->
+
+  <!-- Price Movement and Theme Dissection Tab -->
+  <div class="tab-panel" id="tab-pricetheme">
+    <div class="section-heading">Price moves since you refreshed</div>
+    <div id="price-moves-wrap" style="margin-bottom:24px"></div>
+    <div id="theme-discovery" style="margin-top:18px"></div>
+  </div><!-- end tab-pricetheme -->
 
   <!-- Rebalance & Tax Tab -->
 
@@ -5662,7 +5666,8 @@ function switchTab(name) {
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); }
-  if (name === 'tradeideas') { safeRender('renderThemeResearch', renderThemeResearch); safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
+  if (name === 'tradeideas') { safeRender('renderThemeResearch', renderThemeResearch); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
+  if (name === 'pricetheme') { safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
@@ -29308,6 +29313,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08l</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08m</div>
 </body>
 </html>
