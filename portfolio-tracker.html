@@ -1091,11 +1091,15 @@
     </div>
 
     <!-- Analytics Row -->
-    <!-- TOP ROW: summary cards (Passive Core · Private Investments · Unrealised Gain · Tax Year) -->
+    <!-- TOP ROW: summary cards (Passive Core · Unrealised Gain by Account · Private Investments · Tax Year) -->
     <div class="analytics-grid-4">
       <div class="analytics-card" id="sp-summary-card" onclick="showCardOverlay('voo')" style="cursor:pointer">
         <div class="analytics-card-title">Passive Core — VOO</div>
         <div id="sp-summary-content"><div style="color:var(--color-text-tertiary);font-size:11px">No lots imported yet</div></div>
+      </div>
+      <div class="analytics-card" id="account-card" onclick="showCardOverlay('account')" style="cursor:pointer">
+        <div class="analytics-card-title">Unrealised Gains Within Sleeve by Account</div>
+        <div id="account-content"></div>
       </div>
       <div class="analytics-card" id="pe-deals-card" onclick="showCardOverlay('private-investments')" style="cursor:pointer">
         <div class="analytics-card-title">Private Investments — Direct PE Deals</div>
@@ -1104,10 +1108,6 @@
       <div class="analytics-card" id="pe-ipo-conc-card" style="display:none">
         <div class="analytics-card-title">IPO'd Private Holdings — Concentration</div>
         <div id="pe-ipo-conc-content"></div>
-      </div>
-      <div class="analytics-card" id="account-card" onclick="showCardOverlay('account')" style="cursor:pointer">
-        <div class="analytics-card-title">Unrealised Gain by Account</div>
-        <div id="account-content"></div>
       </div>
       <div class="analytics-card" id="tax-exposure-card" onclick="openRealizedLedgerModal()" style="cursor:pointer" title="Click for the full realized-gains ledger by year">
         <div class="analytics-card-title" id="tax-year-label">2026 Tax Year</div>
@@ -13938,6 +13938,7 @@ function renderTaxExposure() {
   setEl('tax-st-est', `Est. tax: ${fmtDollarWhole(stTax)} @ ${(stRate * 100).toFixed(0)}%`);
   setEl('tax-harvested', fmtDollarWhole(harvested));
   setEl('tax-sheltered', fmtDollarWhole(netTax));
+  setEl('tax-year-label', `${taxYear} Tax Year`); // was hardcoded in markup; this rolls the title on the first render of any new year
 
   // Update label for sheltered field to say Net Tax Bill
   const shelteredLabel = document.querySelector('#tax-exposure-card [style*="IRA Sheltered"]');
@@ -16976,7 +16977,7 @@ function _renderCardOverlay(type) {
       if (!accounts[acct]) accounts[acct] = [];
       accounts[acct].push(p);
     });
-    html = '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:16px">Unrealised Gain by Account</div>';
+    html = '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:16px">Unrealised Gains Within Sleeve by Account</div>';
     Object.entries(accounts).forEach(([acct, ps]) => {
       const invested = ps.reduce((s,p)=>s+(calcPos(p).invested||0),0);
       const value = ps.reduce((s,p)=>s+(calcPos(p).exitValue||0),0);
@@ -29645,6 +29646,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09n</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09o</div>
 </body>
 </html>
