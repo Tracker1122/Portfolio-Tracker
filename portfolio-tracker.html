@@ -15898,13 +15898,15 @@ function _candPerfBenchParagraph() {
     };
     const addsAbs = sideAggAbs(compared.filter(pc => pc.tr.kind !== 'trim'), 'amount');
     const trimsAbs = sideAggAbs(compared.filter(pc => pc.tr.kind === 'trim'), 'proceeds');
-    const aggLine = (label, agg) => agg ? `<div>${label} are, on average, ${_CAND_REL_WINDOWS.filter(([lbl, k]) => agg[k] != null).map(([lbl, k]) => `${lbl} ${_candPpHtml(agg[k])}`).join(' · ')} vs their own indices</div>` : '';
-    const aggLineAbs = (label, agg) => agg ? `<div>${label} — outright return, dollar-weighted: ${_CAND_REL_WINDOWS.filter(([lbl, k]) => agg[k] != null).map(([lbl, k]) => `${lbl} ${_candFmtPctHtml(agg[k])}`).join(' · ')}</div>` : '';
-    if (addsAgg || trimsAgg || addsAbs || trimsAbs) {
+    const aggLine = (label, agg) => agg ? `<div>${label}: ${_CAND_REL_WINDOWS.filter(([lbl, k]) => agg[k] != null).map(([lbl, k]) => `${lbl} ${_candPpHtml(agg[k])}`).join(' · ')}</div>` : '';
+    const aggLineAbs = (label, agg) => agg ? `<div>${label}: ${_CAND_REL_WINDOWS.filter(([lbl, k]) => agg[k] != null).map(([lbl, k]) => `${lbl} ${_candFmtPctHtml(agg[k])}`).join(' · ')}</div>` : '';
+    const _subHdr = 'color:var(--color-text-tertiary);font-weight:600;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;margin-top:4px';
+    const absBlock = (addsAbs || trimsAbs) ? `<div style="${_subHdr}">Outright return</div>${aggLineAbs('Names being added', addsAbs)}${aggLineAbs('Names being trimmed', trimsAbs)}` : '';
+    const relBlock = (addsAgg || trimsAgg) ? `<div style="${_subHdr}">vs theme index</div>${aggLine('Names being added', addsAgg)}${aggLine('Names being trimmed', trimsAgg)}` : '';
+    if (absBlock || relBlock) {
       cumulative = `<div style="margin:5px 0;padding-bottom:4px;border-bottom:1px solid var(--color-border-tertiary)">
         <div style="color:var(--color-text-primary);font-weight:600;margin-bottom:1px">Whole trade (weighted by dollars)</div>
-        ${aggLineAbs('Names being added', addsAbs)}${aggLineAbs('Names being trimmed', trimsAbs)}
-        ${aggLine('Names being added', addsAgg)}${aggLine('Names being trimmed', trimsAgg)}
+        ${absBlock}${relBlock}
       </div>`;
     }
   }
@@ -29306,6 +29308,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08k</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08l</div>
 </body>
 </html>
