@@ -15831,7 +15831,13 @@ function _candPerfBenchParagraph() {
     if (!bench) { rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag} · ${themeStr}) — no index mapped for this theme, so there's nothing to measure it against.</div>`); return; }
     if (bench === T) { rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag} · ${themeStr}) — this IS the ${themeStr} index, so it sets the bar rather than being measured against one.</div>`); return; }
     const b = _candPerf[bench];
-    if (!b || b.error) { rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag} · ${themeStr}) — not compared yet. ${b && b.error === 'rate' ? `${esc(bench)} rate-limited; ` : ''}tap "↻ compare vs ${esc(bench)}" on its card to see how it's done against its index.</div>`); return; }
+    if (typeof _candBenchFetching !== 'undefined' && _candBenchFetching === bench) { rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag} · ${themeStr}) — comparing vs ${esc(bench)}…</div>`); return; }
+    if (!b || b.error) {
+      const why = (b && b.error === 'rate') ? ' — rate-limited last try' : (b && b.error === 'nokey') ? ' — set your Polygon key first' : (b && b.error) ? ' — last try failed' : '';
+      const verb = (b && b.error) ? 'retry' : 'compare';
+      rows.push(`<div style="margin-top:3px"><strong>${esc(T)}</strong> (${tag} · ${themeStr}) — <span onclick="candFetchBench('${escq(bench)}')" style="cursor:pointer;color:var(--color-text-info);text-decoration:underline">↻ ${verb} vs ${esc(bench)}</span> to see how it has done against its index${why}.</div>`);
+      return;
+    }
     // Compared OK — build the per-window gap (name − benchmark)
     const g = {};
     _CAND_REL_WINDOWS.forEach(([lbl, k]) => { if (typeof p[k] === 'number' && typeof b[k] === 'number') g[k] = p[k] - b[k]; });
@@ -15840,9 +15846,14 @@ function _candPerfBenchParagraph() {
     compared.push({ tr, g });
     const headPhrase = gh == null ? '' : `: ${_candPpHtml(gh)} over ${HEAD_LABEL[hk]}`;
     const chips = _CAND_REL_WINDOWS.filter(([lbl, k]) => g[k] != null).map(([lbl, k]) => `${lbl} ${_candPpHtml(g[k])}`).join(' · ');
+    const riskBits = [];
+    if (typeof p.annVol === 'number' && typeof b.annVol === 'number') riskBits.push(`vol ${p.annVol.toFixed(0)}% vs ${b.annVol.toFixed(0)}%`);
+    if (typeof p.maxDrawdown === 'number' && typeof b.maxDrawdown === 'number') riskBits.push(`maxDD ${p.maxDrawdown.toFixed(0)}% vs ${b.maxDrawdown.toFixed(0)}%`);
+    const riskSub = riskBits.length ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">risk (${esc(T)} vs ${esc(bench)}): ${riskBits.join(' · ')}</div>` : '';
     rows.push(`<div style="margin-top:5px">
       <strong>${esc(T)}</strong> (${tag} · ${themeStr}) — ${verdict(gh, bench)}${headPhrase}.
       <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:1px">by window (${esc(T)} − ${esc(bench)}): ${chips || '—'}</div>
+      ${riskSub}
     </div>`);
   });
   if (!rows.length) return '';
@@ -15880,6 +15891,39 @@ function _candPerfBenchParagraph() {
   </div>`;
 }
 
+// Compact size/position read for a staged move — what & how much, NOT performance. Replaces the
+// per-row return/benchmark/risk block in the Scenario list (those now live in the cards below).
+function _candPositionEffectHtml(tr) {
+  if (!tr) return '';
+  const fmtK = (v) => { const a = Math.abs(v); if (a >= 1000) { let s = (v / 1000).toFixed(1); if (s.endsWith('.0')) s = s.slice(0, -2); return '$' + s + 'k'; } return '$' + Math.round(v); };
+  const book = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const pctOf = (v) => book > 0 ? (v / book * 100).toFixed(1) + '% of book' : '';
+  const T = (tr.ticker || '').toUpperCase();
+  const lots = (typeof _candTickerLots === 'function') ? _candTickerLots(T) : [];
+  const curShares = lots.reduce((s, p) => s + (parseFloat(p.shares) || 0), 0);
+  let px = null;
+  for (const p of lots) { const v = parseFloat(p.exitPrice); if (isFinite(v) && v > 0) { px = v; break; } }
+  let txt = '';
+  if (tr.kind === 'trim') {
+    const remSh = Math.max(0, curShares - (parseFloat(tr.shares) || 0));
+    const bits = ['leaves ~' + (Math.round(remSh * 100) / 100) + ' of ' + (Math.round(curShares * 100) / 100) + ' sh'];
+    if (px != null) { const remVal = remSh * px; bits.push('~' + fmtK(remVal)); if (book > 0) bits.push(pctOf(remVal)); }
+    txt = bits.join(' · ');
+  } else {
+    const amt = Number(tr.amount) || 0;
+    const bits = [];
+    if (px != null && amt > 0) bits.push('~' + (Math.round(amt / px * 100) / 100) + ' sh');
+    if (book > 0 && amt > 0) bits.push('+' + pctOf(amt));
+    const tags = [];
+    if (tr.kind === 'etf' && tr.theme && tr.theme !== '(unassigned)') tags.push(esc(tr.theme));
+    if (tr.sleeve && tr.sleeve !== '(unassigned)' && tr.sleeve !== tr.theme) tags.push(esc(tr.sleeve));
+    if (tags.length) bits.push('<span style="color:var(--color-text-tertiary)">' + tags.join(' / ') + '</span>');
+    txt = bits.join(' · ');
+  }
+  if (!txt.trim()) return '';
+  return '<div style="font-size:9px;color:var(--color-text-secondary);margin-top:2px">' + txt + '</div>';
+}
+
 function candRenderQueue() {
   const el = document.getElementById('cand-queue'); if (!el) return;
   if (!_candQueue.length) { el.innerHTML = '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No moves staged yet. Add one or more above — they combine into a single scenario.</div>'; const _rp0 = document.getElementById('cand-relperf'); if (_rp0) _rp0.innerHTML = ''; return; }
@@ -15901,7 +15945,7 @@ function candRenderQueue() {
     _candMomentumSummary() +
     _candQueue.map((tr, i) => `<div style="padding:3px 8px;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);margin-bottom:3px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--color-text-primary)"><span>${esc(_candTradeLabel(tr))}</span><span style="display:inline-flex;gap:10px;align-items:center;flex:none"><span onclick="candEditQueueItem(${i})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline" title="Load this ${tr.kind === 'trim' ? 'trim' : 'buy'} back into the form to edit it — replaces this staged item in place, no duplicate">edit</span><span onclick="candRemoveFromQueue(${i})" style="cursor:pointer;color:var(--color-text-tertiary);font-size:13px;line-height:1" title="Remove">×</span></span></div>
-      ${_candPerfLineHtml(tr.ticker)}${_candBenchLineHtml(tr)}
+      ${_candPositionEffectHtml(tr)}
     </div>`).join('') +
     `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">Recent performance via Polygon daily bars; * = under ~1Y of history. Informational — not a return forecast.</div>`;
   const _rp = document.getElementById('cand-relperf'); if (_rp) _rp.innerHTML = _candPerfBenchParagraph();
@@ -29236,6 +29280,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08h</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08i</div>
 </body>
 </html>
