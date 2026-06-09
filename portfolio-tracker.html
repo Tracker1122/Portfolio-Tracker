@@ -5139,6 +5139,9 @@ let distOpenKey = null;         // which Top Holdings full-table row is currentl
 let priceMovesView = 'allTime'; // 'sinceLast' or 'allTime' — view toggle for the price-moves panel (opens to all-refreshes by request)
 let priceMovesCmpA = null; // Compare-two view: ts (ISO) of the baseline (A) priceHistory entry
 let priceMovesCmpB = null; // Compare-two view: ts (ISO) of the compare-to (B) priceHistory entry
+let priceMovesCmpLive = false; // Compare-two: when true, the B side is LIVE prices, not a snapshot
+let _pmLiveBusy = false;        // true while a bulk live fetch is in flight
+let _pmLiveSummary = null;      // { live, prev, failed:[], at } from the last bulk live fetch
 // Sort state for the price-moves table. col = column key, dir = 'asc' | 'desc'.
 // Keys are deliberately stable across both tabs where possible (ticker, perShare, moveOnPosition,
 // pctChange); priceFrom / priceTo / bench / trend are tab-specific. When the user clicks a column
@@ -11935,7 +11938,41 @@ function setPriceMovesView(view) {
 // Compare-two view: pick which baseline (A) / compare-to (B) snapshot the panel diffs.
 function setPriceMovesCmp(which, ts) {
   if (which === 'A') priceMovesCmpA = ts;
-  else priceMovesCmpB = ts;
+  else { priceMovesCmpB = ts; priceMovesCmpLive = false; } // picking a snapshot B exits live mode
+  renderPriceMoves();
+}
+
+// Compare-two "compare to live": fetch a live quote for every open position, then diff baseline -> live.
+// Honesty first: live comes from Finnhub (per-ticker). Without a key, _livePxFetch falls back to Polygon
+// previous close — so we warn up front, and afterward report how many quotes were truly real-time vs
+// previous-close vs failed (each quote self-reports via its `source` field).
+async function priceMovesFetchLive() {
+  if (_pmLiveBusy) return;
+  if (typeof finnhubKey !== 'undefined' && !finnhubKey && typeof loadFinnhubKey === 'function') loadFinnhubKey();
+  const hasKey = !!(typeof finnhubKey !== 'undefined' && finnhubKey);
+  if (!hasKey) {
+    const proceed = confirm('No Finnhub key is set, so "live" will fall back to Polygon previous close — i.e. NOT live (the prior trading day close).\n\nAdd a Finnhub key under the API Keys panel for real-time quotes.\n\nOK — compare to previous close anyway (it will be clearly labeled)\nCancel — stop');
+    if (!proceed) return;
+  }
+  const tickers = [...new Set(positions.filter(p => !p.closed && p.ticker).map(p => (p.ticker || '').toUpperCase().trim()).filter(Boolean))];
+  if (!tickers.length) return;
+  _pmLiveBusy = true;
+  priceMovesCmpLive = true;
+  renderPriceMoves();
+  const results = await Promise.all(tickers.map(t =>
+    _livePxFetch(t).then(r => ({ t: t, ok: true, r: r })).catch(() => ({ t: t, ok: false, r: null }))
+  ));
+  let live = 0, prev = 0; const failed = [];
+  results.forEach(res => {
+    if (res.ok && res.r && res.r.price > 0) {
+      livePxCache[res.t] = { price: res.r.price, fetchedAt: Date.now(), source: res.r.source, marketTime: res.r.marketTime };
+      if (res.r.source === 'live') live++; else prev++;
+    } else {
+      failed.push(res.t);
+    }
+  });
+  _pmLiveSummary = { live: live, prev: prev, failed: failed, at: Date.now() };
+  _pmLiveBusy = false;
   renderPriceMoves();
 }
 
@@ -12147,7 +12184,17 @@ function renderPriceMoves() {
     if (!eB) eB = sortedH[sortedH.length - 1]; // default compare-to = latest
     priceMovesCmpA = eA ? eA.ts : null;
     priceMovesCmpB = eB ? eB.ts : null;
-    if (eA && eB) cmpResult = computePriceMovesPair(eA, eB, positions);
+    if (priceMovesCmpLive && eA) {
+      // Compare-to = LIVE: synthesize a "B" from the live cache, restricted to open-position
+      // tickers. computePriceMovesPair still uses shares held at the baseline (A).
+      const openTk = new Set(positions.filter(p => !p.closed && p.ticker).map(p => (p.ticker || '').toUpperCase().trim()));
+      const livePrices = {};
+      Object.keys(livePxCache).forEach(t => { if (openTk.has(t)) { const c = livePxCache[t]; if (c && c.price > 0) livePrices[t] = c.price; } });
+      const liveEntry = { ts: new Date().toISOString(), asOf: null, prices: livePrices, shares: {}, vooPrice: null, spxLive: null };
+      cmpResult = computePriceMovesPair(eA, liveEntry, positions);
+    } else if (eA && eB) {
+      cmpResult = computePriceMovesPair(eA, eB, positions);
+    }
     const optLabel = (e) => {
       const dd = fmtAsOfDate(e.asOf);
       return dd ? (dd + ' · pulled ' + fmtPmTs(e.ts)) : ('pulled ' + fmtPmTs(e.ts));
@@ -12156,14 +12203,43 @@ function renderPriceMoves() {
       '<option value="' + esc(e.ts) + '"' + (e.ts === selTs ? ' selected' : '') + '>' + esc(optLabel(e)) + '</option>'
     ).join('');
     const selStyle = 'background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:3px 6px';
-    cmpControls = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--color-text-tertiary)">' +
+    const liveBtnLabel = _pmLiveBusy ? 'Fetching live…' : (priceMovesCmpLive ? '↻ Refresh live' : '→ Compare to live');
+    const liveBtnBg = priceMovesCmpLive ? 'var(--color-accent-blue)' : 'var(--color-background-tertiary)';
+    const liveBtnFg = priceMovesCmpLive ? '#fff' : 'var(--color-text-secondary)';
+    const liveBtn = '<button onclick="priceMovesFetchLive()"' + (_pmLiveBusy ? ' disabled' : '') + ' style="background:' + liveBtnBg + ';border:1px solid var(--color-border-tertiary);color:' + liveBtnFg + ';padding:3px 10px;font-size:11px;border-radius:var(--border-radius-sm);cursor:' + (_pmLiveBusy ? 'default' : 'pointer') + ';font-weight:600">' + liveBtnLabel + '</button>';
+    const bSelOpen = priceMovesCmpLive
+      ? '<select onchange="setPriceMovesCmp(\'B\', this.value)" title="Comparing to live — pick a snapshot to switch back" style="opacity:0.5;' + selStyle + '">'
+      : '<select onchange="setPriceMovesCmp(\'B\', this.value)" style="' + selStyle + '">';
+    cmpControls = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;font-size:11px;color:var(--color-text-tertiary)">' +
       '<span>Baseline</span>' +
       '<select onchange="setPriceMovesCmp(\'A\', this.value)" style="' + selStyle + '">' + optionsFor(priceMovesCmpA) + '</select>' +
       '<span style="color:var(--color-text-secondary)">→</span>' +
       '<span>Compare to</span>' +
-      '<select onchange="setPriceMovesCmp(\'B\', this.value)" style="' + selStyle + '">' + optionsFor(priceMovesCmpB) + '</select>' +
+      bSelOpen + optionsFor(priceMovesCmpB) + '</select>' +
+      liveBtn +
       '<span style="font-style:italic">· $ impact uses shares held at the baseline</span>' +
     '</div>';
+    if (priceMovesCmpLive) {
+      const s = _pmLiveSummary;
+      let bTxt, bCol;
+      if (_pmLiveBusy) {
+        bTxt = 'Fetching live quotes for every open position…'; bCol = 'var(--color-text-tertiary)';
+      } else if (!s) {
+        bTxt = 'Comparing the baseline to cached live prices. Hit Refresh live to pull fresh quotes for every position.'; bCol = 'var(--color-text-tertiary)';
+      } else if (s.live === 0 && s.prev === 0) {
+        bTxt = '⚠ No live quote returned for any position' + (s.failed.length ? ' (' + s.failed.join(', ') + ')' : '') + '. Check your network or API key.'; bCol = '#fbbf24';
+      } else if (s.live === 0) {
+        bTxt = '⚠ Not live — every value is a previous close (no Finnhub key, or no real-time quote available). Add a key under the API Keys panel for real-time.'; bCol = '#fbbf24';
+      } else if (s.prev > 0 || s.failed.length) {
+        const bits = [s.live + ' real-time'];
+        if (s.prev > 0) bits.push(s.prev + ' previous-close (NOT live)');
+        if (s.failed.length) bits.push(s.failed.length + ' failed: ' + s.failed.join(', '));
+        bTxt = '⚠ Mixed as of ' + fmtPmTs(new Date(s.at).toISOString()) + ' — ' + bits.join(' · ') + '. Names without a real-time quote fell back to previous close.'; bCol = '#fbbf24';
+      } else {
+        bTxt = '✓ Live — all ' + s.live + ' quotes real-time as of ' + fmtPmTs(new Date(s.at).toISOString()) + '.'; bCol = 'var(--color-text-success)';
+      }
+      cmpControls += '<div style="font-size:10px;color:' + bCol + ';background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:6px 10px;margin-bottom:10px;line-height:1.4">' + bTxt + '</div>';
+    }
   }
 
   let body = '';
@@ -12233,7 +12309,7 @@ function renderPriceMoves() {
       } catch (e) { return iso; }
     };
     const prevDateLbl = _shortDate(sl.tsPrev);
-    const nowDateLbl  = _shortDate(sl.tsNow);
+    const nowDateLbl  = (priceMovesView === 'compare' && priceMovesCmpLive) ? 'live' : _shortDate(sl.tsNow);
 
     // Build per-ticker rows (capped to the top PM_VISIBLE; the rest sit behind the toggle row)
     const pmHidden = Math.max(0, rows.length - PM_VISIBLE);
@@ -12326,7 +12402,7 @@ function renderPriceMoves() {
       : '';
 
     const pmMoversHtml = renderPmMovers(rows, 'moveOnPosition', 'pctChange');
-    const pmBookLine = '<div style="font-size:11px;margin-bottom:8px"><span style="color:var(--color-text-tertiary)">' + (priceMovesView === 'compare' ? 'Book over selected window:' : 'Book since last refresh:') + '</span> ' + '<span style="color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(0) + '</span>' + (b.bookPct !== null ? ' <span style="color:' + pColor(b.bookPct) + '">(' + (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%)</span>' : '') + (b.vsVoo !== null ? ' &nbsp;·&nbsp; <span style="color:var(--color-text-tertiary)">vs VOO</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>' : '') + '</div>';
+    const pmBookLine = '<div style="font-size:11px;margin-bottom:8px"><span style="color:var(--color-text-tertiary)">' + (priceMovesView === 'compare' ? (priceMovesCmpLive ? 'Book: baseline → live:' : 'Book over selected window:') : 'Book since last refresh:') + '</span> ' + '<span style="color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(0) + '</span>' + (b.bookPct !== null ? ' <span style="color:' + pColor(b.bookPct) + '">(' + (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%)</span>' : '') + (b.vsVoo !== null ? ' &nbsp;·&nbsp; <span style="color:var(--color-text-tertiary)">vs VOO</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>' : '') + '</div>';
     body = pmBookLine + pmMoversHtml +
       '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;margin-bottom:8px;list-style:none">▸ Full table — all ' + rows.length + ' tickers</summary>' +
       '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
@@ -29160,6 +29236,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08g</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08h</div>
 </body>
 </html>
