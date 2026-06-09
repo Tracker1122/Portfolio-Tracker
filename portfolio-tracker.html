@@ -4235,11 +4235,7 @@ function renderBookExcludePanel(openArr) {
   el.innerHTML = `
     ${banner}
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">Your directly-held book by theme — click to turn a block off</div>
-    </div>
-    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-      Sized by current value of <strong>positions you hold directly</strong> (${fmtD(total)} across ${openArr.length} positions). Click a block — in the bar or the legend — to remove it; the summary cards below recompute without it.
-      <span style="color:var(--color-text-secondary)">These %s won't match "How your holdings move together"</span> — that graph uses <em>true exposure</em> (your look-through share of names inside funds too), so mega-cap-heavy themes like Big Tech read much larger there. This is the direct book only, because direct positions are the only names with a real return to turn off.
+      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">Your directly-held book by theme — Directly held names only — click to turn a block off</div>
     </div>
     ${bar}
     <div style="display:flex;align-items:flex-end;gap:8px;padding:2px 6px 4px;font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;border-bottom:0.5px solid var(--color-border-tertiary);margin-bottom:2px">
@@ -19907,11 +19903,11 @@ function renderThemeClusters() {
 
       <div style="background:var(--color-background-secondary);border-left:3px solid #60a5fa;border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:10px;font-size:11px;line-height:1.55;color:var(--color-text-primary)">
         ${biggest ? `Your biggest moves-together block is <strong style="color:${biggest.pct >= 25 ? '#fbbf24' : 'var(--color-text-primary)'}">${esc(biggest.label)} at ${biggest.pct.toFixed(1)}%</strong> of your book — that's the chunk of you that rises and falls as one bet.` : ''}
-        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">On your whole book you behave like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} effective positions</strong> (by weight; lower = more concentrated). This counts how spread your weight is, not how <em>uncorrelated</em> your bets are — co-moving blocks, and your base's shared equity beta, aren't independent of each other. Your ${data.base.pct.toFixed(1)}% diversified base (VOO's broad holdings + fund tails) isn't a bet — it's hundreds of small positions, and holding that much of it is exactly what makes the count this high. The concentration lives in the themed blocks above it.</div>
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">Your book carries weight like <strong style="color:var(--color-text-secondary)">≈ ${data.effectiveBets.toFixed(1)} effective positions</strong> (lower = more concentrated) — that's how spread your <em>weight</em> is, not how independent your bets are; co-moving blocks and shared market beta aren't separate. The count runs high mainly because your ${data.base.pct.toFixed(1)}% diversified base is hundreds of small, un-themed holdings inside your funds — the real concentration sits in the themed blocks above.</div>
       </div>
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        Names grouped by theme — using your true exposure (direct + everything inside funds you hold, so a name like a mega-cap you only own via VOO still counts toward its theme). The <em>why</em> next to each name explains the grouping: your own tag, or — for untagged names — that the name is a top constituent of the theme's benchmark ETF (its weight <em>inside that benchmark</em>, a classification signal, not a position you hold). ${flagCount ? `<span style="color:#fbbf24">⚠ marks ${flagCount} low-confidence call${flagCount > 1 ? 's' : ''}</span> — names that span clusters or rest on a thin weight. Hit "Reassign names" to fix any.` : ''} This is structural co-movement (same theme/funds), <strong>not</strong> measured return correlation — a name can buck its block.
+        Grouped by theme using <strong>true exposure</strong> (direct + look-through inside your funds, so a mega-cap you hold only via VOO still counts). Each name's <em>why</em> is either your own tag or — if untagged — its weight inside the theme's benchmark ETF (a classification signal, not a holding). ${flagCount ? `<span style="color:#fbbf24">⚠ ${flagCount} low-confidence call${flagCount > 1 ? 's' : ''}</span> — span clusters or rest on a thin weight; use "Reassign names" to fix. ` : ''}Structural co-movement (shared theme/funds), <strong>not</strong> measured correlation — a name can buck its block.
       </div>
 
       ${(() => {
@@ -20064,6 +20060,9 @@ function renderSectorPanel() {
         <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">By sector — what's hiding in your funds</div>
         <button class="btn btn-sm" onclick="toggleSectorTag()" style="font-size:9px">${sectorTagExpanded ? 'Done tagging' : '🏷 Tag sectors' + (redCount ? ' (' + redCount + ' untagged)' : '')}</button>
       </div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
+        Sector = what each holding <em>is</em> (industry), vs the theme view's how-it-trades. This panel's one job: flag what the other views miss — untagged names and undecomposed ETFs (below).${aiCount > 0 ? ` Claude pre-labeled ${aiCount}${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} to verify</span>` : ''} — overridable.` : ''}${data.taggedPct < 100 ? ` <span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged.</span>` : ''}
+      </div>
 
       ${(() => {
         // DIAGNOSTIC PANEL is this section's identity — "what should I check?" — NOT a concentration
@@ -20081,9 +20080,6 @@ function renderSectorPanel() {
         return `<div style="background:rgba(52,211,153,0.06);border:1px solid rgba(52,211,153,0.25);border-radius:var(--border-radius-md);padding:8px 11px;margin-bottom:10px;font-size:10px;color:#34d399"><span style="font-weight:700">✓ All material exposure is tagged and accounted for.</span> No untagged positions or undecomposed ETFs.</div>`;
       })()}
 
-      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        This lens works the <em>sector</em> axis — what each holding <strong>is</strong> (industry), as opposed to the theme view's how-it-trades. Its job here is to flag what the other views can't: untagged positions and undecomposed ETFs — surfaced as the flags above. ${aiCount > 0 ? `Claude pre-labeled ${aiCount} names${verifyCount ? `, <span style="color:#fbbf24">${verifyCount} flagged ⚠ verify</span>` : ''} — yours to override. ` : ''}The full sector ranking mostly echoes the bar above, so it's not shown; tag names below to keep the flags sharp. ${data.taggedPct < 100 ? `<span style="color:var(--color-text-danger)">${data.taggedPct.toFixed(0)}% tagged</span> — flags are a floor until the rest is tagged.` : ''}
-      </div>
       ${data.untagged.total > 0 ? `<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:4px">Untagged: ${fmtD(data.untagged.total)} (${data.untagged.pct.toFixed(1)}%, ${data.untagged.names.length} names) — tag the big ones below.</div>` : ''}
 
       ${sectorTagExpanded ? `
@@ -29646,6 +29642,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09o</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09p</div>
 </body>
 </html>
