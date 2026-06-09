@@ -1342,9 +1342,9 @@
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
       Turn off part of the book to see how the rest performs without it. Non-destructive — it filters this view only, never your data. Only directly-held positions can be excluded; a name held only inside an ETF can't be cleanly removed from that ETF's return.
     </div>
+    <div id="book-exclude-panel" style="margin:6px 0 14px"></div>
     <div class="summary-grid" id="book-isolate-summary" style="margin-bottom:8px"></div>
     <div id="book-isolate-delta" style="margin-bottom:8px"></div>
-    <div id="book-exclude-panel" style="margin:6px 0 20px"></div>
   </div><!-- end tab-analysis -->
 
   <!-- Trade Ideas Tab -->
@@ -4227,7 +4227,7 @@ function renderBookExcludePanel(openArr) {
 
   const banner = bookExcludeActive()
     ? `<div style="background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:7px 12px;margin-bottom:10px;font-size:12px;color:#fbbf24;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-         <span><strong>Summary is filtered</strong> — showing ${shownCount} of ${openArr.length} positions (${excludedCount} turned off). The cards above reflect the book WITHOUT them.</span>
+         <span><strong>Summary is filtered</strong> — showing ${shownCount} of ${openArr.length} positions (${excludedCount} turned off). The cards below reflect the book WITHOUT them.</span>
          <span style="cursor:pointer;text-decoration:underline" onclick="clearBookExclude()">show all</span>
        </div>`
     : '';
@@ -4238,7 +4238,7 @@ function renderBookExcludePanel(openArr) {
       <div style="font-size:11px;font-weight:700;color:var(--color-text-primary)">Your directly-held book by theme — click to turn a block off</div>
     </div>
     <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-      Sized by current value of <strong>positions you hold directly</strong> (${fmtD(total)} across ${openArr.length} positions). Click a block — in the bar or the legend — to remove it; the summary cards above recompute without it.
+      Sized by current value of <strong>positions you hold directly</strong> (${fmtD(total)} across ${openArr.length} positions). Click a block — in the bar or the legend — to remove it; the summary cards below recompute without it.
       <span style="color:var(--color-text-secondary)">These %s won't match "How your holdings move together"</span> — that graph uses <em>true exposure</em> (your look-through share of names inside funds too), so mega-cap-heavy themes like Big Tech read much larger there. This is the direct book only, because direct positions are the only names with a real return to turn off.
     </div>
     ${bar}
@@ -4265,7 +4265,7 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
   const glLabel = isOpen ? 'Gain / Loss' : 'Realised G/L';
   // On the open dashboard and the Isolate card these figures cover only the active (managed) sleeve,
   // not the whole book — flag that so they aren't mistaken for the all-in total. Not shown on closed.
-  const sleeveSub = isOpen ? '<span style="text-transform:none;letter-spacing:0;font-size:8px;display:block;color:var(--color-text-tertiary);font-weight:400">active sleeve</span>' : '';
+  const sleeveSub = isOpen ? '<span style="text-transform:none;letter-spacing:0;font-size:9px;display:block;color:var(--color-text-tertiary);font-weight:400">active sleeve only</span>' : '';
 
   el.innerHTML = `
     ${isOpen && typeof aumCardHtml === 'function' ? aumCardHtml() : ''}
@@ -29645,6 +29645,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09l</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09m</div>
 </body>
 </html>
