@@ -15716,8 +15716,14 @@ function _candPerfBenchParagraph() {
     }
   }
 
+  const _rpTk = (typeof _candScenarioTickers === 'function') ? _candScenarioTickers() : [];
+  const _rpGaps = _rpTk.filter(t => { const p = _candPerf[t]; return !p || p.error; });
+  const _rpForce = _rpGaps.length === 0;
+  const _rpLabel = _candPerfBusy ? 'refreshing…' : (_rpGaps.length ? `fetch the ${_rpGaps.length} still missing` : '↻ refresh prices');
+  const _rpTitle = _rpGaps.length ? `Fetch only the ${_rpGaps.length} ticker(s) that haven't loaded yet (e.g. Polygon rate-limited) — leaves the ones already captured alone.` : 'Re-pull recent performance for every ticker in the scenario from Polygon.';
+  const _rpBtn = _rpTk.length ? `<span onclick="candFetchPerf(${_rpForce})" style="cursor:pointer;color:var(--color-text-info);font-size:9px;text-decoration:underline;text-transform:none;letter-spacing:0;white-space:nowrap;flex:none" title="${escq(_rpTitle)}">${_candPerfBusy ? '' : '↻ '}${_rpLabel}</span>` : '';
   return `<div style="margin-top:5px;padding:8px 11px;border-left:3px solid #a78bfa;background:var(--color-background-tertiary);border-radius:var(--border-radius-md);font-size:10px;line-height:1.6;color:var(--color-text-secondary)">
-    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#a78bfa;font-weight:600">How each name is doing — outright and vs its theme's index</div>
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px"><div style="font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#a78bfa;font-weight:600">How each name is doing — outright and vs its theme's index</div>${_rpBtn}</div>
     <div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:2px">Each row shows the name's own return (%), its gap vs its theme index (percentage points — positive beat the index, negative lagged), and its risk, over the same trailing windows.</div>
     ${cumulative}${rows.join('')}
     <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Benchmarks are fetched per card on demand (↻ compare), so only names you've compared appear here. Price-only, same windows — relative recent return is context, not a forecast.</div>
@@ -15760,12 +15766,6 @@ function _candPositionEffectHtml(tr) {
 function candRenderQueue() {
   const el = document.getElementById('cand-queue'); if (!el) return;
   if (!_candQueue.length) { el.innerHTML = '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic">No moves staged yet. Add one or more above — they combine into a single scenario.</div>'; const _rp0 = document.getElementById('cand-relperf'); if (_rp0) _rp0.innerHTML = ''; return; }
-  const _perfTickers = _candScenarioTickers();
-  const _perfGaps = _perfTickers.filter(t => { const p = _candPerf[t]; return !p || p.error; });
-  const _perfForce = _perfGaps.length === 0; // gaps present → fetch ONLY those (the rate-limited ones); all captured → full re-pull
-  const _perfLabel = _candPerfBusy ? 'refreshing…' : (_perfGaps.length ? `fetch the ${_perfGaps.length} still missing` : 'refresh performance');
-  const _perfTitle = _perfGaps.length ? `Fetch only the ${_perfGaps.length} ticker(s) that haven't loaded yet (e.g. Polygon rate-limited) — leaves the ones already captured alone.` : 'Re-pull recent performance for every ticker in the scenario from Polygon.';
-  const refreshBtn = `<span onclick="candFetchPerf(${_perfForce})" style="cursor:pointer;color:var(--color-text-info);font-size:8px;text-decoration:underline;text-transform:none;letter-spacing:0" title="${escq(_perfTitle)}">↻ ${_perfLabel}</span>`;
   const tot = _candQueueTotals();
   const netCol = tot.net > 0 ? 'var(--color-text-success)' : tot.net < 0 ? 'var(--color-text-danger)' : 'var(--color-text-secondary)';
   const totalsLine = `<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:11px;margin-bottom:5px;padding:4px 9px;background:var(--color-background-secondary);border-radius:var(--border-radius-md)">
@@ -15773,7 +15773,7 @@ function candRenderQueue() {
     <span style="color:var(--color-text-secondary)">Trimming <strong style="color:var(--color-text-primary)">${fmtDollarWhole(tot.trims)}</strong>${tot.nTrim ? ` <span style="color:var(--color-text-tertiary)">(${tot.nTrim})</span>` : ''}</span>
     <span style="color:var(--color-text-secondary)">Net cash <strong style="color:${netCol}">${tot.net >= 0 ? '+' : '−'}${fmtDollarWhole(Math.abs(tot.net))}</strong> <span style="color:var(--color-text-tertiary)">${tot.net >= 0 ? 'freed' : 'to fund'}</span></span>
   </div>`;
-  el.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px"><span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Scenario (${_candQueue.length} move${_candQueue.length === 1 ? '' : 's'})</span>${refreshBtn}</div>` +
+  el.innerHTML = `<div style="margin-bottom:3px"><span style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">Scenario (${_candQueue.length} move${_candQueue.length === 1 ? '' : 's'})</span></div>` +
     totalsLine +
     _candMomentumSummary() +
     _candQueue.map((tr, i) => `<div style="padding:3px 8px 4px;background:${i === _candEditIdx ? 'rgba(96,165,250,0.16)' : (tr.kind === 'trim' ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)')};border-left:3px solid ${tr.kind === 'trim' ? 'var(--color-text-danger)' : 'var(--color-text-success)'};border-radius:var(--border-radius-md);margin-bottom:3px${i === _candEditIdx ? ';outline:1px solid var(--color-text-info)' : ''}">
@@ -22201,19 +22201,14 @@ function renderEvaltradeRiskMirror() {
     host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;line-height:1.45;margin:4px 0">No stress test run yet. Use the <strong>⚡ Stress-test this scenario in Risk Review</strong> button below to replay your staged trade through a real historical window — the chart will appear here when you come back.</div>`;
     return;
   }
-  const lead = restored
-    ? 'Saved from your last stress test (Risk Review rebuilds its own state each session) — '
-    : 'Mirrored from Risk Review — ';
-  const tail = restored ? 'Re-run via the stress-test button below to refresh it.' : 'To change it, use the stress-test button below.';
-  const savedTag = restored ? ` <span style="font-weight:400;color:var(--color-text-tertiary)">· saved</span>` : '';
-  const head =
-    `<div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin:2px 0 2px">Stress test — ${esc(r.windowLabel || r.windowId)}${r.dateRange ? ` <span style="font-weight:400;color:var(--color-text-tertiary)">(${esc(r.dateRange)})</span>` : ''}${savedTag}</div>` +
-    `<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.45;margin-bottom:6px">${lead}how your active sleeve${r.hasHypothetical ? ' (and the staged trade, folded in)' : ''} would have moved through this real past window. Past behavior, not a forecast. ${tail}</div>`;
+  const note = restored
+    ? 'Saved from your last stress test (Risk Review rebuilds its own state each session) — re-run via the stress-test button below to refresh it.'
+    : 'Mirrored from Risk Review — to change the window, use the stress-test button below.';
   let body = r.eventHtml || '';
   if (r.hasHypothetical && r.hypoHtml) {
     body += `<div style="font-size:10px;font-weight:600;color:var(--color-text-secondary);margin:12px 0 2px">With the staged trade folded in</div>` + r.hypoHtml;
   }
-  host.innerHTML = `<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-secondary)">${head}${body}</div>`;
+  host.innerHTML = `<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 5px">${note}</div>` + body;
 }
 
 
@@ -28617,10 +28612,11 @@ init();
       }
     } catch (e) { ladder = ''; }
     return '<div style="border:1px solid var(--color-border-tertiary);border-radius:8px;padding:10px 12px;margin:8px 0;background:var(--color-background-secondary)">' +
-      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">' +
+      ((opts && opts.noTitle) ? '' :
+       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">' +
         '<strong style="font-size:12px;color:var(--color-text-primary)">' + model.windowLabel + '</strong>' +
         (model.dateRange ? '<span style="font-size:10px;color:var(--color-text-tertiary)">' + model.dateRange + '</span>' : '') +
-      '</div>' +
+      '</div>') +
       briefing +
       (model.scenarioNote ? '<div style="font-size:9.5px;line-height:1.45;margin:5px 0 0;padding:5px 8px;border:1px solid var(--color-text-info, #60a5fa);border-radius:6px;background:rgba(96,165,250,0.08);color:var(--color-text-secondary)"><strong style="color:var(--color-text-info, #60a5fa)">Hypothetical sleeve</strong> \u2014 ' + model.scenarioNote + '</div>' : '') +
       replaySummaryText(model) +
@@ -29117,7 +29113,7 @@ init();
         stresses: win ? (win.stresses || '') : '',
         hasHypothetical: !!hypoModel,
         eventHtml: curModel ? renderReplayCard(curModel) : '',
-        hypoHtml: hypoModel ? renderReplayCard(hypoModel, { noBriefing: !!curModel }) : '',
+        hypoHtml: hypoModel ? renderReplayCard(hypoModel, { noBriefing: !!curModel, noTitle: !!curModel }) : '',
         themeMapHtml: (function () { try { return renderThemeFactorGrid(); } catch (e) { return ''; } })()
       };
     } catch (e) { return { active: false }; }
@@ -29128,6 +29124,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08t</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08u</div>
 </body>
 </html>
