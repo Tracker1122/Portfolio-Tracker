@@ -12404,8 +12404,10 @@ function renderPriceMoves() {
     const headline = '<div style="font-size:12px;color:var(--color-text-primary);margin-bottom:6px">Over <b>' + esc(D.base) + ' → ' + esc(D.end) + '</b>, the value of your current holdings moved ' + _pmUsd(D.bookMove) + ' (' + _pmPct(D.bookPct) + ')' + vooStr + '.</div>';
     let pmFresh = '';
     if (D.endBarMs && typeof freshnessLabel === 'function') {
-      const _flE = freshnessLabel({ barDate: _etDayKey(D.endBarMs) });
-      const _eff = _etDayKey(D.endBarMs);
+      // Bar timestamps are midnight-UTC markers of the trading DATE — read them in UTC, not ET, or the
+      // date rolls back a day (a Mon 00:00Z bar is Sun evening ET, which mislabeled it "Sun, Jun 7").
+      const _eff = new Date(D.endBarMs).toISOString().slice(0, 10);
+      const _flE = freshnessLabel({ barDate: _eff });
       const _mismatch = (_eff && D.end && _eff < D.end) ? ' \u00b7 you asked through ' + esc(D.end) + ', but the freshest close available is ' + esc(_eff) : '';
       pmFresh = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px" title="' + esc(_flE.title) + '">Closes through <b style="color:var(--color-text-secondary);font-weight:600">' + esc(_flE.full) + '</b>' + _mismatch + '</div>';
     }
@@ -29373,6 +29375,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09d</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09e</div>
 </body>
 </html>
