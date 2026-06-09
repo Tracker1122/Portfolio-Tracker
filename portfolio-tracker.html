@@ -5137,6 +5137,8 @@ let intelSortDir = 'desc';
 let intelOpenKey = null;        // which theme row is currently expanded (one at a time)
 let distOpenKey = null;         // which Top Holdings full-table row is currently expanded
 let priceMovesView = 'allTime'; // 'sinceLast' or 'allTime' — view toggle for the price-moves panel (opens to all-refreshes by request)
+let priceMovesCmpA = null; // Compare-two view: ts (ISO) of the baseline (A) priceHistory entry
+let priceMovesCmpB = null; // Compare-two view: ts (ISO) of the compare-to (B) priceHistory entry
 // Sort state for the price-moves table. col = column key, dir = 'asc' | 'desc'.
 // Keys are deliberately stable across both tabs where possible (ticker, perShare, moveOnPosition,
 // pctChange); priceFrom / priceTo / bench / trend are tab-specific. When the user clicks a column
@@ -11926,8 +11928,58 @@ function computePriceMoves(history, posList) {
 }
 
 function setPriceMovesView(view) {
-  priceMovesView = (view === 'allTime') ? 'allTime' : 'sinceLast';
+  priceMovesView = (view === 'allTime') ? 'allTime' : (view === 'compare') ? 'compare' : 'sinceLast';
   renderPriceMoves();
+}
+
+// Compare-two view: pick which baseline (A) / compare-to (B) snapshot the panel diffs.
+function setPriceMovesCmp(which, ts) {
+  if (which === 'A') priceMovesCmpA = ts;
+  else priceMovesCmpB = ts;
+  renderPriceMoves();
+}
+
+// Price moves between any two chosen snapshots, A (baseline) -> B (compare-to). Mirrors the
+// "since last refresh" math: dollar impact uses shares held as of A, so it reads as a true
+// price move on the position as it stood at the baseline, uncontaminated by buys/sells in the
+// window. Returns the same shape as result.sinceLast so the existing renderer consumes it as-is.
+function computePriceMovesPair(entryA, entryB, posList) {
+  const currShares = {};
+  (posList || []).filter(p => !p.closed && p.ticker).forEach(p => {
+    const t = (p.ticker || '').toUpperCase().trim();
+    const sh = parseFloat(p.shares) || 0;
+    if (!t || sh <= 0) return;
+    currShares[t] = (currShares[t] || 0) + sh;
+  });
+  const rows = [];
+  const allTickers = new Set([
+    ...Object.keys(entryA.prices || {}),
+    ...Object.keys(entryB.prices || {})
+  ]);
+  for (const t of allTickers) {
+    const pA = entryA.prices ? entryA.prices[t] : undefined;
+    const pB = entryB.prices ? entryB.prices[t] : undefined;
+    const sA = (entryA.shares ? entryA.shares[t] : undefined) || 0;
+    const sNow = currShares[t] || 0;
+    if (pA === undefined && pB !== undefined) { rows.push({ ticker: t, isNew: true, priceNow: pB, sharesNow: sNow }); continue; }
+    if (pB === undefined) { rows.push({ ticker: t, isMissing: true, pricePrev: pA, sharesThen: sA }); continue; }
+    const perShare = pB - pA;
+    const pctChange = pA > 0 ? (perShare / pA) * 100 : null;
+    const moveOnPosition = sA * perShare; // shares as of baseline A
+    rows.push({ ticker: t, pricePrev: pA, priceNow: pB, perShare, pctChange, sharesThen: sA, sharesNow: sNow, moveOnPosition, sharesChanged: sA !== sNow });
+  }
+  let bookThen = 0, bookNow = 0;
+  rows.forEach(r => { if (r.isNew || r.isMissing) return; bookThen += (r.sharesThen || 0) * r.pricePrev; bookNow += (r.sharesThen || 0) * r.priceNow; });
+  const bookMove = bookNow - bookThen;
+  const bookPct = bookThen > 0 ? (bookMove / bookThen) * 100 : null;
+  let vooPct = null;
+  if (typeof entryA.vooPrice === 'number' && entryA.vooPrice > 0 && typeof entryB.vooPrice === 'number' && entryB.vooPrice > 0) {
+    vooPct = ((entryB.vooPrice - entryA.vooPrice) / entryA.vooPrice) * 100;
+  } else if (typeof entryA.spxLive === 'number' && entryA.spxLive > 0 && typeof entryB.spxLive === 'number' && entryB.spxLive > 0) {
+    vooPct = ((entryB.spxLive - entryA.spxLive) / entryA.spxLive) * 100;
+  }
+  const vsVoo = (bookPct !== null && vooPct !== null) ? bookPct - vooPct : null;
+  return { tsPrev: entryA.ts, tsNow: entryB.ts, rows, book: { bookThen, bookNow, bookMove, bookPct, vooPct, vsVoo } };
 }
 
 // Format a short timestamp for header strip — keeps user-facing labels concise.
@@ -12047,8 +12099,9 @@ function renderPriceMoves() {
     : '';
   const headerStrip = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">' +
     '<div style="display:flex;gap:6px">' +
-      tabBtn('Since last refresh', isSince, "setPriceMovesView('sinceLast')") +
-      tabBtn('Across all refreshes', !isSince, "setPriceMovesView('allTime')") +
+      tabBtn('Since last refresh', priceMovesView === 'sinceLast', "setPriceMovesView('sinceLast')") +
+      tabBtn('Across all refreshes', priceMovesView === 'allTime', "setPriceMovesView('allTime')") +
+      tabBtn('Compare two', priceMovesView === 'compare', "setPriceMovesView('compare')") +
     '</div>' +
     '<div style="font-size:10px;color:var(--color-text-tertiary)">' +
       histCount + ' / ' + MAX_PRICE_HISTORY + ' refreshes captured' + capNote +
@@ -12082,11 +12135,42 @@ function renderPriceMoves() {
     return '<th onclick="setPriceMovesSort(\'' + colKey + '\')" style="padding:4px 8px;text-align:' + align + ';cursor:pointer;user-select:none' + activeStyle + '"' + titleAttr + '>' + label + arrow + '</th>';
   };
 
+  // ── Compare-two: resolve the chosen A/B snapshots and compute the custom window. ──
+  let cmpResult = null;
+  let cmpControls = '';
+  if (priceMovesView === 'compare') {
+    const sortedH = [...priceHistory].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    const findByTs = (ts) => sortedH.find(e => e.ts === ts) || null;
+    let eA = findByTs(priceMovesCmpA);
+    let eB = findByTs(priceMovesCmpB);
+    if (!eA) eA = sortedH[sortedH.length - 2]; // default baseline = second-to-last
+    if (!eB) eB = sortedH[sortedH.length - 1]; // default compare-to = latest
+    priceMovesCmpA = eA ? eA.ts : null;
+    priceMovesCmpB = eB ? eB.ts : null;
+    if (eA && eB) cmpResult = computePriceMovesPair(eA, eB, positions);
+    const optLabel = (e) => {
+      const dd = fmtAsOfDate(e.asOf);
+      return dd ? (dd + ' · pulled ' + fmtPmTs(e.ts)) : ('pulled ' + fmtPmTs(e.ts));
+    };
+    const optionsFor = (selTs) => sortedH.map(e =>
+      '<option value="' + esc(e.ts) + '"' + (e.ts === selTs ? ' selected' : '') + '>' + esc(optLabel(e)) + '</option>'
+    ).join('');
+    const selStyle = 'background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:3px 6px';
+    cmpControls = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--color-text-tertiary)">' +
+      '<span>Baseline</span>' +
+      '<select onchange="setPriceMovesCmp(\'A\', this.value)" style="' + selStyle + '">' + optionsFor(priceMovesCmpA) + '</select>' +
+      '<span style="color:var(--color-text-secondary)">→</span>' +
+      '<span>Compare to</span>' +
+      '<select onchange="setPriceMovesCmp(\'B\', this.value)" style="' + selStyle + '">' + optionsFor(priceMovesCmpB) + '</select>' +
+      '<span style="font-style:italic">· $ impact uses shares held at the baseline</span>' +
+    '</div>';
+  }
+
   let body = '';
 
   if (isSince) {
-    // ── SINCE LAST REFRESH ──
-    const sl = result.sinceLast;
+    // ── SINCE LAST REFRESH (also renders the Compare-two custom window) ──
+    const sl = (priceMovesView === 'compare' && cmpResult) ? cmpResult : result.sinceLast;
 
     // Resolve a row's bench ticker for sort-by-theme. "self"-benchmarked rows go to the
     // bottom intentionally — they're a different category (no theme to group with), and the
@@ -12242,7 +12326,7 @@ function renderPriceMoves() {
       : '';
 
     const pmMoversHtml = renderPmMovers(rows, 'moveOnPosition', 'pctChange');
-    const pmBookLine = '<div style="font-size:11px;margin-bottom:8px"><span style="color:var(--color-text-tertiary)">Book since last refresh:</span> ' + '<span style="color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(0) + '</span>' + (b.bookPct !== null ? ' <span style="color:' + pColor(b.bookPct) + '">(' + (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%)</span>' : '') + (b.vsVoo !== null ? ' &nbsp;·&nbsp; <span style="color:var(--color-text-tertiary)">vs VOO</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>' : '') + '</div>';
+    const pmBookLine = '<div style="font-size:11px;margin-bottom:8px"><span style="color:var(--color-text-tertiary)">' + (priceMovesView === 'compare' ? 'Book over selected window:' : 'Book since last refresh:') + '</span> ' + '<span style="color:' + dColor(b.bookMove) + ';font-weight:700">' + (b.bookMove >= 0 ? '+' : '−') + '$' + Math.abs(b.bookMove).toFixed(0) + '</span>' + (b.bookPct !== null ? ' <span style="color:' + pColor(b.bookPct) + '">(' + (b.bookPct >= 0 ? '+' : '') + b.bookPct.toFixed(2) + '%)</span>' : '') + (b.vsVoo !== null ? ' &nbsp;·&nbsp; <span style="color:var(--color-text-tertiary)">vs VOO</span> <span style="color:' + pColor(b.vsVoo) + ';font-weight:600">' + (b.vsVoo >= 0 ? '+' : '') + b.vsVoo.toFixed(2) + 'pp</span>' : '') + '</div>';
     body = pmBookLine + pmMoversHtml +
       '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:11px;color:var(--color-text-info);user-select:none;margin-bottom:8px;list-style:none">▸ Full table — all ' + rows.length + ' tickers</summary>' +
       '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
@@ -12361,7 +12445,7 @@ function renderPriceMoves() {
       '<div style="margin-top:8px;font-size:10px">' + vooLine + vsVooLine + '</div>' + '</details>';
   }
 
-  el.innerHTML = headerStrip + asOfStrip + body;
+  el.innerHTML = headerStrip + asOfStrip + cmpControls + body;
 }
 
 function renderSleeveValueAdd() {
@@ -13022,6 +13106,28 @@ function _resolveBenchForRow(rowTicker) {
 // captured (don't pollute history with empty rows from a failed fetch). Enforces
 // MAX_PRICE_HISTORY rolling cap via FIFO eviction.
 // ─────────────────────────────────────────────
+// Trading-day key (YYYY-MM-DD in US Eastern / market time) for an as-of ms epoch.
+// Used to detect a refresh that landed on the same trading session as the last one.
+function _asOfDayKey(ms) {
+  if (typeof ms !== 'number' || !(ms > 0)) return '';
+  try {
+    return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  } catch (e) { return ''; }
+}
+
+// True when two price maps cover the same tickers with identical values — the fallback
+// duplicate test for entries captured before as-of dates existed.
+function _pricesIdentical(a, b) {
+  if (!a || !b) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length === 0 || ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (b[k] === undefined) return false;
+    if (Number(a[k]) !== Number(b[k])) return false;
+  }
+  return true;
+}
+
 function capturePriceHistoryPoint(asOfMs) {
   try {
     const open = positions.filter(p => !p.closed && p.ticker);
@@ -13042,20 +13148,51 @@ function capturePriceHistoryPoint(asOfMs) {
       pricesByTicker[t] = px;
     });
     // If zero successful prices, don't write a row.
-    if (Object.keys(pricesByTicker).length === 0) return;
-    const entry = {
+    if (Object.keys(pricesByTicker).length === 0) return 'noop';
+
+    const asOf = (typeof asOfMs === 'number' && asOfMs > 0) ? asOfMs : null;
+    const buildEntry = () => ({
       ts: new Date().toISOString(),
-      asOf: (typeof asOfMs === 'number' && asOfMs > 0) ? asOfMs : null,
+      asOf: asOf,
       prices: pricesByTicker,
       shares: sharesByTicker,
       spxLive: (typeof spxLive === 'number' && isFinite(spxLive) && spxLive > 0) ? spxLive : null,
       vooPrice: (typeof spCurrentPrice === 'number' && isFinite(spCurrentPrice) && spCurrentPrice > 0) ? spCurrentPrice : null
-    };
-    priceHistory.push(entry);
+    });
+
+    // ── B4: don't append a duplicate close. If this refresh's prices are from the same
+    // trading day as the last snapshot (a weekend/holiday refresh where no new close has
+    // printed), appending would create a zero-movement comparison point and could push the
+    // last genuine baseline out of view. Prefer the trading-date check (B3); fall back to a
+    // price-identity check for older entries captured before as-of dates existed.
+    const last = priceHistory.length ? priceHistory[priceHistory.length - 1] : null;
+    if (last) {
+      const haveDates = !!(asOf && last.asOf);
+      const sameDay = haveDates ? (_asOfDayKey(asOf) === _asOfDayKey(last.asOf)) : false;
+      const samePrices = !haveDates ? _pricesIdentical(pricesByTicker, last.prices) : false;
+      if (sameDay || samePrices) {
+        const dayStr = asOf ? fmtAsOfDate(asOf) : (last.asOf ? fmtAsOfDate(last.asOf) : 'the same trading day');
+        const why = sameDay
+          ? 'These prices are from the same trading day (' + dayStr + ') as your last refresh — no new market close has printed since.'
+          : 'These prices look identical to your last refresh — no new market data appears to have printed.';
+        const ok = confirm(why + '\n\n' +
+          'Adding this as a new snapshot would create a comparison with zero movement and could push your last genuine baseline out of view.\n\n' +
+          'OK — update the existing snapshot in place (recommended; no new comparison point)\n' +
+          'Cancel — leave your snapshots untouched');
+        if (ok) {
+          priceHistory[priceHistory.length - 1] = buildEntry();
+          return 'replaced';
+        }
+        return 'skipped';
+      }
+    }
+
+    priceHistory.push(buildEntry());
     // FIFO cap
     if (priceHistory.length > MAX_PRICE_HISTORY) {
       priceHistory.splice(0, priceHistory.length - MAX_PRICE_HISTORY);
     }
+    return 'appended';
   } catch (e) {
     // Capture is best-effort — never let it break the refresh flow.
     console.warn('capturePriceHistoryPoint failed:', e);
@@ -13211,7 +13348,9 @@ async function refreshAllPrices() {
   // trading day; take the max defensively. Stays null if nothing usable came back.
   let refreshAsOfMs = null;
   results.forEach(r => { if (r && typeof r.asOfMs === 'number' && r.asOfMs > 0 && (refreshAsOfMs === null || r.asOfMs > refreshAsOfMs)) refreshAsOfMs = r.asOfMs; });
-  capturePriceHistoryPoint(refreshAsOfMs);
+  const _capResult = capturePriceHistoryPoint(refreshAsOfMs);
+  if (status && _capResult === 'replaced') status.textContent += ' · same trading day, snapshot updated in place';
+  else if (status && _capResult === 'skipped') status.textContent += ' · same trading day, snapshot left unchanged';
   renderAll(); scheduleSave();
   setTimeout(() => { if (status) { status.textContent = ''; status.style.color = ''; } }, 20000);
 }
@@ -29021,6 +29160,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08e</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-08g</div>
 </body>
 </html>
