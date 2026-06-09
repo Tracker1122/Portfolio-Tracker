@@ -1437,9 +1437,19 @@
     <!-- ── Mode 2: Sized what-if scenario — relocated from the Theme Level Review tab. -->
     <!-- renderCandidatePanel() mounts here (keeps its own internal heading/intro); ID preserved so -->
     <!-- renderCandidatePanel / candCompute / candStageFromDiscovery keep finding it by string. ── -->
-    <div id="theme-candidate-panel" style="margin-top:18px"></div>
-    <div id="evaltrade-risk-mirror" style="margin-top:18px"></div>
-    <div id="theme-ai-review" style="margin-top:18px"></div>
+    <!-- Scenario moves: always visible at the top of the build area -->
+    <div id="cand-queue" style="margin-top:18px"></div>
+    <!-- ONE collapsed tab: build & adjust the trade + the stress test -->
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);padding:6px 0">Build &amp; adjust the trade &middot; stress test</summary>
+      <div id="theme-candidate-panel" style="margin-top:6px"></div>
+      <div id="evaltrade-risk-mirror" style="margin-top:18px"></div>
+    </details>
+    <!-- AI analysis: its own collapsed tab (long, so it gets its own toggle) -->
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);padding:6px 0">AI analysis &mdash; your book &amp; the staged trade</summary>
+      <div id="theme-ai-review" style="margin-top:6px"></div>
+    </details>
 
   </div><!-- end tab-evaltrade -->
 
@@ -14672,8 +14682,8 @@ function _candShellHtml() {
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-sm" onclick="candAddToQueue()" style="font-size:11px">+ Add trim</button>
       <button class="btn btn-sm" onclick="candClearScenario()" style="font-size:11px">Clear trade</button>
+      <button class="btn btn-sm" onclick="candExportPdf()" style="font-size:11px" title="Open a print-friendly report (staged trade, combined impact, both private-deal bases, the risk-review chart, and the AI analysis) — then use your browser’s Save as PDF.">⤓ Export PDF</button>
     </div>
-    <div id="cand-queue" style="margin-top:8px"></div>
     <div id="cand-output" style="margin-top:12px"></div>
   `;
 }
@@ -21997,7 +22007,6 @@ function renderThemeAiReview() {
 
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">AI analysis — your book and the staged trade</div>
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
         A one-shot read of your whole book: what's already visible in the structure, where the gaps are, and the open questions worth taking to a full evaluation. If you have a trade staged below, it also reads the staged moves and folds in your own typed vetting for each buy — holding your stated reason for the buy against what it does to concentration, tax, and performance. Observations and questions only — it hands candidates to New Position Evaluation, it doesn't evaluate, recommend, or tell you to buy/sell/rebalance.
         
@@ -22005,7 +22014,6 @@ function renderThemeAiReview() {
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <button class="btn btn-sm btn-primary" onclick="runBookAiReview()" ${bookAiBusy ? 'disabled' : ''} style="font-size:10px">${bookAiBusy ? 'Reviewing…' : (bookAiReview ? (stale ? '↻ Re-analyze (inputs changed)' : '↻ Re-run analysis') : 'Analyze my book & trade with AI')}</button>
         <span style="font-size:9px;color:var(--color-text-tertiary)" title="Estimated before sending. Sonnet ~$3/M input, ~$15/M output. Input is measured from the prompt; output is a ~1200-token ceiling assumption — actuals shown after the call.">Est. cost this call: <strong style="color:var(--color-text-secondary)">~${costStr}</strong> (${estIn.toLocaleString()} input tokens + ~${estOut} output)</span>
-        ${(!_bookAiReRunning && (bookAiReview || (typeof _candQueue !== 'undefined' && _candQueue.length))) ? `<button class="btn btn-sm" onclick="candExportPdf()" style="font-size:10px;margin-left:auto" title="Open a print-friendly report (staged trade, combined impact, both private-deal bases, the risk-review chart, and this AI analysis) — then use your browser's Save as PDF.">⤓ Export PDF</button>` : ''}
       </div>
       <div id="book-ai-output"></div>
       ${_bookAiReRunning ? '' : result}
@@ -28750,8 +28758,8 @@ init();
       bar = document.createElement('div');
       bar.className = 'risk-stress-bar';
       bar.style.cssText = 'margin:8px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
-      var anchor = panel.querySelector('#theme-ai-review');
-      if (anchor) panel.insertBefore(bar, anchor); else panel.insertBefore(bar, panel.firstChild);
+      var anchor = panel.querySelector('#evaltrade-risk-mirror');
+      if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(bar, anchor); else panel.insertBefore(bar, panel.firstChild);
     }
     var recos = recommendStressEvents(scenarioFactorWeights(), 3);
     var recoLine = recos.length
