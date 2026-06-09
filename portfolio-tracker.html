@@ -2511,6 +2511,8 @@ let realizedPeDeals = []; // PE deals that have exited (IPO'd / acquired) — ke
 let qualityReviews = []; // saved pre-purchase quality checklists for stock/ETF candidates
 // peDeal shape: { id, company, investmentDate, amountInvested, currentValue, lastValuationDate, stage, notes }
 let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Benchmarks
+let refreshPricesAsOfMs = null; // close DATE (ms) of the last Refresh Prices /prev pull (it's a prev close, not live)
+let benchmarkAsOfMs = null;     // close DATE (ms) of the last Get Benchmarks /prev pull
 let benchmarkPricesDate = null; // ISO timestamp of last benchmark fetch
 // Expense ratios (annual %, e.g. 0.18 = 0.18%/yr) for benchmark ETFs. Used to decompose
 // theme alpha into "fee tailwind" (the edge you get just from not paying the benchmark's fee,
@@ -5831,7 +5833,7 @@ async function getBenchmarkPrices() {
     try {
       const res = await fetchWithTimeout(url, 8000);
       const data = await res.json();
-      if (data.results && data.results.length > 0) return { ticker, price: data.results[0].c };
+      if (data.results && data.results.length > 0) return { ticker, price: data.results[0].c, asOfMs: (typeof data.results[0].t === 'number' && data.results[0].t > 0) ? data.results[0].t : null };
       return { ticker, price: null };
     } catch(e) { return { ticker, price: null }; }
   }
@@ -5875,6 +5877,7 @@ async function getBenchmarkPrices() {
   });
 
   if (updated > 0) benchmarkPricesDate = new Date().toISOString();
+  if (updated > 0) benchmarkAsOfMs = results.reduce((m, r) => (r && r.asOfMs && (!m || r.asOfMs > m)) ? r.asOfMs : m, null);
 
   btn.disabled = false; btn.textContent = '\u27f3 Get Benchmarks';
   const ts = new Date().toLocaleTimeString();
@@ -6735,7 +6738,7 @@ function renderStaleTags() {
     }
   });
 
-  const setTag = (id, isoTimestamp, neverLabel) => {
+  const setTag = (id, isoTimestamp, neverLabel, kind, asOfMs) => {
     const el = document.getElementById(id);
     if (!el) return;
     if (!isoTimestamp) {
@@ -6745,26 +6748,24 @@ function renderStaleTags() {
       return;
     }
     const ago = fmtTimeAgo(isoTimestamp);
-    // Beyond "how long since YOU pulled", say what the data most likely IS, from the US market session
-    // at the moment of the pull (pre-open \u2192 prior close; open \u2192 intraday; after close \u2192 today's close),
-    // plus the session right now so you know whether a refresh could even get something newer.
-    const _nowSess = (typeof usMarketSession === 'function') ? usMarketSession(Date.now()) : { state: 'unknown' };
-    const _fetchSess = (typeof usMarketSession === 'function') ? usMarketSession(new Date(isoTimestamp).getTime()) : { state: 'unknown' };
-    const _nowShort = _nowSess.state === 'open' ? 'market open' : _nowSess.state === 'pre' ? 'pre-market' : _nowSess.state === 'post' ? 'after close' : _nowSess.state === 'weekend' ? 'weekend' : '';
-    const _repr = _fetchSess.state === 'open' ? 'an intraday price (market was open when you pulled)'
-                : _fetchSess.state === 'pre' ? "the prior session\u2019s close (pulled pre-market)"
-                : _fetchSess.state === 'post' ? "that day\u2019s close (pulled after the close)"
-                : _fetchSess.state === 'weekend' ? 'the prior Friday close (pulled on a weekend)'
-                : '';
-    el.textContent = ago ? ('Last: ' + ago + (_nowShort ? ' \u00b7 ' + _nowShort : '')) : '';
     el.style.color = staleColorFor(isoTimestamp);
-    const _nowSentence = _nowSess.state === 'open' ? 'open.' : _nowSess.state === 'weekend' ? 'closed (weekend).' : _nowSess.state === 'pre' ? 'pre-open.' : _nowSess.state === 'post' ? 'closed for the day.' : '';
-    el.title = (ago ? 'Pulled ' + ago + (_repr ? ', so this is likely ' + _repr + '.' : '.') : '') + (_nowSentence ? ' Right now the US market is ' + _nowSentence : '');
+    if (kind === 'prevclose') {
+      // Polygon /prev returns the PREVIOUS completed daily close \u2014 never a live mid-session quote.
+      // Label it by what it is (with the close's real date), so it can't be misread as "live now".
+      let dlbl = '';
+      if (asOfMs) { try { dlbl = _etDateLabel(new Date(asOfMs).toISOString().slice(0, 10)); } catch (e) {} }
+      el.textContent = 'Last: ' + (ago || '\u2014') + (dlbl ? ' \u00b7 prev close ' + dlbl : ' \u00b7 prev close');
+      el.title = 'Previous trading day\u2019s closing prices' + (dlbl ? ' (' + dlbl + ')' : '') + ', fetched ' + (ago || 'recently') + '. This source returns end-of-day closes only \u2014 NOT a live quote; the market being open now does not make it live. Re-fetch after the next close to advance the date.';
+      return;
+    }
+    // 'quote' (Yahoo S&P level): a live snapshot during market hours, the last close otherwise.
+    el.textContent = ago ? ('Last: ' + ago) : '';
+    el.title = 'Yahoo S&P 500 level, fetched ' + (ago || 'recently') + ' \u2014 a live snapshot during market hours, the last close otherwise.';
   };
 
-  setTag('refresh-prices-stale', mostRecentPosFetch, 'Never');
-  setTag('get-benchmarks-stale', benchmarkPricesDate, 'Never');
-  setTag('spx-stale', spxLiveDate, 'Manual entry');
+  setTag('refresh-prices-stale', mostRecentPosFetch, 'Never', 'prevclose', refreshPricesAsOfMs);
+  setTag('get-benchmarks-stale', benchmarkPricesDate, 'Never', 'prevclose', benchmarkAsOfMs);
+  setTag('spx-stale', spxLiveDate, 'Manual entry', 'quote');
 }
 
 // ─────────────────────────────────────────────
@@ -13290,6 +13291,7 @@ async function refreshAllPrices() {
 
   // Apply prices
   const fetchedAt = new Date().toISOString();
+  refreshPricesAsOfMs = results.reduce((m, r) => (r && r.asOfMs && (!m || r.asOfMs > m)) ? r.asOfMs : m, null);
   let updated = 0, failed = [];
   results.forEach(({ ticker, price }) => {
     if (!price) { failed.push(ticker); return; }
@@ -29375,6 +29377,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09e</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09f</div>
 </body>
 </html>
