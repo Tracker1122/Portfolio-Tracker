@@ -143,6 +143,17 @@
     border-radius: var(--border-radius-md);
     padding: 10px 12px;
   }
+  /* Isolate-card summary grid: don't let the tall AUM tile stretch its short neighbours; pack the
+     cards to the left with spare width as a right-hand gutter; AUM (first card) spans a 2-row block
+     so the short cards stack beside/under it. Scoped by id — the dashboard grid is unaffected. */
+  #book-isolate-summary {
+    grid-template-columns: repeat(4, minmax(140px, 180px));
+    align-items: start;
+    justify-content: start;
+  }
+  #book-isolate-summary > .summary-card:first-child {
+    grid-row: span 2;
+  }
   .summary-card-label {
     font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em;
     color: var(--color-text-tertiary); margin-bottom: 4px;
@@ -29642,6 +29653,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09p</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09q</div>
 </body>
 </html>
