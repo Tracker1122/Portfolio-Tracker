@@ -5885,6 +5885,79 @@ function buildAskSnapshot() {
       lines.push('TRUE ALL-IN SIZE = public book + private at cost = ' + fmt(c.fullBook + pe.totalCost) + '. The cluster % above are of the PUBLIC book only; private deals are additional direct exposure on top.');
     }
   } catch (e) {}
+
+  // ---- Per-position detail: cost basis, UNREALIZED gain, account, holding-period tax status ----
+  try {
+    var openPos = positions.filter(function (p) { return !p.closed && p.ticker; });
+    if (openPos.length) {
+      var nowMs = Date.now();
+      var rowsP = openPos.map(function (p) {
+        var cp = calcPos(p);
+        var days = p.dateBought ? Math.floor((nowMs - new Date(p.dateBought).getTime()) / 86400000) : null;
+        return { p: p, cp: cp, lt: (days == null) ? '?' : (days >= 365 ? 'LT' : 'ST') };
+      }).sort(function (a, b) { return (b.cp.exitValue || 0) - (a.cp.exitValue || 0); });
+      lines.push('');
+      lines.push('POSITION DETAIL (open holdings; value | cost basis | UNREALIZED gain | account | tax holding status LT=long-term / ST=short-term):');
+      rowsP.forEach(function (r) {
+        var cp = r.cp, p = r.p;
+        var g = cp.gainLoss || 0;
+        var ret = (typeof cp.yourReturn === 'number') ? cp.yourReturn : null;
+        lines.push('- ' + (p.ticker || '?') + ' (' + (p.account || '?') + (p.sleeve ? ', ' + p.sleeve : '') + '): ' + fmt(cp.exitValue || 0)
+          + ' | cost ' + fmt(cp.invested || 0)
+          + ' | ' + (g >= 0 ? '+' : '') + fmt(g) + (ret != null ? ' (' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%)' : '')
+          + ' | ' + r.lt
+          + (p.peConverted ? ' | converted from private deal' + (p.peCompany ? ' (' + p.peCompany + ')' : '') : ''));
+      });
+    }
+  } catch (e) {}
+
+  // ---- Tax context ----
+  try {
+    if (typeof TAX_RATE_LT === 'number' && typeof TAX_RATE_ST === 'number') {
+      var stt = (typeof taxProfile !== 'undefined' && taxProfile && taxProfile.state) ? taxProfile.state : '';
+      lines.push('');
+      lines.push('TAX CONTEXT' + (stt ? ' (' + stt + ')' : '') + ': effective long-term rate ' + (TAX_RATE_LT * 100).toFixed(1) + '%, short-term ' + (TAX_RATE_ST * 100).toFixed(1) + '%. A position held under 1 year is taxed at the short-term rate if sold. Use for after-tax / holding-period reasoning only; you are not a tax advisor.');
+    }
+  } catch (e) {}
+
+  // ---- Closed / realized positions ----
+  try {
+    var closedPos = positions.filter(function (p) { return p.closed && p.ticker; });
+    if (closedPos.length) {
+      var rowsC = closedPos.map(function (p) { return { p: p, cp: calcPos(p) }; })
+        .sort(function (a, b) { return Math.abs(b.cp.gainLoss || 0) - Math.abs(a.cp.gainLoss || 0); });
+      var totReal = rowsC.reduce(function (s, r) { return s + (r.cp.gainLoss || 0); }, 0);
+      lines.push('');
+      lines.push('CLOSED / REALIZED POSITIONS (already sold; REALIZED gain/loss). Total realized ' + (totReal >= 0 ? '+' : '') + fmt(totReal) + ' across ' + rowsC.length + ' position' + (rowsC.length === 1 ? '' : 's') + '. Largest by magnitude:');
+      rowsC.slice(0, 15).forEach(function (r) {
+        var g = r.cp.gainLoss || 0;
+        var ret = (typeof r.cp.yourReturn === 'number') ? r.cp.yourReturn : null;
+        lines.push('- ' + (r.p.ticker || '?') + ': ' + (g >= 0 ? '+' : '') + fmt(g) + (ret != null ? ' (' + (ret >= 0 ? '+' : '') + ret.toFixed(1) + '%)' : ''));
+      });
+      if (rowsC.length > 15) lines.push('  ...and ' + (rowsC.length - 15) + ' more closed positions.');
+    }
+  } catch (e) {}
+
+  // ---- Realized private deals (exited) ----
+  try {
+    if (typeof realizedPeDeals !== 'undefined' && Array.isArray(realizedPeDeals) && realizedPeDeals.length) {
+      lines.push('');
+      lines.push('EXITED PRIVATE DEALS: ' + realizedPeDeals.length + ' private deal' + (realizedPeDeals.length === 1 ? '' : 's') + ' have IPO\'d or been acquired (kept in your realized private track record).');
+    }
+  } catch (e) {}
+
+  // ---- Staged what-if scenario (hypothetical, NOT executed) ----
+  try {
+    if (typeof _candScenario !== 'undefined' && _candScenario && Array.isArray(_candScenario.trades) && _candScenario.trades.length) {
+      lines.push('');
+      lines.push('STAGED WHAT-IF SCENARIO (hypothetical moves the user is evaluating on the Evaluate-a-Trade tab \u2014 NOT executed, NOT part of the book totals above):');
+      _candScenario.trades.forEach(function (tr) {
+        lines.push('- ' + (tr.kind || 'move') + ': ' + (tr.ticker || '(unnamed)'));
+      });
+      if (_candScenario.summary) lines.push('Tracker\'s plain-language read of this scenario: ' + _candScenario.summary);
+    }
+  } catch (e) {}
+
   return lines.join('\n');
 }
 
@@ -5902,6 +5975,9 @@ function buildAskSystem() {
   p.push('- Private deals are illiquid single-name bets valued at cost (or a self-mark you set); treat self-marked values as soft estimates, not live prices.');
   p.push('- You do NOT yet have live prices, per-ticker performance, or what-if tools. If a question needs data not in the snapshot, say so plainly instead of guessing or fabricating a number.');
   p.push('- The user is finance-sharp. Be direct and concise. Hedge genuine uncertainty ("probably", "I can\'t tell from this snapshot"). Do not flatter or validate a claim without basis; push back when their framing outruns what the data shows.');
+  p.push('- POSITION DETAIL lists open holdings with cost basis and UNREALIZED gain; CLOSED / REALIZED shows positions already sold with REALIZED gain. Never conflate unrealized and realized.');
+  p.push('- The STAGED WHAT-IF SCENARIO, if present, is hypothetical and NOT in the book totals; treat it as something the user is considering, not something owned.');
+  p.push('- You may reason about after-tax outcomes and long- vs short-term holding using the tax context, but flag that you are not a tax advisor.');
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
   return p.join('\n');
 }
@@ -30718,6 +30794,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ar</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09as</div>
 </body>
 </html>
