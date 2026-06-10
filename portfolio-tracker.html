@@ -5988,6 +5988,52 @@ function buildAskSnapshot() {
     }
   } catch (e) {}
 
+  // ---- Candidate pipeline (saved quality reviews: vetted ideas being EVALUATED, NOT owned) ----
+  try {
+    if (typeof qualityReviews !== 'undefined' && Array.isArray(qualityReviews) && qualityReviews.length) {
+      var revs = qualityReviews.slice().sort(function (a, b) { return (b.updatedAt || '').localeCompare(a.updatedAt || ''); });
+      lines.push('');
+      lines.push('CANDIDATE PIPELINE (stocks/ETFs you have SAVED and vetted with the pre-purchase checklist \u2014 being EVALUATED, NOT owned):');
+      revs.slice(0, 25).forEach(function (r) {
+        var analyzed = !!(r.aiAnalysis || (r.aiThread && r.aiThread.length));
+        var rounds = (r.aiThread && Array.isArray(r.aiThread)) ? r.aiThread.filter(function (t) { return t.role === 'user'; }).length : 0;
+        var bits = [];
+        bits.push((r.ticker || '(unnamed)') + (r.type ? ' (' + r.type + ')' : ''));
+        if (r.sleeve) bits.push('sleeve: ' + r.sleeve);
+        if (r.theme) bits.push('theme: ' + r.theme);
+        if (r.buyAmount) bits.push('considering ' + fmt(r.buyAmount));
+        bits.push(analyzed ? ('AI-analyzed' + (rounds ? ', ' + rounds + ' argue round' + (rounds === 1 ? '' : 's') : '')) : 'not yet analyzed');
+        lines.push('- ' + bits.join(' | '));
+      });
+      if (revs.length > 25) lines.push('  ...and ' + (revs.length - 25) + ' more saved candidates.');
+    }
+  } catch (e) {}
+
+  // ---- Sleeve objectives (the framework each holding is judged against) ----
+  try {
+    lines.push('');
+    lines.push('SLEEVE OBJECTIVES (what each strategy bucket is FOR \u2014 judge a holding by its own sleeve\'s purpose, not a generic yardstick):');
+    lines.push('- Thesis Plays: conviction bets on a specific articulated thesis or catalyst (AI, Space, future themes). A Thesis Play with no stated thesis is missing its premise. Alpha meaningful after ~180 days held.');
+    lines.push('- Quality: exceptional businesses held long term (compounders); judged on durability, not a near-term catalyst. Alpha meaningful after ~365 days.');
+    lines.push('- Portfolio Balance Plays: structural, non-correlated holdings for portfolio construction; judged on balance/diversification, NOT growth or alpha (arguing one on outperformance is a category error). Excluded from alpha comparisons.');
+  } catch (e) {}
+
+  // ---- Risk factor profile (standing) + any active stress-window context ----
+  try {
+    var rp = (typeof window !== 'undefined' && window._riskReplay && typeof window._riskReplay.riskFactorProfileStanding === 'function') ? window._riskReplay.riskFactorProfileStanding() : null;
+    if (rp && rp.length) {
+      lines.push('');
+      lines.push('RISK FACTOR PROFILE (live look-through across six factors; each = share of the WHOLE book materially sensitive to that factor; two-sided, NOT directional, NOT a forecast):');
+      rp.forEach(function (f) {
+        lines.push('- ' + f.label + ': ' + (f.pct || 0).toFixed(0) + '%' + (f.themes && f.themes.length ? ' [' + f.themes.join(', ') + ']' : ''));
+      });
+    }
+  } catch (e) {}
+  try {
+    var rfacts = (typeof riskReviewAiFacts === 'function') ? riskReviewAiFacts() : '';
+    if (rfacts) { lines.push(''); lines.push(rfacts); }
+  } catch (e) {}
+
   return lines.join('\n');
 }
 
@@ -6009,6 +6055,8 @@ function buildAskSystem() {
   p.push('- The STAGED WHAT-IF SCENARIO, if present, is hypothetical and NOT in the book totals; treat it as something the user is considering, not something owned.');
   p.push('- You may reason about after-tax outcomes and long- vs short-term holding using the tax context, but flag that you are not a tax advisor.');
   p.push('- FUND LOOK-THROUGH (if present) shows the top holdings INSIDE funds you own, from saved tables \u2014 answer "what is inside my <fund>" and fund-overlap questions from it. It lists only funds you actually hold and only their top names (not exhaustive). The clusters above already fold these into your named exposure.');
+  p.push('- CANDIDATE PIPELINE lists ideas you are EVALUATING (saved quality reviews), not holdings. SLEEVE OBJECTIVES define what each strategy bucket is for; judge a position or candidate against its own sleeve\'s purpose.');
+  p.push('- RISK FACTOR PROFILE percentages are two-sided sensitivities (share of book materially exposed to a factor), NOT directional forecasts. Any RISK REVIEW block is a replay of a PAST stress window, never a prediction or a buy/sell signal.');
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
   return p.join('\n');
 }
@@ -30692,6 +30740,19 @@ init();
       return o;
     });
   }
+  // Standing six-factor risk profile (live look-through), independent of any open stress window.
+  // ES5 only. Returns [{col,label,pct,themes}] or null.
+  function riskFactorProfileStanding() {
+    try {
+      var fe = factorExposureLive();
+      if (!fe || !fe.ok) return null;
+      return RISK_FACTORS.map(function (f) {
+        var e = fe.byFactor[f.id];
+        return { col: f.col, label: f.label, pct: e ? e.pct : 0, themes: e ? e.themes : [] };
+      });
+    } catch (e) { return null; }
+  }
+
   function riskReviewContext() {
     try {
       if (!_activeRowKey) return { active: false };
@@ -30820,11 +30881,11 @@ init();
     } catch (e) { return { active: false }; }
   }
 
-  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext, riskReviewReportHtml: riskReviewReportHtml };
+  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext, riskReviewReportHtml: riskReviewReportHtml, riskFactorProfileStanding: riskFactorProfileStanding };
 })(window);
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09at</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09au</div>
 </body>
 </html>
