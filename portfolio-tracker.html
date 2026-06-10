@@ -21384,16 +21384,19 @@ function cmpThemeMapHtml(A, B) {
   // Per side: split pasted holdings into NEW (not owned) vs OWNED (deepened), and theme weights.
   const sideStats = (S) => {
     const cov = S.holdings.reduce((s, h) => s + (h.weight || 0), 0) || 0;
-    const themeW = {}; const news = [], owned = [];
+    const themeW = {}; const news = [], owned = []; const themeNames = {};
     S.holdings.forEach(h => {
       const c = qrCanonical(h.ticker); if (!c || !c.key) return;
       const t = themeOf(c.key, c.display) || '__un';
       themeW[t] = (themeW[t] || 0) + (h.weight || 0);
-      (bookKeys.has(c.key) ? owned : news).push({ ticker: c.display || h.ticker, weight: h.weight });
+      const held = bookKeys.has(c.key);
+      (held ? owned : news).push({ ticker: c.display || h.ticker, weight: h.weight });
+      (themeNames[t] = themeNames[t] || []).push({ ticker: c.display || h.ticker, weight: h.weight, held });
     });
     news.sort((a, b) => (b.weight || 0) - (a.weight || 0));
     owned.sort((a, b) => (b.weight || 0) - (a.weight || 0));
-    return { cov, themeW, news, owned, label: S.label, mode: S.mode,
+    Object.keys(themeNames).forEach(t => themeNames[t].sort((a, b) => (b.weight || 0) - (a.weight || 0)));
+    return { cov, themeW, news, owned, themeNames, label: S.label, mode: S.mode,
       newSum: news.reduce((s, x) => s + (x.weight || 0), 0),
       ownSum: owned.reduce((s, x) => s + (x.weight || 0), 0) };
   };
@@ -21440,11 +21443,31 @@ function cmpThemeMapHtml(A, B) {
   const thL = `<th style="padding:0 10px 4px 0;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary)">Theme</th>`;
   const thBook = `<th style="padding:0 10px 4px;text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary)">Your book</th>`;
   const thEtf = (col) => `<th colspan="2" style="padding:0 10px 4px;text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:${col.c}">${ex(col.st.label)}<div style="font-weight:400;text-transform:none;letter-spacing:0;font-size:8px;color:var(--color-text-tertiary)">% \u00b7 \u0394 vs you</div></th>`;
-  const trs = themeRows.map(r => `<tr>
+  const _fullCols = 2 + cols.length * 2;
+  const detailContent = (col, names, theme) => {
+    const heldN = names.filter(n => n.held).length, newN = names.length - heldN;
+    const chips = names.map(n => `<span style="color:${n.held ? 'var(--color-text-tertiary)' : 'var(--color-text-success)'}">${ex(n.ticker)}${n.weight != null ? ` <span style="opacity:0.55">${n.weight.toFixed(1)}%</span>` : ''}</span>`).join(' \u00b7 ');
+    return `<div style="padding:3px 0 7px;font-size:10px;line-height:1.85"><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px"><span style="font-weight:700;color:${col.c}">${ex(col.st.label)}</span> \u00b7 ${ex(labelFor(theme))} \u2014 ${names.length} name${names.length !== 1 ? 's' : ''} (<span style="color:var(--color-text-success)">${newN} new</span>, <span style="color:var(--color-text-tertiary)">${heldN} you hold</span>)</div><div>${chips}</div></div>`;
+  };
+  const trs = themeRows.map((r, ti) => {
+    const mainRow = `<tr>
     <td style="padding:2px 10px 2px 0;color:var(--color-text-secondary)">${ex(labelFor(r.t))}</td>
     <td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--color-text-tertiary)">${pc(r.bp)}</td>
-    ${cols.map((col, i) => `<td style="padding:2px 4px 2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${col.c}">${pc(r.vals[i])}</td><td style="padding:2px 10px 2px 2px;text-align:right;font-variant-numeric:tabular-nums;font-size:9px">${gapCell(r.gaps[i])}</td>`).join('')}
-  </tr>`).join('');
+    ${cols.map((col, i) => {
+      const has = (col.st.themeNames[r.t] || []).length > 0;
+      const cell = has
+        ? `<td onclick="cmpToggleThemeDetail('cmpdtl-${i}-${ti}')" style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;padding:2px 4px 2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${col.c}" title="list ${ex(col.st.label)} holdings in ${ex(labelFor(r.t))} \u2014 grey=owned, green=new">${pc(r.vals[i])}</td>`
+        : `<td style="padding:2px 4px 2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${col.c}">${pc(r.vals[i])}</td>`;
+      return cell + `<td style="padding:2px 10px 2px 2px;text-align:right;font-variant-numeric:tabular-nums;font-size:9px">${gapCell(r.gaps[i])}</td>`;
+    }).join('')}
+  </tr>`;
+    const detail = cols.map((col, i) => {
+      const names = col.st.themeNames[r.t] || [];
+      if (!names.length) return '';
+      return `<tr id="cmpdtl-${i}-${ti}" style="display:none"><td colspan="${_fullCols}" style="padding:0 10px 0 0;background:var(--color-background-secondary)">${detailContent(col, names, r.t)}</td></tr>`;
+    }).join('');
+    return mainRow + detail;
+  }).join('');
   const table = themeRows.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:10px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">${thL}${thBook}${cols.map(thEtf).join('')}</tr></thead><tbody>${trs}</tbody></table></div>` : '';
 
   // Plain-language takeaway per ETF, computed from the gaps: where it leans in (you're light) vs away
@@ -21479,12 +21502,18 @@ function cmpThemeMapHtml(A, B) {
   const word = present.length === 1 ? 'this ETF' : 'each ETF';
   return `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border-secondary)">
     <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">What adding ${word} would do to your book</div>
-    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:11px"><span style="color:var(--color-text-success)">New to you</span> = names you don't already own, directly or inside funds you hold \u2014 the exposure you'd actually be adding. The theme table is all percentages \u2014 your current look-through mix vs ${word} \u2014 and the <strong>\u0394</strong> column is how many points adding it would move that theme's share of your book (<span style="color:var(--color-text-success)">+</span> raises, <span style="color:var(--color-text-danger)">\u2212</span> lowers), sorted biggest move first. (ETF % is of the holdings you pasted.)</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:11px"><span style="color:var(--color-text-success)">New to you</span> = names you don't already own, directly or inside funds you hold \u2014 the exposure you'd actually be adding. The theme table is all percentages \u2014 your current look-through mix vs ${word} \u2014 and the <strong>\u0394</strong> column is how many points adding it would move that theme's share of your book (<span style="color:var(--color-text-success)">+</span> raises, <span style="color:var(--color-text-danger)">\u2212</span> lowers), sorted biggest move first. (ETF % is of the holdings you pasted.) <span style="color:var(--color-text-secondary)">Tap any ETF % to list that fund\u2019s names in the theme \u2014 <span style="color:var(--color-text-tertiary)">grey = you already own it</span>, <span style="color:var(--color-text-success)">green = new to you</span>.</span></div>
     <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px">${cols.map(col => sideBlock(col.st, col.c)).join('')}</div>
     ${table}
     ${takeaways}
     ${untaggedHtml}
   </div>`;
+}
+
+function cmpToggleThemeDetail(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = (!el.style.display || el.style.display === 'none') ? '' : 'none';
 }
 
 function cmpCompare() {
@@ -30262,6 +30291,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ah</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ai</div>
 </body>
 </html>
