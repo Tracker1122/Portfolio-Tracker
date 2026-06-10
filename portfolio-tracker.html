@@ -6088,9 +6088,11 @@ function buildAskSystem() {
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
   p.push('- EVIDENCE DISCIPLINE (same convention as the other tabs): mark the BASIS of what you say. Facts from the snapshot above or fetched by a tool this turn (the ones shown with receipts) are verified \u2014 state them plainly. Your own reasoning or interpretation built on those numbers is an INFERENCE \u2014 prefix it inline with "[inference]". Example: "VST is down 12% over 1Y" is a fetched fact; "the market is selling the story" is [inference]. Do not let an inference borrow the certainty of the numbers it sits next to.');
   p.push('- Any specific outside real-world fact NOT in the snapshot and NOT fetched this turn (what a company does, its products/market share, a news event, a valuation, any figure recalled from training) is UNVERIFIED and possibly stale. Do not assert it inline as fact: flag it \u26a0UNVERIFIED, say why it matters, and point to where the user would confirm it (e.g. "issuer fact sheet", "company 10-Q", "stockanalysis.com") \u2014 a pointer, never a fabricated citation or as-of date. If you are unsure of a figure, say so rather than filling the gap.');
+  p.push('- If web search is available to you this turn (the user enabled it), you MAY search for CURRENT, time-sensitive facts \u2014 news, a recent price, a current event \u2014 but be economical (a couple of targeted searches, not many; each one costs). Anything you state FROM SEARCH must cite its source URL inline, and that counts as verified for this turn. Facts you did NOT actually find via search this turn stay \u26a0UNVERIFIED: never present a recalled figure as if you searched it, and never fabricate a URL or as-of date. If web search is not available, do not claim current facts \u2014 flag them \u26a0UNVERIFIED instead.');
   return p.join('\n');
 }
 
+var askWebOn = false; // per-question web-search toggle (in-memory; sticky until turned off)
 function renderAskTab() {
   var panel = document.getElementById('tab-ask');
   if (!panel) return;
@@ -6102,7 +6104,7 @@ function renderAskTab() {
       '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Conversational analysis of your held-only book. It sees the same true-exposure and theme-cluster figures the rest of the tracker computes. It reads only \u2014 it cannot place trades or change anything.</div>' +
       (noWorker ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then come back.</div>' : '') +
       '<div id="ask-thread" style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px"></div>' +
-      '<div style="display:flex;gap:8px;align-items:flex-end">' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' + '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer" title="When on, the assistant may search the web for current news or facts. Costs roughly 1-4 cents only on questions where it actually searches.">' + '<input type="checkbox" id="ask-web-toggle"' + (askWebOn ? ' checked' : '') + ' onchange="askWebOn=this.checked"' + (noWorker ? ' disabled' : '') + '> Allow web search' + '</label>' + '<span style="font-size:9px;color:var(--color-text-tertiary)">~1\u20134\u00a2 when it searches</span>' + '</div>' + '<div style="display:flex;gap:8px;align-items:flex-end">' +
         '<textarea id="ask-input" placeholder="Ask about your exposure, concentration, themes\u2026" onkeydown="askKey(event)" style="flex:1;min-height:52px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;line-height:1.5;padding:8px;box-sizing:border-box;resize:vertical"' + (noWorker ? ' disabled' : '') + '></textarea>' +
         '<button class="btn" onclick="sendAskMessage()" style="white-space:nowrap"' + (noWorker ? ' disabled' : '') + '>Send</button>' +
       '</div>' +
@@ -6330,7 +6332,7 @@ function setAskLive(txt) {
 }
 
 // One user turn: model call -> (optional tool rounds) -> final text. Returns { text, receipts }.
-async function runAskTurn() {
+async function runAskTurn(webOn) {
   var system = buildAskSystem();
   var msgs = askConversation.map(function (turn) { return { role: turn.role, content: turn.content }; });
   var receipts = [];
@@ -6338,9 +6340,10 @@ async function runAskTurn() {
   var rounds = 0;
   while (rounds < 6) {
     rounds++;
-    var data = await aiWorkerCallStructured(msgs, system, ASK_TOOLS, {});
+    var data = await aiWorkerCallStructured(msgs, system, ASK_TOOLS, { web: !!webOn });
     var content = data.content || [];
     try { if (data.usage && data.usage.cache_read_input_tokens) cacheRead += data.usage.cache_read_input_tokens; } catch (e) {}
+    try { if (content.some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; }) && receipts.indexOf('web search \u2713') < 0) receipts.push('web search \u2713'); } catch (e) {}
     if (data.stop_reason === 'tool_use') {
       msgs.push({ role: 'assistant', content: content });
       var toolUses = content.filter(function (b) { return b.type === 'tool_use'; });
@@ -6387,7 +6390,7 @@ async function sendAskMessage() {
     t.appendChild(live);
   }
   try {
-    var r = await runAskTurn();
+    var r = await runAskTurn(askWebOn);
     askConversation.push({ role: 'assistant', content: r.text, receipts: r.receipts, cacheReused: r.cacheReused });
     askBusy = false;
     renderAskTab();
@@ -31162,6 +31165,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bc</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bd</div>
 </body>
 </html>
