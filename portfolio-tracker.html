@@ -6086,6 +6086,8 @@ function buildAskSystem() {
   p.push('- For any "top holdings" or ranking question, use the PRE-SORTED order in TOP NAMES BY EFFECTIVE EXPOSURE exactly as given; do not re-sort, reorder, or recompute the ranking yourself.');
   p.push('- VOO is the PASSIVE INDEX CORE, not a position: never list, rank, or compare it as a holding, and do not volunteer VOO commentary on sizing/positions/concentration questions. Its constituents are already folded into your named exposures via look-through, and it stays in the book denominator. You may mention the passive core exists as brief context only when directly relevant.');
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
+  p.push('- EVIDENCE DISCIPLINE (same convention as the other tabs): mark the BASIS of what you say. Facts from the snapshot above or fetched by a tool this turn (the ones shown with receipts) are verified \u2014 state them plainly. Your own reasoning or interpretation built on those numbers is an INFERENCE \u2014 prefix it inline with "[inference]". Example: "VST is down 12% over 1Y" is a fetched fact; "the market is selling the story" is [inference]. Do not let an inference borrow the certainty of the numbers it sits next to.');
+  p.push('- Any specific outside real-world fact NOT in the snapshot and NOT fetched this turn (what a company does, its products/market share, a news event, a valuation, any figure recalled from training) is UNVERIFIED and possibly stale. Do not assert it inline as fact: flag it \u26a0UNVERIFIED, say why it matters, and point to where the user would confirm it (e.g. "issuer fact sheet", "company 10-Q", "stockanalysis.com") \u2014 a pointer, never a fabricated citation or as-of date. If you are unsure of a figure, say so rather than filling the gap.');
   return p.join('\n');
 }
 
@@ -31160,6 +31162,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bb</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bc</div>
 </body>
 </html>
