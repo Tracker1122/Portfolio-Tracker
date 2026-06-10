@@ -6096,35 +6096,39 @@ function buildAskSystem() {
 
 // ===== Deploy Optimizer: propose -> theme -> score -> rank (its own surface, not the chat). =====
 // The model proposes themed candidates (optionally from objective-level news); the REAL engine
-// (computeThemeClusters + riskFactorProfileHypothetical) scores each name's true impact, with the
-// theme flagged [inference] because a wrong theme = wrong math (confirmed later in Evaluate a Trade).
+// (computeThemeClusters + riskFactorProfileHypothetical) scores each name's true impact. Goals are
+// multi-select: pick 1-3 and each candidate gets a normalized "fit" blended across them. Theme is
+// flagged [inference] because a wrong theme = wrong math (confirmed later in Evaluate a Trade).
 var optBusy = false;
 var optWebOn = true; // objective-level news default ON
 var optResults = null;
 var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities'];
 var OPT_FACTORS = [{ col: 'Rate', label: 'Rate / duration' }, { col: 'Liquidity', label: 'Liquidity / funding' }, { col: 'Credit', label: 'Credit' }, { col: 'Policy', label: 'Policy shock' }, { col: 'Crowding', label: 'Positioning / leverage' }, { col: 'Cyclical', label: 'Demand cyclicality' }];
+var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor' };
 
-function optObjectiveLabel(obj, factorCol) {
-  if (obj === 'diversify') return 'improve diversification (raise effective independent bets)';
-  if (obj === 'concentration') return 'reduce the single biggest concentration (dilute the largest theme cluster)';
-  if (obj === 'factor') return 'reduce exposure to the ' + (factorCol || 'selected') + ' risk factor';
-  return obj;
+function optGoalPhrase(goals, factorCol) {
+  return goals.map(function (g) {
+    if (g === 'factor') return 'reduce exposure to the ' + (factorCol || 'selected') + ' risk factor';
+    if (g === 'diversify') return 'improve diversification (raise effective independent bets)';
+    if (g === 'concentration') return 'reduce the single biggest concentration (dilute the largest theme cluster)';
+    return g;
+  }).join('; AND ');
 }
 
-function buildOptimizerSystem(amount, obj, factorCol, web) {
+function buildOptimizerSystem(amount, goals, factorCol, web) {
   var p = [];
-  p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' into one stock and your job is to PROPOSE candidate stocks (individual names, not funds) that would serve ONE stated objective, so an engine can then score each one\u2019s real impact on their book.');
-  p.push('OBJECTIVE: ' + optObjectiveLabel(obj, factorCol) + '.');
+  p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' into one stock and your job is to PROPOSE candidate stocks (individual names, not funds) that would serve the stated objective(s) TOGETHER, so an engine can then score each one\u2019s real impact on their book.');
+  p.push('OBJECTIVE' + (goals.length > 1 ? 'S (a good candidate should serve these together)' : '') + ': ' + optGoalPhrase(goals, factorCol) + '.');
   p.push('Their current book (so your proposals fit what they already own and where they are concentrated):');
   p.push(buildAskSnapshot());
   p.push('---');
   p.push('PROPOSE 8 to 10 individual stocks. For EACH, assign exactly one THEME from this list, verbatim (this is how the engine buckets the name, so it MUST match one of these): ' + OPT_THEMES.join(', ') + '.');
   p.push('The theme you assign is YOUR inference and it DRIVES the scoring math, so pick the single best fit; the user confirms it later in Evaluate a Trade.');
-  if (obj === 'concentration') p.push('To dilute the biggest cluster, favor names whose theme is DIFFERENT from the user\u2019s largest existing cluster \u2014 a name in the same theme would concentrate further, not dilute.');
-  if (obj === 'factor') p.push('Because the objective is cutting the ' + factorCol + ' factor, favor themes that do NOT carry that factor, so the addition genuinely dilutes it rather than adding to it.');
-  if (web) p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (e.g. current catalysts in the relevant theme/space) \u2014 be economical, this is the expensive step. For any catalyst you take from a search, set sourced=true and keep the claim tied to what the result actually said.');
+  if (goals.indexOf('concentration') >= 0) p.push('For the concentration goal, favor names whose theme is DIFFERENT from the user\u2019s largest existing cluster \u2014 a name in the same theme would concentrate further, not dilute.');
+  if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor, so the addition genuinely dilutes it.');
+  if (web) p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts in the relevant theme/space) \u2014 be economical, this is the expensive step. For any catalyst taken from a search, set sourced=true and keep it tied to what the result said.');
   p.push('EVIDENCE: any specific real-world fact about a company is UNVERIFIED unless you found it via web search this run. If you did not search, keep the catalyst to a short recollection and set sourced=false. Never invent a price, figure, or date.');
-  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective now","sourced":true}]. Return nothing but the JSON array.');
+  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true}]. Return nothing but the JSON array.');
   return p.join('\n');
 }
 
@@ -6141,31 +6145,47 @@ function optParseCandidates(text) {
   });
 }
 
-function optScore(cands, amount, obj, factorCol) {
+function optScore(cands, amount, goals, factorCol) {
   var before = computeThemeClusters();
   var ebBefore = before.effectiveBets || 0;
   var topLabel = (before.clusters && before.clusters[0]) ? before.clusters[0].label : null;
   var topBeforePct = (before.clusters && before.clusters[0]) ? before.clusters[0].pct : 0;
-  return cands.map(function (c) {
+  var rows = cands.map(function (c) {
     var adj = [{ ticker: c.ticker, deltaDirect: amount, themeTag: c.theme, display: c.ticker }];
     var ebAfter = ebBefore, topAfterPct = topBeforePct, fB = null, fA = null;
     try {
       var after = computeThemeClusters({ adjustments: adj });
       ebAfter = after.effectiveBets || 0;
       if (topLabel && after.clusters) { for (var i = 0; i < after.clusters.length; i++) { if (after.clusters[i].label === topLabel) { topAfterPct = after.clusters[i].pct; break; } } }
-      if (obj === 'factor' && typeof window !== 'undefined' && window._riskReplay && window._riskReplay.riskFactorProfileHypothetical) {
+      if (goals.indexOf('factor') >= 0 && typeof window !== 'undefined' && window._riskReplay && window._riskReplay.riskFactorProfileHypothetical) {
         var fs = window._riskReplay.riskFactorProfileHypothetical(adj);
         if (fs) { for (var j = 0; j < fs.length; j++) { if (fs[j].col === factorCol) { fB = fs[j].beforePct; fA = fs[j].afterPct; break; } } }
       }
     } catch (e) {}
     var ebDelta = +(ebAfter - ebBefore).toFixed(2);
     var topDelta = +(topAfterPct - topBeforePct).toFixed(2);
-    var metric;
-    if (obj === 'diversify') metric = ebDelta;
-    else if (obj === 'concentration') metric = -topDelta;
-    else metric = (fB != null && fA != null) ? +(fB - fA).toFixed(2) : 0;
-    return { ticker: c.ticker, name: c.name, theme: c.theme, catalyst: c.catalyst, sourced: c.sourced, ebDelta: ebDelta, topDelta: topDelta, topLabel: topLabel, factorBefore: fB, factorAfter: fA, metric: metric };
+    return {
+      ticker: c.ticker, name: c.name, theme: c.theme, catalyst: c.catalyst, sourced: c.sourced,
+      ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA,
+      g_diversify: ebDelta,                                  // higher = better
+      g_concentration: -topDelta,                            // higher = more dilution of top cluster
+      g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null // higher = more reduction
+    };
   });
+  // normalize each selected goal 0..1 across candidates, then average -> composite "fit"
+  goals.forEach(function (g) {
+    var key = 'g_' + g;
+    var vals = rows.map(function (r) { return r[key]; }).filter(function (v) { return v != null; });
+    if (!vals.length) return;
+    var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+    rows.forEach(function (r) { r['n_' + key] = (r[key] == null) ? null : (mx === mn ? 0.5 : (r[key] - mn) / (mx - mn)); });
+  });
+  rows.forEach(function (r) {
+    var sum = 0, cnt = 0;
+    goals.forEach(function (g) { var nk = 'n_g_' + g; if (r[nk] != null) { sum += r[nk]; cnt++; } });
+    r.fit = cnt ? (sum / cnt) : 0;
+  });
+  return rows;
 }
 
 async function runOptimizer() {
@@ -6175,7 +6195,9 @@ async function runOptimizer() {
   var amtEl = document.getElementById('opt-amount');
   var amount = parseFloat(amtEl ? amtEl.value : '') || 0;
   if (amount <= 0) { if (amtEl) { amtEl.style.borderColor = '#fbbf24'; setTimeout(function () { if (amtEl) amtEl.style.borderColor = 'var(--color-border-tertiary)'; }, 800); } return; }
-  var obj = (document.getElementById('opt-objective') || {}).value || 'diversify';
+  var goals = [];
+  ['diversify', 'concentration', 'factor'].forEach(function (g) { var el = document.getElementById('opt-goal-' + g); if (el && el.checked) goals.push(g); });
+  if (!goals.length) goals = ['diversify'];
   var factorCol = (document.getElementById('opt-factor') || {}).value || 'Rate';
   var webEl = document.getElementById('opt-web');
   optWebOn = webEl ? !!webEl.checked : optWebOn;
@@ -6183,15 +6205,15 @@ async function runOptimizer() {
   var resEl = document.getElementById('opt-results');
   if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:var(--color-text-tertiary);padding:8px 0">Scouting candidates' + (optWebOn ? ' (searching current catalysts)' : '') + '\u2026</div>';
   try {
-    var system = buildOptimizerSystem(amount, obj, factorCol, optWebOn);
+    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn);
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose the candidates now as the JSON array.' }], system, [], { web: optWebOn });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
     var cands = optParseCandidates(text);
-    if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">No candidates came back \u2014 try again, or rephrase the objective.</div>'; optBusy = false; return; }
-    var scored = optScore(cands, amount, obj, factorCol);
-    scored.sort(function (a, b) { return (b.metric || 0) - (a.metric || 0); });
-    optResults = { amount: amount, obj: obj, factorCol: factorCol, usedWeb: usedWeb, ranOn: Date.now(), rows: scored };
+    if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">No candidates came back \u2014 try again, or adjust the goals.</div>'; optBusy = false; return; }
+    var scored = optScore(cands, amount, goals, factorCol);
+    scored.sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
+    optResults = { amount: amount, goals: goals, factorCol: factorCol, usedWeb: usedWeb, ranOn: Date.now(), rows: scored };
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6206,50 +6228,65 @@ function renderOptimizerResults() {
   if (!optResults || !optResults.rows || !optResults.rows.length) { el.innerHTML = ''; return; }
   var R = optResults, e = (typeof esc === 'function') ? esc : function (s) { return s; };
   var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
-  var isFactor = (R.obj === 'factor');
-  var headline = (R.obj === 'diversify') ? 'Eff. bets gain' : (R.obj === 'concentration') ? ('Dilutes ' + (R.rows[0] && R.rows[0].topLabel ? R.rows[0].topLabel : 'top cluster')) : ('Cuts ' + R.factorCol);
-  var th = 'style="font-size:9px;font-weight:600;color:var(--color-text-tertiary);padding:4px 6px;text-align:left;white-space:nowrap"';
-  var thR = 'style="font-size:9px;font-weight:600;color:var(--color-text-tertiary);padding:4px 6px;text-align:right;white-space:nowrap"';
+  var multi = R.goals.length > 1;
+  var goalText = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : OPT_GOAL_LABELS[g]; }).join(' + ');
+  var showFactor = R.goals.indexOf('factor') >= 0;
   var html = '';
-  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:12px 0 6px;line-height:1.5">Ranked to <strong>' + e(optObjectiveLabel(R.obj, R.factorCol)) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 catalysts sourced</span>' : '') + '.</div>';
-  html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:8px;line-height:1.5">\u26a0 Each theme is the model\u2019s [inference] and drives the math \u2014 a wrong theme means wrong numbers. Confirm a name in Evaluate a Trade before acting. Catalysts not marked sourced are recollection, not verified.</div>';
-  html += '<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:640px">';
-  html += '<tr style="border-bottom:1px solid var(--color-border-tertiary)"><th ' + th + '>#</th><th ' + th + '>Name</th><th ' + th + '>Theme [inf]</th><th ' + thR + '>' + e(headline) + '</th><th ' + thR + '>Eff. bets \u0394</th><th ' + thR + '>Top cluster \u0394</th>' + (isFactor ? ('<th ' + thR + '>' + e(R.factorCol) + ' before\u2192after</th>') : '') + '<th ' + th + '>Catalyst</th></tr>';
+  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 6px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 catalysts sourced</span>' : '') + '.</div>';
+  // plain-language legend
+  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);line-height:1.55;margin-bottom:6px;border-left:2px solid var(--color-border-tertiary);padding-left:8px">';
+  html += '<strong>Eff. bets</strong> = effective independent bets, a diversification score: roughly how many genuinely independent positions your book behaves like \u2014 higher is more spread out. The +number is how much this name raises it.<br>';
+  html += '<strong>Top cluster \u0394</strong> = the change in the weight of your single biggest theme, in percentage points; negative means it dilutes your largest concentration.';
+  if (showFactor) html += '<br><strong>' + e(R.factorCol) + ' \u0394</strong> = how that risk factor\u2019s share of the book moves (before\u2192after) when you add this name.';
+  if (multi) html += '<br><strong>Fit</strong> = your selected goals blended: each goal is scaled 0\u2013100 across these candidates, then averaged, so a name ranks high only if it helps across all of them.';
+  html += '</div>';
+  html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:10px;line-height:1.5">\u26a0 Each theme is the model\u2019s [inference] and drives the math \u2014 a wrong theme means wrong numbers. Confirm a name in Evaluate a Trade before acting. Catalysts not marked sourced are recollection, not verified.</div>';
+
   R.rows.forEach(function (r, i) {
-    var metricStr = (R.obj === 'diversify') ? ('+' + r.ebDelta) : (R.obj === 'concentration') ? ((-r.topDelta).toFixed(2) + ' pp') : ((r.factorBefore != null && r.factorAfter != null) ? ('\u2212' + (r.factorBefore - r.factorAfter).toFixed(1) + ' pp') : '\u2014');
-    var metricColor = (r.metric > 0) ? 'var(--color-text-success)' : (r.metric < 0 ? 'var(--color-text-danger)' : 'var(--color-text-tertiary)');
-    var td = 'style="font-size:10px;color:var(--color-text-primary);padding:5px 6px;vertical-align:top"';
-    var tdR = 'style="font-size:10px;padding:5px 6px;text-align:right;white-space:nowrap;vertical-align:top"';
-    html += '<tr style="border-bottom:1px solid var(--color-border-tertiary)">';
-    html += '<td ' + td + '>' + (i + 1) + '</td>';
-    html += '<td ' + td + '><strong>' + e(r.ticker) + '</strong>' + (r.name ? '<div style="font-size:8.5px;color:var(--color-text-tertiary)">' + e(r.name) + '</div>' : '') + '</td>';
-    html += '<td ' + td + '>' + e(r.theme) + '</td>';
-    html += '<td ' + tdR + 'color:' + metricColor + ';font-weight:600">' + e(metricStr) + '</td>';
-    html += '<td ' + tdR + 'color:var(--color-text-secondary)">' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + '</td>';
-    html += '<td ' + tdR + 'color:var(--color-text-secondary)">' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp</td>';
-    if (isFactor) html += '<td ' + tdR + 'color:var(--color-text-secondary)">' + (r.factorBefore != null ? (r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1)) : '\u2014') + '</td>';
-    html += '<td ' + td + 'style="font-size:9px;color:var(--color-text-secondary);max-width:260px;white-space:normal">' + e(r.catalyst || '') + (r.sourced ? ' <span style="color:var(--color-text-success)">\u2713src</span>' : ' <span style="color:#fbbf24">\u26a0unsourced</span>') + '</td>';
-    html += '</tr>';
+    var headline;
+    if (multi) headline = 'Fit ' + Math.round((r.fit || 0) * 100) + '/100';
+    else if (R.goals[0] === 'diversify') headline = (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ' eff. bets';
+    else if (R.goals[0] === 'concentration') headline = (-r.topDelta).toFixed(2) + ' pp top cluster';
+    else headline = (r.factorBefore != null) ? ('\u2212' + (r.factorBefore - r.factorAfter).toFixed(1) + ' pp ' + R.factorCol) : '\u2014';
+    var parts = [];
+    parts.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
+    parts.push('Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp');
+    if (showFactor && r.factorBefore != null) parts.push(R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1));
+    var srcTag = r.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>';
+    html += '<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:7px;background:var(--color-background-tertiary)">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">';
+    html += '<div style="font-size:12px;color:var(--color-text-primary)"><span style="color:var(--color-text-tertiary)">#' + (i + 1) + '</span> <strong>' + e(r.ticker) + '</strong>' + (r.name ? ' <span style="font-size:10px;color:var(--color-text-tertiary)">' + e(r.name) + '</span>' : '') + '</div>';
+    html += '<div style="font-size:12px;font-weight:700;color:var(--color-text-info,#60a5fa);white-space:nowrap">' + e(headline) + '</div>';
+    html += '</div>';
+    html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-top:3px">' + e(r.theme) + ' <span style="font-style:italic">[model\u2019s inference \u2014 confirm]</span></div>';
+    html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + e(parts.join('  \u00b7  ')) + '</div>';
+    html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
+    html += '</div>';
   });
-  html += '</table></div>';
   el.innerHTML = html;
 }
 
 function renderOptimizerTab() {
   var el = document.getElementById('tab-optimizer'); if (!el) return;
   var noWorker = !aiWorkerUrl;
+  var dis = noWorker ? ' disabled' : '';
   var factorOpts = OPT_FACTORS.map(function (f) { return '<option value="' + f.col + '">' + f.label + '</option>'; }).join('');
+  var inp = 'background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px';
   var html = '<div style="max-width:900px;margin:0 auto">';
   html += '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Deploy Optimizer</h2>';
-  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount and a goal. The model proposes candidate names (any stock, not just your pipeline) and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact on your book and ranks them. Themes are the model\u2019s [inference] \u2014 take a winner into Evaluate a Trade to confirm.</div>';
-  if (noWorker) html += '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set. Paste your Cloudflare AI worker URL and Save \u2014 it is shared across Ask, Deploy Optimizer, and Evaluate a Trade.<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="opt-worker-url" type="text" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:200px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px"><button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById(\'opt-worker-url\').value); renderOptimizerTab()" style="font-size:9px">Save</button></div></div>';
-  html += '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:6px">';
-  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="50000" style="width:120px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px"' + (noWorker ? ' disabled' : '') + '></div>';
-  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Goal</div><select id="opt-objective" onchange="document.getElementById(\'opt-factor-wrap\').style.display=this.value===\'factor\'?\'block\':\'none\'" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;cursor:pointer"' + (noWorker ? ' disabled' : '') + '><option value="diversify">Improve diversification</option><option value="concentration">Cut my biggest concentration</option><option value="factor">Cut a specific risk factor</option></select></div>';
-  html += '<div id="opt-factor-wrap" style="display:none"><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Which factor</div><select id="opt-factor" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;cursor:pointer">' + factorOpts + '</select></div>';
-  html += '<button class="btn btn-primary" onclick="runOptimizer()" style="white-space:nowrap"' + (noWorker ? ' disabled' : '') + '>Rank candidates</button>';
+  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount and one or more goals. The model proposes candidate names (any stock, not just your pipeline) and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact on your book and ranks them. With more than one goal it blends them into a single fit score. Themes are the model\u2019s [inference] \u2014 take a winner into Evaluate a Trade to confirm.</div>';
+  if (noWorker) html += '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set. Paste your Cloudflare AI worker URL and Save \u2014 it is shared across Ask, Deploy Optimizer, and Evaluate a Trade.<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="opt-worker-url" type="text" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:200px;' + inp + ';font-size:10px;padding:4px 7px"><button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById(\'opt-worker-url\').value); renderOptimizerTab()" style="font-size:9px">Save</button></div></div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:8px">';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="15000" style="width:120px;' + inp + '"' + dis + '></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Goals (pick one or more)</div><div style="display:flex;flex-direction:column;gap:3px">';
+  html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-diversify" checked' + dis + '> Improve diversification</label>';
+  html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-concentration"' + dis + '> Cut my biggest concentration</label>';
+  html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-factor" onchange="document.getElementById(\'opt-factor-wrap\').style.display=this.checked?\'block\':\'none\'"' + dis + '> Cut a specific risk factor</label>';
+  html += '<div id="opt-factor-wrap" style="display:none;margin-top:2px"><select id="opt-factor" style="' + inp + ';font-size:11px;padding:4px 7px;cursor:pointer">' + factorOpts + '</select></div>';
+  html += '</div></div>';
+  html += '<div style="align-self:flex-end"><button class="btn btn-primary" onclick="runOptimizer()" style="white-space:nowrap"' + dis + '>Rank candidates</button></div>';
   html += '</div>';
-  html += '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer;margin-bottom:4px" title="Searches current catalysts at the objective level (a few cents per run)."><input type="checkbox" id="opt-web"' + (optWebOn ? ' checked' : '') + (noWorker ? ' disabled' : '') + '> Use current news (objective-level web search) <span style="font-size:9px">~a few \u00a2 per run</span></label>';
+  html += '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer;margin-bottom:4px" title="Searches current catalysts at the objective level (a few cents per run)."><input type="checkbox" id="opt-web"' + (optWebOn ? ' checked' : '') + dis + '> Use current news (objective-level web search) <span style="font-size:9px">~a few \u00a2 per run</span></label>';
   html += '<div id="opt-results"></div>';
   html += '</div>';
   el.innerHTML = html;
@@ -31330,6 +31367,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bf</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bg</div>
 </body>
 </html>
