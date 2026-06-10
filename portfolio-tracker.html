@@ -6119,7 +6119,10 @@ function renderAskThread() {
     if (turn.role === 'user') {
       html += '<div style="align-self:flex-end;max-width:80%;background:var(--color-background-tertiary);border:1px solid #3b82f6;border-radius:10px;padding:8px 11px;font-size:12px;line-height:1.5;white-space:pre-wrap;color:var(--color-text-primary)">' + e(turn.content) + '</div>';
     } else {
-      var foot = (turn.receipts && turn.receipts.length) ? '<div style="margin-top:7px;font-size:9px;color:var(--color-text-tertiary)">\u21B3 live data fetched: ' + e(turn.receipts.join(', ')) + '</div>' : '';
+      var footBits = [];
+      if (turn.receipts && turn.receipts.length) footBits.push('live data fetched: ' + e(turn.receipts.join(', ')));
+      if (turn.cacheReused) footBits.push('cache reused ' + e(turn.cacheReused.toLocaleString()) + ' tok');
+      var foot = footBits.length ? '<div style="margin-top:7px;font-size:9px;color:var(--color-text-tertiary)">\u21B3 ' + footBits.join(' \u00b7 ') + '</div>' : '';
       html += '<div style="align-self:flex-start;max-width:92%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:9px 12px;font-size:12px;line-height:1.55;white-space:pre-wrap;color:var(--color-text-primary)">' + e(turn.content) + foot + '</div>';
     }
   });
@@ -6169,7 +6172,10 @@ async function aiWorkerCallStructured(messages, system, tools, opts) {
   opts = opts || {};
   if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
   var body = { messages: messages, stream: false };
-  if (system) body.system = system;
+  // Prompt caching: the system block carries the big stable snapshot, and tools precede it in the
+  // cached prefix, so one ephemeral breakpoint here caches tools+system. The tool loop resends this
+  // every round (seconds apart) -> cache hits on rounds 2+ and on rapid follow-ups bill it at ~10%.
+  if (system) body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
   if (tools && tools.length) body.tools = tools;
   if (opts.web) body.web = true;
   var resp;
@@ -6280,11 +6286,13 @@ async function runAskTurn() {
   var system = buildAskSystem();
   var msgs = askConversation.map(function (turn) { return { role: turn.role, content: turn.content }; });
   var receipts = [];
+  var cacheRead = 0;
   var rounds = 0;
   while (rounds < 6) {
     rounds++;
     var data = await aiWorkerCallStructured(msgs, system, ASK_TOOLS, {});
     var content = data.content || [];
+    try { if (data.usage && data.usage.cache_read_input_tokens) cacheRead += data.usage.cache_read_input_tokens; } catch (e) {}
     if (data.stop_reason === 'tool_use') {
       msgs.push({ role: 'assistant', content: content });
       var toolUses = content.filter(function (b) { return b.type === 'tool_use'; });
@@ -6304,9 +6312,9 @@ async function runAskTurn() {
       continue;
     }
     var text = content.filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n').trim();
-    return { text: text || '(empty response)', receipts: receipts };
+    return { text: text || '(empty response)', receipts: receipts, cacheReused: cacheRead };
   }
-  return { text: '(stopped after the maximum number of tool rounds)', receipts: receipts };
+  return { text: '(stopped after the maximum number of tool rounds)', receipts: receipts, cacheReused: cacheRead };
 }
 
 async function sendAskMessage() {
@@ -6332,7 +6340,7 @@ async function sendAskMessage() {
   }
   try {
     var r = await runAskTurn();
-    askConversation.push({ role: 'assistant', content: r.text, receipts: r.receipts });
+    askConversation.push({ role: 'assistant', content: r.text, receipts: r.receipts, cacheReused: r.cacheReused });
     askBusy = false;
     renderAskTab();
   } catch (err) {
@@ -31085,6 +31093,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ax</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ay</div>
 </body>
 </html>
