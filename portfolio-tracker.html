@@ -6096,10 +6096,11 @@ function buildAskSystem() {
 
 // ===== Deploy Optimizer: propose -> theme -> score -> rank (its own surface, not the chat). =====
 // Model proposes themed candidates (STOCKS/ETFs, within a UNIVERSE + optional free-hand DIRECTION); the
-// REAL engine scores each name's true impact -> blended structural "fit". "Growth" goal: only its MEASURED
-// theme-exposure tilt enters Fit; per-name growth figure is model-sourced, shown not ranked. With news on,
-// each name also gets a model "momentum" read (current catalyst strength) -> a SEPARATE [inference] sort
-// that never touches Fit. Growth+news makes the search mandatory/sharper. "Deepen" merges/re-ranks more names.
+// REAL engine scores each name's true impact -> blended structural "fit" (the ONLY thing in the ranking).
+// GROWTH is a LENS, not a goal: it steers which names get proposed and shows a per-name growth figure, with
+// NO measured footprint in Fit (the coarse theme-tilt was inert/contradictory vs cut-rate, so it's gone).
+// With news on, each name also gets a model "momentum" read -> a SEPARATE [inference] sort, never in Fit.
+// Growth-lens + news makes the search mandatory/sharper. "Deepen" merges/re-ranks more names.
 // Theme is [inference]; ETF impact is APPROXIMATE until confirmed in Evaluate a Trade.
 var optBusy = false;
 var optWebOn = true; // objective-level news default ON
@@ -6107,9 +6108,8 @@ var optResults = null;
 var optDirection = ''; // free-hand steer, persisted across re-renders in this session
 var optSortMode = 'fit'; // 'fit' (measured) | 'momentum' (model's current-news read, inference)
 var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities'];
-var OPT_GROWTH_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Consumer Discretionary', 'Space & Defense'];
 var OPT_FACTORS = [{ col: 'Rate', label: 'Rate / duration' }, { col: 'Liquidity', label: 'Liquidity / funding' }, { col: 'Credit', label: 'Credit' }, { col: 'Policy', label: 'Policy shock' }, { col: 'Crowding', label: 'Positioning / leverage' }, { col: 'Cyclical', label: 'Demand cyclicality' }];
-var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor', growth: 'tilt toward growth' };
+var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor' };
 var OPT_BROAD_THEMES = ['Broad ETF', 'International Developed', 'Emerging Markets', 'Small Caps', 'Bonds'];
 var OPT_GEOS = [{ id: 'us', label: 'US' }, { id: 'intl', label: 'Intl developed' }, { id: 'em', label: 'Emerging mkts' }];
 var OPT_VEHICLES = [{ id: 'stock', label: 'Stocks' }, { id: 'sector', label: 'Sector ETFs' }, { id: 'broad', label: 'Broad ETFs' }];
@@ -6122,7 +6122,6 @@ function optIsBroadEtf(c) { return c.type === 'etf' && (c.broad === true || OPT_
 function optCandGeo(c) { if (c.theme === 'International Developed') return 'intl'; if (c.theme === 'Emerging Markets') return 'em'; return 'us'; }
 function optCandVehicle(c) { if (optIsBroadEtf(c)) return 'broad'; if (c.type === 'etf') return 'sector'; return 'stock'; }
 function optApplyConstraints(cands, geos, vehicles) { return cands.filter(function (c) { return geos.indexOf(optCandGeo(c)) >= 0 && vehicles.indexOf(optCandVehicle(c)) >= 0; }); }
-function optGrowthWeight(clusters) { if (!clusters) return 0; var s = 0, i; for (i = 0; i < clusters.length; i++) { if (OPT_GROWTH_THEMES.indexOf(clusters[i].label) >= 0) s += (clusters[i].pct || 0); } return s; }
 
 function optBuildAdjustments(c, amount) {
   if (optIsBroadEtf(c)) {
@@ -6139,15 +6138,14 @@ function optGoalPhrase(goals, factorCol) {
     if (g === 'factor') return 'reduce exposure to the ' + (factorCol || 'selected') + ' risk factor';
     if (g === 'diversify') return 'improve diversification (raise effective independent bets)';
     if (g === 'concentration') return 'reduce the single biggest concentration (dilute the largest theme cluster)';
-    if (g === 'growth') return 'tilt the book toward growth (favor names with real revenue/earnings growth, and raise exposure to growth-categorized themes)';
     return g;
   }).join('; AND ');
 }
 
-function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, direction, exclude) {
-  var p = [], wantGrowth = goals.indexOf('growth') >= 0;
+function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, direction, exclude, growthLean) {
+  var p = [];
   p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' and your job is to PROPOSE candidates \u2014 individual STOCKS or ETFs \u2014 that would serve the stated objective(s) TOGETHER, so an engine can score each one\u2019s real impact on their book.');
-  p.push('OBJECTIVE' + (goals.length > 1 ? 'S (a good candidate should serve these together)' : '') + ': ' + optGoalPhrase(goals, factorCol) + '.');
+  p.push('RANKING OBJECTIVE' + (goals.length > 1 ? 'S (a good candidate should serve these together)' : '') + ': ' + optGoalPhrase(goals, factorCol) + '.');
   var allowGeo = geos.map(function (g) { return OPT_GEO_DESC[g]; }).join(', ');
   var blockGeo = ['us', 'intl', 'em'].filter(function (g) { return geos.indexOf(g) < 0; }).map(function (g) { return OPT_GEO_DESC[g]; });
   p.push('UNIVERSE \u2014 propose ONLY names within: ' + allowGeo + '.' + (blockGeo.length ? ' Do NOT propose ' + blockGeo.join(' or ') + ' names; they will be rejected.' : ''));
@@ -6156,9 +6154,9 @@ function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, dir
   p.push('ALLOWED VEHICLES: ' + allowVeh + '.' + (blockVeh.length ? ' Do NOT propose ' + blockVeh.join(' or ') + '; they will be rejected.' : ''));
   if (geos.length === 1 && geos[0] === 'us' && vehicles.indexOf('broad') < 0) p.push('This is a deliberately TIGHT universe (US, no broad funds). Do NOT fall back on the obvious broad-diversifier answer \u2014 the value is in finding genuinely useful, less-obvious US names (single stocks or focused sector funds) that still move the objective.');
   if (goals.indexOf('diversify') >= 0 && vehicles.indexOf('broad') >= 0) p.push('For diversification, broad ETFs are often the better vehicle \u2014 include strong ETF options where allowed, alongside single-stock ideas.');
-  if (wantGrowth) {
-    p.push('GROWTH GOAL: favor names with genuine growth characteristics (real revenue/earnings growth, expanding addressable market) that ALSO serve the other selected objective(s). Be careful: if the other goals push defensive (e.g. diversify + cut Rate), find the growthiest names that STILL satisfy them rather than abandoning growth or abandoning the structural goal.');
-    p.push('For EACH candidate also return a "growth" field: a short real growth figure or characterization (e.g. "rev +22% YoY, EPS +30% est"). Set "growthSourced" true ONLY if you pulled the figure from a web search THIS run; otherwise a brief recollection with growthSourced false. Never invent a precise figure.');
+  if (growthLean) {
+    p.push('GROWTH LENS (a SELECTION steer, NOT a ranking objective): among names that serve the ranking objective(s) above, FAVOR those with genuine growth characteristics (real revenue/earnings growth, expanding addressable market). Do not sacrifice the ranking objective to chase growth \u2014 find the growthiest names that STILL satisfy it.');
+    p.push('For EACH candidate return a "growth" field: a short real growth figure or characterization (e.g. "rev +22% YoY, EPS +30% est"). Set "growthSourced" true ONLY if you pulled the figure from a web search THIS run; otherwise a brief recollection with growthSourced false. Never invent a precise figure.');
   }
   if (direction && direction.trim()) p.push('USER DIRECTION (honor this preference; it overrides your default tendencies but NOT the universe or evidence rules): ' + direction.trim());
   if (exclude && exclude.length) p.push('GO DEEPER \u2014 these names were ALREADY proposed; do NOT repeat any of them, return DIFFERENT names: ' + exclude.join(', ') + '. Cast wider within the universe, surface less-obvious or smaller names, and dig into the most promising under-explored angle for the objective(s).');
@@ -6171,12 +6169,12 @@ function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, dir
   if (goals.indexOf('concentration') >= 0) p.push('For the concentration goal, favor candidates whose theme is DIFFERENT from the user\u2019s largest existing cluster.');
   if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor.');
   if (web) {
-    if (wantGrowth) p.push('SEARCH IS REQUIRED this run: run targeted web searches for CURRENT growth catalysts in this space and, for EACH name you propose, verify a RECENT growth figure (latest-quarter revenue/EPS growth or fresh guidance). Set growthSourced true for figures you confirmed by search. Be reasonably economical, but do NOT skip the search.');
+    if (growthLean) p.push('SEARCH IS REQUIRED this run: run targeted web searches for CURRENT growth catalysts in this space and, for EACH name you propose, verify a RECENT growth figure (latest-quarter revenue/EPS growth or fresh guidance). Set growthSourced true for figures you confirmed by search. Be reasonably economical, but do NOT skip the search.');
     else p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts in the relevant space, within the allowed universe) \u2014 be economical. For any catalyst from a search, set sourced true and keep it tied to what the result said.');
     p.push('Also assign each candidate a "momentum" score from 0 to 100: YOUR read of how STRONG and TIMELY its catalyst is RIGHT NOW, based on what you found in search (recent earnings beats, guidance raises, product/cycle inflections, fresh demand or policy signals). This is an INFERENCE from current news, not a computation \u2014 a solid company with no fresh catalyst should score low. Base it on what you actually found, and reflect the same reasoning in the catalyst line.');
   }
   p.push('EVIDENCE: any specific real-world fact is UNVERIFIED unless you found it via web search this run. If you did not search, keep it a short recollection and set the sourced flag false. Never invent a price, figure, or date.');
-  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","type":"stock"|"etf","broad":true|false,"theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true' + (wantGrowth ? ',"growth":"short growth figure","growthSourced":true' : '') + (web ? ',"momentum":<integer 0-100, current-catalyst strength>' : '') + '}]. Return nothing but the JSON array.');
+  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","type":"stock"|"etf","broad":true|false,"theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true' + (growthLean ? ',"growth":"short growth figure","growthSourced":true' : '') + (web ? ',"momentum":<integer 0-100, current-catalyst strength>' : '') + '}]. Return nothing but the JSON array.');
   return p.join('\n');
 }
 
@@ -6199,14 +6197,12 @@ function optScore(cands, amount, goals, factorCol) {
   var ebBefore = before.effectiveBets || 0;
   var topLabel = (before.clusters && before.clusters[0]) ? before.clusters[0].label : null;
   var topBeforePct = (before.clusters && before.clusters[0]) ? before.clusters[0].pct : 0;
-  var growthBefore = optGrowthWeight(before.clusters);
   var rows = cands.map(function (c) {
     var adj = optBuildAdjustments(c, amount);
-    var ebAfter = ebBefore, topAfterPct = topBeforePct, growthAfter = growthBefore, fB = null, fA = null;
+    var ebAfter = ebBefore, topAfterPct = topBeforePct, fB = null, fA = null;
     try {
       var after = computeThemeClusters({ adjustments: adj });
       ebAfter = after.effectiveBets || 0;
-      growthAfter = optGrowthWeight(after.clusters);
       if (topLabel && after.clusters) { for (var i = 0; i < after.clusters.length; i++) { if (after.clusters[i].label === topLabel) { topAfterPct = after.clusters[i].pct; break; } } }
       if (goals.indexOf('factor') >= 0 && typeof window !== 'undefined' && window._riskReplay && window._riskReplay.riskFactorProfileHypothetical) {
         var fs = window._riskReplay.riskFactorProfileHypothetical(adj);
@@ -6215,11 +6211,10 @@ function optScore(cands, amount, goals, factorCol) {
     } catch (e) {}
     var ebDelta = +(ebAfter - ebBefore).toFixed(2);
     var topDelta = +(topAfterPct - topBeforePct).toFixed(2);
-    var growthDelta = +(growthAfter - growthBefore).toFixed(2);
     return {
       ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced, growth: c.growth, growthSourced: c.growthSourced, momentum: (c.momentum == null ? null : c.momentum),
-      ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA, growthDelta: growthDelta,
-      g_diversify: ebDelta, g_concentration: -topDelta, g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null, g_growth: growthDelta
+      ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA,
+      g_diversify: ebDelta, g_concentration: -topDelta, g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null
     };
   });
   goals.forEach(function (g) {
@@ -6237,10 +6232,11 @@ function optScore(cands, amount, goals, factorCol) {
   return rows;
 }
 
-function optReadGoals() { var goals = []; ['diversify', 'concentration', 'factor', 'growth'].forEach(function (g) { var el = document.getElementById('opt-goal-' + g); if (el && el.checked) goals.push(g); }); return goals.length ? goals : ['diversify']; }
+function optReadGoals() { var goals = []; ['diversify', 'concentration', 'factor'].forEach(function (g) { var el = document.getElementById('opt-goal-' + g); if (el && el.checked) goals.push(g); }); return goals.length ? goals : ['diversify']; }
 function optReadGeos() { var x = OPT_GEOS.map(function (g) { return g.id; }).filter(function (id) { var el = document.getElementById('opt-geo-' + id); return el ? el.checked : true; }); return x.length ? x : ['us', 'intl', 'em']; }
 function optReadVehicles() { var x = OPT_VEHICLES.map(function (v) { return v.id; }).filter(function (id) { var el = document.getElementById('opt-veh-' + id); return el ? el.checked : true; }); return x.length ? x : ['stock', 'sector', 'broad']; }
 function optReadDirection() { var el = document.getElementById('opt-direction'); var v = el ? (el.value || '') : optDirection; optDirection = v; return v; }
+function optReadGrowthLean() { var el = document.getElementById('opt-growth-lean'); return el ? !!el.checked : false; }
 function optSetSort(mode) { optSortMode = mode; renderOptimizerResults(); }
 
 async function runOptimizer() {
@@ -6251,14 +6247,14 @@ async function runOptimizer() {
   var amount = parseFloat(amtEl ? amtEl.value : '') || 0;
   if (amount <= 0) { if (amtEl) { amtEl.style.borderColor = '#fbbf24'; setTimeout(function () { if (amtEl) amtEl.style.borderColor = 'var(--color-border-tertiary)'; }, 800); } return; }
   var goals = optReadGoals(), factorCol = (document.getElementById('opt-factor') || {}).value || 'Rate';
-  var geos = optReadGeos(), vehicles = optReadVehicles(), direction = optReadDirection();
+  var geos = optReadGeos(), vehicles = optReadVehicles(), direction = optReadDirection(), growthLean = optReadGrowthLean();
   var webEl = document.getElementById('opt-web'); optWebOn = webEl ? !!webEl.checked : optWebOn;
   optSortMode = 'fit';
   optBusy = true;
   var resEl = document.getElementById('opt-results');
   if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:var(--color-text-tertiary);padding:8px 0">Scouting candidates' + (optWebOn ? ' (searching current catalysts)' : '') + '\u2026</div>';
   try {
-    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn, geos, vehicles, direction, []);
+    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn, geos, vehicles, direction, [], growthLean);
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose the candidates now as the JSON array.' }], system, [], { web: optWebOn });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
@@ -6267,7 +6263,7 @@ async function runOptimizer() {
     if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">Nothing came back inside your universe \u2014 loosen the constraints or try again.</div>'; optBusy = false; return; }
     var scored = optScore(cands, amount, goals, factorCol);
     scored.sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
-    optResults = { amount: amount, goals: goals, factorCol: factorCol, geos: geos, vehicles: vehicles, direction: direction, filtered: filtered, usedWeb: usedWeb, deepened: 0, added: 0, ranOn: Date.now(), cands: cands, seen: cands.map(function (c) { return c.ticker; }), rows: scored };
+    optResults = { amount: amount, goals: goals, factorCol: factorCol, geos: geos, vehicles: vehicles, direction: direction, growthLean: growthLean, filtered: filtered, usedWeb: usedWeb, deepened: 0, added: 0, ranOn: Date.now(), cands: cands, seen: cands.map(function (c) { return c.ticker; }), rows: scored };
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6285,7 +6281,7 @@ async function optDeepen() {
   var wrap = document.getElementById('opt-deepen-wrap');
   if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:var(--color-text-tertiary)">Deepening \u2014 searching for more names\u2026</span>';
   try {
-    var system = buildOptimizerSystem(R.amount, R.goals, R.factorCol, optWebOn, R.geos, R.vehicles, direction, R.seen);
+    var system = buildOptimizerSystem(R.amount, R.goals, R.factorCol, optWebOn, R.geos, R.vehicles, direction, R.seen, R.growthLean);
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose MORE candidates now (excluding the ones already listed) as the JSON array.' }], system, [], { web: optWebOn });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
@@ -6296,7 +6292,7 @@ async function optDeepen() {
     var allCands = R.cands.concat(fresh);
     var scored = optScore(allCands, R.amount, R.goals, R.factorCol);
     scored.sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
-    optResults = { amount: R.amount, goals: R.goals, factorCol: R.factorCol, geos: R.geos, vehicles: R.vehicles, direction: direction, filtered: R.filtered, usedWeb: R.usedWeb || usedWeb, deepened: (R.deepened || 0) + 1, added: fresh.length, ranOn: Date.now(), cands: allCands, seen: allCands.map(function (c) { return c.ticker; }), rows: scored };
+    optResults = { amount: R.amount, goals: R.goals, factorCol: R.factorCol, geos: R.geos, vehicles: R.vehicles, direction: direction, growthLean: R.growthLean, filtered: R.filtered, usedWeb: R.usedWeb || usedWeb, deepened: (R.deepened || 0) + 1, added: fresh.length, ranOn: Date.now(), cands: allCands, seen: allCands.map(function (c) { return c.ticker; }), rows: scored };
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6318,7 +6314,7 @@ function renderOptimizerResults() {
   var multi = R.goals.length > 1;
   var goalText = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : OPT_GOAL_LABELS[g]; }).join(' + ');
   var showFactor = R.goals.indexOf('factor') >= 0;
-  var showGrowth = R.goals.indexOf('growth') >= 0;
+  var showGrowth = !!R.growthLean;
   var anyEtf = R.rows.some(function (r) { return r.type === 'etf'; });
   var hasMomentum = R.rows.some(function (r) { return r.momentum != null; });
   var mode = (optSortMode === 'momentum' && hasMomentum) ? 'momentum' : 'fit';
@@ -6328,9 +6324,9 @@ function renderOptimizerResults() {
   var geoSummary = (R.geos.length === 3) ? 'all regions' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join(' + ');
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
   var html = '';
-  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ' candidates)' : '') + (mode === 'momentum' ? ' \u00b7 <span style="color:#fbbf24">sorted by current momentum [inference]</span>' : '') + '.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' <span style="color:var(--color-text-tertiary)">(growth lens on \u2014 steers picks, not ranking)</span>' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ' candidates)' : '') + (mode === 'momentum' ? ' \u00b7 <span style="color:#fbbf24">sorted by current momentum [inference]</span>' : '') + '.</div>';
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:6px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped (outside universe)' : '') + '.</div>';
-  if (showGrowth && !R.usedWeb) html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">Growth is current-event-aware only with the news toggle on \u2014 it was off this run, so growth figures are recollection and there\u2019s no momentum sort.</div>';
+  if (showGrowth && !R.usedWeb) html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">Growth lens is current-event-aware only with the news toggle on \u2014 it was off this run, so growth figures are recollection and there\u2019s no momentum sort.</div>';
   if (hasMomentum) {
     html += '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap"><span style="font-size:9.5px;color:var(--color-text-tertiary)">Sort:</span>';
     html += '<button class="btn btn-sm" onclick="optSetSort(\'fit\')" style="font-size:10px;' + (mode === 'fit' ? 'font-weight:700' : 'opacity:.55') + '">Structural fit (measured)</button>';
@@ -6341,7 +6337,7 @@ function renderOptimizerResults() {
   html += '<strong>Eff. bets</strong> = effective independent bets, a diversification score: roughly how many genuinely independent positions your book behaves like \u2014 higher is more spread out. The +number is how much this name raises it.<br>';
   html += '<strong>Top cluster \u0394</strong> = the change in the weight of your single biggest theme, in percentage points; negative means it dilutes your largest concentration.';
   if (showFactor) html += '<br><strong>' + e(R.factorCol) + ' \u0394</strong> = how that risk factor\u2019s share of the book moves (before\u2192after) when you add this name.';
-  if (showGrowth) html += '<br><strong>Growth tilt</strong> = MEASURED shift of your book toward growth-categorized themes (' + OPT_GROWTH_THEMES.slice(0, 3).join(', ') + '\u2026), in pp. Coarse, theme-level EXPOSURE \u2014 NOT a return forecast \u2014 and it is what the growth goal feeds into the ranking. The per-name <strong>Growth:</strong> figure is the model\u2019s sourced/recalled number and is NOT ranked.';
+  if (showGrowth) html += '<br><strong>Growth:</strong> the per-name figure is the model\u2019s sourced/recalled growth number. The growth lens uses it to bias WHICH names were proposed and it\u2019s shown for your eyeball \u2014 it is NOT measured and NOT in the ranking.';
   if (hasMomentum) html += '<br><strong>Current momentum</strong> = the model\u2019s 0\u2013100 read of how strong/timely each name\u2019s catalyst is RIGHT NOW, from current news. It is an [inference], NOT measured and NOT in Fit \u2014 use the Sort toggle to order by it.';
   if (multi) html += '<br><strong>Fit</strong> = your selected goals blended: each goal is scaled 0\u2013100 across these candidates, then averaged, so a name ranks high only if it helps across all of them.';
   if (anyEtf) html += '<br><strong>ETF scoring is approximate.</strong> A broad fund is modeled as spread across many positions; a sector fund like its theme. Exact impact needs the fund\u2019s real holdings \u2014 add its look-through in Evaluate a Trade.';
@@ -6354,14 +6350,12 @@ function renderOptimizerResults() {
     else if (multi) headline = 'Fit ' + Math.round((r.fit || 0) * 100) + '/100';
     else if (R.goals[0] === 'diversify') headline = (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ' eff. bets';
     else if (R.goals[0] === 'concentration') headline = (-r.topDelta).toFixed(2) + ' pp top cluster';
-    else if (R.goals[0] === 'growth') headline = (r.growthDelta >= 0 ? '+' : '') + r.growthDelta + ' pp growth tilt';
     else headline = (r.factorBefore != null) ? ('\u2212' + (r.factorBefore - r.factorAfter).toFixed(1) + ' pp ' + R.factorCol) : '\u2014';
     var badge = (r.type === 'etf') ? (' <span style="font-size:8.5px;color:var(--color-text-info,#60a5fa);border:1px solid var(--color-text-info,#60a5fa);border-radius:3px;padding:0 3px">ETF' + (r.broad ? ' \u00b7 broad' : ' \u00b7 sector') + '</span>') : '';
     var parts = [];
     parts.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
     parts.push('Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp');
     if (showFactor && r.factorBefore != null) parts.push(R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1));
-    if (showGrowth) parts.push('Growth tilt ' + (r.growthDelta >= 0 ? '+' : '') + r.growthDelta + ' pp');
     var srcTag = r.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>';
     html += '<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:7px;background:var(--color-background-tertiary)">';
     html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">';
@@ -6390,16 +6384,15 @@ function renderOptimizerTab() {
   var chk = function (id, label) { return '<label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="' + id + '" checked' + dis + '> ' + label + '</label>'; };
   var html = '<div style="max-width:900px;margin:0 auto">';
   html += '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Deploy Optimizer</h2>';
-  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount, one or more goals, and the universe to draw from; add free-hand direction to steer it. The model proposes candidate names within your constraints and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact and ranks them. With news on you can also sort by the model\u2019s current-momentum read. Use Deepen to pull more names. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount, one or more goals, and the universe to draw from; add free-hand direction to steer it. The model proposes candidate names within your constraints and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact and ranks them. The growth lens and current-momentum sort are model reads that shape selection and display but never the measured ranking. Use Deepen to pull more names. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
   html += aiWorkerUrlFieldHtml('opt-worker-url', 'renderOptimizerTab()');
   html += '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:8px">';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="15000" style="width:120px;' + inp + '"' + dis + '></div>';
-  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Goals (pick one or more)</div><div style="display:flex;flex-direction:column;gap:3px">';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Goals (pick one or more) \u2014 these are what the ranking measures</div><div style="display:flex;flex-direction:column;gap:3px">';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-diversify" checked' + dis + '> Improve diversification</label>';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-concentration"' + dis + '> Cut my biggest concentration</label>';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-factor" onchange="document.getElementById(\'opt-factor-wrap\').style.display=this.checked?\'block\':\'none\'"' + dis + '> Cut a specific risk factor</label>';
   html += '<div id="opt-factor-wrap" style="display:none;margin-top:2px"><select id="opt-factor" style="' + inp + ';font-size:11px;padding:4px 7px;cursor:pointer">' + factorOpts + '</select></div>';
-  html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer" title="Tilts the candidate pool toward growth and ranks by a MEASURED theme-exposure tilt. With news on, the search becomes required and verifies a recent growth figure per name. The per-name growth figure is shown but not ranked."><input type="checkbox" id="opt-goal-growth"' + dis + '> Tilt toward growth</label>';
   html += '</div></div>';
   html += '<div style="align-self:flex-end"><button class="btn btn-primary" onclick="runOptimizer()" style="white-space:nowrap"' + dis + '>Rank candidates</button></div>';
   html += '</div>';
@@ -6407,8 +6400,9 @@ function renderOptimizerTab() {
   html += '<div style="display:flex;gap:8px;align-items:center"><span style="font-size:9px;color:var(--color-text-tertiary)">Geography:</span>' + OPT_GEOS.map(function (g) { return chk('opt-geo-' + g.id, g.label); }).join('') + '</div>';
   html += '<div style="display:flex;gap:8px;align-items:center"><span style="font-size:9px;color:var(--color-text-tertiary)">Vehicle:</span>' + OPT_VEHICLES.map(function (v) { return chk('opt-veh-' + v.id, v.label); }).join('') + '</div>';
   html += '</div></div>';
+  html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer;margin-bottom:8px" title="A model-driven SELECTION lens, not a ranking goal. Biases the candidate pool toward names with real growth and shows a growth figure on each card. With news on, the search is required and verifies a recent figure per name. Does NOT affect the measured Fit ranking."><input type="checkbox" id="opt-growth-lean"' + dis + '> Growth lens <span style="font-size:9px;color:var(--color-text-tertiary)">\u2014 steers picks toward growthy names &amp; shows growth figures (not a ranking goal)</span></label>';
   html += '<div style="margin-bottom:8px"><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Free-hand direction (optional) \u2014 steer the search</div><textarea id="opt-direction" oninput="optDirection=this.value" placeholder="e.g. prefer dividend growers; avoid tobacco; lean defensive; smaller under-the-radar names; emphasize cash-flow quality" style="width:100%;max-width:560px;min-height:38px;box-sizing:border-box;' + inp + ';font-size:11px;resize:vertical"' + dis + '>' + e(optDirection) + '</textarea></div>';
-  html += '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer;margin-bottom:4px" title="Searches current catalysts at the objective level (a few cents per run). Required when the growth goal is on; also powers the current-momentum sort."><input type="checkbox" id="opt-web"' + (optWebOn ? ' checked' : '') + dis + '> Use current news (objective-level web search) <span style="font-size:9px">~a few \u00a2 per run</span></label>';
+  html += '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer;margin-bottom:4px" title="Searches current catalysts at the objective level (a few cents per run). Required when the growth lens is on; also powers the current-momentum sort."><input type="checkbox" id="opt-web"' + (optWebOn ? ' checked' : '') + dis + '> Use current news (objective-level web search) <span style="font-size:9px">~a few \u00a2 per run</span></label>';
   html += '<div id="opt-results"></div>';
   html += '</div>';
   el.innerHTML = html;
@@ -31505,6 +31499,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bm</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bn</div>
 </body>
 </html>
