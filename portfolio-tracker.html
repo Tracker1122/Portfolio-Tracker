@@ -6049,7 +6049,7 @@ function buildAskSystem() {
   p.push('- The book above is the ONLY thing you can see. It is held-only: every name listed is actually owned. Do NOT invent holdings or assume positions that are not shown.');
   p.push('- "% of book" in the THEME CLUSTERS section is % of the public-book FULL BOOK figure. Private / pre-IPO deals (if any are listed) are held but counted SEPARATELY as additional direct exposure; the true all-in size is stated in that section. When the user asks about overall concentration, account for both and say which basis (cost vs self-mark) you used.');
   p.push('- Private deals are illiquid single-name bets valued at cost (or a self-mark you set); treat self-marked values as soft estimates, not live prices.');
-  p.push('- You do NOT yet have live prices, per-ticker performance, or what-if tools. If a question needs data not in the snapshot, say so plainly instead of guessing or fabricating a number.');
+  p.push('- You have a TOOL, get_ticker_performance, that fetches recent performance (1M/3M/6M/YTD/1Y returns, max drawdown, annualized volatility) for any ticker on demand \u2014 call it when the user asks how a holding or candidate has performed, instead of guessing. You do not yet have a what-if / scenario tool; if a question needs to simulate a trade, say so. For anything not in the snapshot and not fetchable by a tool, say plainly that you cannot see it rather than fabricating.');
   p.push('- The user is finance-sharp. Be direct and concise. Hedge genuine uncertainty ("probably", "I can\'t tell from this snapshot"). Do not flatter or validate a claim without basis; push back when their framing outruns what the data shows.');
   p.push('- POSITION DETAIL lists open holdings with cost basis and UNREALIZED gain; CLOSED / REALIZED shows positions already sold with REALIZED gain. Never conflate unrealized and realized.');
   p.push('- The STAGED WHAT-IF SCENARIO, if present, is hypothetical and NOT in the book totals; treat it as something the user is considering, not something owned.');
@@ -6093,7 +6093,8 @@ function renderAskThread() {
     if (turn.role === 'user') {
       html += '<div style="align-self:flex-end;max-width:80%;background:var(--color-background-tertiary);border:1px solid #3b82f6;border-radius:10px;padding:8px 11px;font-size:12px;line-height:1.5;white-space:pre-wrap;color:var(--color-text-primary)">' + e(turn.content) + '</div>';
     } else {
-      html += '<div style="align-self:flex-start;max-width:92%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:9px 12px;font-size:12px;line-height:1.55;white-space:pre-wrap;color:var(--color-text-primary)">' + e(turn.content) + '</div>';
+      var foot = (turn.receipts && turn.receipts.length) ? '<div style="margin-top:7px;font-size:9px;color:var(--color-text-tertiary)">\u21B3 live data fetched: ' + e(turn.receipts.join(', ')) + '</div>' : '';
+      html += '<div style="align-self:flex-start;max-width:92%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:9px 12px;font-size:12px;line-height:1.55;white-space:pre-wrap;color:var(--color-text-primary)">' + e(turn.content) + foot + '</div>';
     }
   });
   t.innerHTML = html;
@@ -6104,6 +6105,116 @@ function askKey(ev) {
 }
 
 function clearAsk() { askConversation = []; renderAskTab(); }
+
+// ===== Ask-the-Portfolio: tool use (Ship 2) =====
+// Read-only tools the model may call mid-conversation. Each returns engine/cache data; the model
+// interprets it. Nothing here writes or persists a trade.
+var ASK_TOOLS = [{
+  name: 'get_ticker_performance',
+  description: 'Get recent price performance for one stock or ETF ticker: 1-month, 3-month, 6-month, year-to-date and 1-year returns (percent), plus max drawdown (percent) and annualized volatility (percent) over roughly the past year. Use whenever the user asks how a holding or candidate has performed recently, or to compare recent performance. Reads a shared local cache first and only fetches live if needed.',
+  input_schema: { type: 'object', properties: { ticker: { type: 'string', description: 'Ticker symbol, e.g. NVDA' } }, required: ['ticker'] }
+}];
+
+// Non-streamed structured call to the worker. Returns the raw Anthropic message object
+// ({ content:[...blocks], stop_reason, usage }). Throws the same classified errors as aiWorkerCall.
+async function aiWorkerCallStructured(messages, system, tools, opts) {
+  opts = opts || {};
+  if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
+  var body = { messages: messages, stream: false };
+  if (system) body.system = system;
+  if (tools && tools.length) body.tools = tools;
+  if (opts.web) body.web = true;
+  var resp;
+  try {
+    resp = await fetch(aiWorkerUrl + '/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch (netErr) { var e1 = new Error(netErr.message || 'network error'); e1.aiKind = 'network'; throw e1; }
+  var data = {};
+  try { data = await resp.json(); } catch (_) {}
+  if (!resp.ok || (data && data.error)) {
+    var errObj = (data && typeof data.error === 'object') ? data.error : null;
+    var msg = errObj ? (errObj.message || '') : '';
+    var type = errObj ? (errObj.type || '') : '';
+    var er = new Error(msg || ('HTTP ' + resp.status));
+    er.aiKind = (typeof classifyAiError === 'function') ? classifyAiError(resp.status, type, msg) : 'err';
+    er.httpStatus = resp.status; throw er;
+  }
+  return data;
+}
+
+// Tool: recent performance for one ticker. Cache-first (shared _candPerf), else live fetch.
+async function askToolTickerPerf(ticker) {
+  var T = (ticker || '').toUpperCase().trim();
+  if (!T) return { error: 'no ticker provided' };
+  try {
+    var cached = (typeof _candPerf !== 'undefined' && _candPerf) ? _candPerf[T] : null;
+    if (cached && !cached.error && typeof cached.m1 !== 'undefined') {
+      return { ticker: T, units: 'percent returns', m1: cached.m1, m3: cached.m3, m6: cached.m6, ytd: cached.ytd, y1: cached.y1, maxDrawdown: cached.maxDrawdown, annVol: cached.annVol, source: 'cache' };
+    }
+  } catch (e) {}
+  try {
+    var w = await fetchTickerWindows(T);
+    try {
+      if (typeof _candPerf !== 'undefined' && _candPerf) {
+        _candPerf[T] = { m1: w.m1, m3: w.m3, m6: w.m6, y1: w.y1, ytd: w.ytd, maxDrawdown: w.maxDrawdown, annVol: w.annVol, shortHist: w.shortHist, histDays: w.histDays, fetchedAt: w.fetchedAt };
+        if (typeof saveCandPerf === 'function') saveCandPerf();
+      }
+    } catch (e) {}
+    return { ticker: T, units: 'percent returns', m1: w.m1, m3: w.m3, m6: w.m6, ytd: w.ytd, y1: w.y1, maxDrawdown: w.maxDrawdown, annVol: w.annVol, source: 'live' };
+  } catch (err) {
+    var m = (err && err.message) || 'err';
+    if (m === 'nokey') return { error: 'No Polygon API key is set in the tracker, so live performance cannot be fetched.' };
+    if (m === 'rate') return { error: 'Polygon rate limit hit; performance for ' + T + ' is temporarily unavailable.' };
+    return { error: 'Could not fetch performance for ' + T + '.' };
+  }
+}
+
+async function runAskTool(name, input) {
+  if (name === 'get_ticker_performance') return await askToolTickerPerf((input && input.ticker) || '');
+  return { error: 'unknown tool: ' + name };
+}
+
+function setAskLive(txt) {
+  var el = document.getElementById('ask-live');
+  if (el) { el.style.color = 'var(--color-text-secondary)'; el.textContent = txt; }
+}
+
+// One user turn: model call -> (optional tool rounds) -> final text. Returns { text, receipts }.
+async function runAskTurn() {
+  var system = buildAskSystem();
+  var msgs = askConversation.map(function (turn) { return { role: turn.role, content: turn.content }; });
+  var receipts = [];
+  var rounds = 0;
+  while (rounds < 6) {
+    rounds++;
+    var data = await aiWorkerCallStructured(msgs, system, ASK_TOOLS, {});
+    var content = data.content || [];
+    if (data.stop_reason === 'tool_use') {
+      msgs.push({ role: 'assistant', content: content });
+      var toolUses = content.filter(function (b) { return b.type === 'tool_use'; });
+      var results = [];
+      for (var i = 0; i < toolUses.length; i++) {
+        var tu = toolUses[i];
+        var label = (tu.input && tu.input.ticker) ? String(tu.input.ticker).toUpperCase() : (tu.name || 'tool');
+        setAskLive('Fetching ' + label + '\u2026');
+        var out;
+        try { out = await runAskTool(tu.name, tu.input); }
+        catch (e) { out = { error: (e && e.message) || 'tool failed' }; }
+        receipts.push(label + (out && out.error ? ' \u2717' : ' \u2713'));
+        results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(out), is_error: !!(out && out.error) });
+      }
+      msgs.push({ role: 'user', content: results });
+      setAskLive('Analyzing\u2026');
+      continue;
+    }
+    var text = content.filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n').trim();
+    return { text: text || '(empty response)', receipts: receipts };
+  }
+  return { text: '(stopped after the maximum number of tool rounds)', receipts: receipts };
+}
 
 async function sendAskMessage() {
   if (askBusy) return;
@@ -6126,14 +6237,9 @@ async function sendAskMessage() {
     live.textContent = 'Thinking\u2026';
     t.appendChild(live);
   }
-  var system = buildAskSystem();
-  var messages = askConversation.map(function (turn) { return { role: turn.role, content: turn.content }; });
   try {
-    var r = await aiWorkerCall('', function (textSoFar) {
-      var el = document.getElementById('ask-live');
-      if (el) { el.style.color = 'var(--color-text-primary)'; el.textContent = textSoFar; }
-    }, { messages: messages, system: system });
-    askConversation.push({ role: 'assistant', content: r.text });
+    var r = await runAskTurn();
+    askConversation.push({ role: 'assistant', content: r.text, receipts: r.receipts });
     askBusy = false;
     renderAskTab();
   } catch (err) {
@@ -30886,6 +30992,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09au</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09av</div>
 </body>
 </html>
