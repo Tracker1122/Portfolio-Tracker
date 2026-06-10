@@ -5861,6 +5861,22 @@ function buildAskSnapshot() {
   lines.push('Effective independent bets (lower = more concentrated): ' + (c.effectiveBets ? c.effectiveBets.toFixed(1) : 'n/a'));
   if (c.base) lines.push('Diversified base (broad-index tail + themeless names): ' + c.base.pct.toFixed(1) + '% of book');
   lines.push('');
+  // Pre-sorted flat ranking so the model READS order rather than computing it (engine ranks, model interprets).
+  try {
+    var _ex = (typeof computeTrueExposure === 'function') ? computeTrueExposure() : null;
+    var _rows = (_ex && Array.isArray(_ex.rows)) ? _ex.rows.slice() : [];
+    _rows.sort(function (a, b) { return (b.total || 0) - (a.total || 0); });
+    if (_rows.length) {
+      lines.push('');
+      lines.push('TOP NAMES BY EFFECTIVE EXPOSURE (PRE-SORTED, biggest first \u2014 use THIS exact order for any "top holdings"/ranking answer; effective = direct shares + look-through inside funds you hold; % of full book; the VOO core is decomposed INTO these names, never listed itself):');
+      _rows.slice(0, 20).forEach(function (r, i) {
+        var pct = c.fullBook > 0 ? (r.total / c.fullBook * 100) : 0;
+        var split = (r.direct > 0 && r.viaFunds > 0) ? (' [' + fmt(r.direct) + ' direct + ' + fmt(r.viaFunds) + ' in funds]') : (r.direct > 0 ? ' [direct]' : (r.viaFunds > 0 ? ' [via funds]' : ''));
+        lines.push((i + 1) + '. ' + r.display + ': ' + fmt(r.total) + ' (' + pct.toFixed(1) + '%)' + split);
+      });
+    }
+  } catch (e) {}
+
   lines.push('THEME CLUSTERS (names that move together), dollars and % of full book, biggest first:');
   (c.clusters || []).forEach(function (cl) {
     lines.push('- ' + cl.label + ': ' + fmt(cl.total) + ' (' + cl.pct.toFixed(1) + '% of book)');
@@ -6056,7 +6072,8 @@ function buildAskSystem() {
   p.push('- The book above is the ONLY thing you can see. It is held-only: every name listed is actually owned. Do NOT invent holdings or assume positions that are not shown.');
   p.push('- "% of book" in the THEME CLUSTERS section is % of the public-book FULL BOOK figure. Private / pre-IPO deals (if any are listed) are held but counted SEPARATELY as additional direct exposure; the true all-in size is stated in that section. When the user asks about overall concentration, account for both and say which basis (cost vs self-mark) you used.');
   p.push('- Private deals are illiquid single-name bets valued at cost (or a self-mark you set); treat self-marked values as soft estimates, not live prices.');
-  p.push('- You have a TOOL, get_ticker_performance, that fetches recent performance (1M/3M/6M/YTD/1Y returns, max drawdown, annualized volatility) for any ticker on demand \u2014 call it when the user asks how a holding or candidate has performed, instead of guessing. You do not yet have a what-if / scenario tool; if a question needs to simulate a trade, say so. For anything not in the snapshot and not fetchable by a tool, say plainly that you cannot see it rather than fabricating.');
+  p.push('- TOOL get_ticker_performance fetches recent performance (1M/3M/6M/YTD/1Y returns, max drawdown, annualized volatility) for any ticker on demand \u2014 call it when asked how a holding or candidate has performed, instead of guessing.');
+  p.push('- TOOL run_what_if simulates adding/trimming STOCK positions by dollar amount and returns the concentration/effective-bets/cluster impact, non-persisting (ETF moves not modeled). Use it for "what if I add/sell $X of <ticker>"; do not compute the impact yourself. For anything not in the snapshot and not fetchable by a tool, say plainly that you cannot see it rather than fabricating.');
   p.push('- The user is finance-sharp. Be direct and concise. Hedge genuine uncertainty ("probably", "I can\'t tell from this snapshot"). Do not flatter or validate a claim without basis; push back when their framing outruns what the data shows.');
   p.push('- POSITION DETAIL lists open holdings with cost basis and UNREALIZED gain; CLOSED / REALIZED shows positions already sold with REALIZED gain. Never conflate unrealized and realized.');
   p.push('- The STAGED WHAT-IF SCENARIO, if present, is hypothetical and NOT in the book totals; treat it as something the user is considering, not something owned.');
@@ -6064,6 +6081,7 @@ function buildAskSystem() {
   p.push('- FUND LOOK-THROUGH (if present) shows the top holdings INSIDE funds you own, from saved tables \u2014 answer "what is inside my <fund>" and fund-overlap questions from it. It lists only funds you actually hold and only their top names (not exhaustive). The clusters above already fold these into your named exposure.');
   p.push('- CANDIDATE PIPELINE lists ideas you are EVALUATING (saved quality reviews), not holdings. SLEEVE OBJECTIVES define what each strategy bucket is for; judge a position or candidate against its own sleeve\'s purpose.');
   p.push('- RISK FACTOR PROFILE percentages are two-sided sensitivities (share of book materially exposed to a factor), NOT directional forecasts. Any RISK REVIEW block is a replay of a PAST stress window, never a prediction or a buy/sell signal.');
+  p.push('- For any "top holdings" or ranking question, use the PRE-SORTED order in TOP NAMES BY EFFECTIVE EXPOSURE exactly as given; do not re-sort, reorder, or recompute the ranking yourself.');
   p.push('- VOO is the PASSIVE INDEX CORE, not a position: never list, rank, or compare it as a holding, and do not volunteer VOO commentary on sizing/positions/concentration questions. Its constituents are already folded into your named exposures via look-through, and it stays in the book denominator. You may mention the passive core exists as brief context only when directly relevant.');
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
   return p.join('\n');
@@ -6121,6 +6139,28 @@ var ASK_TOOLS = [{
   name: 'get_ticker_performance',
   description: 'Get recent price performance for one stock or ETF ticker: 1-month, 3-month, 6-month, year-to-date and 1-year returns (percent), plus max drawdown (percent) and annualized volatility (percent) over roughly the past year. Use whenever the user asks how a holding or candidate has performed recently, or to compare recent performance. Reads a shared local cache first and only fetches live if needed.',
   input_schema: { type: 'object', properties: { ticker: { type: 'string', description: 'Ticker symbol, e.g. NVDA' } }, required: ['ticker'] }
+}, {
+  name: 'run_what_if',
+  description: 'Simulate a hypothetical change to the book and see the concentration/exposure impact WITHOUT making any real change. Supports adding or trimming STOCK positions by dollar amount (ETF moves are not modeled yet). Returns full-book size, effective independent-bets count, and per-theme cluster % before vs after, plus affected names\' new exposure. Use for "what if I add/sell $X of <ticker>" or to see how a trade shifts concentration. Non-persisting: it never stages or saves a trade.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      moves: {
+        type: 'array',
+        description: 'One or more hypothetical stock moves.',
+        items: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['add', 'trim'], description: 'add = buy more; trim = sell some' },
+            ticker: { type: 'string', description: 'Stock ticker' },
+            amount: { type: 'number', description: 'Dollar amount to add or trim' }
+          },
+          required: ['action', 'ticker', 'amount']
+        }
+      }
+    },
+    required: ['moves']
+  }
 }];
 
 // Non-streamed structured call to the worker. Returns the raw Anthropic message object
@@ -6180,8 +6220,53 @@ async function askToolTickerPerf(ticker) {
   }
 }
 
+// Tool: non-persisting what-if via computeThemeClusters({adjustments}) (clones rows; no mutation, no save).
+async function askToolWhatIf(moves) {
+  var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
+  if (!Array.isArray(moves) || !moves.length) return { error: 'no moves provided' };
+  var adjustments = [], echo = [];
+  for (var i = 0; i < moves.length; i++) {
+    var mv = moves[i] || {};
+    var tk = (mv.ticker || '').toUpperCase().trim();
+    var amt = parseFloat(mv.amount) || 0;
+    var act = (mv.action === 'trim' || mv.action === 'sell') ? 'trim' : 'add';
+    if (!tk || amt <= 0) continue;
+    adjustments.push({ ticker: tk, deltaDirect: (act === 'trim' ? -amt : amt), display: tk });
+    echo.push(act + ' ' + fmt(amt) + ' ' + tk);
+  }
+  if (!adjustments.length) return { error: 'no valid moves (need a ticker and a positive dollar amount; stocks only for now)' };
+  try {
+    var before = computeThemeClusters();
+    var after = computeThemeClusters({ adjustments: adjustments });
+    var beforeMap = {};
+    (before.clusters || []).forEach(function (cl) { beforeMap[cl.label] = cl.pct; });
+    var clusterShift = (after.clusters || []).map(function (cl) {
+      return { theme: cl.label, beforePct: +((beforeMap[cl.label] || 0).toFixed(1)), afterPct: +(cl.pct.toFixed(1)) };
+    });
+    var wantKeys = {};
+    adjustments.forEach(function (a) { try { wantKeys[qrCanonical(a.ticker).key] = a.ticker; } catch (e) {} });
+    var affected = [];
+    var scan = function (arr) {
+      (arr || []).forEach(function (n) {
+        if (n.key && wantKeys[n.key]) affected.push({ ticker: wantKeys[n.key], afterExposure: Math.round(n.total), afterPct: +((after.fullBook > 0 ? n.total / after.fullBook * 100 : 0).toFixed(1)) });
+      });
+    };
+    (after.clusters || []).forEach(function (cl) { scan(cl.names); });
+    if (after.base && after.base.names) scan(after.base.names);
+    return {
+      moves: echo,
+      note: 'Hypothetical exposure/concentration impact only. Non-persisting (nothing was staged or saved). Stocks only; no tax, fees, or ETF decomposition modeled.',
+      fullBookBefore: Math.round(before.fullBook), fullBookAfter: Math.round(after.fullBook),
+      effectiveBetsBefore: +(before.effectiveBets || 0).toFixed(1), effectiveBetsAfter: +(after.effectiveBets || 0).toFixed(1),
+      affectedNames: affected,
+      clusterShift: clusterShift
+    };
+  } catch (e) { return { error: 'what-if computation failed' }; }
+}
+
 async function runAskTool(name, input) {
   if (name === 'get_ticker_performance') return await askToolTickerPerf((input && input.ticker) || '');
+  if (name === 'run_what_if') return await askToolWhatIf((input && input.moves) || []);
   return { error: 'unknown tool: ' + name };
 }
 
@@ -6206,7 +6291,7 @@ async function runAskTurn() {
       var results = [];
       for (var i = 0; i < toolUses.length; i++) {
         var tu = toolUses[i];
-        var label = (tu.input && tu.input.ticker) ? String(tu.input.ticker).toUpperCase() : (tu.name || 'tool');
+        var label = (tu.input && tu.input.ticker) ? String(tu.input.ticker).toUpperCase() : (tu.name === 'run_what_if' ? 'what-if scenario' : (tu.name || 'tool'));
         setAskLive('Fetching ' + label + '\u2026');
         var out;
         try { out = await runAskTool(tu.name, tu.input); }
@@ -31000,6 +31085,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09aw</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ax</div>
 </body>
 </html>
