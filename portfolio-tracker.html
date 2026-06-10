@@ -8571,7 +8571,7 @@ function renderQrForm() {
       <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
         <div style="flex:1;min-width:120px">
           <label style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px">Ticker</label>
-          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="qrCheckStage1()" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
+          <input id="qr-ticker" type="text" value="${esc(tickerVal)}" oninput="qrCheckStage1()" onchange="qrAutofillHoldings()" placeholder="${qrType === 'etf' ? 'e.g. SMH' : 'e.g. NVDA'}" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;text-transform:uppercase">
           <div style="margin-top:3px"><a href="#" onclick="qrOpenAnalysis(event)" title="Opens the ${qrType === 'etf' ? 'fund' : 'company'} overview on stockanalysis.com (free, no login) — a handy reference while you fill this out" style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">↗ View ${qrType === 'etf' ? 'fund' : 'stock'} on stockanalysis.com</a></div>
           <div style="margin-top:3px"><a href="#" onclick="event.preventDefault();qrToggleFormInfo()" title="Quick summary — what this is, sector, research links, and an AI read on which of YOUR themes it fits. Mirrors the Discovery card." style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">ⓘ What is this? · where it lands</a></div>
         </div>
@@ -9604,6 +9604,29 @@ function qrRotRemoveTrim(idx) {
 function qrToggleRotationLegacy() { qrRenderRotation(); }
 
 // Read the ETF holdings field, parse it, and show DIRECT overlaps with the book.
+// Autofill a candidate ETF's holdings from your stored data (library / look-through table) when you
+// enter a ticker you've used before — same idea as the comparison tool's autofill. Won't clobber a
+// manual paste; mirrors the holdings textarea's own oninput chain so previews/overlap recompute.
+function qrAutofillHoldings() {
+  if (typeof qrType !== 'undefined' && qrType !== 'etf') return;
+  if (typeof getIndexLookthrough !== 'function') return;
+  const tkEl = document.getElementById('qr-ticker');
+  const fEl = document.getElementById('qr-f-holdingsTop');
+  if (!tkEl || !fEl || fEl.value.trim()) return;
+  const tk = (tkEl.value || '').trim().toUpperCase();
+  if (!tk) return;
+  const tbl = getIndexLookthrough()[tk];
+  if (!tbl || !tbl.weights || !Object.keys(tbl.weights).length) return;
+  fEl.value = Object.entries(tbl.weights)
+    .sort(function (a, b) { return (parseFloat(b[1]) || 0) - (parseFloat(a[1]) || 0); })
+    .map(function (e) { return e[0] + ' ' + (parseFloat(e[1]) || 0) + '%'; })
+    .join('\n');
+  if (typeof renderHoldingsPreview === 'function') renderHoldingsPreview();
+  if (typeof qrCheckStage1 === 'function') qrCheckStage1();
+  if (typeof runQrHoldingsOverlap === 'function') runQrHoldingsOverlap();
+  if (typeof qrRenderBuyImpact === 'function') qrRenderBuyImpact();
+}
+
 function runQrHoldingsOverlap() {
   const out = document.getElementById('qr-holdings-overlap');
   const fieldEl = document.getElementById('qr-f-holdingsTop');
@@ -21398,7 +21421,7 @@ function cmpThemeMapHtml(A, B) {
   const _themes = (typeof themeUniverseAll === 'function') ? themeUniverseAll() : [];
   const tagSelect = (key) => `<select onchange="cmpSetTag('${eq(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer"><option value="__unset__" selected>tag\u2026</option>${_themes.map(t => `<option value="${ex(t.name)}">${ex(t.name)}</option>`).join('')}</select>`;
   const untaggedHtml = untagged.length
-    ? `<div style="margin-top:11px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#fbbf24;margin-bottom:5px">Untagged (${untagged.length}) \u2014 tag once to place it in the table above and everywhere else</div>${untagged.map(n => `<span style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:10px"><span style="color:var(--color-text-secondary)">${ex(n.ticker)}</span>${tagSelect(n.key)}</span>`).join('')}</div>`
+    ? `<div style="margin-top:11px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#fbbf24;margin-bottom:5px">Untagged (${untagged.length}) \u2014 tap \u2139 to see what it is, then tag it once to place it everywhere</div>${untagged.map(n => `<span style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:10px"><span style="color:var(--color-text-secondary)">${ex(n.ticker)}</span><span onclick="showTickerInfoInto('${eq(n.ticker)}','cmp-untagged-info')" title="What is this? Sector, description, market cap" style="cursor:help;color:var(--color-text-info);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 4px;font-size:9px">\u2139</span>${tagSelect(n.key)}</span>`).join('')}<div id="cmp-untagged-info" style="margin-top:6px"></div></div>`
     : '';
 
   const anyNames = cols.some(col => col.st.news.length || col.st.owned.length);
@@ -30188,6 +30211,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09aa</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ab</div>
 </body>
 </html>
