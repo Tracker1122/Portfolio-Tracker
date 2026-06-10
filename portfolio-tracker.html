@@ -5851,6 +5851,13 @@ function buildAskSnapshot() {
   try { if (typeof cashBuckets !== 'undefined' && cashBuckets) cash = Object.values(cashBuckets).reduce(function (s, v) { return s + (parseFloat(v) || 0); }, 0); } catch (e) {}
   lines.push('FULL BOOK (the denominator for every % below): ' + fmt(c.fullBook));
   lines.push('Cash: ' + fmt(cash) + '  |  Named positions held: ' + posCount);
+  try {
+    var vooVal = (typeof indexFundHeldValue === 'function') ? indexFundHeldValue('VOO') : 0;
+    if (vooVal > 0) {
+      var vooPct = c.fullBook > 0 ? (vooVal / c.fullBook * 100) : 0;
+      lines.push('PASSIVE CORE: VOO is your broad-market index base \u2014 ' + fmt(vooVal) + ' (~' + vooPct.toFixed(0) + '% of book). Its constituents ARE counted in every exposure/concentration figure here via look-through (the NVDA inside VOO is already in your NVDA total). But VOO ITSELF is not a single-name bet: do NOT rank it among holdings, do NOT put it in top-holdings or comparison lists, and do NOT volunteer commentary about VOO when the question is about positions, sizing, or concentration. The denominator stays the full book, which includes VOO.');
+    }
+  } catch (e) {}
   lines.push('Effective independent bets (lower = more concentrated): ' + (c.effectiveBets ? c.effectiveBets.toFixed(1) : 'n/a'));
   if (c.base) lines.push('Diversified base (broad-index tail + themeless names): ' + c.base.pct.toFixed(1) + '% of book');
   lines.push('');
@@ -5975,7 +5982,7 @@ function buildAskSnapshot() {
         var cov = Math.min(sumW, 100);
         var sorted = names.map(function (k) { return { tk: k, w: parseFloat(w[k]) || 0 }; })
           .sort(function (a, b) { return b.w - a.w; }).slice(0, 15);
-        fundLines.push('- ' + ftk + ' (you hold ' + fmt(held) + '; ~' + cov.toFixed(0) + '% itemized below, remainder is broad tail):');
+        fundLines.push('- ' + ftk + (ftk === 'VOO' ? ' [PASSIVE INDEX CORE \u2014 base, not a holding to rank]' : '') + ' (you hold ' + fmt(held) + '; ~' + cov.toFixed(0) + '% itemized below, remainder is broad tail):');
         sorted.forEach(function (it) {
           fundLines.push('    ' + it.tk + ' ' + it.w.toFixed(1) + '% (~' + fmt(held * it.w / 100) + ' inside this fund)');
         });
@@ -6057,6 +6064,7 @@ function buildAskSystem() {
   p.push('- FUND LOOK-THROUGH (if present) shows the top holdings INSIDE funds you own, from saved tables \u2014 answer "what is inside my <fund>" and fund-overlap questions from it. It lists only funds you actually hold and only their top names (not exhaustive). The clusters above already fold these into your named exposure.');
   p.push('- CANDIDATE PIPELINE lists ideas you are EVALUATING (saved quality reviews), not holdings. SLEEVE OBJECTIVES define what each strategy bucket is for; judge a position or candidate against its own sleeve\'s purpose.');
   p.push('- RISK FACTOR PROFILE percentages are two-sided sensitivities (share of book materially exposed to a factor), NOT directional forecasts. Any RISK REVIEW block is a replay of a PAST stress window, never a prediction or a buy/sell signal.');
+  p.push('- VOO is the PASSIVE INDEX CORE, not a position: never list, rank, or compare it as a holding, and do not volunteer VOO commentary on sizing/positions/concentration questions. Its constituents are already folded into your named exposures via look-through, and it stays in the book denominator. You may mention the passive core exists as brief context only when directly relevant.');
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
   return p.join('\n');
 }
@@ -30992,6 +31000,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09av</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09aw</div>
 </body>
 </html>
