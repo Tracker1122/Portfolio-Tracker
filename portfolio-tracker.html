@@ -21570,7 +21570,7 @@ function cmpCompare() {
     const pctAinB = A.coverage > 0 ? (sumAsh / A.coverage * 100) : null;
     const pctBinA = B.coverage > 0 ? (sumBsh / B.coverage * 100) : null;
 
-    intro = `<div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:9px">You're comparing the holdings of ${labA} and ${labB}. <strong style="color:var(--color-text-secondary)">Shared</strong> = names both funds hold (each fund's weight shown in its own color); <strong style="color:var(--color-text-secondary)">Only in</strong> = names unique to one fund, among what you pasted. The bolded weight on a shared name is the fund that leans into it more.</div>`;
+    intro = `<div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:9px">You're comparing the holdings of ${labA} and ${labB}. <strong style="color:var(--color-text-secondary)">Shared</strong> = names both funds hold (each fund's weight shown in its own color); <strong style="color:var(--color-text-secondary)">Only in</strong> = names unique to one fund, among what you pasted. The bolded weight on a shared name is the fund that leans into it more. <span style="color:var(--color-text-success)">Green</span> = a name you don\u2019t already own \u2014 new exposure the fund would add.</div>`;
 
     headline = `<div style="font-size:13px;color:var(--color-text-primary);line-height:1.5"><strong style="color:var(--color-text-info)">≈ ${minSum.toFixed(1)}% overlap by weight.</strong> That much of the two funds is the same stocks at the same time — own both and roughly ${minSum.toFixed(0)}% of your combined exposure is duplicated.</div>`;
     if (pctAinB != null && pctBinA != null) {
@@ -21582,11 +21582,17 @@ function cmpCompare() {
     onlyA.sort((a, b) => (b.weight || 0) - (a.weight || 0));
     onlyB.sort((a, b) => (b.weight || 0) - (a.weight || 0));
 
+    // Names NOT already in your book (no true exposure, direct or via funds) render GREEN — the new
+    // exposure each fund would actually add. Names you already own keep their neutral color.
+    const _heldKeys = new Set();
+    try { if (typeof computeTrueExposure === 'function') (computeTrueExposure().rows || []).forEach(r => _heldKeys.add(r.key)); } catch (e) {}
+    const _newCol = (tk, ownColor) => { try { return _heldKeys.has(qrCanonical(tk).key) ? ownColor : 'var(--color-text-success)'; } catch (e) { return ownColor; } };
+
     const sharedRows = shared.map(x => {
       const aBig = (x.wA || 0) >= (x.wB || 0);
-      return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="color:var(--color-text-primary);font-weight:600">${esc2(x.ticker)}</span><span style="font-variant-numeric:tabular-nums"><span style="color:${cA};font-weight:${aBig ? 700 : 400}">${fmtW(x.wA)}</span> <span style="color:var(--color-text-tertiary)">/</span> <span style="color:${cB};font-weight:${aBig ? 400 : 700}">${fmtW(x.wB)}</span></span></div>`;
+      return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="color:${_newCol(x.ticker, 'var(--color-text-primary)')};font-weight:600">${esc2(x.ticker)}</span><span style="font-variant-numeric:tabular-nums"><span style="color:${cA};font-weight:${aBig ? 700 : 400}">${fmtW(x.wA)}</span> <span style="color:var(--color-text-tertiary)">/</span> <span style="color:${cB};font-weight:${aBig ? 400 : 700}">${fmtW(x.wB)}</span></span></div>`;
     }).join('');
-    const onlyRow = (x, c) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="color:var(--color-text-secondary)">${esc2(x.ticker)}</span><span style="color:${c};font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`;
+    const onlyRow = (x, c) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="color:${_newCol(x.ticker, 'var(--color-text-secondary)')}">${esc2(x.ticker)}</span><span style="color:${c};font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`;
     const aRows = onlyA.map(x => onlyRow(x, cA)).join('');
     const bRows = onlyB.map(x => onlyRow(x, cB)).join('');
 
@@ -30299,6 +30305,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ak</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09al</div>
 </body>
 </html>
