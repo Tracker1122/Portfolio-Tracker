@@ -1066,6 +1066,7 @@
 
   <!-- Tab Bar -->
   <div class="tab-bar">
+    <button class="tab-btn" onclick="switchTab('ask')">Ask</button>
     <button class="tab-btn active" onclick="switchTab('dashboard')">Home</button>
     <button class="tab-btn" onclick="switchTab('distribution')">True Exposure</button>
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
@@ -1076,7 +1077,6 @@
     <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
-    <button class="tab-btn" onclick="switchTab('ask')">Ask</button>
   </div>
 
   <!-- Dashboard Tab -->
@@ -5958,6 +5958,36 @@ function buildAskSnapshot() {
     }
   } catch (e) {}
 
+  // ---- Held-fund look-through (top holdings INSIDE each fund you actually own) ----
+  // Held-only by construction: indexFundHeldValue() returns 0 for the _ref/_benchmark reference ETFs
+  // in the store, so the skip below guarantees we never list a fund you don't own as a holding.
+  try {
+    var store = (typeof getIndexLookthrough === 'function') ? getIndexLookthrough() : null;
+    if (store) {
+      var fundLines = [];
+      Object.keys(store).forEach(function (ftk) {
+        var held = (typeof indexFundHeldValue === 'function') ? indexFundHeldValue(ftk) : 0;
+        if (!(held > 0)) return; // unheld reference/benchmark ETF -> never list as a holding
+        var w = (store[ftk] && store[ftk].weights) || {};
+        var names = Object.keys(w);
+        if (!names.length) return; // blank-on-purpose or not itemized yet
+        var sumW = names.reduce(function (s, k) { return s + (parseFloat(w[k]) || 0); }, 0);
+        var cov = Math.min(sumW, 100);
+        var sorted = names.map(function (k) { return { tk: k, w: parseFloat(w[k]) || 0 }; })
+          .sort(function (a, b) { return b.w - a.w; }).slice(0, 15);
+        fundLines.push('- ' + ftk + ' (you hold ' + fmt(held) + '; ~' + cov.toFixed(0) + '% itemized below, remainder is broad tail):');
+        sorted.forEach(function (it) {
+          fundLines.push('    ' + it.tk + ' ' + it.w.toFixed(1) + '% (~' + fmt(held * it.w / 100) + ' inside this fund)');
+        });
+      });
+      if (fundLines.length) {
+        lines.push('');
+        lines.push('FUND LOOK-THROUGH (top holdings INSIDE the funds you OWN, from your saved look-through tables \u2014 use for "what is inside my <fund>" and overlap questions; only top names per fund are shown, so it is not exhaustive):');
+        fundLines.forEach(function (l) { lines.push(l); });
+      }
+    }
+  } catch (e) {}
+
   return lines.join('\n');
 }
 
@@ -5978,6 +6008,7 @@ function buildAskSystem() {
   p.push('- POSITION DETAIL lists open holdings with cost basis and UNREALIZED gain; CLOSED / REALIZED shows positions already sold with REALIZED gain. Never conflate unrealized and realized.');
   p.push('- The STAGED WHAT-IF SCENARIO, if present, is hypothetical and NOT in the book totals; treat it as something the user is considering, not something owned.');
   p.push('- You may reason about after-tax outcomes and long- vs short-term holding using the tax context, but flag that you are not a tax advisor.');
+  p.push('- FUND LOOK-THROUGH (if present) shows the top holdings INSIDE funds you own, from saved tables \u2014 answer "what is inside my <fund>" and fund-overlap questions from it. It lists only funds you actually hold and only their top names (not exhaustive). The clusters above already fold these into your named exposure.');
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
   return p.join('\n');
 }
@@ -30794,6 +30825,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09as</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09at</div>
 </body>
 </html>
