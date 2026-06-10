@@ -7381,6 +7381,10 @@ function renderIndexEditor() {
   heldEtfTickers.forEach(tk => {
     if (!tables[tk]) tables[tk] = { asOf: '', weights: {}, _auto: true };
   });
+  // New theme benchmarks — fillable reference cards. Pasting their holdings turns ON benchmark-
+  // membership classification for Industrials/Materials/Communications (a stronger signal than the AI
+  // seed, and catches names the seed misses). Unheld, so they add ZERO to true exposure — purely a tag aid.
+  ['XLI', 'XLB', 'XLC'].forEach(tk => { if (!tables[tk]) tables[tk] = { asOf: '', weights: {}, _ref: true, _benchmark: true }; });
   // Order: held funds first (most relevant), then any unheld tables (e.g. seeded VOO not yet held).
   const funds = Object.keys(tables).sort((a, b) => {
     const ha = indexFundHeldValue(a) > 0 ? 0 : 1, hb = indexFundHeldValue(b) > 0 ? 0 : 1;
@@ -7423,7 +7427,7 @@ function renderIndexEditor() {
           : (blankOnPurposeNote
               ? `<span style="color:var(--color-text-tertiary)">✓ you hold ~${fmtDollarWhole(held)} \u2014 marked blank on purpose (no decomposition needed)</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${escq(fund)}')" style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">undo</a>`
               : `<span style="color:#fbbf24">✓ you hold ~${fmtDollarWhole(held)} \u2014 paste its holdings below to enable look-through</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${escq(fund)}')" style="font-size:9px;color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="If this fund doesn't need decomposing (e.g. gold, cash, a commodity), mark it so it stops flagging as a to-do">mark blank on purpose</a>`))
-      : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 look-through inactive until you own it${tbl._ref ? ' \u00b7 reference, added from ETF comparison' : ''}</span>`;
+      : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 ${tbl._benchmark ? 'theme benchmark \u00b7 paste its holdings to auto-classify that theme (adds no exposure)' : `look-through inactive until you own it${tbl._ref ? ' \u00b7 reference, added from ETF comparison' : ''}`}</span>`;
     const ageDays = (() => { try { return tbl.asOf ? Math.round((Date.now() - new Date(tbl.asOf).getTime()) / 86400000) : null; } catch(e){ return null; } })();
     const stale = ageDays != null && ageDays > 120;
     const rows = Object.entries(tbl.weights || {}).sort((a,b)=>b[1]-a[1]).map(([tk, w]) => {
@@ -19329,6 +19333,12 @@ function computeThemeClusters(hypo) {
       // whether they actually hold it comes from their OWN funds (VOO etc.), shown in true-exposure.
       return { label: clusterLabelForBench(bestFund), why: 'classified here — it\'s ' + fw[bestFund].toFixed(1) + '% of the ' + bestFund + ' benchmark (this name\'s weight inside that ETF — used to bucket it by theme, not your position size)', isBase: false, key: k, themes: (benchToThemes[bestFund] || []) };
     }
+    const _ai = (typeof AI_SECTOR_SUGGESTIONS !== 'undefined') ? AI_SECTOR_SUGGESTIONS[k] : null;
+    if (_ai && typeof SECTOR_TO_THEME !== 'undefined' && SECTOR_TO_THEME[_ai[0]]) {
+      const _thm = SECTOR_TO_THEME[_ai[0]];
+      const _b = themeBench[_thm];
+      return { label: _b ? clusterLabelForBench(_b) : _thm, why: 'AI-suggested ' + _thm + ' (sector-seed guess \u2014 tag it to confirm)', isBase: false, key: k, themes: [_thm], aiGuess: true };
+    }
     return { label: '__BASE__', why: 'only a broad-index constituent — no theme signal', isBase: true, key: k, themes: [] };
   };
 
@@ -19340,7 +19350,7 @@ function computeThemeClusters(hypo) {
     if (a.isBase) { base.total += r.total; base.names.push({ display: r.display, total: r.total, key: a.key }); return; }
     if (!clusters[a.label]) clusters[a.label] = { label: a.label, total: 0, names: [] };
     clusters[a.label].total += r.total;
-    clusters[a.label].names.push({ display: r.display, total: r.total, why: a.why, key: a.key, direct: r.direct, viaFunds: r.viaFunds });
+    clusters[a.label].names.push({ display: r.display, total: r.total, why: a.why, key: a.key, direct: r.direct, viaFunds: r.viaFunds, aiGuess: a.aiGuess });
     if (a.themes && a.themes.length) { const share = r.total / a.themes.length; a.themes.forEach(thm => { byTheme[thm] = (byTheme[thm] || 0) + share; }); }
   });
 
@@ -20016,7 +20026,7 @@ function renderThemeClusters() {
 
   // One name line inside a cluster: name, true $, the "why", and ⚠ + reassign control when editing.
   const nameLine = (n) => {
-    const flag = clusterConfidenceFlag(n, ctx);
+    const flag = n.aiGuess ? (n.why || 'AI-suggested theme \u2014 a guess; tag it to confirm') : clusterConfidenceFlag(n, ctx);
     const tri = flag ? `<span title="${esc(flag)}" style="color:#fbbf24;cursor:help">⚠</span> ` : '';
     const isOverridden = n.why && n.why.indexOf('you assigned') === 0;
     // The dropdown always reflects the name's CURRENT cluster (whether auto-placed or overridden) by
@@ -30245,6 +30255,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ae</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09af</div>
 </body>
 </html>
