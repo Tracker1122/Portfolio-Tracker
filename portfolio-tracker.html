@@ -21147,8 +21147,11 @@ function cmpCompare() {
   Object.keys(mapB).forEach(k => { if (!mapA[k]) onlyB.push(mapB[k]); });
   const esc2 = (typeof esc === 'function') ? esc : (s => s);
   const combo = A.mode + '-' + B.mode;
+  const cA = '#fbbf24', cB = '#60a5fa'; // fund identity colors — A = amber, B = blue, used throughout
+  const labA = `<span style="color:${cA};font-weight:700">${esc2(A.label)}</span>`;
+  const labB = `<span style="color:${cB};font-weight:700">${esc2(B.label)}</span>`;
 
-  let headline = '';
+  let intro = '', headline = '', lists = '';
   if (combo === 'stock-stock') {
     headline = shared.length
       ? `<strong style="color:var(--color-text-success)">${esc2(A.label)} and ${esc2(B.label)} are the same name.</strong>`
@@ -21163,36 +21166,47 @@ function cmpCompare() {
       : `<strong>${esc2(stock.label)} is not among ${esc2(etf.label)}'s pasted holdings.</strong>`;
     if (etf.coverage > 0) headline += ` <span style="color:var(--color-text-tertiary);font-size:10px">(${esc2(etf.label)} paste covers ~${etf.coverage.toFixed(1)}% of the fund.)</span>`;
   } else {
+    const fmtW = (w) => w != null ? w.toFixed(2) + '%' : '—';
     const minSum = shared.reduce((s, x) => s + Math.min(x.wA || 0, x.wB || 0), 0);
     const sumAsh = shared.reduce((s, x) => s + (x.wA || 0), 0);
     const sumBsh = shared.reduce((s, x) => s + (x.wB || 0), 0);
+    const onlyAsum = onlyA.reduce((s, x) => s + (x.weight || 0), 0);
+    const onlyBsum = onlyB.reduce((s, x) => s + (x.weight || 0), 0);
     const pctAinB = A.coverage > 0 ? (sumAsh / A.coverage * 100) : null;
     const pctBinA = B.coverage > 0 ? (sumBsh / B.coverage * 100) : null;
-    headline = `<strong>${shared.length} shared name${shared.length !== 1 ? 's' : ''}.</strong> Overlap by weight \u2248 <strong style="color:var(--color-text-info)">${minSum.toFixed(1)}%</strong> <span style="font-size:10px;color:var(--color-text-tertiary)">(a floor — only the names you pasted count)</span>.`;
-    if (pctAinB != null && pctBinA != null) {
-      headline += `<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">${pctAinB.toFixed(0)}% of ${esc2(A.label)}'s pasted weight is also in ${esc2(B.label)} · ${pctBinA.toFixed(0)}% of ${esc2(B.label)}'s is also in ${esc2(A.label)}.</div>`;
-    }
-    headline += `<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:3px">Coverage: ${esc2(A.label)} paste \u2248 ${A.coverage.toFixed(1)}% of the fund, ${esc2(B.label)} \u2248 ${B.coverage.toFixed(1)}% — the rest (smaller positions) isn't included, so true overlap is at least this.</div>`;
-  }
 
-  let lists = '';
-  if (combo === 'etf-etf') {
-    const fmtW = (w) => w != null ? w.toFixed(2) + '%' : '—';
+    intro = `<div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:9px">You're comparing the holdings of ${labA} and ${labB}. <strong style="color:var(--color-text-secondary)">Shared</strong> = names both funds hold (each fund's weight shown in its own color); <strong style="color:var(--color-text-secondary)">Only in</strong> = names unique to one fund, among what you pasted. The bolded weight on a shared name is the fund that leans into it more.</div>`;
+
+    headline = `<div style="font-size:13px;color:var(--color-text-primary);line-height:1.5"><strong style="color:var(--color-text-info)">≈ ${minSum.toFixed(1)}% overlap by weight.</strong> That much of the two funds is the same stocks at the same time — own both and roughly ${minSum.toFixed(0)}% of your combined exposure is duplicated.</div>`;
+    if (pctAinB != null && pctBinA != null) {
+      headline += `<div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px"><span style="color:${cA};font-weight:700">${pctAinB.toFixed(0)}%</span> of ${labA}'s weight is also in ${labB} &nbsp;·&nbsp; <span style="color:${cB};font-weight:700">${pctBinA.toFixed(0)}%</span> of ${labB}'s is also in ${labA}.</div>`;
+    }
+    headline += `<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:5px;font-style:italic">Measured on what you pasted — ${esc2(A.label)} ≈ ${A.coverage.toFixed(1)}% of the fund, ${esc2(B.label)} ≈ ${B.coverage.toFixed(1)}%. Smaller un-pasted positions aren't counted, so true overlap is at least this.</div>`;
+
     shared.sort((a, b) => Math.min(b.wA || 0, b.wB || 0) - Math.min(a.wA || 0, a.wB || 0));
     onlyA.sort((a, b) => (b.weight || 0) - (a.weight || 0));
     onlyB.sort((a, b) => (b.weight || 0) - (a.weight || 0));
-    const col = (title, rowsHtml) => `<div style="flex:1;min-width:200px"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--color-text-tertiary);margin-bottom:5px">${title}</div>${rowsHtml || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">none</div>'}</div>`;
-    const sharedRows = shared.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1px 0"><span style="color:var(--color-text-primary);font-weight:600">${esc2(x.ticker)}</span><span style="color:var(--color-text-tertiary);font-variant-numeric:tabular-nums">${fmtW(x.wA)} / ${fmtW(x.wB)}</span></div>`).join('');
-    const aRows = onlyA.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1px 0"><span style="color:var(--color-text-secondary)">${esc2(x.ticker)}</span><span style="color:var(--color-text-tertiary);font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`).join('');
-    const bRows = onlyB.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1px 0"><span style="color:var(--color-text-secondary)">${esc2(x.ticker)}</span><span style="color:var(--color-text-tertiary);font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`).join('');
-    lists = `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
-      ${col(`Shared (${shared.length}) · ${esc2(A.label)} / ${esc2(B.label)}`, sharedRows)}
-      ${col(`Only in ${esc2(A.label)} (${onlyA.length})`, aRows)}
-      ${col(`Only in ${esc2(B.label)} (${onlyB.length})`, bRows)}
+
+    const sharedRows = shared.map(x => {
+      const aBig = (x.wA || 0) >= (x.wB || 0);
+      return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="color:var(--color-text-primary);font-weight:600">${esc2(x.ticker)}</span><span style="font-variant-numeric:tabular-nums"><span style="color:${cA};font-weight:${aBig ? 700 : 400}">${fmtW(x.wA)}</span> <span style="color:var(--color-text-tertiary)">/</span> <span style="color:${cB};font-weight:${aBig ? 400 : 700}">${fmtW(x.wB)}</span></span></div>`;
+    }).join('');
+    const onlyRow = (x, c) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="color:var(--color-text-secondary)">${esc2(x.ticker)}</span><span style="color:${c};font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`;
+    const aRows = onlyA.map(x => onlyRow(x, cA)).join('');
+    const bRows = onlyB.map(x => onlyRow(x, cB)).join('');
+
+    const col = (headerHtml, rowsHtml, footInner) => `<div style="flex:1;min-width:210px"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--color-border-tertiary)">${headerHtml}</div>${rowsHtml || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">none</div>'}${footInner ? `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0 0;margin-top:5px;border-top:1px solid var(--color-border-secondary);font-weight:700"><span style="color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em;font-size:9px">Σ total</span>${footInner}</div>` : ''}</div>`;
+
+    const sharedHdr = `<span style="color:var(--color-text-tertiary)">Shared (${shared.length}) · </span><span style="color:${cA}">${esc2(A.label)}</span><span style="color:var(--color-text-tertiary)"> / </span><span style="color:${cB}">${esc2(B.label)}</span>`;
+    const sharedFoot = `<span style="font-size:10px;font-variant-numeric:tabular-nums"><span style="color:${cA}">${sumAsh.toFixed(1)}%</span> <span style="color:var(--color-text-tertiary)">/</span> <span style="color:${cB}">${sumBsh.toFixed(1)}%</span></span>`;
+    lists = `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:14px">
+      ${col(sharedHdr, sharedRows, sharedFoot)}
+      ${col(`<span style="color:${cA}">Only in ${esc2(A.label)} (${onlyA.length})</span>`, aRows, `<span style="color:${cA};font-size:10px;font-variant-numeric:tabular-nums">${onlyAsum.toFixed(1)}%</span>`)}
+      ${col(`<span style="color:${cB}">Only in ${esc2(B.label)} (${onlyB.length})</span>`, bRows, `<span style="color:${cB};font-size:10px;font-variant-numeric:tabular-nums">${onlyBsum.toFixed(1)}%</span>`)}
     </div>`;
   }
 
-  out.innerHTML = `<div style="padding:12px 14px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-tertiary)"><div style="font-size:12px;color:var(--color-text-primary);line-height:1.5">${headline}</div>${lists}</div>`;
+  out.innerHTML = `<div style="padding:13px 15px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-tertiary)">${intro}<div style="font-size:12px;color:var(--color-text-primary);line-height:1.5">${headline}</div>${lists}</div>`;
 }
 
 function renderEtfCompare() {
@@ -29881,6 +29895,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09t</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09u</div>
 </body>
 </html>
