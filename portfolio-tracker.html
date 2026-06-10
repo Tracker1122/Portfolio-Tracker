@@ -6242,7 +6242,7 @@ function renderOptimizerTab() {
   var html = '<div style="max-width:900px;margin:0 auto">';
   html += '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Deploy Optimizer</h2>';
   html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount and a goal. The model proposes candidate names (any stock, not just your pipeline) and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact on your book and ranks them. Themes are the model\u2019s [inference] \u2014 take a winner into Evaluate a Trade to confirm.</div>';
-  if (noWorker) html += '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then come back.</div>';
+  if (noWorker) html += '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set. Paste your Cloudflare AI worker URL and Save \u2014 it is shared across Ask, Deploy Optimizer, and Evaluate a Trade.<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="opt-worker-url" type="text" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:200px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px"><button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById(\'opt-worker-url\').value); renderOptimizerTab()" style="font-size:9px">Save</button></div></div>';
   html += '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:6px">';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="50000" style="width:120px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px"' + (noWorker ? ' disabled' : '') + '></div>';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Goal</div><select id="opt-objective" onchange="document.getElementById(\'opt-factor-wrap\').style.display=this.value===\'factor\'?\'block\':\'none\'" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px;cursor:pointer"' + (noWorker ? ' disabled' : '') + '><option value="diversify">Improve diversification</option><option value="concentration">Cut my biggest concentration</option><option value="factor">Cut a specific risk factor</option></select></div>';
@@ -6266,7 +6266,7 @@ function renderAskTab() {
     '<div style="max-width:860px;margin:0 auto">' +
       '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Ask your portfolio</h2>' +
       '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Conversational analysis of your held-only book. It sees the same true-exposure and theme-cluster figures the rest of the tracker computes. It reads only \u2014 it cannot place trades or change anything.</div>' +
-      (noWorker ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then come back.</div>' : '') +
+      (noWorker ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set. Paste your Cloudflare AI worker URL and Save \u2014 it is shared across Ask, Deploy Optimizer, and Evaluate a Trade.<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="ask-worker-url" type="text" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:200px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px"><button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById(\'ask-worker-url\').value); renderAskTab()" style="font-size:9px">Save</button></div></div>' : '') +
       '<div id="ask-thread" style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px"></div>' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' + '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer" title="When on, the assistant may search the web for current news or facts. Costs roughly 1-4 cents only on questions where it actually searches.">' + '<input type="checkbox" id="ask-web-toggle"' + (askWebOn ? ' checked' : '') + ' onchange="askWebOn=this.checked"' + (noWorker ? ' disabled' : '') + '> Allow web search' + '</label>' + '<span style="font-size:9px;color:var(--color-text-tertiary)">~1\u20134\u00a2 when it searches</span>' + '</div>' + '<div style="display:flex;gap:8px;align-items:flex-end">' +
         '<textarea id="ask-input" placeholder="Ask about your exposure, concentration, themes\u2026" onkeydown="askKey(event)" style="flex:1;min-height:52px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;line-height:1.5;padding:8px;box-sizing:border-box;resize:vertical"' + (noWorker ? ' disabled' : '') + '></textarea>' +
@@ -21343,7 +21343,7 @@ async function suggestTickerClassification(ticker, safeBase) {
   const btn = document.getElementById(btnId);
   if (!aiWorkerUrl) loadAiWorkerUrl();
   const render = function (html) { const o = document.getElementById(outId); if (o) o.innerHTML = html; };
-  if (!aiWorkerUrl) { render('<span style="color:#fbbf24;font-size:9px">No AI worker URL set \u2014 set it on the New Position Evaluation tab.</span>'); return; }
+  if (!aiWorkerUrl) { render('<span style="color:#fbbf24;font-size:9px">No AI worker URL set \u2014 set it on the Evaluate a Trade tab.</span>'); return; }
   tickerClassifyBusy = true;
   if (btn) { btn.disabled = true; btn.textContent = useWeb ? 'Searching\u2026' : 'Thinking\u2026'; }
   render('<span style="color:var(--color-text-tertiary);font-style:italic;font-size:9px">' + (useWeb ? 'Searching + classifying ' : 'Classifying ') + esc(key) + '\u2026</span>');
@@ -23084,7 +23084,7 @@ async function runThemeResearch(theme) {
   const setBody = (html) => { const o = document.getElementById(bodyId); if (o) o.innerHTML = html; };
   if (!aiWorkerUrl) {
     themeResearchBusy = false;
-    setBody('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">No AI worker URL set. Set it on the New Position Evaluation tab (the "AI worker URL" box), then retry.</div>');
+    setBody('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">No AI worker URL set. Set it on the Evaluate a Trade tab (the "AI worker URL" box), then retry.</div>');
     return;
   }
   setBody('<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;padding:4px 0">Researching ' + esc(theme) + ' — pulling current news and the lay of the land (web search makes this a little slower)\u2026</div>');
@@ -23211,7 +23211,7 @@ async function askThemeResearch(theme) {
   const useWeb = !!(webEl && webEl.checked);
   if (!aiWorkerUrl) loadAiWorkerUrl();
   const render = function (html) { const o = document.getElementById(ansId); if (o) o.innerHTML = html; };
-  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then retry.</div>'); return; }
+  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the Evaluate a Trade tab, then retry.</div>'); return; }
   themeAskBusy = true;
   if (inEl) inEl.disabled = true;
   if (btn) { btn.disabled = true; btn.textContent = useWeb ? 'Searching\u2026' : 'Thinking\u2026'; }
@@ -23271,7 +23271,7 @@ async function runThemeNewsDeepDive(theme) {
   const outId = trKey(theme) + '_news';
   if (!aiWorkerUrl) loadAiWorkerUrl();
   const render = function (html) { const o = document.getElementById(outId); if (o) o.innerHTML = html; };
-  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then retry.</div>'); return; }
+  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the Evaluate a Trade tab, then retry.</div>'); return; }
   themeAskBusy = true;
   if (btn) { btn.disabled = true; btn.textContent = 'Searching news\u2026'; }
   render('<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">Pulling a fresh news pass\u2026</div>');
@@ -23330,7 +23330,7 @@ async function runThemePlayersDeepDive(theme) {
   const outId = trKey(theme) + '_players';
   if (!aiWorkerUrl) loadAiWorkerUrl();
   const render = function (html) { const o = document.getElementById(outId); if (o) o.innerHTML = html; };
-  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then retry.</div>'); return; }
+  if (!aiWorkerUrl) { render('<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary)">No AI worker URL set \u2014 set it on the Evaluate a Trade tab, then retry.</div>'); return; }
   themeAskBusy = true;
   if (btn) { btn.disabled = true; btn.textContent = 'Searching\u2026'; }
   render('<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:6px">Hunting for more key players \u0026 ETFs the brief missed\u2026</div>');
@@ -23961,7 +23961,7 @@ async function runBookAiReview() {
   if (!aiWorkerUrl) {
     bookAiBusy = false;
     out.innerHTML = `<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:10px 12px;background:var(--color-background-tertiary);font-size:10px;color:var(--color-text-secondary);line-height:1.5">
-      No AI worker URL set. The Anthropic API can't be called directly from this deployment (CORS), so the review routes through your Cloudflare worker. Set it via the "AI worker URL" box on the New Position Evaluation tab, then retry.</div>`;
+      No AI worker URL set. The Anthropic API can't be called directly from this deployment (CORS), so the review routes through your Cloudflare worker. Set it via the "AI worker URL" box on the Evaluate a Trade tab, then retry.</div>`;
     return;
   }
 
@@ -31330,6 +31330,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09be</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bf</div>
 </body>
 </html>
