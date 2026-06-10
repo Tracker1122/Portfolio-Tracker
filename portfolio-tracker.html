@@ -7420,7 +7420,7 @@ function renderIndexEditor() {
           : (blankOnPurposeNote
               ? `<span style="color:var(--color-text-tertiary)">✓ you hold ~${fmtDollarWhole(held)} \u2014 marked blank on purpose (no decomposition needed)</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${escq(fund)}')" style="font-size:9px;color:var(--color-text-info);text-decoration:underline;cursor:pointer">undo</a>`
               : `<span style="color:#fbbf24">✓ you hold ~${fmtDollarWhole(held)} \u2014 paste its holdings below to enable look-through</span> <a href="#" onclick="toggleBlankOnPurpose(event,'${escq(fund)}')" style="font-size:9px;color:var(--color-text-tertiary);text-decoration:underline;cursor:pointer" title="If this fund doesn't need decomposing (e.g. gold, cash, a commodity), mark it so it stops flagging as a to-do">mark blank on purpose</a>`))
-      : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 look-through inactive until you own it</span>`;
+      : `<span style="color:var(--color-text-tertiary)">not currently held \u2014 look-through inactive until you own it${tbl._ref ? ' \u00b7 reference, added from ETF comparison' : ''}</span>`;
     const ageDays = (() => { try { return tbl.asOf ? Math.round((Date.now() - new Date(tbl.asOf).getTime()) / 86400000) : null; } catch(e){ return null; } })();
     const stale = ageDays != null && ageDays > 120;
     const rows = Object.entries(tbl.weights || {}).sort((a,b)=>b[1]-a[1]).map(([tk, w]) => {
@@ -21131,6 +21131,88 @@ function _cmpSide(side) {
   return { mode, label: tk || '(ETF)', holdings: res.parsed, coverage };
 }
 
+// Tag an untagged holding from the comparison view. Writes the SAME shared sectorMap the By-sector
+// panel uses (one brain), then re-renders the comparison so the theme map reflects it immediately.
+function cmpSetTag(key, sectorId) {
+  if (typeof setSectorTag === 'function') setSectorTag(key, sectorId);
+  cmpCompare();
+}
+
+// Accrue a pasted comparison ETF into the Fund/ETF library (indexLookthrough). Only saves funds you
+// do NOT hold — a held fund's look-through table drives real exposure and is managed in its own
+// editor, so we never overwrite it from a casual comparison paste. Un-held entries are flagged
+// _ref so they show as "reference, not held" and contribute zero to exposure math.
+function cmpSaveToLibrary(side) {
+  if (_cmpMode[side] !== 'etf') return;
+  if (typeof getIndexLookthrough !== 'function' || typeof saveIndexLookthrough !== 'function') return;
+  const tkEl = document.getElementById('cmp-' + side + '-etf-ticker');
+  const paEl = document.getElementById('cmp-' + side + '-paste');
+  if (!tkEl || !paEl) return;
+  const tk = (tkEl.value || '').trim().toUpperCase();
+  if (!tk) return;
+  const res = parseHoldings(paEl.value || '');
+  if (!res.parsed.length) return;
+  const held = (typeof indexFundHeldValue === 'function') ? indexFundHeldValue(tk) : 0;
+  if (held > 0) return; // never clobber a held fund's curated table
+  const weights = {};
+  res.parsed.forEach(h => { if (h.ticker) weights[(h.ticker || '').toUpperCase()] = (h.weight != null ? h.weight : 0); });
+  const tables = getIndexLookthrough();
+  tables[tk] = { asOf: new Date().toISOString().slice(0, 10), weights, _ref: true, _source: 'comparison' };
+  saveIndexLookthrough();
+}
+
+// Where every holding lands in the theme world. Resolves each name via the shared sectorMap (user
+// tags + AI seeds), groups by theme, marks book holdings, and offers a tag dropdown for unknowns.
+function cmpThemeMapHtml(A, B) {
+  const map = (typeof loadSectorMap === 'function') ? loadSectorMap() : {};
+  const vocab = (typeof SECTOR_VOCAB !== 'undefined') ? SECTOR_VOCAB : [];
+  const aiFor = (typeof AI_SECTOR_SUGGESTIONS !== 'undefined') ? AI_SECTOR_SUGGESTIONS : {};
+  const labelFor = (id) => { const s = vocab.find(v => v.id === id); return s ? s.label : id; };
+  const eq = (typeof escq === 'function') ? escq : (s => s);
+  const ex = (typeof esc === 'function') ? esc : (s => s);
+
+  const heldNorms = new Set();
+  if (typeof positions !== 'undefined' && typeof qrNormTicker === 'function') {
+    positions.filter(pp => !pp.closed && pp.ticker).forEach(pp => heldNorms.add(qrNormTicker(pp.ticker)));
+  }
+
+  const union = {};
+  const addH = (h) => { const c = qrCanonical(h.ticker); if (c && c.key && !union[c.key]) union[c.key] = { key: c.key, ticker: c.display || h.ticker }; };
+  A.holdings.forEach(addH); B.holdings.forEach(addH);
+
+  const byTheme = {}, untagged = [];
+  Object.values(union).forEach(n => {
+    let ent = (typeof sectorEntry === 'function') ? sectorEntry(map, n.key) : (map[n.key] || null);
+    let sid = ent ? (ent.sector || ent) : null;
+    let src = ent ? (ent.src || 'user') : null;
+    if (!sid) {
+      const ai = aiFor[n.key] || aiFor[(n.ticker || '').toUpperCase()];
+      if (ai) { sid = ai[0]; src = ai[1] === 'hi' ? 'ai' : 'ai-lo'; }
+    }
+    const held = heldNorms.has(qrNormTicker(n.ticker));
+    if (!sid) { untagged.push({ ...n, held }); return; }
+    (byTheme[sid] = byTheme[sid] || []).push({ ...n, src, held });
+  });
+
+  const nameChip = (n) => `${ex(n.ticker)}${n.held ? ' <span title="in your book" style="color:var(--color-text-success)">\u25cf</span>' : ''}${n.src === 'ai-lo' ? ' <span title="AI guess \u2014 worth verifying" style="color:#fbbf24">\u26a0</span>' : ''}`;
+  const groups = Object.entries(byTheme).sort((a, b) => b[1].length - a[1].length);
+  const groupHtml = groups.map(([sid, names]) =>
+    `<div style="margin-bottom:5px;line-height:1.6"><span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-secondary)">${ex(labelFor(sid))} (${names.length})</span> <span style="font-size:10px;color:var(--color-text-tertiary)">${names.map(nameChip).join(' \u00b7 ')}</span></div>`
+  ).join('');
+
+  const tagSelect = (key) => `<select onchange="cmpSetTag('${eq(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer"><option value="__unset__" selected>tag\u2026</option>${vocab.map(s => `<option value="${s.id}" title="${ex(s.blurb || '')}">${ex(s.label)}</option>`).join('')}</select>`;
+  const untaggedHtml = untagged.length
+    ? `<div style="margin-top:9px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#fbbf24;margin-bottom:5px">Untagged (${untagged.length}) \u2014 tag once, stored for every future comparison &amp; the By-sector panel</div>${untagged.map(n => `<span style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:10px"><span style="color:var(--color-text-secondary)">${nameChip(n)}</span>${tagSelect(n.key)}</span>`).join('')}</div>`
+    : '';
+
+  if (!groupHtml && !untaggedHtml) return '';
+  return `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border-secondary)">
+    <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">Where these land in your theme world</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:9px">Classified by your shared sector/theme tags \u2014 the same brain the By-sector panel uses. <span style="color:var(--color-text-success)">\u25cf</span> in your book \u00b7 <span style="color:#fbbf24">\u26a0</span> AI guess, worth verifying. Tagging an untagged name stores it everywhere, so the next ETF you paste lights up automatically.</div>
+    ${groupHtml}${untaggedHtml}
+  </div>`;
+}
+
 function cmpCompare() {
   const out = document.getElementById('cmp-results');
   if (!out) return;
@@ -21139,6 +21221,7 @@ function cmpCompare() {
     out.innerHTML = `<div style="font-size:11px;color:#fbbf24">Fill both sides — a ticker for a stock, or pasted holdings for an ETF.</div>`;
     return;
   }
+  cmpSaveToLibrary('A'); cmpSaveToLibrary('B'); // accrue pasted ETFs into the Fund/ETF library
   const mapA = {}, mapB = {};
   A.holdings.forEach(h => { const k = qrNormTicker(h.ticker); if (k) mapA[k] = { ticker: h.ticker, weight: h.weight }; });
   B.holdings.forEach(h => { const k = qrNormTicker(h.ticker); if (k) mapB[k] = { ticker: h.ticker, weight: h.weight }; });
@@ -21206,7 +21289,8 @@ function cmpCompare() {
     </div>`;
   }
 
-  out.innerHTML = `<div style="padding:13px 15px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-tertiary)">${intro}<div style="font-size:12px;color:var(--color-text-primary);line-height:1.5">${headline}</div>${lists}</div>`;
+  const themeMap = cmpThemeMapHtml(A, B);
+  out.innerHTML = `<div style="padding:13px 15px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-tertiary)">${intro}<div style="font-size:12px;color:var(--color-text-primary);line-height:1.5">${headline}</div>${lists}${themeMap}</div>`;
 }
 
 function renderEtfCompare() {
@@ -29895,6 +29979,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09u</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09v</div>
 </body>
 </html>
