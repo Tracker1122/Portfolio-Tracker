@@ -5860,6 +5860,31 @@ function buildAskSnapshot() {
     var top = (cl.names || []).slice(0, 10).map(function (n) { return n.display + ' ' + fmt(n.total); }).join(', ');
     if (top) lines.push('    holdings: ' + top);
   });
+  // Private / pre-IPO deals: a separate, illiquid single-name sleeve (peDeals), NOT in
+  // computeThemeClusters() unless folded via the basis toggle. Enumerate it explicitly at COST
+  // (verifiable), with the self-mark where one exists, so the model can see these names (e.g. a
+  // pre-IPO SpaceX stake). Public % above stay public-book; we also state the true all-in size.
+  try {
+    var pe = (typeof peThemeExposure === 'function') ? peThemeExposure('cost') : null;
+    if (pe && (pe.totalCost > 0 || pe.untaggedCount > 0)) {
+      lines.push('');
+      lines.push('PRIVATE / PRE-IPO DEALS (held; illiquid single-name DIRECT exposure; NOT counted in the public-book % above; shown at COST, with SELF-MARKED value where you set one):');
+      Object.keys(pe.byTheme).forEach(function (theme) {
+        var info = pe.byTheme[theme];
+        var head = '- ' + theme + ': ' + fmt(info.cost) + ' at cost';
+        if (info.market && Math.round(info.market) !== Math.round(info.cost)) head += ' (' + fmt(info.market) + ' self-marked)';
+        lines.push(head);
+        info.deals.slice().sort(function (a, b) { return b.cost - a.cost; }).forEach(function (dl) {
+          var row = '    ' + dl.company + ' \u2014 ' + fmt(dl.cost) + ' at cost';
+          if (dl.hasMark && Math.round(dl.market) !== Math.round(dl.cost)) row += ', ' + fmt(dl.market) + ' self-marked';
+          lines.push(row);
+        });
+      });
+      if (pe.untaggedCount) lines.push('- Untagged private deals (no theme assigned, so not bucketed): ' + pe.untaggedCount + ', ' + fmt(pe.untaggedValue) + ' at cost');
+      lines.push('Total private: ' + fmt(pe.totalCost) + ' at cost  |  ' + fmt(pe.totalMarket) + ' at self-mark');
+      lines.push('TRUE ALL-IN SIZE = public book + private at cost = ' + fmt(c.fullBook + pe.totalCost) + '. The cluster % above are of the PUBLIC book only; private deals are additional direct exposure on top.');
+    }
+  } catch (e) {}
   return lines.join('\n');
 }
 
@@ -5873,7 +5898,8 @@ function buildAskSystem() {
   p.push('');
   p.push('RULES:');
   p.push('- The book above is the ONLY thing you can see. It is held-only: every name listed is actually owned. Do NOT invent holdings or assume positions that are not shown.');
-  p.push('- "% of book" always means % of the FULL BOOK figure stated above. Never invent or recompute a different denominator.');
+  p.push('- "% of book" in the THEME CLUSTERS section is % of the public-book FULL BOOK figure. Private / pre-IPO deals (if any are listed) are held but counted SEPARATELY as additional direct exposure; the true all-in size is stated in that section. When the user asks about overall concentration, account for both and say which basis (cost vs self-mark) you used.');
+  p.push('- Private deals are illiquid single-name bets valued at cost (or a self-mark you set); treat self-marked values as soft estimates, not live prices.');
   p.push('- You do NOT yet have live prices, per-ticker performance, or what-if tools. If a question needs data not in the snapshot, say so plainly instead of guessing or fabricating a number.');
   p.push('- The user is finance-sharp. Be direct and concise. Hedge genuine uncertainty ("probably", "I can\'t tell from this snapshot"). Do not flatter or validate a claim without basis; push back when their framing outruns what the data shows.');
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
@@ -30692,6 +30718,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09aq</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ar</div>
 </body>
 </html>
