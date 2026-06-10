@@ -1463,6 +1463,16 @@
       <div id="cmp-results" style="margin-top:16px"></div>
       <div style="border-top:1px solid var(--color-border-tertiary);margin-top:26px"></div>
     </div>
+    <div id="manual-analyze-card" style="margin-top:26px;padding-top:18px;border-top:1px solid var(--color-border-secondary)">
+      <div style="font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:4px">Analyze any ticker</div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">Type one or more tickers (space or comma separated) for the same read-out Discovery gives the names hiding in your funds — recent performance, the 📊 price-history deep-dive, ℹ company info, and where it lands in your themes. One Polygon price call per new ticker, then cached.</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="manual-analyze-input" type="text" placeholder="e.g. CAT, DE, PH" onkeydown="if(event.key==='Enter')manualAnalyzeRun()" style="flex:1;min-width:200px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-size:12px;padding:6px 10px">
+        <button class="btn" onclick="manualAnalyzeRun()" style="font-size:11px;padding:6px 16px">Analyze</button>
+        <button class="btn btn-sm" onclick="manualAnalyzeClear()" style="font-size:10px">Clear</button>
+      </div>
+      <div id="manual-analyze-results" style="margin-top:12px"></div>
+    </div>
     <div id="theme-discovery" style="margin-top:18px"></div>
   </div><!-- end tab-pricetheme -->
 
@@ -5829,7 +5839,7 @@ function switchTab(name) {
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderPriceMoves', renderPriceMoves); }
   if (name === 'tradeideas') { safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
-  if (name === 'pricetheme') { safeRender('renderEtfCompare', renderEtfCompare); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
+  if (name === 'pricetheme') { safeRender('renderEtfCompare', renderEtfCompare); safeRender('renderManualAnalyze', renderManualAnalyze); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
@@ -21627,6 +21637,128 @@ function discoverySetBucketOpen(themeEnc, isOpen) {
   if (typeof saveDiscoveryCache === 'function') saveDiscoveryCache();
 }
 
+// Analyze any ticker (manual Discovery) — on-demand twin of "ideas hiding in your funds". Reuses
+// fetchTickerWindows + the _candPerf cache + showTickerInfoInto + makeThemeResolver so it can't drift.
+let _manualTickers = [];
+const _manualExpanded = new Set();
+let _manualLoaded = false;
+const MANUAL_ANALYZE_KEY = 'portfolio-manual-analyze-v1';
+function saveManualAnalyze() { try { localStorage.setItem(MANUAL_ANALYZE_KEY, JSON.stringify(_manualTickers)); } catch (e) {} }
+function loadManualAnalyze() { try { const r = localStorage.getItem(MANUAL_ANALYZE_KEY); const a = r ? JSON.parse(r) : null; _manualTickers = Array.isArray(a) ? a.map(x => (x || '').toUpperCase()).filter(Boolean) : []; } catch (e) { _manualTickers = []; } _manualLoaded = true; }
+
+async function manualAnalyzeRun() {
+  if (!_manualLoaded) loadManualAnalyze();
+  const inp = document.getElementById('manual-analyze-input');
+  if (!inp) return;
+  const toks = (inp.value || '').toUpperCase().split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+  toks.forEach(t => { if (!_manualTickers.includes(t)) _manualTickers.push(t); });
+  if (_manualTickers.length > 30) _manualTickers = _manualTickers.slice(-30);
+  saveManualAnalyze();
+  inp.value = '';
+  renderManualAnalyze();
+  if (typeof loadPolygonKey === 'function' && typeof polygonKey !== 'undefined' && !polygonKey) loadPolygonKey();
+  let rateLimited = false;
+  for (const t of _manualTickers) {
+    if (_candPerf[t] && !_candPerf[t].error) continue;
+    if (rateLimited) { _candPerf[t] = { error: 'rate', fetchedAt: Date.now() }; continue; }
+    try {
+      const w = await fetchTickerWindows(t);
+      _candPerf[t] = { m1: w.m1, m3: w.m3, m6: w.m6, y1: w.y1, ytd: w.ytd, maxDrawdown: w.maxDrawdown, annVol: w.annVol, shortHist: w.shortHist, histDays: w.histDays, fetchedAt: w.fetchedAt };
+    } catch (e) {
+      const msg = (e && e.message) || 'err';
+      if (msg === 'rate') rateLimited = true;
+      _candPerf[t] = { error: msg === 'rate' ? 'rate' : (msg === 'nokey' ? 'nokey' : 'err'), fetchedAt: Date.now() };
+    }
+    if (typeof saveCandPerf === 'function') saveCandPerf();
+    renderManualAnalyze();
+    await new Promise(r => setTimeout(r, 350));
+  }
+  renderManualAnalyze();
+}
+
+function manualRemove(t) { _manualTickers = _manualTickers.filter(x => x !== t); _manualExpanded.delete(t); saveManualAnalyze(); renderManualAnalyze(); }
+function manualAnalyzeClear() { _manualTickers = []; _manualExpanded.clear(); saveManualAnalyze(); renderManualAnalyze(); }
+function manualSetTag(key, theme) { if (typeof setThemeTag === 'function') setThemeTag(key, theme); renderManualAnalyze(); }
+
+function manualFillDetail(t, slot) {
+  const p = _candPerf[t];
+  if (!p || p.error) { slot.innerHTML = `<div style="margin:3px 2px 6px;padding:7px 10px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:9px;color:var(--color-text-tertiary)">No detail for ${esc(t)} \u2014 ${p && p.error === 'rate' ? 'rate-limited' : p && p.error === 'nokey' ? 'no Polygon key' : p && p.error ? 'no data on Polygon' : 'not fetched yet'}.</div>`; return; }
+  const pct = (v) => (v === null || v === undefined || typeof v !== 'number') ? '<span style="color:var(--color-text-tertiary)">\u2014</span>' : `<span style="color:${v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)'};font-weight:600">${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
+  const row = (label, html) => `<div style="display:flex;gap:10px;padding:1px 0"><span style="color:var(--color-text-tertiary);flex:0 0 210px">${label}</span><span style="font-weight:600">${html}</span></div>`;
+  const rows = [];
+  rows.push(row('1-month return', pct(p.m1)));
+  rows.push(row('3-month return', pct(p.m3)));
+  rows.push(row('6-month return', pct(p.m6)));
+  rows.push(row('year-to-date return', pct(p.ytd)));
+  rows.push(row(p.shortHist ? `return since listing (~${p.histDays ? Math.round(p.histDays / 30) : '<12'}mo, partial)` : '1-year return', pct(p.y1)));
+  if (typeof p.maxDrawdown === 'number') rows.push(row('max drawdown (worst peak\u2192trough)', `<span style="color:var(--color-text-danger)">${p.maxDrawdown.toFixed(1)}%</span>`));
+  if (typeof p.annVol === 'number') rows.push(row('annualized volatility', `${p.annVol.toFixed(0)}% <span style="color:var(--color-text-tertiary)">(index ~15-20%)</span>`));
+  const _r = (typeof makeThemeResolver === 'function') ? makeThemeResolver()((typeof qrCanonical === 'function' ? qrCanonical(t).key : t), t) : null;
+  const _thm = _r && _r.theme;
+  const _b = _thm && typeof getThemeBenchmark === 'function' ? (getThemeBenchmark(_thm) || '').toUpperCase() : '';
+  if (_b) {
+    const bp = _candPerf[_b];
+    const bStr = (bp && typeof bp.y1 === 'number') ? `${pct(bp.y1)} <span style="color:var(--color-text-tertiary)">(${esc(_b)} 1Y)</span>` : `<span style="color:var(--color-text-tertiary)">${esc(_b)} not fetched \u2014 analyze it too to compare</span>`;
+    rows.push(row(`vs theme benchmark ${esc(_b)}`, bStr));
+  }
+  const caption = (typeof fmtRiskCaption === 'function') ? fmtRiskCaption(p) : '';
+  slot.innerHTML = `<div style="margin:3px 2px 6px;padding:9px 13px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:11px;line-height:1.7;max-width:540px">
+    <div style="font-weight:700;color:var(--color-text-primary);margin-bottom:3px">${esc(t)} \u2014 performance detail <span style="font-weight:400;color:var(--color-text-tertiary)">(from data already fetched; no new API call)</span></div>
+    ${rows.join('')}
+    ${caption}
+    <div style="margin-top:4px;color:var(--color-text-tertiary);font-style:italic">Price history, not analysis \u2014 a record of how it moved, not a view on whether to own it.</div>
+  </div>`;
+}
+
+function manualToggleDetail(t) {
+  const out = document.getElementById('manual-analyze-results');
+  if (!out) return;
+  const slot = out.querySelector(`[data-manual-detail="${CSS.escape(t)}"]`);
+  if (!slot) return;
+  if (slot.style.display !== 'none') { slot.style.display = 'none'; slot.innerHTML = ''; _manualExpanded.delete(t); return; }
+  slot.style.display = 'block'; _manualExpanded.add(t); manualFillDetail(t, slot);
+}
+
+function renderManualAnalyze() {
+  if (!_manualLoaded) loadManualAnalyze();
+  const out = document.getElementById('manual-analyze-results');
+  if (!out) return;
+  if (!_manualTickers.length) { out.innerHTML = '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No tickers yet \u2014 type one above and hit Analyze.</div>'; return; }
+  const resolve = (typeof makeThemeResolver === 'function') ? makeThemeResolver() : (function () { return { theme: null }; });
+  const themes = (typeof themeUniverseAll === 'function') ? themeUniverseAll() : [];
+  const ic = 'cursor:pointer;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 5px;font-size:10px;color:var(--color-text-info)';
+  const rows = _manualTickers.map(t => {
+    const c = (typeof qrCanonical === 'function') ? qrCanonical(t) : { key: t, display: t };
+    const disp = c.display || t;
+    const pf = _candPerf[t];
+    const r = resolve(c.key, disp);
+    const theme = r && r.theme;
+    const bench = theme && typeof getThemeBenchmark === 'function' ? getThemeBenchmark(theme) : null;
+    let perfHtml;
+    if (!pf) perfHtml = '<span style="color:var(--color-text-tertiary);font-size:10px">fetching\u2026</span>';
+    else if (pf.error) perfHtml = `<span style="color:var(--color-text-tertiary);font-size:10px">${pf.error === 'nokey' ? 'set a Polygon key' : pf.error === 'rate' ? 'rate-limited' : 'no Polygon data'}</span>`;
+    else perfHtml = `${fmtWin(pf.m1, '1M')} &nbsp; ${fmtWin(pf.y1, '1Y')}`;
+    const themeCell = theme
+      ? `<span style="font-size:10px;color:var(--color-text-secondary)">${esc(theme)}${bench ? ` <span style="color:var(--color-text-tertiary)">\u00b7 ${esc(bench)}</span>` : ''}</span>`
+      : `<select onchange="manualSetTag('${escq(c.key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer"><option value="__unset__" selected>tag\u2026</option>${themes.map(x => `<option value="${esc(x.name)}">${esc(x.name)}</option>`).join('')}</select>`;
+    const canDetail = pf && !pf.error;
+    return `<div style="border-bottom:1px solid var(--color-border-tertiary);padding:6px 0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px">
+        <span style="font-weight:700;color:var(--color-text-primary);min-width:62px">${esc(disp)}</span>
+        <span>${perfHtml}</span>
+        ${canDetail ? `<span onclick="manualToggleDetail('${escq(t)}')" title="performance detail (3M/6M/YTD, drawdown, vol)" style="${ic}">\U0001F4CA</span>` : ''}
+        <span onclick="showTickerInfoInto('${escq(disp)}','manual-info-${escq(t)}')" title="what is this \u2014 sector, description, market cap" style="${ic}">\u2139</span>
+        <span onclick="manualRemove('${escq(t)}')" title="remove from list" style="cursor:pointer;color:var(--color-text-tertiary);font-size:10px">\u2715</span>
+        <span style="margin-left:auto">${themeCell}</span>
+      </div>
+      <div data-manual-detail="${esc(t)}" style="display:none"></div>
+      <div id="manual-info-${esc(t)}" style="margin-top:4px"></div>
+    </div>`;
+  }).join('');
+  out.innerHTML = rows;
+  _manualExpanded.forEach(t => { const slot = out.querySelector(`[data-manual-detail="${CSS.escape(t)}"]`); if (slot) { slot.style.display = 'block'; manualFillDetail(t, slot); } });
+}
+
 function renderThemeDiscovery() {
   const host = document.getElementById('theme-discovery');
   if (!host) return;
@@ -30305,6 +30437,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09al</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09am</div>
 </body>
 </html>
