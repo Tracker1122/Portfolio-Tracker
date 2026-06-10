@@ -21167,49 +21167,98 @@ function cmpThemeMapHtml(A, B) {
   const map = (typeof loadSectorMap === 'function') ? loadSectorMap() : {};
   const vocab = (typeof SECTOR_VOCAB !== 'undefined') ? SECTOR_VOCAB : [];
   const aiFor = (typeof AI_SECTOR_SUGGESTIONS !== 'undefined') ? AI_SECTOR_SUGGESTIONS : {};
-  const labelFor = (id) => { const s = vocab.find(v => v.id === id); return s ? s.label : id; };
+  const labelFor = (id) => { if (id === '__un') return 'Untagged'; const s = vocab.find(v => v.id === id); return s ? s.label : id; };
   const eq = (typeof escq === 'function') ? escq : (s => s);
   const ex = (typeof esc === 'function') ? esc : (s => s);
+  const cA = '#fbbf24', cB = '#60a5fa';
 
-  const heldNorms = new Set();
-  if (typeof positions !== 'undefined' && typeof qrNormTicker === 'function') {
-    positions.filter(pp => !pp.closed && pp.ticker).forEach(pp => heldNorms.add(qrNormTicker(pp.ticker)));
-  }
-
-  const union = {};
-  const addH = (h) => { const c = qrCanonical(h.ticker); if (c && c.key && !union[c.key]) union[c.key] = { key: c.key, ticker: c.display || h.ticker }; };
-  A.holdings.forEach(addH); B.holdings.forEach(addH);
-
-  const byTheme = {}, untagged = [];
-  Object.values(union).forEach(n => {
-    let ent = (typeof sectorEntry === 'function') ? sectorEntry(map, n.key) : (map[n.key] || null);
+  const themeOf = (key, ticker) => {
+    let ent = (typeof sectorEntry === 'function') ? sectorEntry(map, key) : (map[key] || null);
     let sid = ent ? (ent.sector || ent) : null;
-    let src = ent ? (ent.src || 'user') : null;
-    if (!sid) {
-      const ai = aiFor[n.key] || aiFor[(n.ticker || '').toUpperCase()];
-      if (ai) { sid = ai[0]; src = ai[1] === 'hi' ? 'ai' : 'ai-lo'; }
-    }
-    const held = heldNorms.has(qrNormTicker(n.ticker));
-    if (!sid) { untagged.push({ ...n, held }); return; }
-    (byTheme[sid] = byTheme[sid] || []).push({ ...n, src, held });
-  });
+    if (!sid) { const ai = aiFor[key] || aiFor[(ticker || '').toUpperCase()]; if (ai) sid = ai[0]; }
+    return sid;
+  };
 
-  const nameChip = (n) => `${ex(n.ticker)}${n.held ? ' <span title="in your book" style="color:var(--color-text-success)">\u25cf</span>' : ''}${n.src === 'ai-lo' ? ' <span title="AI guess \u2014 worth verifying" style="color:#fbbf24">\u26a0</span>' : ''}`;
-  const groups = Object.entries(byTheme).sort((a, b) => b[1].length - a[1].length);
-  const groupHtml = groups.map(([sid, names]) =>
-    `<div style="margin-bottom:5px;line-height:1.6"><span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-secondary)">${ex(labelFor(sid))} (${names.length})</span> <span style="font-size:10px;color:var(--color-text-tertiary)">${names.map(nameChip).join(' \u00b7 ')}</span></div>`
-  ).join('');
+  // Book look-through (funds you actually hold only): owned-name set + theme dollars rolled to %.
+  const bookKeys = new Set(); let bookTotal = 0; const bookThemeVal = {};
+  if (typeof computeTrueExposure === 'function') {
+    try {
+      const te = computeTrueExposure();
+      (te && te.rows ? te.rows : []).forEach(r => {
+        bookKeys.add(r.key); bookTotal += (r.total || 0);
+        const t = themeOf(r.key, r.display) || '__un';
+        bookThemeVal[t] = (bookThemeVal[t] || 0) + (r.total || 0);
+      });
+    } catch (e) {}
+  }
+  const bookPct = (t) => bookTotal > 0 ? (bookThemeVal[t] || 0) / bookTotal * 100 : null;
 
+  // Per side: split pasted holdings into NEW (not owned) vs OWNED (deepened), and theme weights.
+  const sideStats = (S) => {
+    const cov = S.holdings.reduce((s, h) => s + (h.weight || 0), 0) || 0;
+    const themeW = {}; const news = [], owned = [];
+    S.holdings.forEach(h => {
+      const c = qrCanonical(h.ticker); if (!c || !c.key) return;
+      const t = themeOf(c.key, c.display) || '__un';
+      themeW[t] = (themeW[t] || 0) + (h.weight || 0);
+      (bookKeys.has(c.key) ? owned : news).push({ ticker: c.display || h.ticker, weight: h.weight });
+    });
+    news.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+    owned.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+    return { cov, themeW, news, owned, label: S.label, mode: S.mode,
+      newSum: news.reduce((s, x) => s + (x.weight || 0), 0),
+      ownSum: owned.reduce((s, x) => s + (x.weight || 0), 0) };
+  };
+  const SA = sideStats(A), SB = sideStats(B);
+
+  const chip = (x) => `${ex(x.ticker)}${x.weight != null ? ` <span style="color:var(--color-text-tertiary)">${x.weight.toFixed(1)}%</span>` : ''}`;
+  const sideBlock = (S, c) => {
+    const newLine = S.news.length
+      ? `<div style="margin-bottom:6px"><div style="color:var(--color-text-success);font-weight:700;font-size:10px;margin-bottom:2px">New to you \u2014 ${S.news.length} name${S.news.length !== 1 ? 's' : ''}${S.cov ? `, ${S.newSum.toFixed(0)}% of the fund` : ''}</div><div style="font-size:10px;color:var(--color-text-secondary);line-height:1.65">${S.news.map(chip).join(' \u00b7 ')}</div></div>`
+      : `<div style="margin-bottom:6px;font-size:10px;color:var(--color-text-tertiary)">No new names \u2014 you already own everything pasted.</div>`;
+    const ownLine = S.owned.length
+      ? `<div><div style="color:var(--color-text-tertiary);font-weight:700;font-size:10px;margin-bottom:2px">Deepens ${S.owned.length} you already own${S.cov ? `, ${S.ownSum.toFixed(0)}% of the fund` : ''}</div><div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.65">${S.owned.map(chip).join(' \u00b7 ')}</div></div>`
+      : '';
+    return `<div style="flex:1;min-width:280px"><div style="font-size:11px;font-weight:700;color:${c};margin-bottom:6px">${ex(S.label)}</div>${newLine}${ownLine}</div>`;
+  };
+
+  // Theme tilt: your book % vs each ETF % (ETF normalized to its pasted coverage), with up/down arrows.
+  const etfPct = (S, t) => S.cov > 0 ? (S.themeW[t] || 0) / S.cov * 100 : null;
+  const themesSet = new Set([...Object.keys(bookThemeVal), ...Object.keys(SA.themeW), ...Object.keys(SB.themeW)]);
+  const themeRows = [...themesSet].map(t => ({ t, bp: bookPct(t), ap: etfPct(SA, t), bp2: etfPct(SB, t) }))
+    .filter(r => (r.bp || 0) > 0.05 || (r.ap || 0) > 0.05 || (r.bp2 || 0) > 0.05)
+    .sort((x, y) => Math.max(y.ap || 0, y.bp2 || 0, y.bp || 0) - Math.max(x.ap || 0, x.bp2 || 0, x.bp || 0));
+  const arrow = (etf, bk) => {
+    if (etf == null || bk == null) return '';
+    if (etf > bk + 0.5) return ` <span style="color:var(--color-text-success)" title="adding this ETF raises this theme's share of your book">\u25b2</span>`;
+    if (etf < bk - 0.5) return ` <span style="color:var(--color-text-danger)" title="adding this ETF lowers this theme's share of your book">\u25bc</span>`;
+    return '';
+  };
+  const pc = (v) => v == null ? '<span style="color:var(--color-text-tertiary)">\u2014</span>' : `${v.toFixed(0)}%`;
+  const th = (txt, c) => `<th style="padding:0 10px 4px;text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:${c}">${txt}</th>`;
+  const trs = themeRows.map(r => `<tr>
+    <td style="padding:2px 10px 2px 0;color:var(--color-text-secondary)">${ex(labelFor(r.t))}</td>
+    <td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--color-text-tertiary)">${pc(r.bp)}</td>
+    <td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${cA}">${pc(r.ap)}${arrow(r.ap, r.bp)}</td>
+    <td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${cB}">${pc(r.bp2)}${arrow(r.bp2, r.bp)}</td>
+  </tr>`).join('');
+  const table = themeRows.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:10px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:0 10px 4px 0;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary)">Theme</th>${th('Your book', 'var(--color-text-tertiary)')}${th(ex(SA.label), cA)}${th(ex(SB.label), cB)}</tr></thead><tbody>${trs}</tbody></table></div>` : '';
+
+  // Tag the unclassified — keeps the shared brain (and this table) improving.
+  const untagged = []; const seenU = new Set();
+  [...A.holdings, ...B.holdings].forEach(h => { const c = qrCanonical(h.ticker); if (!c || !c.key || seenU.has(c.key)) return; seenU.add(c.key); if (!themeOf(c.key, c.display)) untagged.push({ key: c.key, ticker: c.display || h.ticker }); });
   const tagSelect = (key) => `<select onchange="cmpSetTag('${eq(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer"><option value="__unset__" selected>tag\u2026</option>${vocab.map(s => `<option value="${s.id}" title="${ex(s.blurb || '')}">${ex(s.label)}</option>`).join('')}</select>`;
   const untaggedHtml = untagged.length
-    ? `<div style="margin-top:9px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#fbbf24;margin-bottom:5px">Untagged (${untagged.length}) \u2014 tag once, stored for every future comparison &amp; the By-sector panel</div>${untagged.map(n => `<span style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:10px"><span style="color:var(--color-text-secondary)">${nameChip(n)}</span>${tagSelect(n.key)}</span>`).join('')}</div>`
+    ? `<div style="margin-top:11px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#fbbf24;margin-bottom:5px">Untagged (${untagged.length}) \u2014 tag once to place it in the table above and everywhere else</div>${untagged.map(n => `<span style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:10px"><span style="color:var(--color-text-secondary)">${ex(n.ticker)}</span>${tagSelect(n.key)}</span>`).join('')}</div>`
     : '';
 
-  if (!groupHtml && !untaggedHtml) return '';
+  if (!themeRows.length && !SA.news.length && !SB.news.length && !SA.owned.length && !SB.owned.length) return '';
   return `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border-secondary)">
-    <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">Where these land in your theme world</div>
-    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:9px">Classified by your shared sector/theme tags \u2014 the same brain the By-sector panel uses. <span style="color:var(--color-text-success)">\u25cf</span> in your book \u00b7 <span style="color:#fbbf24">\u26a0</span> AI guess, worth verifying. Tagging an untagged name stores it everywhere, so the next ETF you paste lights up automatically.</div>
-    ${groupHtml}${untaggedHtml}
+    <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">What adding each ETF would do to your book</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:11px"><span style="color:var(--color-text-success)">New to you</span> = names you don't already own, directly or inside funds you hold \u2014 the exposure you'd actually be adding. The theme table is all percentages: your current look-through mix vs each ETF, with <span style="color:var(--color-text-success)">\u25b2</span>/<span style="color:var(--color-text-danger)">\u25bc</span> showing whether adding that ETF would raise or lower each theme's share of your book. (ETF % is of the holdings you pasted.)</div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px">${sideBlock(SA, cA)}${sideBlock(SB, cB)}</div>
+    ${table}
+    ${untaggedHtml}
   </div>`;
 }
 
@@ -29979,6 +30028,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09v</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09w</div>
 </body>
 </html>
