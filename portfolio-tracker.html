@@ -1421,16 +1421,17 @@
             <span id="cmp-A-mode-etf" onclick="cmpSetMode('A','etf')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600">ETF</span>
           </div>
           <div id="cmp-A-stock-row" style="display:none">
-            <input id="cmp-A-stock-ticker" class="modal-input" placeholder="Ticker — e.g. NVDA" style="width:100%;font-size:11px;padding:5px 9px" />
+            <input id="cmp-A-stock-ticker" class="modal-input" placeholder="Ticker — e.g. NVDA" onchange="cmpFetchPerf('A')" style="width:100%;font-size:11px;padding:5px 9px" />
           </div>
           <div id="cmp-A-etf-row">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-              <input id="cmp-A-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. QQQ" oninput="cmpHoldingsLink('A')" style="width:160px;font-size:11px;padding:5px 9px" />
+              <input id="cmp-A-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. QQQ" oninput="cmpHoldingsLink('A')" onchange="cmpFetchPerf('A')" style="width:160px;font-size:11px;padding:5px 9px" />
               <a id="cmp-A-holdings-link" href="https://stockanalysis.com/etf/" target="_blank" rel="noopener" style="font-size:10px;color:#60a5fa;text-decoration:none">open full holdings ↗</a>
             </div>
             <textarea id="cmp-A-paste" rows="5" oninput="cmpPastePreview('A')" placeholder="Paste the holdings table — ticker + %, e.g. NVDA 8.2%, MSFT 6.1% — or the raw rows straight off the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:5px 8px;resize:vertical"></textarea>
             <div id="cmp-A-preview" style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px;min-height:11px"></div>
           </div>
+          <div id="cmp-A-perf" style="margin-top:6px;min-height:12px"></div>
         </div>
         <div style="flex:1;min-width:300px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -1439,16 +1440,17 @@
             <span id="cmp-B-mode-etf" onclick="cmpSetMode('B','etf')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600">ETF</span>
           </div>
           <div id="cmp-B-stock-row" style="display:none">
-            <input id="cmp-B-stock-ticker" class="modal-input" placeholder="Ticker — e.g. AMD" style="width:100%;font-size:11px;padding:5px 9px" />
+            <input id="cmp-B-stock-ticker" class="modal-input" placeholder="Ticker — e.g. AMD" onchange="cmpFetchPerf('B')" style="width:100%;font-size:11px;padding:5px 9px" />
           </div>
           <div id="cmp-B-etf-row">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-              <input id="cmp-B-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. VGT" oninput="cmpHoldingsLink('B')" style="width:160px;font-size:11px;padding:5px 9px" />
+              <input id="cmp-B-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. VGT" oninput="cmpHoldingsLink('B')" onchange="cmpFetchPerf('B')" style="width:160px;font-size:11px;padding:5px 9px" />
               <a id="cmp-B-holdings-link" href="https://stockanalysis.com/etf/" target="_blank" rel="noopener" style="font-size:10px;color:#60a5fa;text-decoration:none">open full holdings ↗</a>
             </div>
             <textarea id="cmp-B-paste" rows="5" oninput="cmpPastePreview('B')" placeholder="Paste the holdings table — ticker + %, e.g. NVDA 8.2%, MSFT 6.1% — or the raw rows straight off the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:5px 8px;resize:vertical"></textarea>
             <div id="cmp-B-preview" style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px;min-height:11px"></div>
           </div>
+          <div id="cmp-B-perf" style="margin-top:6px;min-height:12px"></div>
         </div>
       </div>
       <div style="margin-top:14px;display:flex;align-items:center;gap:12px">
@@ -21040,6 +21042,7 @@ function cmpSetMode(side, mode) {
   const ep = document.getElementById('cmp-' + side + '-mode-etf');
   if (sp) sp.style.cssText = (mode === 'stock') ? _cmpPillOn() : _cmpPillOff();
   if (ep) ep.style.cssText = (mode === 'etf') ? _cmpPillOn() : _cmpPillOff();
+  if (typeof cmpFetchPerf === 'function') cmpFetchPerf(side, false); // show cached perf for the active symbol; never auto-fetch on a toggle
 }
 
 function cmpHoldingsLink(side) {
@@ -21062,10 +21065,55 @@ function cmpPastePreview(side) {
   out.innerHTML = `${res.parsed.length} name${res.parsed.length !== 1 ? 's' : ''} read${cov}${skip}`;
 }
 
+// Pull the entered symbol's performance windows (Polygon, via fetchTickerWindows) into the shared
+// _candPerf cache and show them under the input. allowFetch=false = render cached only (used on a
+// mode toggle, so flipping Stock/ETF never fires a network call on its own).
+async function cmpFetchPerf(side, allowFetch) {
+  if (allowFetch === undefined) allowFetch = true;
+  const out = document.getElementById('cmp-' + side + '-perf');
+  if (!out) return;
+  const mode = _cmpMode[side];
+  const inp = document.getElementById('cmp-' + side + (mode === 'stock' ? '-stock-ticker' : '-etf-ticker'));
+  const tk = inp ? (inp.value || '').trim().toUpperCase() : '';
+  if (!tk) { out.innerHTML = ''; return; }
+  const cache = (typeof _candPerf !== 'undefined') ? _candPerf : null;
+  if (cache && cache[tk] && !cache[tk].error) { cmpRenderPerf(side, tk, cache[tk]); return; }
+  if (!allowFetch) { out.innerHTML = ''; return; }
+  out.innerHTML = `<span style="font-size:10px;color:var(--color-text-tertiary)">Fetching ${esc(tk)} performance…</span>`;
+  try {
+    const w = await fetchTickerWindows(tk);
+    if (cache) {
+      cache[tk] = { m1: w.m1, m3: w.m3, m6: w.m6, y1: w.y1, ytd: w.ytd, maxDrawdown: w.maxDrawdown, annVol: w.annVol, shortHist: w.shortHist, histDays: w.histDays, fetchedAt: w.fetchedAt };
+      if (typeof saveCandPerf === 'function') saveCandPerf();
+    }
+    cmpRenderPerf(side, tk, cache ? cache[tk] : w);
+  } catch (e) {
+    const msg = (e && e.message) || 'err';
+    const txt = msg === 'nokey' ? 'add a Polygon key in Settings to pull performance' : (msg === 'rate' ? 'rate-limited — try again shortly' : 'no price data');
+    out.innerHTML = `<span style="font-size:10px;color:#fbbf24">${esc(tk)}: ${txt}</span>`;
+  }
+}
+
+function cmpRenderPerf(side, tk, w) {
+  const out = document.getElementById('cmp-' + side + '-perf');
+  if (!out) return;
+  const cell = (lbl, v) => {
+    if (v == null) return `<span style="color:var(--color-text-tertiary)">${lbl} —</span>`;
+    const c = v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    return `<span style="color:var(--color-text-tertiary)">${lbl} <span style="color:${c};font-weight:600">${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span></span>`;
+  };
+  const partial = w.shortHist ? ` <span style="color:#fbbf24;cursor:help" title="Less than ~1Y of price history — the 1Y figure spans only ${w.histDays} days, so it isn't a clean trailing year">⚠ &lt;1Y hist</span>` : '';
+  out.innerHTML = `<div style="font-size:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:baseline">
+    <span style="font-weight:700;color:var(--color-text-secondary)">${esc(tk)}</span>
+    ${cell('1M', w.m1)} ${cell('3M', w.m3)} ${cell('6M', w.m6)} ${cell('YTD', w.ytd)} ${cell('1Y', w.y1)}${partial}
+  </div>`;
+}
+
 function cmpClear() {
   ['A', 'B'].forEach(side => {
     ['-stock-ticker', '-etf-ticker', '-paste'].forEach(suf => { const el = document.getElementById('cmp-' + side + suf); if (el) el.value = ''; });
     const pv = document.getElementById('cmp-' + side + '-preview'); if (pv) pv.innerHTML = '';
+    const pf = document.getElementById('cmp-' + side + '-perf'); if (pf) pf.innerHTML = '';
     cmpHoldingsLink(side);
   });
   const o = document.getElementById('cmp-results'); if (o) o.innerHTML = '';
@@ -29833,6 +29881,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09s</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09t</div>
 </body>
 </html>
