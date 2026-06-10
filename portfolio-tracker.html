@@ -6095,13 +6095,14 @@ function buildAskSystem() {
 }
 
 // ===== Deploy Optimizer: propose -> theme -> score -> rank (its own surface, not the chat). =====
-// The model proposes themed candidates (STOCKS or ETFs, optionally from objective-level news, within a
-// user-set UNIVERSE); the REAL engine (computeThemeClusters + riskFactorProfileHypothetical) scores each
-// name's true impact. Goals are multi-select with a blended "fit". Theme is [inference]; ETF impact is
-// APPROXIMATE (no look-through here) until confirmed in Evaluate a Trade.
+// The model proposes themed candidates (STOCKS or ETFs, optionally from news, within a user-set UNIVERSE
+// and optional free-hand DIRECTION); the REAL engine scores each name's true impact. Goals multi-select
+// with a blended "fit". "Deepen" runs another pass excluding names already shown and merges/re-ranks.
+// Theme is [inference]; ETF impact is APPROXIMATE (no look-through here) until confirmed in Evaluate a Trade.
 var optBusy = false;
 var optWebOn = true; // objective-level news default ON
 var optResults = null;
+var optDirection = ''; // free-hand steer, persisted across re-renders in this session
 var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities'];
 var OPT_FACTORS = [{ col: 'Rate', label: 'Rate / duration' }, { col: 'Liquidity', label: 'Liquidity / funding' }, { col: 'Credit', label: 'Credit' }, { col: 'Policy', label: 'Policy shock' }, { col: 'Crowding', label: 'Positioning / leverage' }, { col: 'Cyclical', label: 'Demand cyclicality' }];
 var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor' };
@@ -6137,19 +6138,20 @@ function optGoalPhrase(goals, factorCol) {
   }).join('; AND ');
 }
 
-function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles) {
+function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, direction, exclude) {
   var p = [];
   p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' and your job is to PROPOSE candidates \u2014 individual STOCKS or ETFs \u2014 that would serve the stated objective(s) TOGETHER, so an engine can score each one\u2019s real impact on their book.');
   p.push('OBJECTIVE' + (goals.length > 1 ? 'S (a good candidate should serve these together)' : '') + ': ' + optGoalPhrase(goals, factorCol) + '.');
-  // universe constraints (hard filter)
   var allowGeo = geos.map(function (g) { return OPT_GEO_DESC[g]; }).join(', ');
   var blockGeo = ['us', 'intl', 'em'].filter(function (g) { return geos.indexOf(g) < 0; }).map(function (g) { return OPT_GEO_DESC[g]; });
   p.push('UNIVERSE \u2014 propose ONLY names within: ' + allowGeo + '.' + (blockGeo.length ? ' Do NOT propose ' + blockGeo.join(' or ') + ' names; they will be rejected.' : ''));
   var allowVeh = vehicles.map(function (v) { return OPT_VEH_DESC[v]; }).join(', ');
   var blockVeh = ['stock', 'sector', 'broad'].filter(function (v) { return vehicles.indexOf(v) < 0; }).map(function (v) { return OPT_VEH_DESC[v]; });
   p.push('ALLOWED VEHICLES: ' + allowVeh + '.' + (blockVeh.length ? ' Do NOT propose ' + blockVeh.join(' or ') + '; they will be rejected.' : ''));
-  if (geos.length === 1 && geos[0] === 'us' && vehicles.indexOf('broad') < 0) p.push('This is a deliberately TIGHT universe (US, no broad funds). Do NOT fall back on the obvious broad-diversifier answer \u2014 the value is in finding genuinely useful, less-obvious US names (single stocks or focused sector funds) that still move the objective. Lean on low-correlation domestic sectors the book is light in.');
+  if (geos.length === 1 && geos[0] === 'us' && vehicles.indexOf('broad') < 0) p.push('This is a deliberately TIGHT universe (US, no broad funds). Do NOT fall back on the obvious broad-diversifier answer \u2014 the value is in finding genuinely useful, less-obvious US names (single stocks or focused sector funds) that still move the objective.');
   if (goals.indexOf('diversify') >= 0 && vehicles.indexOf('broad') >= 0) p.push('For diversification, broad ETFs are often the better vehicle \u2014 include strong ETF options where allowed, alongside single-stock ideas.');
+  if (direction && direction.trim()) p.push('USER DIRECTION (honor this preference; it overrides your default tendencies but NOT the universe or evidence rules): ' + direction.trim());
+  if (exclude && exclude.length) p.push('GO DEEPER \u2014 these names were ALREADY proposed; do NOT repeat any of them, return DIFFERENT names: ' + exclude.join(', ') + '. Cast wider within the universe, surface less-obvious or smaller names, and dig into the most promising under-explored angle for the objective(s).');
   p.push('Their current book (so your proposals fit what they already own and where they are concentrated):');
   p.push(buildAskSnapshot());
   p.push('---');
@@ -6217,6 +6219,11 @@ function optScore(cands, amount, goals, factorCol) {
   return rows;
 }
 
+function optReadGoals() { var goals = []; ['diversify', 'concentration', 'factor'].forEach(function (g) { var el = document.getElementById('opt-goal-' + g); if (el && el.checked) goals.push(g); }); return goals.length ? goals : ['diversify']; }
+function optReadGeos() { var x = OPT_GEOS.map(function (g) { return g.id; }).filter(function (id) { var el = document.getElementById('opt-geo-' + id); return el ? el.checked : true; }); return x.length ? x : ['us', 'intl', 'em']; }
+function optReadVehicles() { var x = OPT_VEHICLES.map(function (v) { return v.id; }).filter(function (id) { var el = document.getElementById('opt-veh-' + id); return el ? el.checked : true; }); return x.length ? x : ['stock', 'sector', 'broad']; }
+function optReadDirection() { var el = document.getElementById('opt-direction'); var v = el ? (el.value || '') : optDirection; optDirection = v; return v; }
+
 async function runOptimizer() {
   if (optBusy) return;
   if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
@@ -6224,32 +6231,23 @@ async function runOptimizer() {
   var amtEl = document.getElementById('opt-amount');
   var amount = parseFloat(amtEl ? amtEl.value : '') || 0;
   if (amount <= 0) { if (amtEl) { amtEl.style.borderColor = '#fbbf24'; setTimeout(function () { if (amtEl) amtEl.style.borderColor = 'var(--color-border-tertiary)'; }, 800); } return; }
-  var goals = [];
-  ['diversify', 'concentration', 'factor'].forEach(function (g) { var el = document.getElementById('opt-goal-' + g); if (el && el.checked) goals.push(g); });
-  if (!goals.length) goals = ['diversify'];
-  var factorCol = (document.getElementById('opt-factor') || {}).value || 'Rate';
-  var geos = OPT_GEOS.map(function (g) { return g.id; }).filter(function (id) { var el = document.getElementById('opt-geo-' + id); return el ? el.checked : true; });
-  if (!geos.length) geos = ['us', 'intl', 'em'];
-  var vehicles = OPT_VEHICLES.map(function (v) { return v.id; }).filter(function (id) { var el = document.getElementById('opt-veh-' + id); return el ? el.checked : true; });
-  if (!vehicles.length) vehicles = ['stock', 'sector', 'broad'];
-  var webEl = document.getElementById('opt-web');
-  optWebOn = webEl ? !!webEl.checked : optWebOn;
+  var goals = optReadGoals(), factorCol = (document.getElementById('opt-factor') || {}).value || 'Rate';
+  var geos = optReadGeos(), vehicles = optReadVehicles(), direction = optReadDirection();
+  var webEl = document.getElementById('opt-web'); optWebOn = webEl ? !!webEl.checked : optWebOn;
   optBusy = true;
   var resEl = document.getElementById('opt-results');
   if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:var(--color-text-tertiary);padding:8px 0">Scouting candidates' + (optWebOn ? ' (searching current catalysts)' : '') + '\u2026</div>';
   try {
-    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn, geos, vehicles);
+    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn, geos, vehicles, direction, []);
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose the candidates now as the JSON array.' }], system, [], { web: optWebOn });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
-    var cands = optParseCandidates(text);
-    var rawN = cands.length;
-    cands = optApplyConstraints(cands, geos, vehicles);
-    var filtered = rawN - cands.length;
-    if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">Nothing came back inside your universe' + (rawN ? ' (' + rawN + ' proposed, all outside your toggles)' : '') + ' \u2014 loosen the constraints or try again.</div>'; optBusy = false; return; }
+    var cands = optApplyConstraints(optParseCandidates(text), geos, vehicles);
+    var filtered = optParseCandidates(text).length - cands.length;
+    if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">Nothing came back inside your universe \u2014 loosen the constraints or try again.</div>'; optBusy = false; return; }
     var scored = optScore(cands, amount, goals, factorCol);
     scored.sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
-    optResults = { amount: amount, goals: goals, factorCol: factorCol, geos: geos, vehicles: vehicles, filtered: filtered, usedWeb: usedWeb, ranOn: Date.now(), rows: scored };
+    optResults = { amount: amount, goals: goals, factorCol: factorCol, geos: geos, vehicles: vehicles, direction: direction, filtered: filtered, usedWeb: usedWeb, deepened: 0, added: 0, ranOn: Date.now(), cands: cands, seen: cands.map(function (c) { return c.ticker; }), rows: scored };
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6257,6 +6255,39 @@ async function runOptimizer() {
     var info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed' };
     if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#ef4444;padding:8px 0">' + ((info.title || 'Error') + ': ' + (info.detail || '')) + '</div>';
   }
+}
+
+async function optDeepen() {
+  if (optBusy || !optResults) return;
+  var R = optResults, direction = optReadDirection();
+  var webEl = document.getElementById('opt-web'); optWebOn = webEl ? !!webEl.checked : optWebOn;
+  optBusy = true;
+  var wrap = document.getElementById('opt-deepen-wrap');
+  if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:var(--color-text-tertiary)">Deepening \u2014 searching for more names\u2026</span>';
+  try {
+    var system = buildOptimizerSystem(R.amount, R.goals, R.factorCol, optWebOn, R.geos, R.vehicles, direction, R.seen);
+    var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose MORE candidates now (excluding the ones already listed) as the JSON array.' }], system, [], { web: optWebOn });
+    var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
+    var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
+    var fresh = optApplyConstraints(optParseCandidates(text), R.geos, R.vehicles);
+    var seenSet = {}; R.seen.forEach(function (t) { seenSet[t] = 1; });
+    fresh = fresh.filter(function (c) { return !seenSet[c.ticker]; });
+    if (!fresh.length) { if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:#fbbf24">No new names this pass \u2014 try adding free-hand direction, or loosen the universe.</span> ' + optDeepenButtonHtml(R); optBusy = false; return; }
+    var allCands = R.cands.concat(fresh);
+    var scored = optScore(allCands, R.amount, R.goals, R.factorCol);
+    scored.sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
+    optResults = { amount: R.amount, goals: R.goals, factorCol: R.factorCol, geos: R.geos, vehicles: R.vehicles, direction: direction, filtered: R.filtered, usedWeb: R.usedWeb || usedWeb, deepened: (R.deepened || 0) + 1, added: fresh.length, ranOn: Date.now(), cands: allCands, seen: allCands.map(function (c) { return c.ticker; }), rows: scored };
+    optBusy = false;
+    renderOptimizerResults();
+  } catch (err) {
+    optBusy = false;
+    var info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed' };
+    if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:#ef4444">' + ((info.title || 'Error') + ': ' + (info.detail || '')) + '</span> ' + optDeepenButtonHtml(R);
+  }
+}
+
+function optDeepenButtonHtml(R) {
+  return '<button class="btn btn-sm" onclick="optDeepen()" style="font-size:10px"' + (optBusy ? ' disabled' : '') + '>\u21bb Deepen \u2014 find more (excluding the ' + R.rows.length + ' shown)</button>';
 }
 
 function renderOptimizerResults() {
@@ -6271,8 +6302,8 @@ function renderOptimizerResults() {
   var geoSummary = (R.geos.length === 3) ? 'all regions' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join(' + ');
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
   var html = '';
-  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 catalysts sourced</span>' : '') + '.</div>';
-  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:6px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.filtered ? ' \u00b7 ' + R.filtered + ' proposed name' + (R.filtered === 1 ? '' : 's') + ' dropped for falling outside it' : '') + '.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 catalysts sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ' candidates)' : '') + '.</div>';
+  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:6px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped (outside universe)' : '') + '.</div>';
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);line-height:1.55;margin-bottom:6px;border-left:2px solid var(--color-border-tertiary);padding-left:8px">';
   html += '<strong>Eff. bets</strong> = effective independent bets, a diversification score: roughly how many genuinely independent positions your book behaves like \u2014 higher is more spread out. The +number is how much this name raises it.<br>';
   html += '<strong>Top cluster \u0394</strong> = the change in the weight of your single biggest theme, in percentage points; negative means it dilutes your largest concentration.';
@@ -6304,6 +6335,7 @@ function renderOptimizerResults() {
     html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
     html += '</div>';
   });
+  html += '<div id="opt-deepen-wrap" style="margin-top:6px">' + optDeepenButtonHtml(R) + '</div>';
   el.innerHTML = html;
 }
 
@@ -6314,10 +6346,11 @@ function renderOptimizerTab() {
   var dis = noWorker ? ' disabled' : '';
   var factorOpts = OPT_FACTORS.map(function (f) { return '<option value="' + f.col + '">' + f.label + '</option>'; }).join('');
   var inp = 'background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px';
+  var e = (typeof esc === 'function') ? esc : function (s) { return s; };
   var chk = function (id, label) { return '<label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="' + id + '" checked' + dis + '> ' + label + '</label>'; };
   var html = '<div style="max-width:900px;margin:0 auto">';
   html += '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Deploy Optimizer</h2>';
-  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount, one or more goals, and the universe to draw from. The model proposes candidate names within your constraints and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact and ranks them. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount, one or more goals, and the universe to draw from; add free-hand direction to steer it. The model proposes candidate names within your constraints and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact and ranks them. Use Deepen to pull more names. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
   html += aiWorkerUrlFieldHtml('opt-worker-url', 'renderOptimizerTab()');
   html += '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:8px">';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="15000" style="width:120px;' + inp + '"' + dis + '></div>';
@@ -6333,6 +6366,7 @@ function renderOptimizerTab() {
   html += '<div style="display:flex;gap:8px;align-items:center"><span style="font-size:9px;color:var(--color-text-tertiary)">Geography:</span>' + OPT_GEOS.map(function (g) { return chk('opt-geo-' + g.id, g.label); }).join('') + '</div>';
   html += '<div style="display:flex;gap:8px;align-items:center"><span style="font-size:9px;color:var(--color-text-tertiary)">Vehicle:</span>' + OPT_VEHICLES.map(function (v) { return chk('opt-veh-' + v.id, v.label); }).join('') + '</div>';
   html += '</div></div>';
+  html += '<div style="margin-bottom:8px"><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Free-hand direction (optional) \u2014 steer the search</div><textarea id="opt-direction" oninput="optDirection=this.value" placeholder="e.g. prefer dividend growers; avoid tobacco; lean defensive; smaller under-the-radar names; emphasize cash-flow quality" style="width:100%;max-width:560px;min-height:38px;box-sizing:border-box;' + inp + ';font-size:11px;resize:vertical"' + dis + '>' + e(optDirection) + '</textarea></div>';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer;margin-bottom:4px" title="Searches current catalysts at the objective level (a few cents per run)."><input type="checkbox" id="opt-web"' + (optWebOn ? ' checked' : '') + dis + '> Use current news (objective-level web search) <span style="font-size:9px">~a few \u00a2 per run</span></label>';
   html += '<div id="opt-results"></div>';
   html += '</div>';
@@ -31430,6 +31464,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bj</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bk</div>
 </body>
 </html>
