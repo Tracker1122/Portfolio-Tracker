@@ -21395,25 +21395,51 @@ function cmpThemeMapHtml(A, B) {
   const etfPct = (st, t) => st.cov > 0 ? (st.themeW[t] || 0) / st.cov * 100 : null;
   const themeKeys = new Set(Object.keys(bookThemeVal));
   cols.forEach(col => Object.keys(col.st.themeW).forEach(t => themeKeys.add(t)));
-  const themeRows = [...themeKeys].map(t => ({ t, bp: bookPct(t), vals: cols.map(col => etfPct(col.st, t)) }))
-    .filter(r => (r.bp || 0) > 0.05 || r.vals.some(v => (v || 0) > 0.05))
-    .sort((x, y) => Math.max(y.bp || 0, ...y.vals.map(v => v || 0)) - Math.max(x.bp || 0, ...x.vals.map(v => v || 0)));
-  const greyDash = ` <span style="color:var(--color-text-tertiary)" title="no meaningful change to this theme's share">\u2013</span>`;
-  const arrow = (etf, bk) => {
-    if (etf == null || bk == null) return '';
-    if (etf <= 0.05) return greyDash; // ETF holds ~nothing in this theme — absent, not an active reduction
-    if (etf > bk + 0.5) return ` <span style="color:var(--color-text-success)" title="adding this ETF raises this theme's share of your book">\u25b2</span>`;
-    if (etf < bk - 0.5) return ` <span style="color:var(--color-text-danger)" title="adding this ETF lowers this theme's share of your book">\u25bc</span>`;
-    return greyDash; // within ±0.5 — no meaningful movement
-  };
+  // The GAP (ETF% - your book%, in points) is the real signal: how hard adding the fund pulls each
+  // theme. We sort by the biggest gap so the rows that would move you most lead, and show the gap
+  // itself (signed) instead of a bare up/down arrow, which only restated "this number < that number".
+  const gapOf = (etf, bk) => (etf == null || bk == null) ? null : (etf - bk);
+  const themeRows = [...themeKeys].map(t => {
+    const bp = bookPct(t);
+    const vals = cols.map(col => etfPct(col.st, t));
+    const gaps = vals.map(v => gapOf(v, bp));
+    const maxAbsGap = Math.max(0, ...gaps.map(g => g == null ? 0 : Math.abs(g)));
+    return { t, bp, vals, gaps, maxAbsGap };
+  }).filter(r => (r.bp || 0) > 0.05 || r.vals.some(v => (v || 0) > 0.05))
+    .sort((x, y) => y.maxAbsGap - x.maxAbsGap);
   const pc = (v) => v == null ? '<span style="color:var(--color-text-tertiary)">\u2014</span>' : `${v.toFixed(0)}%`;
-  const th = (txt, c) => `<th style="padding:0 10px 4px;text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:${c}">${txt}</th>`;
+  const gapCell = (g) => {
+    if (g == null || Math.abs(g) < 0.5) return '<span style="color:var(--color-text-tertiary)" title="no meaningful change to this theme\u2019s share">\u2013</span>';
+    const c = g > 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+    return `<span style="color:${c}" title="adding this ETF would ${g > 0 ? 'raise' : 'lower'} this theme\u2019s share of your book by ~${Math.abs(g).toFixed(0)} points">${g > 0 ? '+' : '\u2212'}${Math.abs(g).toFixed(0)}</span>`;
+  };
+  const thL = `<th style="padding:0 10px 4px 0;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary)">Theme</th>`;
+  const thBook = `<th style="padding:0 10px 4px;text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary)">Your book</th>`;
+  const thEtf = (col) => `<th colspan="2" style="padding:0 10px 4px;text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:${col.c}">${ex(col.st.label)}<div style="font-weight:400;text-transform:none;letter-spacing:0;font-size:8px;color:var(--color-text-tertiary)">% \u00b7 \u0394 vs you</div></th>`;
   const trs = themeRows.map(r => `<tr>
     <td style="padding:2px 10px 2px 0;color:var(--color-text-secondary)">${ex(labelFor(r.t))}</td>
     <td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--color-text-tertiary)">${pc(r.bp)}</td>
-    ${cols.map((col, i) => `<td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${col.c}">${pc(r.vals[i])}${arrow(r.vals[i], r.bp)}</td>`).join('')}
+    ${cols.map((col, i) => `<td style="padding:2px 4px 2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${col.c}">${pc(r.vals[i])}</td><td style="padding:2px 10px 2px 2px;text-align:right;font-variant-numeric:tabular-nums;font-size:9px">${gapCell(r.gaps[i])}</td>`).join('')}
   </tr>`).join('');
-  const table = themeRows.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:10px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:0 10px 4px 0;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary)">Theme</th>${th('Your book', 'var(--color-text-tertiary)')}${cols.map(col => th(ex(col.st.label), col.c)).join('')}</tr></thead><tbody>${trs}</tbody></table></div>` : '';
+  const table = themeRows.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:10px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)">${thL}${thBook}${cols.map(thEtf).join('')}</tr></thead><tbody>${trs}</tbody></table></div>` : '';
+
+  // Plain-language takeaway per ETF, computed from the gaps: where it leans in (you're light) vs away
+  // from (your heavier bets). Untagged is surfaced as a caveat, not a "lean into" — it's unclassified.
+  const fmtG = (g) => `${g > 0 ? '+' : '\u2212'}${Math.abs(g).toFixed(0)}`;
+  const takeawayFor = (col, i) => {
+    const rg = themeRows.map(r => ({ t: r.t, g: r.gaps[i] })).filter(r => r.g != null);
+    const pos = rg.filter(r => r.g > 0.5 && r.t !== '__un').sort((a, b) => b.g - a.g);
+    const neg = rg.filter(r => r.g < -0.5).sort((a, b) => a.g - b.g);
+    const lst = (arr) => arr.slice(0, 3).map(r => `${ex(labelFor(r.t))} (${fmtG(r.g)})`).join(', ');
+    const parts = [];
+    if (pos.length) parts.push(`leans into ${lst(pos)}`);
+    if (neg.length) parts.push(`away from ${lst(neg)}`);
+    if (!parts.length) return '';
+    const un = rg.find(r => r.t === '__un');
+    const unNote = (un && un.g > 5) ? ` <span style="color:#fbbf24">A ${fmtG(un.g)}-pt slice is still Untagged \u2014 tag those to sharpen this.</span>` : '';
+    return `<div style="font-size:10px;color:var(--color-text-secondary);line-height:1.55;margin-top:9px"><span style="font-weight:700;color:${col.c}">${ex(col.st.label)}</span> ${parts.join(', and ')} \u2014 vs your current book.${unNote}</div>`;
+  };
+  const takeaways = themeRows.length ? cols.map((col, i) => takeawayFor(col, i)).join('') : '';
 
   // Tag the unclassified — keeps the shared brain (and this table) improving.
   const untagged = []; const seenU = new Set();
@@ -21429,9 +21455,10 @@ function cmpThemeMapHtml(A, B) {
   const word = present.length === 1 ? 'this ETF' : 'each ETF';
   return `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border-secondary)">
     <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">What adding ${word} would do to your book</div>
-    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:11px"><span style="color:var(--color-text-success)">New to you</span> = names you don't already own, directly or inside funds you hold \u2014 the exposure you'd actually be adding. The theme table is all percentages: your current look-through mix vs ${word}, with <span style="color:var(--color-text-success)">\u25b2</span>/<span style="color:var(--color-text-danger)">\u25bc</span> showing whether adding it would raise or lower each theme's share of your book. (ETF % is of the holdings you pasted.)</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:11px"><span style="color:var(--color-text-success)">New to you</span> = names you don't already own, directly or inside funds you hold \u2014 the exposure you'd actually be adding. The theme table is all percentages \u2014 your current look-through mix vs ${word} \u2014 and the <strong>\u0394</strong> column is how many points adding it would move that theme's share of your book (<span style="color:var(--color-text-success)">+</span> raises, <span style="color:var(--color-text-danger)">\u2212</span> lowers), sorted biggest move first. (ETF % is of the holdings you pasted.)</div>
     <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px">${cols.map(col => sideBlock(col.st, col.c)).join('')}</div>
     ${table}
+    ${takeaways}
     ${untaggedHtml}
   </div>`;
 }
@@ -30211,6 +30238,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ab</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ac</div>
 </body>
 </html>
