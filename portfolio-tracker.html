@@ -21434,7 +21434,14 @@ function cmpThemeMapHtml(A, B) {
     const maxAbsGap = Math.max(0, ...gaps.map(g => g == null ? 0 : Math.abs(g)));
     return { t, bp, vals, gaps, maxAbsGap };
   }).filter(r => (r.bp || 0) > 0.05 || r.vals.some(v => (v || 0) > 0.05))
-    .sort((x, y) => y.maxAbsGap - x.maxAbsGap);
+    .sort((x, y) => {
+      const xu = x.t === '__un' ? 1 : 0, yu = y.t === '__un' ? 1 : 0;
+      if (xu !== yu) return xu - yu;                  // Untagged always sinks to the bottom
+      const xb = x.bp || 0, yb = y.bp || 0;
+      if (yb !== xb) return yb - xb;                  // then biggest share of YOUR book first
+      const xm = Math.max(0, ...x.vals.map(v => v || 0)), ym = Math.max(0, ...y.vals.map(v => v || 0));
+      return ym - xm;                                 // tiebreak: biggest ETF share
+    });
   const pc = (v) => v == null ? '<span style="color:var(--color-text-tertiary)">\u2014</span>' : `${v.toFixed(0)}%`;
   const gapCell = (g) => {
     if (g == null || Math.abs(g) < 0.5) return '<span style="color:var(--color-text-tertiary)" title="no meaningful change to this theme\u2019s share">\u2013</span>';
@@ -21514,7 +21521,7 @@ function cmpThemeMapHtml(A, B) {
 function cmpToggleThemeDetail(id) {
   var el = document.getElementById(id);
   if (!el) return;
-  el.style.display = (!el.style.display || el.style.display === 'none') ? '' : 'none';
+  el.style.display = el.style.display === 'none' ? '' : 'none';
 }
 
 function cmpCompare() {
@@ -30292,6 +30299,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09aj</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ak</div>
 </body>
 </html>
