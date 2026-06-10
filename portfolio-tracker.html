@@ -18598,6 +18598,9 @@ const THEMES = {
   'Commodities':       { benchmark: 'GLD',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
   'Consumer Discretionary': { benchmark: 'XLY',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
   'Space & Defense':   { benchmark: 'ITA',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
+  'Industrials':       { benchmark: 'XLI',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
+  'Materials':         { benchmark: 'XLB',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
+  'Communications':    { benchmark: 'XLC',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
   // ─── universe additions (awareness surface; benchmark mapped so positions get theme alpha if added) ───
   'Healthcare':            { benchmark: 'XLV', inUniverse: true, inUniverseAs: 'missing', dropdown: true },
   'Real Estate':           { benchmark: 'VNQ', inUniverse: true, inUniverseAs: 'missing', dropdown: true },
@@ -19001,14 +19004,15 @@ function saveClusterOverrides(o) {
   try { localStorage.setItem('portfolio-cluster-overrides-v1', JSON.stringify(o)); } catch (e) {}
 }
 
-// Bridge: the old AI sector seeds -> theme-universe themes, so switching the comparison to the theme
-// universe doesn't start from a blank slate. Ambiguous sectors (materials, industrials, comms, cash)
-// are deliberately left unmapped — no theme-universe home, so better no suggestion than a wrong one.
+// Bridge: the old AI sector seeds -> theme-universe themes, so a name a seed recognizes auto-suggests
+// its theme instead of landing untagged. Now that Industrials/Materials/Communications exist in the
+// universe, every sector maps EXCEPT 'cash' (no theme home — left unmapped, stays untagged honestly).
 const SECTOR_TO_THEME = {
   semis: 'Semiconductors', memory: 'Semiconductors', datacenter: 'AI Infrastructure',
   bigtech: 'Mag 7-ish', grid: 'Energy & Grid', energy: 'Energy & Grid', space: 'Space & Defense',
   financials: 'Financials', cyber: 'Cybersecurity', utilities: 'Utilities', staples: 'Consumer Staples',
-  discretionary: 'Consumer Discretionary', healthcare: 'Healthcare', commodities: 'Commodities'
+  discretionary: 'Consumer Discretionary', healthcare: 'Healthcare', commodities: 'Commodities',
+  industrials: 'Industrials', materials: 'Materials', comms: 'Communications'
 };
 
 // THE single theme classifier. Same priority move-together's cluster engine uses — your override wins,
@@ -30238,6 +30242,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ac</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ad</div>
 </body>
 </html>
