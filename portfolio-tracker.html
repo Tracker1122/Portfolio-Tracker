@@ -1072,7 +1072,7 @@
     <button class="tab-btn" onclick="switchTab('themes')">Theme Level Review</button>
     <button class="tab-btn" onclick="switchTab('risk')">Risk Review</button>
     <button class="tab-btn" onclick="switchTab('tradeideas')">Signals Within the Book</button>
-    <button class="tab-btn" onclick="switchTab('pricetheme')">Theme Dissection</button>
+    <button class="tab-btn" onclick="switchTab('pricetheme')">ETF and Theme Dissection</button>
     <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
@@ -1408,6 +1408,56 @@
 
   <!-- Theme Dissection Tab -->
   <div class="tab-panel" id="tab-pricetheme">
+    <div id="etf-compare-card" style="margin-top:6px">
+      <div class="section-heading">ETF &amp; Stock Dissection — holdings overlap</div>
+      <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin:2px 0 14px;max-width:840px">
+        Compare what's inside two ETFs — or an ETF vs a single stock — to see how much they actually overlap. For an ETF, open its full holdings on stockanalysis.com and paste the table (only <strong>ticker + %</strong> is read — row #, name and shares are ignored). For a stock, just enter its ticker. Overlap is computed on the names you paste and labeled with how much of each fund that covers, so a partial paste is never mistaken for the whole ETF.
+      </div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
+        <div style="flex:1;min-width:300px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em;margin-right:2px">A</span>
+            <span id="cmp-A-mode-stock" onclick="cmpSetMode('A','stock')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)">Stock</span>
+            <span id="cmp-A-mode-etf" onclick="cmpSetMode('A','etf')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600">ETF</span>
+          </div>
+          <div id="cmp-A-stock-row" style="display:none">
+            <input id="cmp-A-stock-ticker" class="modal-input" placeholder="Ticker — e.g. NVDA" style="width:100%;font-size:11px;padding:5px 9px" />
+          </div>
+          <div id="cmp-A-etf-row">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+              <input id="cmp-A-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. QQQ" oninput="cmpHoldingsLink('A')" style="width:160px;font-size:11px;padding:5px 9px" />
+              <a id="cmp-A-holdings-link" href="https://stockanalysis.com/etf/" target="_blank" rel="noopener" style="font-size:10px;color:#60a5fa;text-decoration:none">open full holdings ↗</a>
+            </div>
+            <textarea id="cmp-A-paste" rows="5" oninput="cmpPastePreview('A')" placeholder="Paste the holdings table — ticker + %, e.g. NVDA 8.2%, MSFT 6.1% — or the raw rows straight off the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:5px 8px;resize:vertical"></textarea>
+            <div id="cmp-A-preview" style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px;min-height:11px"></div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:300px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em;margin-right:2px">B</span>
+            <span id="cmp-B-mode-stock" onclick="cmpSetMode('B','stock')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)">Stock</span>
+            <span id="cmp-B-mode-etf" onclick="cmpSetMode('B','etf')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600">ETF</span>
+          </div>
+          <div id="cmp-B-stock-row" style="display:none">
+            <input id="cmp-B-stock-ticker" class="modal-input" placeholder="Ticker — e.g. AMD" style="width:100%;font-size:11px;padding:5px 9px" />
+          </div>
+          <div id="cmp-B-etf-row">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+              <input id="cmp-B-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. VGT" oninput="cmpHoldingsLink('B')" style="width:160px;font-size:11px;padding:5px 9px" />
+              <a id="cmp-B-holdings-link" href="https://stockanalysis.com/etf/" target="_blank" rel="noopener" style="font-size:10px;color:#60a5fa;text-decoration:none">open full holdings ↗</a>
+            </div>
+            <textarea id="cmp-B-paste" rows="5" oninput="cmpPastePreview('B')" placeholder="Paste the holdings table — ticker + %, e.g. NVDA 8.2%, MSFT 6.1% — or the raw rows straight off the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:5px 8px;resize:vertical"></textarea>
+            <div id="cmp-B-preview" style="font-size:9px;color:var(--color-text-tertiary);margin-top:3px;min-height:11px"></div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:14px;display:flex;align-items:center;gap:12px">
+        <button class="btn" onclick="cmpCompare()" style="font-size:11px;padding:6px 16px">Compare overlap</button>
+        <button class="btn btn-sm" onclick="cmpClear()" style="font-size:10px">Clear</button>
+      </div>
+      <div id="cmp-results" style="margin-top:16px"></div>
+      <div style="border-top:1px solid var(--color-border-tertiary);margin-top:26px"></div>
+    </div>
     <div id="theme-discovery" style="margin-top:18px"></div>
   </div><!-- end tab-pricetheme -->
 
@@ -5774,7 +5824,7 @@ function switchTab(name) {
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderPriceMoves', renderPriceMoves); }
   if (name === 'tradeideas') { safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
-  if (name === 'pricetheme') { safeRender('renderThemeDiscovery', renderThemeDiscovery); }
+  if (name === 'pricetheme') { safeRender('renderEtfCompare', renderEtfCompare); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
@@ -20974,6 +21024,137 @@ function updatePerfSlot(key) {
 }
 
 // ─────────────────────────────────────────────
+// ── ETF & Stock Dissection: holdings-overlap comparison (Theme Dissection tab) ──────────────────
+// Reuses parseHoldings() (stockanalysis paste → {ticker,weight}) and qrNormTicker() for matching.
+let _cmpMode = { A: 'etf', B: 'etf' };
+function _cmpPillOn() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600'; }
+function _cmpPillOff() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)'; }
+
+function cmpSetMode(side, mode) {
+  _cmpMode[side] = mode;
+  const sr = document.getElementById('cmp-' + side + '-stock-row');
+  const er = document.getElementById('cmp-' + side + '-etf-row');
+  if (sr) sr.style.display = (mode === 'stock') ? 'block' : 'none';
+  if (er) er.style.display = (mode === 'etf') ? 'block' : 'none';
+  const sp = document.getElementById('cmp-' + side + '-mode-stock');
+  const ep = document.getElementById('cmp-' + side + '-mode-etf');
+  if (sp) sp.style.cssText = (mode === 'stock') ? _cmpPillOn() : _cmpPillOff();
+  if (ep) ep.style.cssText = (mode === 'etf') ? _cmpPillOn() : _cmpPillOff();
+}
+
+function cmpHoldingsLink(side) {
+  const inp = document.getElementById('cmp-' + side + '-etf-ticker');
+  const a = document.getElementById('cmp-' + side + '-holdings-link');
+  if (!inp || !a) return;
+  const tk = (inp.value || '').trim().toUpperCase();
+  a.href = tk ? `https://stockanalysis.com/etf/${encodeURIComponent(tk)}/holdings/` : 'https://stockanalysis.com/etf/';
+}
+
+function cmpPastePreview(side) {
+  const ta = document.getElementById('cmp-' + side + '-paste');
+  const out = document.getElementById('cmp-' + side + '-preview');
+  if (!ta || !out) return;
+  if (!ta.value.trim()) { out.innerHTML = ''; return; }
+  const res = parseHoldings(ta.value);
+  const wsum = res.parsed.reduce((s, h) => s + (h.weight || 0), 0);
+  const cov = wsum > 0 ? ` · covers ~${wsum.toFixed(1)}% of the fund` : '';
+  const skip = res.unparsed.length ? ` · <span style="color:#fbbf24">${res.unparsed.length} line${res.unparsed.length !== 1 ? 's' : ''} skipped</span>` : '';
+  out.innerHTML = `${res.parsed.length} name${res.parsed.length !== 1 ? 's' : ''} read${cov}${skip}`;
+}
+
+function cmpClear() {
+  ['A', 'B'].forEach(side => {
+    ['-stock-ticker', '-etf-ticker', '-paste'].forEach(suf => { const el = document.getElementById('cmp-' + side + suf); if (el) el.value = ''; });
+    const pv = document.getElementById('cmp-' + side + '-preview'); if (pv) pv.innerHTML = '';
+    cmpHoldingsLink(side);
+  });
+  const o = document.getElementById('cmp-results'); if (o) o.innerHTML = '';
+}
+
+function _cmpSide(side) {
+  const mode = _cmpMode[side];
+  if (mode === 'stock') {
+    const tk = (document.getElementById('cmp-' + side + '-stock-ticker').value || '').trim().toUpperCase();
+    return { mode, label: tk || '(stock)', holdings: tk ? [{ ticker: tk, weight: null }] : [], coverage: 0 };
+  }
+  const tk = (document.getElementById('cmp-' + side + '-etf-ticker').value || '').trim().toUpperCase();
+  const res = parseHoldings(document.getElementById('cmp-' + side + '-paste').value || '');
+  const coverage = res.parsed.reduce((s, h) => s + (h.weight || 0), 0);
+  return { mode, label: tk || '(ETF)', holdings: res.parsed, coverage };
+}
+
+function cmpCompare() {
+  const out = document.getElementById('cmp-results');
+  if (!out) return;
+  const A = _cmpSide('A'), B = _cmpSide('B');
+  if (!A.holdings.length || !B.holdings.length) {
+    out.innerHTML = `<div style="font-size:11px;color:#fbbf24">Fill both sides — a ticker for a stock, or pasted holdings for an ETF.</div>`;
+    return;
+  }
+  const mapA = {}, mapB = {};
+  A.holdings.forEach(h => { const k = qrNormTicker(h.ticker); if (k) mapA[k] = { ticker: h.ticker, weight: h.weight }; });
+  B.holdings.forEach(h => { const k = qrNormTicker(h.ticker); if (k) mapB[k] = { ticker: h.ticker, weight: h.weight }; });
+  const shared = [], onlyA = [], onlyB = [];
+  Object.keys(mapA).forEach(k => { if (mapB[k]) shared.push({ ticker: mapA[k].ticker, wA: mapA[k].weight, wB: mapB[k].weight }); else onlyA.push(mapA[k]); });
+  Object.keys(mapB).forEach(k => { if (!mapA[k]) onlyB.push(mapB[k]); });
+  const esc2 = (typeof esc === 'function') ? esc : (s => s);
+  const combo = A.mode + '-' + B.mode;
+
+  let headline = '';
+  if (combo === 'stock-stock') {
+    headline = shared.length
+      ? `<strong style="color:var(--color-text-success)">${esc2(A.label)} and ${esc2(B.label)} are the same name.</strong>`
+      : `<strong>${esc2(A.label)} and ${esc2(B.label)} are different names</strong> — no overlap.`;
+  } else if (combo === 'stock-etf' || combo === 'etf-stock') {
+    const stock = combo === 'stock-etf' ? A : B;
+    const etf = combo === 'stock-etf' ? B : A;
+    const hit = shared.length ? shared[0] : null;
+    const w = hit ? (combo === 'stock-etf' ? hit.wB : hit.wA) : null;
+    headline = hit
+      ? `<strong style="color:var(--color-text-success)">${esc2(stock.label)} is in ${esc2(etf.label)}</strong>${w != null ? ` at <strong>${w.toFixed(2)}%</strong> weight` : ''}.`
+      : `<strong>${esc2(stock.label)} is not among ${esc2(etf.label)}'s pasted holdings.</strong>`;
+    if (etf.coverage > 0) headline += ` <span style="color:var(--color-text-tertiary);font-size:10px">(${esc2(etf.label)} paste covers ~${etf.coverage.toFixed(1)}% of the fund.)</span>`;
+  } else {
+    const minSum = shared.reduce((s, x) => s + Math.min(x.wA || 0, x.wB || 0), 0);
+    const sumAsh = shared.reduce((s, x) => s + (x.wA || 0), 0);
+    const sumBsh = shared.reduce((s, x) => s + (x.wB || 0), 0);
+    const pctAinB = A.coverage > 0 ? (sumAsh / A.coverage * 100) : null;
+    const pctBinA = B.coverage > 0 ? (sumBsh / B.coverage * 100) : null;
+    headline = `<strong>${shared.length} shared name${shared.length !== 1 ? 's' : ''}.</strong> Overlap by weight \u2248 <strong style="color:var(--color-text-info)">${minSum.toFixed(1)}%</strong> <span style="font-size:10px;color:var(--color-text-tertiary)">(a floor — only the names you pasted count)</span>.`;
+    if (pctAinB != null && pctBinA != null) {
+      headline += `<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">${pctAinB.toFixed(0)}% of ${esc2(A.label)}'s pasted weight is also in ${esc2(B.label)} · ${pctBinA.toFixed(0)}% of ${esc2(B.label)}'s is also in ${esc2(A.label)}.</div>`;
+    }
+    headline += `<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:3px">Coverage: ${esc2(A.label)} paste \u2248 ${A.coverage.toFixed(1)}% of the fund, ${esc2(B.label)} \u2248 ${B.coverage.toFixed(1)}% — the rest (smaller positions) isn't included, so true overlap is at least this.</div>`;
+  }
+
+  let lists = '';
+  if (combo === 'etf-etf') {
+    const fmtW = (w) => w != null ? w.toFixed(2) + '%' : '—';
+    shared.sort((a, b) => Math.min(b.wA || 0, b.wB || 0) - Math.min(a.wA || 0, a.wB || 0));
+    onlyA.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+    onlyB.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+    const col = (title, rowsHtml) => `<div style="flex:1;min-width:200px"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--color-text-tertiary);margin-bottom:5px">${title}</div>${rowsHtml || '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">none</div>'}</div>`;
+    const sharedRows = shared.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1px 0"><span style="color:var(--color-text-primary);font-weight:600">${esc2(x.ticker)}</span><span style="color:var(--color-text-tertiary);font-variant-numeric:tabular-nums">${fmtW(x.wA)} / ${fmtW(x.wB)}</span></div>`).join('');
+    const aRows = onlyA.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1px 0"><span style="color:var(--color-text-secondary)">${esc2(x.ticker)}</span><span style="color:var(--color-text-tertiary);font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`).join('');
+    const bRows = onlyB.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1px 0"><span style="color:var(--color-text-secondary)">${esc2(x.ticker)}</span><span style="color:var(--color-text-tertiary);font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`).join('');
+    lists = `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
+      ${col(`Shared (${shared.length}) · ${esc2(A.label)} / ${esc2(B.label)}`, sharedRows)}
+      ${col(`Only in ${esc2(A.label)} (${onlyA.length})`, aRows)}
+      ${col(`Only in ${esc2(B.label)} (${onlyB.length})`, bRows)}
+    </div>`;
+  }
+
+  out.innerHTML = `<div style="padding:12px 14px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-tertiary)"><div style="font-size:12px;color:var(--color-text-primary);line-height:1.5">${headline}</div>${lists}</div>`;
+}
+
+function renderEtfCompare() {
+  if (!document.getElementById('etf-compare-card')) return;
+  cmpSetMode('A', _cmpMode.A);
+  cmpSetMode('B', _cmpMode.B);
+  cmpPastePreview('A'); cmpPastePreview('B');
+  cmpHoldingsLink('A'); cmpHoldingsLink('B');
+}
+
 function renderThemeDiscovery() {
   const host = document.getElementById('theme-discovery');
   if (!host) return;
@@ -29652,6 +29833,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09r</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09s</div>
 </body>
 </html>
