@@ -16552,6 +16552,22 @@ function candCompute() {
   const _pos = _candPositionCountDelta();
   const _perf = {};
   _candScenarioTickers().forEach(t => { if (_candPerf[t] && !_candPerf[t].error) _perf[t] = _candPerf[t]; });
+  // Per-staged-ETF look-through coverage actually used in the decomposition above (mirrors the
+  // source precedence in _candQueueAdjustments: persistent look-through table first, else the
+  // scenario-local sim paste). Lets the AI prompt flag when a staged ETF's per-name/cluster moves
+  // reflect only a partial paste — the rest being broad, unlisted exposure not itemized anywhere.
+  const _ltTab = (typeof getIndexLookthrough === 'function') ? getIndexLookthrough() : {};
+  const etfCov = [];
+  _candQueue.forEach(tr => {
+    if (tr.kind !== 'etf' || !tr.ticker) return;
+    const u = tr.ticker.toUpperCase();
+    let wl = null;
+    const tb = _ltTab[u];
+    if (tb && tb.weights && Object.keys(tb.weights).length) wl = Object.values(tb.weights);
+    else if (typeof simTempHoldings !== 'undefined' && simTempHoldings[u] && simTempHoldings[u].length) wl = simTempHoldings[u].filter(h => h.weight != null).map(h => h.weight);
+    const cov = wl ? wl.reduce((s, w) => s + (parseFloat(w) || 0), 0) : 0;
+    etfCov.push({ ticker: u, coverage: cov, nHoldings: wl ? wl.length : 0, amount: parseFloat(tr.amount) || 0 });
+  });
   _candScenario = {
     sig: _candScenarioSignature(),
     trades: _candQueue.map(_candTradeLabel),
@@ -16560,7 +16576,8 @@ function candCompute() {
     themeConcNeutral: _candThemeConcText(adds, _themeCtx, { neutralBasis: true }),
     adds,
     posBefore: _pos.before, posAfter: _pos.after,
-    perf: _perf
+    perf: _perf,
+    etfCov
   };
   if (typeof renderThemeAiReview === 'function') renderThemeAiReview();
 }
@@ -22991,6 +23008,15 @@ function buildBookAiPrompt() {
     if (sc.nameRows && sc.nameRows.length) {
       lines.push(`Per-name true-exposure moves (direct + via funds; a name can move because an added ETF holds it):`);
       sc.nameRows.forEach(r => lines.push(`  · ${r.display}: $${Math.round(r.before).toLocaleString()} → $${Math.round(r.after).toLocaleString()} (${r.d >= 0 ? '+' : '−'}$${Math.round(Math.abs(r.d)).toLocaleString()})`));
+    }
+    if (sc.etfCov && sc.etfCov.length) {
+      sc.etfCov.forEach(e => {
+        if (e.coverage < 1) {
+          lines.push(`  ⚠ LOOK-THROUGH COVERAGE — ${e.ticker}: no holdings are pasted for this staged ETF, so its $${Math.round(e.amount).toLocaleString()} buy is an OPAQUE block — it does NOT appear in the per-name moves or theme-cluster shifts above at all. Its underlying theme/name exposure is unknown to the tracker; treat its structural effect as UNMODELED, not as neutral or absent.`);
+        } else if (e.coverage < 90) {
+          lines.push(`  ⚠ LOOK-THROUGH COVERAGE — ${e.ticker}: only ~${e.coverage.toFixed(0)}% of this staged ETF's weight is itemized (${e.nHoldings} holding${e.nHoldings === 1 ? '' : 's'} pasted). The per-name moves and theme-cluster shifts attributed to ${e.ticker} above reflect ONLY that ~${e.coverage.toFixed(0)}% slice; the remaining ~${(100 - e.coverage).toFixed(0)}% of the $${Math.round(e.amount).toLocaleString()} buy adds broad, unlisted exposure NOT shown in those moves. Do NOT read the itemized effect as the complete picture of buying ${e.ticker} — it understates the breadth, and if the unpasted remainder lands in the same themes it also understates the concentration the buy adds.`);
+        }
+      });
     }
     if (typeof sc.posBefore === 'number' && typeof sc.posAfter === 'number') lines.push(`Position count under this scenario: ${sc.posBefore} → ${sc.posAfter}.`);
     if (sc.summary) lines.push(`Plain-language read the tracker computed for this scenario: ${sc.summary}`);
@@ -30443,6 +30469,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09an</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ao</div>
 </body>
 </html>
