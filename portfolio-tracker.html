@@ -18978,6 +18978,62 @@ function saveClusterOverrides(o) {
   try { localStorage.setItem('portfolio-cluster-overrides-v1', JSON.stringify(o)); } catch (e) {}
 }
 
+// Bridge: the old AI sector seeds -> theme-universe themes, so switching the comparison to the theme
+// universe doesn't start from a blank slate. Ambiguous sectors (materials, industrials, comms, cash)
+// are deliberately left unmapped — no theme-universe home, so better no suggestion than a wrong one.
+const SECTOR_TO_THEME = {
+  semis: 'Semiconductors', memory: 'Semiconductors', datacenter: 'AI Infrastructure',
+  bigtech: 'Mag 7-ish', grid: 'Energy & Grid', energy: 'Energy & Grid', space: 'Space & Defense',
+  financials: 'Financials', cyber: 'Cybersecurity', utilities: 'Utilities', staples: 'Consumer Staples',
+  discretionary: 'Consumer Discretionary', healthcare: 'Healthcare', commodities: 'Commodities'
+};
+
+// THE single theme classifier. Same priority move-together's cluster engine uses — your override wins,
+// then a direct position's theme tag, then theme-benchmark membership — with the AI sector bridge as a
+// last-resort suggestion. Returns {theme, src}; theme=null means genuinely untagged. Build once per
+// render (it precomputes maps), then call per name.
+function makeThemeResolver() {
+  const overrides = (typeof loadClusterOverrides === 'function') ? loadClusterOverrides() : {};
+  const themeBench = {};
+  if (typeof themeUniverseAll === 'function') themeUniverseAll().forEach(t => { if (t.ticker) themeBench[t.name] = t.ticker.toUpperCase(); });
+  const benchToThemes = {};
+  Object.entries(themeBench).forEach(([thm, b]) => { (benchToThemes[b] = benchToThemes[b] || []).push(thm); });
+  const directTheme = {};
+  if (typeof positions !== 'undefined') positions.filter(pp => !pp.closed && pp.ticker && pp.theme).forEach(pp => { directTheme[qrCanonical(pp.ticker).key] = pp.theme; });
+  const nameFundW = {};
+  if (typeof getIndexLookthrough === 'function') {
+    Object.entries(getIndexLookthrough()).forEach(([fund, tbl]) => {
+      const FT = fund.toUpperCase();
+      if (!benchToThemes[FT] || !tbl.weights) return;
+      Object.entries(tbl.weights).forEach(([tk, w]) => { if (w == null) return; const k = qrCanonical(tk).key; nameFundW[k] = nameFundW[k] || {}; nameFundW[k][FT] = (nameFundW[k][FT] || 0) + w; });
+    });
+  }
+  const aiFor = (typeof AI_SECTOR_SUGGESTIONS !== 'undefined') ? AI_SECTOR_SUGGESTIONS : {};
+  return function (key, display) {
+    if (overrides[key]) return { theme: overrides[key], src: 'you assigned this' };
+    if (directTheme[key]) return { theme: directTheme[key], src: 'your direct position tag' };
+    const fw = nameFundW[key];
+    if (fw && Object.keys(fw).length) {
+      const bestFund = Object.entries(fw).sort((a, b) => b[1] - a[1])[0][0];
+      const thms = benchToThemes[bestFund] || [];
+      if (thms.length) return { theme: thms[0], src: 'in the ' + bestFund + ' benchmark' };
+    }
+    const ai = aiFor[key] || aiFor[(display || '').toUpperCase()];
+    if (ai && SECTOR_TO_THEME[ai[0]]) return { theme: SECTOR_TO_THEME[ai[0]], src: 'ai-bridge' };
+    return { theme: null, src: null };
+  };
+}
+
+// THE single tag writer — writes the theme-universe override (the store move-together reads) and
+// refreshes every surface that shows theme classification, so a tag anywhere flows everywhere.
+function setThemeTag(key, theme) {
+  const o = (typeof loadClusterOverrides === 'function') ? loadClusterOverrides() : {};
+  if (!theme || theme === '__auto__' || theme === '__unset__') delete o[key]; else o[key] = theme;
+  if (typeof saveClusterOverrides === 'function') saveClusterOverrides(o);
+  if (typeof renderThemeClusters === 'function') renderThemeClusters();
+  if (typeof cmpReplayLastView === 'function') cmpReplayLastView();
+}
+
 // ─────────────────────────────────────────────
 // SECTOR TAGGING — a SECOND lens, distinct from theme clusters. Themes = your investment bets;
 // sectors = a stable industry taxonomy you tag by hand (the tracker has only ticker+weight, no
@@ -21183,11 +21239,10 @@ function _cmpSide(side) {
   return { mode, label: tk || '(ETF)', holdings: res.parsed, coverage };
 }
 
-// Tag an untagged holding from the comparison view. Writes the SAME shared sectorMap the By-sector
-// panel uses (one brain), then re-renders the comparison so the theme map reflects it immediately.
-function cmpSetTag(key, sectorId) {
-  if (typeof setSectorTag === 'function') setSectorTag(key, sectorId);
-  cmpCompare();
+// Tag a holding from the comparison view straight into the THEME UNIVERSE (the one brain move-together
+// reads). setThemeTag re-renders move-together and re-runs this comparison, so the tag flows everywhere.
+function cmpSetTag(key, theme) {
+  if (typeof setThemeTag === 'function') setThemeTag(key, theme);
 }
 
 // Accrue a pasted comparison ETF into the Fund/ETF library (indexLookthrough). Only saves funds you
@@ -21259,19 +21314,11 @@ function cmpAnalyzeOne() {
 }
 
 function cmpThemeMapHtml(A, B) {
-  const map = (typeof loadSectorMap === 'function') ? loadSectorMap() : {};
-  const vocab = (typeof SECTOR_VOCAB !== 'undefined') ? SECTOR_VOCAB : [];
-  const aiFor = (typeof AI_SECTOR_SUGGESTIONS !== 'undefined') ? AI_SECTOR_SUGGESTIONS : {};
-  const labelFor = (id) => { if (id === '__un') return 'Untagged'; const s = vocab.find(v => v.id === id); return s ? s.label : id; };
   const eq = (typeof escq === 'function') ? escq : (s => s);
   const ex = (typeof esc === 'function') ? esc : (s => s);
-
-  const themeOf = (key, ticker) => {
-    let ent = (typeof sectorEntry === 'function') ? sectorEntry(map, key) : (map[key] || null);
-    let sid = ent ? (ent.sector || ent) : null;
-    if (!sid) { const ai = aiFor[key] || aiFor[(ticker || '').toUpperCase()]; if (ai) sid = ai[0]; }
-    return sid;
-  };
+  const labelFor = (t) => (t === '__un' || !t) ? 'Untagged' : t;
+  const _resolve = (typeof makeThemeResolver === 'function') ? makeThemeResolver() : (function () { return { theme: null }; });
+  const themeOf = (key, ticker) => _resolve(key, ticker).theme;
 
   // Book look-through (funds you actually hold only): owned-name set + theme dollars rolled to %.
   const bookKeys = new Set(); let bookTotal = 0; const bookThemeVal = {};
@@ -21348,7 +21395,8 @@ function cmpThemeMapHtml(A, B) {
   // Tag the unclassified — keeps the shared brain (and this table) improving.
   const untagged = []; const seenU = new Set();
   present.forEach(S => S.holdings.forEach(h => { const c = qrCanonical(h.ticker); if (!c || !c.key || seenU.has(c.key)) return; seenU.add(c.key); if (!themeOf(c.key, c.display)) untagged.push({ key: c.key, ticker: c.display || h.ticker }); }));
-  const tagSelect = (key) => `<select onchange="cmpSetTag('${eq(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer"><option value="__unset__" selected>tag\u2026</option>${vocab.map(s => `<option value="${s.id}" title="${ex(s.blurb || '')}">${ex(s.label)}</option>`).join('')}</select>`;
+  const _themes = (typeof themeUniverseAll === 'function') ? themeUniverseAll() : [];
+  const tagSelect = (key) => `<select onchange="cmpSetTag('${eq(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer"><option value="__unset__" selected>tag\u2026</option>${_themes.map(t => `<option value="${ex(t.name)}">${ex(t.name)}</option>`).join('')}</select>`;
   const untaggedHtml = untagged.length
     ? `<div style="margin-top:11px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#fbbf24;margin-bottom:5px">Untagged (${untagged.length}) \u2014 tag once to place it in the table above and everywhere else</div>${untagged.map(n => `<span style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:10px"><span style="color:var(--color-text-secondary)">${ex(n.ticker)}</span>${tagSelect(n.key)}</span>`).join('')}</div>`
     : '';
@@ -30140,6 +30188,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09z</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09aa</div>
 </body>
 </html>
