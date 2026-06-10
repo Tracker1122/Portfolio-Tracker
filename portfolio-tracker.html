@@ -1419,6 +1419,7 @@
             <span style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em;margin-right:2px">A</span>
             <span id="cmp-A-mode-stock" onclick="cmpSetMode('A','stock')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)">Stock</span>
             <span id="cmp-A-mode-etf" onclick="cmpSetMode('A','etf')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600">ETF</span>
+            <span onclick="cmpClearSide('A')" title="Clear side A only" style="font-size:9px;color:var(--color-text-tertiary);cursor:pointer;margin-left:auto;border:1px solid var(--color-border-tertiary);border-radius:10px;padding:2px 9px">clear</span>
           </div>
           <div id="cmp-A-stock-row" style="display:none">
             <input id="cmp-A-stock-ticker" class="modal-input" placeholder="Ticker — e.g. NVDA" onchange="cmpFetchPerf('A')" style="width:100%;font-size:11px;padding:5px 9px" />
@@ -1438,6 +1439,7 @@
             <span style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em;margin-right:2px">B</span>
             <span id="cmp-B-mode-stock" onclick="cmpSetMode('B','stock')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)">Stock</span>
             <span id="cmp-B-mode-etf" onclick="cmpSetMode('B','etf')" style="font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600">ETF</span>
+            <span onclick="cmpClearSide('B')" title="Clear side B only" style="font-size:9px;color:var(--color-text-tertiary);cursor:pointer;margin-left:auto;border:1px solid var(--color-border-tertiary);border-radius:10px;padding:2px 9px">clear</span>
           </div>
           <div id="cmp-B-stock-row" style="display:none">
             <input id="cmp-B-stock-ticker" class="modal-input" placeholder="Ticker — e.g. AMD" onchange="cmpFetchPerf('B')" style="width:100%;font-size:11px;padding:5px 9px" />
@@ -20187,6 +20189,7 @@ const discoveryBenchPerf = {};
 const discoverySourceFund = {};
 const discoverySelected = new Set(); // tickers the user has picked (max 5) to fetch richer data for
 const discoveryExpanded = new Set(); // tickers whose 📊 detail panel is currently expanded (persisted)
+const discoveryOpenThemes = new Set(); // theme buckets the user has expanded — tracked so a re-render (e.g. selecting a chip) keeps them open instead of collapsing
 let _lastPolyFetch = 0; // timestamp guard so rapid calls self-space a little
 const DISCOVERY_MAX_SELECT = 5;
 
@@ -20213,6 +20216,7 @@ function saveDiscoveryCache() {
       themeRank: discoveryThemeRank,
       selected: [...discoverySelected],
       expanded: [...discoveryExpanded],
+      openThemes: [...discoveryOpenThemes],
     }));
   } catch (e) { /* localStorage full or unavailable — fetched data just won't persist this session */ }
 }
@@ -20227,6 +20231,7 @@ function loadDiscoveryCache() {
     if (d.themeRank && typeof d.themeRank === 'object') Object.assign(discoveryThemeRank, d.themeRank);
     if (Array.isArray(d.selected)) d.selected.slice(0, DISCOVERY_MAX_SELECT).forEach(t => discoverySelected.add(t));
     if (Array.isArray(d.expanded)) d.expanded.forEach(t => discoveryExpanded.add(t));
+    if (Array.isArray(d.openThemes)) d.openThemes.forEach(t => discoveryOpenThemes.add(t));
   } catch (e) { /* corrupt or absent — start clean */ }
 }
 
@@ -21030,6 +21035,7 @@ function updatePerfSlot(key) {
 // ── ETF & Stock Dissection: holdings-overlap comparison (Theme Dissection tab) ──────────────────
 // Reuses parseHoldings() (stockanalysis paste → {ticker,weight}) and qrNormTicker() for matching.
 let _cmpMode = { A: 'etf', B: 'etf' };
+let _cmpLastView = null; // 'compare' | 'one' | null — re-run on refresh so results persist
 function _cmpPillOn() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;background:var(--color-text-info);color:#000;font-weight:600'; }
 function _cmpPillOff() { return 'font-size:11px;cursor:pointer;padding:4px 14px;border-radius:14px;color:var(--color-text-tertiary);font-weight:400;border:1px solid var(--color-border-tertiary)'; }
 
@@ -21044,6 +21050,7 @@ function cmpSetMode(side, mode) {
   if (sp) sp.style.cssText = (mode === 'stock') ? _cmpPillOn() : _cmpPillOff();
   if (ep) ep.style.cssText = (mode === 'etf') ? _cmpPillOn() : _cmpPillOff();
   if (typeof cmpFetchPerf === 'function') cmpFetchPerf(side, false); // show cached perf for the active symbol; never auto-fetch on a toggle
+  if (typeof cmpSaveState === 'function') cmpSaveState();
 }
 
 function cmpHoldingsLink(side) {
@@ -21055,6 +21062,7 @@ function cmpHoldingsLink(side) {
 }
 
 function cmpPastePreview(side) {
+  if (typeof cmpSaveState === 'function') cmpSaveState();
   const ta = document.getElementById('cmp-' + side + '-paste');
   const out = document.getElementById('cmp-' + side + '-preview');
   if (!ta || !out) return;
@@ -21071,6 +21079,7 @@ function cmpPastePreview(side) {
 // mode toggle, so flipping Stock/ETF never fires a network call on its own).
 async function cmpFetchPerf(side, allowFetch) {
   if (allowFetch === undefined) allowFetch = true;
+  if (typeof cmpSaveState === 'function') cmpSaveState();
   const out = document.getElementById('cmp-' + side + '-perf');
   if (!out) return;
   const mode = _cmpMode[side];
@@ -21118,6 +21127,48 @@ function cmpClear() {
     cmpHoldingsLink(side);
   });
   const o = document.getElementById('cmp-results'); if (o) o.innerHTML = '';
+  _cmpLastView = null;
+  if (typeof cmpSaveState === 'function') cmpSaveState();
+}
+
+// Clear just one side (ticker + paste + perf + preview), leaving the other intact.
+function cmpClearSide(side) {
+  ['-stock-ticker', '-etf-ticker', '-paste'].forEach(suf => { const el = document.getElementById('cmp-' + side + suf); if (el) el.value = ''; });
+  const pv = document.getElementById('cmp-' + side + '-preview'); if (pv) pv.innerHTML = '';
+  const pf = document.getElementById('cmp-' + side + '-perf'); if (pf) pf.innerHTML = '';
+  cmpHoldingsLink(side);
+  cmpSaveState();
+}
+
+const CMP_STATE_KEY = 'portfolio-etf-compare-v1';
+function cmpSaveState() {
+  try {
+    const grab = (side) => ({
+      mode: _cmpMode[side],
+      stock: ((document.getElementById('cmp-' + side + '-stock-ticker') || {}).value) || '',
+      etf: ((document.getElementById('cmp-' + side + '-etf-ticker') || {}).value) || '',
+      paste: ((document.getElementById('cmp-' + side + '-paste') || {}).value) || '',
+    });
+    localStorage.setItem(CMP_STATE_KEY, JSON.stringify({ A: grab('A'), B: grab('B'), view: _cmpLastView || null }));
+  } catch (e) {}
+}
+function cmpRestoreState() {
+  let s; try { s = JSON.parse(localStorage.getItem(CMP_STATE_KEY) || 'null'); } catch (e) { s = null; }
+  if (!s) return;
+  ['A', 'B'].forEach(side => {
+    const st = s[side]; if (!st) return;
+    if (st.mode === 'stock' || st.mode === 'etf') _cmpMode[side] = st.mode;
+    const setV = (suf, val) => { const el = document.getElementById('cmp-' + side + suf); if (el && val != null) el.value = val; };
+    setV('-stock-ticker', st.stock); setV('-etf-ticker', st.etf); setV('-paste', st.paste);
+  });
+  _cmpLastView = s.view || null;
+}
+function cmpReplayLastView() {
+  if (!_cmpLastView) return;
+  const A = _cmpSide('A'), B = _cmpSide('B');
+  if (!A.holdings.length && !B.holdings.length) return; // nothing to replay
+  if (_cmpLastView === 'compare') cmpCompare();
+  else if (_cmpLastView === 'one') cmpAnalyzeOne();
 }
 
 function _cmpSide(side) {
@@ -21201,6 +21252,7 @@ function cmpAnalyzeOne() {
   const side = haveA ? 'A' : 'B';
   const S = haveA ? A : B;
   cmpSaveToLibrary(side);
+  _cmpLastView = 'one'; if (typeof cmpSaveState === 'function') cmpSaveState();
   const section = cmpThemeMapHtml(haveA ? A : null, haveB ? B : null);
   const intro = `<div style="font-size:12px;color:var(--color-text-primary);line-height:1.5"><span style="font-weight:700">${esc(S.label)}</span> vs your book \u2014 ${S.holdings.length} holding${S.holdings.length !== 1 ? 's' : ''}${S.coverage ? `, covering ${S.coverage.toFixed(0)}% of the fund` : ''}.</div>`;
   out.innerHTML = `<div style="padding:13px 15px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-tertiary)">${intro}${section}</div>`;
@@ -21321,6 +21373,7 @@ function cmpCompare() {
     out.innerHTML = `<div style="font-size:11px;color:#fbbf24">Fill both sides — a ticker for a stock, or pasted holdings for an ETF.</div>`;
     return;
   }
+  _cmpLastView = 'compare'; if (typeof cmpSaveState === 'function') cmpSaveState();
   cmpSaveToLibrary('A'); cmpSaveToLibrary('B'); // accrue pasted ETFs into the Fund/ETF library
   const mapA = {}, mapB = {};
   A.holdings.forEach(h => { const k = qrNormTicker(h.ticker); if (k) mapA[k] = { ticker: h.ticker, weight: h.weight }; });
@@ -21395,10 +21448,18 @@ function cmpCompare() {
 
 function renderEtfCompare() {
   if (!document.getElementById('etf-compare-card')) return;
+  cmpRestoreState();
   cmpSetMode('A', _cmpMode.A);
   cmpSetMode('B', _cmpMode.B);
   cmpPastePreview('A'); cmpPastePreview('B');
   cmpHoldingsLink('A'); cmpHoldingsLink('B');
+  cmpReplayLastView();
+}
+
+function discoverySetBucketOpen(themeEnc, isOpen) {
+  let theme; try { theme = JSON.parse(decodeURIComponent(themeEnc)); } catch (e) { return; }
+  if (isOpen) discoveryOpenThemes.add(theme); else discoveryOpenThemes.delete(theme);
+  if (typeof saveDiscoveryCache === 'function') saveDiscoveryCache();
 }
 
 function renderThemeDiscovery() {
@@ -21606,7 +21667,7 @@ function renderThemeDiscovery() {
     const ranked = !!rankMap;
     const rankBtn = `<button id="${rankBtnId}" class="btn btn-sm" onclick="event.preventDefault();event.stopPropagation();fetchThemeAndRank('${themeEnc}','${rankBtnId}')" style="font-size:9px" title="Fetches the 1-year return for every name in this theme, paced at ~12s/call so it never trips Polygon's 5/min free-tier limit — so a 13-name theme takes ~3 min. Then ranks them best→worst and reorders the chips. Names fetched within the last 24h (green freshness dot) are skipped; anything older is re-pulled fresh (~12s each). So a daily click freshens only what's gone stale.">${ranked ? `↻ Re-fetch & rank (${names.length})` : `↡ Fetch all ${names.length} & rank by 1Y (~${Math.ceil(names.length * 12 / 60)}min)`}</button>`;
     return `
-      <details${open ? ' open' : ''} style="border:1px solid ${src.isNiche ? 'rgba(52,211,153,0.3)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);padding:8px 11px;margin-bottom:6px;${src.isNiche ? '' : 'opacity:0.78'}">
+      <details${open ? ' open' : ''} ontoggle="discoverySetBucketOpen('${themeEnc}', this.open)" style="border:1px solid ${src.isNiche ? 'rgba(52,211,153,0.3)' : 'var(--color-border-tertiary)'};border-radius:var(--border-radius-md);padding:8px 11px;margin-bottom:6px;${src.isNiche ? '' : 'opacity:0.78'}">
         <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;list-style:none;flex-wrap:wrap">
           <span style="font-size:12px;color:var(--color-text-primary)"><strong>${esc(theme)}</strong> ${srcBadge} <span style="font-size:9px;color:var(--color-text-tertiary)" title="True exposure = your direct positions in this theme PLUS your look-through share of theme names sitting inside funds you hold, as a percent of your whole book. Same lens as 'How your holdings move together' — NOT the direct-only percent on the Isolate bar.">${gap < 0.05 ? '<span style="color:#34d399">no true exposure yet</span>' : 'true exposure: ' + gap.toFixed(1) + '% of your book'} · ${names.length} name${names.length > 1 ? 's' : ''}</span></span>
           <span style="white-space:nowrap;font-size:9px;color:var(--color-text-tertiary)">theme 1Y ${fmtRet(perf)}</span>
@@ -21671,7 +21732,7 @@ function renderThemeDiscovery() {
         <div style="flex-basis:100%;font-size:9px;color:var(--color-text-tertiary);line-height:1.45">These ${discoverySelected.size} selected name${discoverySelected.size === 1 ? '' : 's'} ${discoverySelected.size === 1 ? 'is' : 'are'} queued for a data fetch (1M/1Y, with deeper windows on demand) — this is a browse/fetch tool and does <strong>not</strong> feed the AI analysis. To have the AI weigh a name, stage it as a buy in Evaluate a Trade. 📊 on any fetched chip shows its full window set — no new API call. Selection survives refresh.</div>
         <div id="disc-fetch-status" style="flex-basis:100%;margin-top:2px"></div>
       </div>` : ''}
-      ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, false)).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
+      ${orderedThemes.length ? orderedThemes.map((t, i) => bucketHtml(t, i, discoveryOpenThemes.has(t))).join('') : '<div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">No gap-filling candidates yet — paste holdings for the diversifying-theme benchmarks (Healthcare, Real Estate, etc.) in the index look-through table (True Exposure tab) to populate this.</div>'}
       ${junkCount > 0 ? `<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:6px">${junkCount} non-stock holding${junkCount > 1 ? 's' : ''} (mutual funds, cash, or unparseable rows) excluded from discovery.</div>` : ''}
     </div>`;
 
@@ -30079,6 +30140,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09y</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09z</div>
 </body>
 </html>
