@@ -1076,6 +1076,7 @@
     <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
     <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
+    <button class="tab-btn" onclick="switchTab('ask')">Ask</button>
   </div>
 
   <!-- Dashboard Tab -->
@@ -1552,6 +1553,7 @@
   </div><!-- end tab-trends -->
 
   <!-- Themes Tab -->
+  <div class="tab-panel" id="tab-ask"></div>
   <div class="tab-panel" id="tab-themes">
     <div class="section-heading">Theme Universe</div>
     <div id="theme-universe-tab-content"></div>
@@ -5832,6 +5834,146 @@ function renderAccountBreakdown() {
 // ─────────────────────────────────────────────
 // Tab switching
 // ─────────────────────────────────────────────
+// ===== Ask-the-Portfolio chatbox (Ship 1: multi-turn conversation over a held-only snapshot; no tools yet) =====
+var askConversation = []; // [{role:'user'|'assistant', content}]
+var askBusy = false;
+
+// Held-only book snapshot from the canonical engines. computeThemeClusters gates on held funds and
+// uses fullBook as the denominator, so this is correct + held-only by construction.
+function buildAskSnapshot() {
+  var c;
+  try { c = computeThemeClusters(); } catch (e) { return null; }
+  if (!c) return null;
+  var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
+  var lines = [];
+  var posCount = positions.filter(function (p) { return !p.closed && p.ticker; }).length;
+  var cash = 0;
+  try { if (typeof cashBuckets !== 'undefined' && cashBuckets) cash = Object.values(cashBuckets).reduce(function (s, v) { return s + (parseFloat(v) || 0); }, 0); } catch (e) {}
+  lines.push('FULL BOOK (the denominator for every % below): ' + fmt(c.fullBook));
+  lines.push('Cash: ' + fmt(cash) + '  |  Named positions held: ' + posCount);
+  lines.push('Effective independent bets (lower = more concentrated): ' + (c.effectiveBets ? c.effectiveBets.toFixed(1) : 'n/a'));
+  if (c.base) lines.push('Diversified base (broad-index tail + themeless names): ' + c.base.pct.toFixed(1) + '% of book');
+  lines.push('');
+  lines.push('THEME CLUSTERS (names that move together), dollars and % of full book, biggest first:');
+  (c.clusters || []).forEach(function (cl) {
+    lines.push('- ' + cl.label + ': ' + fmt(cl.total) + ' (' + cl.pct.toFixed(1) + '% of book)');
+    var top = (cl.names || []).slice(0, 10).map(function (n) { return n.display + ' ' + fmt(n.total); }).join(', ');
+    if (top) lines.push('    holdings: ' + top);
+  });
+  return lines.join('\n');
+}
+
+function buildAskSystem() {
+  var snap = buildAskSnapshot();
+  var p = [];
+  p.push('You are a portfolio analyst answering questions about the user\'s ACTUAL holdings, shown below. You are running inside their personal portfolio tracker.');
+  p.push('');
+  p.push('=== THE USER\'S BOOK (held-only, computed right now from their data) ===');
+  p.push(snap || '(snapshot unavailable)');
+  p.push('');
+  p.push('RULES:');
+  p.push('- The book above is the ONLY thing you can see. It is held-only: every name listed is actually owned. Do NOT invent holdings or assume positions that are not shown.');
+  p.push('- "% of book" always means % of the FULL BOOK figure stated above. Never invent or recompute a different denominator.');
+  p.push('- You do NOT yet have live prices, per-ticker performance, or what-if tools. If a question needs data not in the snapshot, say so plainly instead of guessing or fabricating a number.');
+  p.push('- The user is finance-sharp. Be direct and concise. Hedge genuine uncertainty ("probably", "I can\'t tell from this snapshot"). Do not flatter or validate a claim without basis; push back when their framing outruns what the data shows.');
+  p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
+  return p.join('\n');
+}
+
+function renderAskTab() {
+  var panel = document.getElementById('tab-ask');
+  if (!panel) return;
+  if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
+  var noWorker = !aiWorkerUrl;
+  panel.innerHTML =
+    '<div style="max-width:860px;margin:0 auto">' +
+      '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Ask your portfolio</h2>' +
+      '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Conversational analysis of your held-only book. It sees the same true-exposure and theme-cluster figures the rest of the tracker computes. It reads only \u2014 it cannot place trades or change anything.</div>' +
+      (noWorker ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set \u2014 set it on the New Position Evaluation tab, then come back.</div>' : '') +
+      '<div id="ask-thread" style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px"></div>' +
+      '<div style="display:flex;gap:8px;align-items:flex-end">' +
+        '<textarea id="ask-input" placeholder="Ask about your exposure, concentration, themes\u2026" onkeydown="askKey(event)" style="flex:1;min-height:52px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;line-height:1.5;padding:8px;box-sizing:border-box;resize:vertical"' + (noWorker ? ' disabled' : '') + '></textarea>' +
+        '<button class="btn" onclick="sendAskMessage()" style="white-space:nowrap"' + (noWorker ? ' disabled' : '') + '>Send</button>' +
+      '</div>' +
+      (askConversation.length ? '<div style="margin-top:8px"><button class="btn btn-sm" onclick="clearAsk()" style="font-size:10px">Clear conversation</button></div>' : '') +
+    '</div>';
+  renderAskThread();
+}
+
+function renderAskThread() {
+  var t = document.getElementById('ask-thread');
+  if (!t) return;
+  var e = (typeof esc === 'function') ? esc : function (s) { return s; };
+  var html = '';
+  if (!askConversation.length) {
+    html = '<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic;padding:8px 0;line-height:1.6">Try: \u201cWhat\u2019s my biggest concentration?\u201d \u00b7 \u201cWhich themes am I quietly doubling down on?\u201d \u00b7 \u201cDoes my book look fragile, and where?\u201d</div>';
+  }
+  askConversation.forEach(function (turn) {
+    if (turn.role === 'user') {
+      html += '<div style="align-self:flex-end;max-width:80%;background:var(--color-background-tertiary);border:1px solid #3b82f6;border-radius:10px;padding:8px 11px;font-size:12px;line-height:1.5;white-space:pre-wrap;color:var(--color-text-primary)">' + e(turn.content) + '</div>';
+    } else {
+      html += '<div style="align-self:flex-start;max-width:92%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:9px 12px;font-size:12px;line-height:1.55;white-space:pre-wrap;color:var(--color-text-primary)">' + e(turn.content) + '</div>';
+    }
+  });
+  t.innerHTML = html;
+}
+
+function askKey(ev) {
+  if (ev && ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendAskMessage(); }
+}
+
+function clearAsk() { askConversation = []; renderAskTab(); }
+
+async function sendAskMessage() {
+  if (askBusy) return;
+  if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
+  if (!aiWorkerUrl) return;
+  var ta = document.getElementById('ask-input');
+  if (!ta) return;
+  var msg = (ta.value || '').trim();
+  if (!msg) { ta.style.borderColor = '#fbbf24'; setTimeout(function () { if (ta) ta.style.borderColor = 'var(--color-border-tertiary)'; }, 800); return; }
+  askBusy = true;
+  askConversation.push({ role: 'user', content: msg });
+  ta.value = '';
+  renderAskThread();
+  // live AI bubble streamed into directly (avoids a full re-render per delta)
+  var t = document.getElementById('ask-thread');
+  if (t) {
+    var live = document.createElement('div');
+    live.id = 'ask-live';
+    live.setAttribute('style', 'align-self:flex-start;max-width:92%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:10px;padding:9px 12px;font-size:12px;line-height:1.55;white-space:pre-wrap;color:var(--color-text-secondary)');
+    live.textContent = 'Thinking\u2026';
+    t.appendChild(live);
+  }
+  var system = buildAskSystem();
+  var messages = askConversation.map(function (turn) { return { role: turn.role, content: turn.content }; });
+  try {
+    var r = await aiWorkerCall('', function (textSoFar) {
+      var el = document.getElementById('ask-live');
+      if (el) { el.style.color = 'var(--color-text-primary)'; el.textContent = textSoFar; }
+    }, { messages: messages, system: system });
+    askConversation.push({ role: 'assistant', content: r.text });
+    askBusy = false;
+    renderAskTab();
+  } catch (err) {
+    askBusy = false;
+    // Drop the optimistic user turn so the conversation stays well-formed (alternating roles), and
+    // hand the text back so the user can retry.
+    if (askConversation.length && askConversation[askConversation.length - 1].role === 'user') askConversation.pop();
+    var info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed', color: '#ef4444' };
+    renderAskTab();
+    var ta2 = document.getElementById('ask-input');
+    if (ta2) ta2.value = msg;
+    var t2 = document.getElementById('ask-thread');
+    if (t2) {
+      var eb = document.createElement('div');
+      eb.setAttribute('style', 'align-self:flex-start;font-size:11px;color:' + (info.color || '#ef4444') + ';padding:4px 2px;line-height:1.5');
+      eb.textContent = (info.title || 'Error') + ': ' + (info.detail || '');
+      t2.appendChild(eb);
+    }
+  }
+}
+
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -5845,6 +5987,7 @@ function switchTab(name) {
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
   if (name === 'trends') safeRender('renderTrends', renderTrends);
+  if (name === 'ask') safeRender('renderAskTab', renderAskTab);
   if (name === 'themes') { clusterExpandedIdx = -1; safeRender('renderThemeUniverse', renderThemeUniverse); }
   if (name === 'dashboard') safeRender('syncFixedScrollbar', syncFixedScrollbar);
   // Risk & Stress Lens (injected block) hook: refresh staged-scenario status on entering
@@ -11054,7 +11197,11 @@ async function aiWorkerCall(prompt, onDelta, opts) {
     resp = await fetch(aiWorkerUrl + '/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-      body: JSON.stringify(Object.assign({ prompt, stream: true }, opts.web ? { web: true } : {}))
+      body: JSON.stringify(Object.assign(
+        (opts.messages ? { messages: opts.messages, stream: true } : { prompt, stream: true }),
+        (opts.system ? { system: opts.system } : {}),
+        (opts.web ? { web: true } : {})
+      ))
     });
   } catch (netErr) {
     const e = new Error(netErr.message || 'network error'); e.aiKind = 'network'; throw e;
@@ -30545,6 +30692,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ap</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09aq</div>
 </body>
 </html>
