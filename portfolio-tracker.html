@@ -6074,6 +6074,8 @@ function buildAskSystem() {
   p.push('- Private deals are illiquid single-name bets valued at cost (or a self-mark you set); treat self-marked values as soft estimates, not live prices.');
   p.push('- TOOL get_ticker_performance fetches recent performance (1M/3M/6M/YTD/1Y returns, max drawdown, annualized volatility) for any ticker on demand \u2014 call it when asked how a holding or candidate has performed, instead of guessing.');
   p.push('- TOOL run_what_if simulates adding/trimming stocks AND ETFs by dollar amount (ETFs decomposed via look-through; trims auto-capped at actual holdings) and returns the concentration/effective-bets/cluster impact, non-persisting. Use it for "what if I add/sell $X of <ticker>"; do not compute the impact yourself, and surface any capping/decomposition notes it returns. For anything not in the snapshot and not fetchable by a tool, say plainly that you cannot see it rather than fabricating.');
+  p.push('- run_what_if also returns factorShift: per-risk-factor before/after %s MEASURED by the risk engine on the hypothetical book (the same 6 factors as your standing profile \u2014 rate/duration, liquidity, credit, policy, positioning/crowding, demand cyclicality). When factorShift is present, report THOSE numbers as the risk-factor impact; do not replace them with a qualitative guess inferred from cluster labels. They are theme-mapped, so they move only to the extent the trade changes themed exposure.');
+  p.push('- If a what-if implies trades the user did NOT spell out (e.g. "rotate Mag-7 into energy"), do not silently invent tickers. Model names that are current holdings or in the CANDIDATE PIPELINE above, state plainly which tickers you used and where each came from (a holding, a pipeline candidate, or your own assumption), and if you had to pick specifics the user did not give, say so in one line up front and invite correction \u2014 never pass invented tickers off as merely "representative".');
   p.push('- The user is finance-sharp. Be direct and concise. Hedge genuine uncertainty ("probably", "I can\'t tell from this snapshot"). Do not flatter or validate a claim without basis; push back when their framing outruns what the data shows.');
   p.push('- POSITION DETAIL lists open holdings with cost basis and UNREALIZED gain; CLOSED / REALIZED shows positions already sold with REALIZED gain. Never conflate unrealized and realized.');
   p.push('- The STAGED WHAT-IF SCENARIO, if present, is hypothetical and NOT in the book totals; treat it as something the user is considering, not something owned.');
@@ -6294,6 +6296,13 @@ async function askToolWhatIf(moves) {
     };
     (after.clusters || []).forEach(function (cl) { scan(cl.names); });
     if (after.base && after.base.names) scan(after.base.names);
+    // Measured risk-factor before/after, computed by the ES5 risk engine on the same adjustments.
+    var factorShift = null;
+    try {
+      if (typeof window !== 'undefined' && window._riskReplay && typeof window._riskReplay.riskFactorProfileHypothetical === 'function') {
+        factorShift = window._riskReplay.riskFactorProfileHypothetical(adjustments);
+      }
+    } catch (e) {}
     return {
       moves: echo,
       note: 'Hypothetical exposure/concentration impact only. Non-persisting (nothing was staged or saved). Stocks and ETFs supported (ETFs decomposed via look-through; trims capped at your actual holdings). No tax or fees modeled.',
@@ -6301,6 +6310,7 @@ async function askToolWhatIf(moves) {
       effectiveBetsBefore: +(before.effectiveBets || 0).toFixed(1), effectiveBetsAfter: +(after.effectiveBets || 0).toFixed(1),
       affectedNames: affected.sort(function (a, b) { return (b.afterExposure || 0) - (a.afterExposure || 0); }).slice(0, 15),
       notes: notes,
+      factorShift: factorShift,
       clusterShift: clusterShift
     };
   } catch (e) { return { error: 'what-if computation failed' }; }
@@ -29393,9 +29403,9 @@ init();
   // factor, over the full reconciled book (same denom as the cluster %s). Returns matched theme
   // names too, so the grid can show its work (a dropped match shows as a missing cluster, not a
   // silent undercount). Pure read of live holdings; wrapped so any failure degrades to ok:false.
-  function factorExposureLive() {
+  function factorExposureLive(hypo) {
     try {
-      var cl = (typeof computeThemeClusters === 'function') ? computeThemeClusters() : null;
+      var cl = (typeof computeThemeClusters === 'function') ? computeThemeClusters(hypo) : null;
       if (!cl || !cl.byTheme || !(cl.fullBook > 0)) return { ok: false };
       var bt = cl.byTheme, denom = cl.fullBook, out = {};
       RISK_FACTORS.forEach(function (f) {
@@ -30996,6 +31006,27 @@ init();
     } catch (e) { return null; }
   }
 
+  // Measured per-factor before/after for a hypothetical set of exposure adjustments (the same
+  // {ticker, deltaDirect?, deltaViaFunds?} shape the Ask what-if builds). Runs the SAME factor engine
+  // on the live book and on the adjusted book, so the deltas are computed, not reasoned. ES5 only.
+  function riskFactorProfileHypothetical(adjustments) {
+    try {
+      if (!adjustments || !adjustments.length) return null;
+      var feBefore = factorExposureLive();
+      var feAfter = factorExposureLive({ adjustments: adjustments });
+      if (!feBefore || !feBefore.ok || !feAfter || !feAfter.ok) return null;
+      return RISK_FACTORS.map(function (f) {
+        var b = feBefore.byFactor[f.id], a = feAfter.byFactor[f.id];
+        return {
+          col: f.col,
+          label: f.label,
+          beforePct: b ? +b.pct.toFixed(1) : 0,
+          afterPct: a ? +a.pct.toFixed(1) : 0
+        };
+      });
+    } catch (e) { return null; }
+  }
+
   function riskReviewContext() {
     try {
       if (!_activeRowKey) return { active: false };
@@ -31124,11 +31155,11 @@ init();
     } catch (e) { return { active: false }; }
   }
 
-  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext, riskReviewReportHtml: riskReviewReportHtml, riskFactorProfileStanding: riskFactorProfileStanding };
+  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext, riskReviewReportHtml: riskReviewReportHtml, riskFactorProfileStanding: riskFactorProfileStanding, riskFactorProfileHypothetical: riskFactorProfileHypothetical };
 })(window);
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ba</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bb</div>
 </body>
 </html>
