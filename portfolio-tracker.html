@@ -20296,6 +20296,7 @@ const discoverySourceFund = {};
 const discoverySelected = new Set(); // tickers the user has picked (max 5) to fetch richer data for
 const discoveryExpanded = new Set(); // tickers whose 📊 detail panel is currently expanded (persisted)
 const discoveryOpenThemes = new Set(); // theme buckets the user has expanded — tracked so a re-render (e.g. selecting a chip) keeps them open instead of collapsing
+let _discoveryRendering = false; // true while renderThemeDiscovery rebuilds; rebuilt <details> fire async toggle events on insert — ignore those so a chip-click re-render can't collapse an open bucket
 let _lastPolyFetch = 0; // timestamp guard so rapid calls self-space a little
 const DISCOVERY_MAX_SELECT = 5;
 
@@ -21597,12 +21598,14 @@ function cmpCompare() {
     const _heldKeys = new Set();
     try { if (typeof computeTrueExposure === 'function') (computeTrueExposure().rows || []).forEach(r => _heldKeys.add(r.key)); } catch (e) {}
     const _newCol = (tk, ownColor) => { try { return _heldKeys.has(qrCanonical(tk).key) ? ownColor : 'var(--color-text-success)'; } catch (e) { return ownColor; } };
+    const _isNew = (tk) => { try { return !_heldKeys.has(qrCanonical(tk).key); } catch (e) { return false; } };
+    const _infoBtn = (tk) => `<span onclick="showTickerInfoInto('${escq(tk)}','cmp-overlap-info')" title="what is this \u2014 sector, description, market cap" style="cursor:help;color:var(--color-text-info);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 3px;font-size:8px;margin-left:5px">\u2139</span>`;
 
     const sharedRows = shared.map(x => {
       const aBig = (x.wA || 0) >= (x.wB || 0);
-      return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="color:${_newCol(x.ticker, 'var(--color-text-primary)')};font-weight:600">${esc2(x.ticker)}</span><span style="font-variant-numeric:tabular-nums"><span style="color:${cA};font-weight:${aBig ? 700 : 400}">${fmtW(x.wA)}</span> <span style="color:var(--color-text-tertiary)">/</span> <span style="color:${cB};font-weight:${aBig ? 400 : 700}">${fmtW(x.wB)}</span></span></div>`;
+      return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="display:inline-flex;align-items:center"><span style="color:${_newCol(x.ticker, 'var(--color-text-primary)')};font-weight:600">${esc2(x.ticker)}</span>${_isNew(x.ticker) ? _infoBtn(x.ticker) : ''}</span><span style="font-variant-numeric:tabular-nums"><span style="color:${cA};font-weight:${aBig ? 700 : 400}">${fmtW(x.wA)}</span> <span style="color:var(--color-text-tertiary)">/</span> <span style="color:${cB};font-weight:${aBig ? 400 : 700}">${fmtW(x.wB)}</span></span></div>`;
     }).join('');
-    const onlyRow = (x, c) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="color:${_newCol(x.ticker, 'var(--color-text-secondary)')}">${esc2(x.ticker)}</span><span style="color:${c};font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`;
+    const onlyRow = (x, c) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;padding:1.5px 0"><span style="display:inline-flex;align-items:center"><span style="color:${_newCol(x.ticker, 'var(--color-text-secondary)')}">${esc2(x.ticker)}</span>${_isNew(x.ticker) ? _infoBtn(x.ticker) : ''}</span><span style="color:${c};font-variant-numeric:tabular-nums">${fmtW(x.weight)}</span></div>`;
     const aRows = onlyA.map(x => onlyRow(x, cA)).join('');
     const bRows = onlyB.map(x => onlyRow(x, cB)).join('');
 
@@ -21614,7 +21617,7 @@ function cmpCompare() {
       ${col(sharedHdr, sharedRows, sharedFoot)}
       ${col(`<span style="color:${cA}">Only in ${esc2(A.label)} (${onlyA.length})</span>`, aRows, `<span style="color:${cA};font-size:10px;font-variant-numeric:tabular-nums">${onlyAsum.toFixed(1)}%</span>`)}
       ${col(`<span style="color:${cB}">Only in ${esc2(B.label)} (${onlyB.length})</span>`, bRows, `<span style="color:${cB};font-size:10px;font-variant-numeric:tabular-nums">${onlyBsum.toFixed(1)}%</span>`)}
-    </div>`;
+    </div><div id="cmp-overlap-info" style="margin-top:10px"></div>`;
   }
 
   const themeMap = cmpThemeMapHtml(A, B);
@@ -21632,6 +21635,7 @@ function renderEtfCompare() {
 }
 
 function discoverySetBucketOpen(themeEnc, isOpen) {
+  if (_discoveryRendering) return; // a rebuild fired this, not a real user click — leave the bucket as the user left it
   let theme; try { theme = JSON.parse(decodeURIComponent(themeEnc)); } catch (e) { return; }
   if (isOpen) discoveryOpenThemes.add(theme); else discoveryOpenThemes.delete(theme);
   if (typeof saveDiscoveryCache === 'function') saveDiscoveryCache();
@@ -21746,7 +21750,7 @@ function renderManualAnalyze() {
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px">
         <span style="font-weight:700;color:var(--color-text-primary);min-width:62px">${esc(disp)}</span>
         <span>${perfHtml}</span>
-        ${canDetail ? `<span onclick="manualToggleDetail('${escq(t)}')" title="performance detail (3M/6M/YTD, drawdown, vol)" style="${ic}">\U0001F4CA</span>` : ''}
+        ${canDetail ? `<span onclick="manualToggleDetail('${escq(t)}')" title="performance detail (3M/6M/YTD, drawdown, vol)" style="${ic}">\ud83d\udcca</span>` : ''}
         <span onclick="showTickerInfoInto('${escq(disp)}','manual-info-${escq(t)}')" title="what is this \u2014 sector, description, market cap" style="${ic}">\u2139</span>
         <span onclick="manualRemove('${escq(t)}')" title="remove from list" style="cursor:pointer;color:var(--color-text-tertiary);font-size:10px">\u2715</span>
         <span style="margin-left:auto">${themeCell}</span>
@@ -22014,6 +22018,7 @@ function renderThemeDiscovery() {
     return (themePct[a] ?? 0) - (themePct[b] ?? 0); // then by gap
   });
 
+  _discoveryRendering = true;
   host.innerHTML = `
     <div style="border-top:1px solid var(--color-border-tertiary);padding-top:14px">
       <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Discovery — ideas hiding in your funds <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(investigate, not buy)</span></div>
@@ -22043,6 +22048,7 @@ function renderThemeDiscovery() {
     if (!slot) { discoveryExpanded.delete(key); return; }
     if (slot.style.display === 'none') toggleDiscoveryDetail(key);
   });
+  setTimeout(function () { _discoveryRendering = false; }, 80); // after the rebuilt <details> flush their async toggle events, resume honoring real user toggles
 }
 
 // ─────────────────────────────────────────────
@@ -30437,6 +30443,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09am</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09an</div>
 </body>
 </html>
