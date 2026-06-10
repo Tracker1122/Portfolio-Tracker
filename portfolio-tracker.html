@@ -1425,7 +1425,7 @@
           </div>
           <div id="cmp-A-etf-row">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-              <input id="cmp-A-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. QQQ" oninput="cmpHoldingsLink('A')" onchange="cmpFetchPerf('A')" style="width:160px;font-size:11px;padding:5px 9px" />
+              <input id="cmp-A-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. QQQ" oninput="cmpHoldingsLink('A')" onchange="cmpAutofillHoldings('A'); cmpFetchPerf('A')" style="width:160px;font-size:11px;padding:5px 9px" />
               <a id="cmp-A-holdings-link" href="https://stockanalysis.com/etf/" target="_blank" rel="noopener" style="font-size:10px;color:#60a5fa;text-decoration:none">open full holdings ↗</a>
             </div>
             <textarea id="cmp-A-paste" rows="5" oninput="cmpPastePreview('A')" placeholder="Paste the holdings table — ticker + %, e.g. NVDA 8.2%, MSFT 6.1% — or the raw rows straight off the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:5px 8px;resize:vertical"></textarea>
@@ -1444,7 +1444,7 @@
           </div>
           <div id="cmp-B-etf-row">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-              <input id="cmp-B-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. VGT" oninput="cmpHoldingsLink('B')" onchange="cmpFetchPerf('B')" style="width:160px;font-size:11px;padding:5px 9px" />
+              <input id="cmp-B-etf-ticker" class="modal-input" placeholder="ETF ticker — e.g. VGT" oninput="cmpHoldingsLink('B')" onchange="cmpAutofillHoldings('B'); cmpFetchPerf('B')" style="width:160px;font-size:11px;padding:5px 9px" />
               <a id="cmp-B-holdings-link" href="https://stockanalysis.com/etf/" target="_blank" rel="noopener" style="font-size:10px;color:#60a5fa;text-decoration:none">open full holdings ↗</a>
             </div>
             <textarea id="cmp-B-paste" rows="5" oninput="cmpPastePreview('B')" placeholder="Paste the holdings table — ticker + %, e.g. NVDA 8.2%, MSFT 6.1% — or the raw rows straight off the page" style="width:100%;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:5px 8px;resize:vertical"></textarea>
@@ -21163,6 +21163,28 @@ function cmpSaveToLibrary(side) {
 
 // Where every holding lands in the theme world. Resolves each name via the shared sectorMap (user
 // tags + AI seeds), groups by theme, marks book holdings, and offers a tag dropdown for unknowns.
+// Auto-fill an ETF's holdings from your stored data (library or look-through table) if we already
+// have them, so typing a ticker you've used before populates the paste box for you. Never clobbers
+// a manual paste; only fires when the box is empty.
+function cmpAutofillHoldings(side) {
+  if (_cmpMode[side] !== 'etf') return;
+  if (typeof getIndexLookthrough !== 'function') return;
+  const tkEl = document.getElementById('cmp-' + side + '-etf-ticker');
+  const paEl = document.getElementById('cmp-' + side + '-paste');
+  if (!tkEl || !paEl || paEl.value.trim()) return;
+  const tk = (tkEl.value || '').trim().toUpperCase();
+  if (!tk) return;
+  const tbl = getIndexLookthrough()[tk];
+  if (!tbl || !tbl.weights || !Object.keys(tbl.weights).length) return;
+  paEl.value = Object.entries(tbl.weights)
+    .sort((a, b) => (parseFloat(b[1]) || 0) - (parseFloat(a[1]) || 0))
+    .map(([t, w]) => `${t} ${(parseFloat(w) || 0)}%`)
+    .join('\n');
+  cmpPastePreview(side);
+  const pv = document.getElementById('cmp-' + side + '-preview');
+  if (pv) pv.innerHTML += ' <span style="color:var(--color-text-info)">\u00b7 auto-filled from your saved data</span>';
+}
+
 function cmpThemeMapHtml(A, B) {
   const map = (typeof loadSectorMap === 'function') ? loadSectorMap() : {};
   const vocab = (typeof SECTOR_VOCAB !== 'undefined') ? SECTOR_VOCAB : [];
@@ -21228,11 +21250,13 @@ function cmpThemeMapHtml(A, B) {
   const themeRows = [...themesSet].map(t => ({ t, bp: bookPct(t), ap: etfPct(SA, t), bp2: etfPct(SB, t) }))
     .filter(r => (r.bp || 0) > 0.05 || (r.ap || 0) > 0.05 || (r.bp2 || 0) > 0.05)
     .sort((x, y) => Math.max(y.ap || 0, y.bp2 || 0, y.bp || 0) - Math.max(x.ap || 0, x.bp2 || 0, x.bp || 0));
+  const greyDash = ` <span style="color:var(--color-text-tertiary)" title="no meaningful change to this theme's share">\u2013</span>`;
   const arrow = (etf, bk) => {
     if (etf == null || bk == null) return '';
+    if (etf <= 0.05) return greyDash; // ETF holds ~nothing in this theme — absent, not an active reduction
     if (etf > bk + 0.5) return ` <span style="color:var(--color-text-success)" title="adding this ETF raises this theme's share of your book">\u25b2</span>`;
     if (etf < bk - 0.5) return ` <span style="color:var(--color-text-danger)" title="adding this ETF lowers this theme's share of your book">\u25bc</span>`;
-    return '';
+    return greyDash; // within ±0.5 — no meaningful movement
   };
   const pc = (v) => v == null ? '<span style="color:var(--color-text-tertiary)">\u2014</span>' : `${v.toFixed(0)}%`;
   const th = (txt, c) => `<th style="padding:0 10px 4px;text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:${c}">${txt}</th>`;
@@ -30028,6 +30052,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09w</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09x</div>
 </body>
 </html>
