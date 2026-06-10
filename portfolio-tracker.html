@@ -6175,7 +6175,11 @@ async function aiWorkerCallStructured(messages, system, tools, opts) {
   // Prompt caching: the system block carries the big stable snapshot, and tools precede it in the
   // cached prefix, so one ephemeral breakpoint here caches tools+system. The tool loop resends this
   // every round (seconds apart) -> cache hits on rounds 2+ and on rapid follow-ups bill it at ~10%.
-  if (system) body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
+  // 1-hour TTL keeps the cache warm across pauses between questions (5-60 min) instead of the 5-min
+  // default; the worker forwards body.beta as the anthropic-beta header it requires. If that header
+  // ever fails to reach the API, the API silently falls back to the 5-min default -> no breakage.
+  if (system) body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }];
+  body.beta = 'extended-cache-ttl-2025-04-11';
   if (tools && tools.length) body.tools = tools;
   if (opts.web) body.web = true;
   var resp;
@@ -31125,6 +31129,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09az</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ba</div>
 </body>
 </html>
