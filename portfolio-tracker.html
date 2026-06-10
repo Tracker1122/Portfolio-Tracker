@@ -1455,6 +1455,7 @@
       </div>
       <div style="margin-top:14px;display:flex;align-items:center;gap:12px">
         <button class="btn" onclick="cmpCompare()" style="font-size:11px;padding:6px 16px">Compare overlap</button>
+        <button class="btn" onclick="cmpAnalyzeOne()" style="font-size:11px;padding:6px 16px" title="Run the book-impact analysis on just the one side you've filled">Analyze one ETF</button>
         <button class="btn btn-sm" onclick="cmpClear()" style="font-size:10px">Clear</button>
       </div>
       <div id="cmp-results" style="margin-top:16px"></div>
@@ -21185,6 +21186,26 @@ function cmpAutofillHoldings(side) {
   if (pv) pv.innerHTML += ' <span style="color:var(--color-text-info)">\u00b7 auto-filled from your saved data</span>';
 }
 
+// Run the book-impact analysis for a SINGLE ETF (skips the A-vs-B overlap, which needs two sides).
+// Uses whichever side you've filled; if both are filled, it just runs the full comparison instead.
+function cmpAnalyzeOne() {
+  const out = document.getElementById('cmp-results');
+  if (!out) return;
+  const A = _cmpSide('A'), B = _cmpSide('B');
+  const haveA = A.holdings.length, haveB = B.holdings.length;
+  if (!haveA && !haveB) {
+    out.innerHTML = `<div style="font-size:11px;color:#fbbf24">Enter one ETF \u2014 a ticker plus its pasted (or auto-filled) holdings \u2014 then hit this.</div>`;
+    return;
+  }
+  if (haveA && haveB) { cmpCompare(); return; }
+  const side = haveA ? 'A' : 'B';
+  const S = haveA ? A : B;
+  cmpSaveToLibrary(side);
+  const section = cmpThemeMapHtml(haveA ? A : null, haveB ? B : null);
+  const intro = `<div style="font-size:12px;color:var(--color-text-primary);line-height:1.5"><span style="font-weight:700">${esc(S.label)}</span> vs your book \u2014 ${S.holdings.length} holding${S.holdings.length !== 1 ? 's' : ''}${S.coverage ? `, covering ${S.coverage.toFixed(0)}% of the fund` : ''}.</div>`;
+  out.innerHTML = `<div style="padding:13px 15px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);border:1px solid var(--color-border-tertiary)">${intro}${section}</div>`;
+}
+
 function cmpThemeMapHtml(A, B) {
   const map = (typeof loadSectorMap === 'function') ? loadSectorMap() : {};
   const vocab = (typeof SECTOR_VOCAB !== 'undefined') ? SECTOR_VOCAB : [];
@@ -21192,7 +21213,6 @@ function cmpThemeMapHtml(A, B) {
   const labelFor = (id) => { if (id === '__un') return 'Untagged'; const s = vocab.find(v => v.id === id); return s ? s.label : id; };
   const eq = (typeof escq === 'function') ? escq : (s => s);
   const ex = (typeof esc === 'function') ? esc : (s => s);
-  const cA = '#fbbf24', cB = '#60a5fa';
 
   const themeOf = (key, ticker) => {
     let ent = (typeof sectorEntry === 'function') ? sectorEntry(map, key) : (map[key] || null);
@@ -21231,25 +21251,31 @@ function cmpThemeMapHtml(A, B) {
       newSum: news.reduce((s, x) => s + (x.weight || 0), 0),
       ownSum: owned.reduce((s, x) => s + (x.weight || 0), 0) };
   };
-  const SA = sideStats(A), SB = sideStats(B);
+
+  // Render for 1 OR 2 sides — only sides that actually have holdings get a column.
+  const present = [A, B].filter(s => s && s.holdings && s.holdings.length);
+  if (!present.length) return '';
+  const palette = ['#fbbf24', '#60a5fa'];
+  const cols = present.map((S, i) => ({ st: sideStats(S), c: palette[i], src: S }));
 
   const chip = (x) => `${ex(x.ticker)}${x.weight != null ? ` <span style="color:var(--color-text-tertiary)">${x.weight.toFixed(1)}%</span>` : ''}`;
-  const sideBlock = (S, c) => {
-    const newLine = S.news.length
-      ? `<div style="margin-bottom:6px"><div style="color:var(--color-text-success);font-weight:700;font-size:10px;margin-bottom:2px">New to you \u2014 ${S.news.length} name${S.news.length !== 1 ? 's' : ''}${S.cov ? `, ${S.newSum.toFixed(0)}% of the fund` : ''}</div><div style="font-size:10px;color:var(--color-text-secondary);line-height:1.65">${S.news.map(chip).join(' \u00b7 ')}</div></div>`
+  const sideBlock = (st, c) => {
+    const newLine = st.news.length
+      ? `<div style="margin-bottom:6px"><div style="color:var(--color-text-success);font-weight:700;font-size:10px;margin-bottom:2px">New to you \u2014 ${st.news.length} name${st.news.length !== 1 ? 's' : ''}${st.cov ? `, ${st.newSum.toFixed(0)}% of the fund` : ''}</div><div style="font-size:10px;color:var(--color-text-secondary);line-height:1.65">${st.news.map(chip).join(' \u00b7 ')}</div></div>`
       : `<div style="margin-bottom:6px;font-size:10px;color:var(--color-text-tertiary)">No new names \u2014 you already own everything pasted.</div>`;
-    const ownLine = S.owned.length
-      ? `<div><div style="color:var(--color-text-tertiary);font-weight:700;font-size:10px;margin-bottom:2px">Deepens ${S.owned.length} you already own${S.cov ? `, ${S.ownSum.toFixed(0)}% of the fund` : ''}</div><div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.65">${S.owned.map(chip).join(' \u00b7 ')}</div></div>`
+    const ownLine = st.owned.length
+      ? `<div><div style="color:var(--color-text-tertiary);font-weight:700;font-size:10px;margin-bottom:2px">Deepens ${st.owned.length} you already own${st.cov ? `, ${st.ownSum.toFixed(0)}% of the fund` : ''}</div><div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.65">${st.owned.map(chip).join(' \u00b7 ')}</div></div>`
       : '';
-    return `<div style="flex:1;min-width:280px"><div style="font-size:11px;font-weight:700;color:${c};margin-bottom:6px">${ex(S.label)}</div>${newLine}${ownLine}</div>`;
+    return `<div style="flex:1;min-width:280px"><div style="font-size:11px;font-weight:700;color:${c};margin-bottom:6px">${ex(st.label)}</div>${newLine}${ownLine}</div>`;
   };
 
-  // Theme tilt: your book % vs each ETF % (ETF normalized to its pasted coverage), with up/down arrows.
-  const etfPct = (S, t) => S.cov > 0 ? (S.themeW[t] || 0) / S.cov * 100 : null;
-  const themesSet = new Set([...Object.keys(bookThemeVal), ...Object.keys(SA.themeW), ...Object.keys(SB.themeW)]);
-  const themeRows = [...themesSet].map(t => ({ t, bp: bookPct(t), ap: etfPct(SA, t), bp2: etfPct(SB, t) }))
-    .filter(r => (r.bp || 0) > 0.05 || (r.ap || 0) > 0.05 || (r.bp2 || 0) > 0.05)
-    .sort((x, y) => Math.max(y.ap || 0, y.bp2 || 0, y.bp || 0) - Math.max(x.ap || 0, x.bp2 || 0, x.bp || 0));
+  // Theme tilt: your book % vs each present ETF % (normalized to its pasted coverage), with arrows.
+  const etfPct = (st, t) => st.cov > 0 ? (st.themeW[t] || 0) / st.cov * 100 : null;
+  const themeKeys = new Set(Object.keys(bookThemeVal));
+  cols.forEach(col => Object.keys(col.st.themeW).forEach(t => themeKeys.add(t)));
+  const themeRows = [...themeKeys].map(t => ({ t, bp: bookPct(t), vals: cols.map(col => etfPct(col.st, t)) }))
+    .filter(r => (r.bp || 0) > 0.05 || r.vals.some(v => (v || 0) > 0.05))
+    .sort((x, y) => Math.max(y.bp || 0, ...y.vals.map(v => v || 0)) - Math.max(x.bp || 0, ...x.vals.map(v => v || 0)));
   const greyDash = ` <span style="color:var(--color-text-tertiary)" title="no meaningful change to this theme's share">\u2013</span>`;
   const arrow = (etf, bk) => {
     if (etf == null || bk == null) return '';
@@ -21263,24 +21289,25 @@ function cmpThemeMapHtml(A, B) {
   const trs = themeRows.map(r => `<tr>
     <td style="padding:2px 10px 2px 0;color:var(--color-text-secondary)">${ex(labelFor(r.t))}</td>
     <td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--color-text-tertiary)">${pc(r.bp)}</td>
-    <td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${cA}">${pc(r.ap)}${arrow(r.ap, r.bp)}</td>
-    <td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${cB}">${pc(r.bp2)}${arrow(r.bp2, r.bp)}</td>
+    ${cols.map((col, i) => `<td style="padding:2px 10px;text-align:right;font-variant-numeric:tabular-nums;color:${col.c}">${pc(r.vals[i])}${arrow(r.vals[i], r.bp)}</td>`).join('')}
   </tr>`).join('');
-  const table = themeRows.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:10px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:0 10px 4px 0;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary)">Theme</th>${th('Your book', 'var(--color-text-tertiary)')}${th(ex(SA.label), cA)}${th(ex(SB.label), cB)}</tr></thead><tbody>${trs}</tbody></table></div>` : '';
+  const table = themeRows.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:10px"><thead><tr style="border-bottom:1px solid var(--color-border-tertiary)"><th style="padding:0 10px 4px 0;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary)">Theme</th>${th('Your book', 'var(--color-text-tertiary)')}${cols.map(col => th(ex(col.st.label), col.c)).join('')}</tr></thead><tbody>${trs}</tbody></table></div>` : '';
 
   // Tag the unclassified — keeps the shared brain (and this table) improving.
   const untagged = []; const seenU = new Set();
-  [...A.holdings, ...B.holdings].forEach(h => { const c = qrCanonical(h.ticker); if (!c || !c.key || seenU.has(c.key)) return; seenU.add(c.key); if (!themeOf(c.key, c.display)) untagged.push({ key: c.key, ticker: c.display || h.ticker }); });
+  present.forEach(S => S.holdings.forEach(h => { const c = qrCanonical(h.ticker); if (!c || !c.key || seenU.has(c.key)) return; seenU.add(c.key); if (!themeOf(c.key, c.display)) untagged.push({ key: c.key, ticker: c.display || h.ticker }); }));
   const tagSelect = (key) => `<select onchange="cmpSetTag('${eq(key)}', this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-secondary);font-size:9px;padding:1px 4px;cursor:pointer"><option value="__unset__" selected>tag\u2026</option>${vocab.map(s => `<option value="${s.id}" title="${ex(s.blurb || '')}">${ex(s.label)}</option>`).join('')}</select>`;
   const untaggedHtml = untagged.length
     ? `<div style="margin-top:11px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)"><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#fbbf24;margin-bottom:5px">Untagged (${untagged.length}) \u2014 tag once to place it in the table above and everywhere else</div>${untagged.map(n => `<span style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:10px"><span style="color:var(--color-text-secondary)">${ex(n.ticker)}</span>${tagSelect(n.key)}</span>`).join('')}</div>`
     : '';
 
-  if (!themeRows.length && !SA.news.length && !SB.news.length && !SA.owned.length && !SB.owned.length) return '';
+  const anyNames = cols.some(col => col.st.news.length || col.st.owned.length);
+  if (!themeRows.length && !anyNames) return '';
+  const word = present.length === 1 ? 'this ETF' : 'each ETF';
   return `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border-secondary)">
-    <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">What adding each ETF would do to your book</div>
-    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:11px"><span style="color:var(--color-text-success)">New to you</span> = names you don't already own, directly or inside funds you hold \u2014 the exposure you'd actually be adding. The theme table is all percentages: your current look-through mix vs each ETF, with <span style="color:var(--color-text-success)">\u25b2</span>/<span style="color:var(--color-text-danger)">\u25bc</span> showing whether adding that ETF would raise or lower each theme's share of your book. (ETF % is of the holdings you pasted.)</div>
-    <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px">${sideBlock(SA, cA)}${sideBlock(SB, cB)}</div>
+    <div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:6px">What adding ${word} would do to your book</div>
+    <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:11px"><span style="color:var(--color-text-success)">New to you</span> = names you don't already own, directly or inside funds you hold \u2014 the exposure you'd actually be adding. The theme table is all percentages: your current look-through mix vs ${word}, with <span style="color:var(--color-text-success)">\u25b2</span>/<span style="color:var(--color-text-danger)">\u25bc</span> showing whether adding it would raise or lower each theme's share of your book. (ETF % is of the holdings you pasted.)</div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px">${cols.map(col => sideBlock(col.st, col.c)).join('')}</div>
     ${table}
     ${untaggedHtml}
   </div>`;
@@ -30052,6 +30079,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09x</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09y</div>
 </body>
 </html>
