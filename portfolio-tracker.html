@@ -6095,17 +6095,19 @@ function buildAskSystem() {
 }
 
 // ===== Deploy Optimizer: propose -> theme -> score -> rank (its own surface, not the chat). =====
-// The model proposes themed candidates (STOCKS or ETFs, optionally from news, within a user-set UNIVERSE
-// and optional free-hand DIRECTION); the REAL engine scores each name's true impact. Goals multi-select
-// with a blended "fit". "Deepen" runs another pass excluding names already shown and merges/re-ranks.
-// Theme is [inference]; ETF impact is APPROXIMATE (no look-through here) until confirmed in Evaluate a Trade.
+// Model proposes themed candidates (STOCKS/ETFs, within a UNIVERSE + optional free-hand DIRECTION); the
+// REAL engine scores each name's true impact. Goals multi-select -> blended "fit". "Growth" is a goal too,
+// but only its MEASURED theme-exposure tilt enters Fit; the per-name growth figure is model-sourced and
+// shown on the card, NEVER in the ranking. "Deepen" pulls more names and merges/re-ranks.
+// Theme is [inference]; ETF impact is APPROXIMATE until confirmed in Evaluate a Trade.
 var optBusy = false;
 var optWebOn = true; // objective-level news default ON
 var optResults = null;
 var optDirection = ''; // free-hand steer, persisted across re-renders in this session
 var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities'];
+var OPT_GROWTH_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Consumer Discretionary', 'Space & Defense'];
 var OPT_FACTORS = [{ col: 'Rate', label: 'Rate / duration' }, { col: 'Liquidity', label: 'Liquidity / funding' }, { col: 'Credit', label: 'Credit' }, { col: 'Policy', label: 'Policy shock' }, { col: 'Crowding', label: 'Positioning / leverage' }, { col: 'Cyclical', label: 'Demand cyclicality' }];
-var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor' };
+var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor', growth: 'tilt toward growth' };
 var OPT_BROAD_THEMES = ['Broad ETF', 'International Developed', 'Emerging Markets', 'Small Caps', 'Bonds'];
 var OPT_GEOS = [{ id: 'us', label: 'US' }, { id: 'intl', label: 'Intl developed' }, { id: 'em', label: 'Emerging mkts' }];
 var OPT_VEHICLES = [{ id: 'stock', label: 'Stocks' }, { id: 'sector', label: 'Sector ETFs' }, { id: 'broad', label: 'Broad ETFs' }];
@@ -6118,6 +6120,7 @@ function optIsBroadEtf(c) { return c.type === 'etf' && (c.broad === true || OPT_
 function optCandGeo(c) { if (c.theme === 'International Developed') return 'intl'; if (c.theme === 'Emerging Markets') return 'em'; return 'us'; }
 function optCandVehicle(c) { if (optIsBroadEtf(c)) return 'broad'; if (c.type === 'etf') return 'sector'; return 'stock'; }
 function optApplyConstraints(cands, geos, vehicles) { return cands.filter(function (c) { return geos.indexOf(optCandGeo(c)) >= 0 && vehicles.indexOf(optCandVehicle(c)) >= 0; }); }
+function optGrowthWeight(clusters) { if (!clusters) return 0; var s = 0, i; for (i = 0; i < clusters.length; i++) { if (OPT_GROWTH_THEMES.indexOf(clusters[i].label) >= 0) s += (clusters[i].pct || 0); } return s; }
 
 function optBuildAdjustments(c, amount) {
   if (optIsBroadEtf(c)) {
@@ -6134,12 +6137,13 @@ function optGoalPhrase(goals, factorCol) {
     if (g === 'factor') return 'reduce exposure to the ' + (factorCol || 'selected') + ' risk factor';
     if (g === 'diversify') return 'improve diversification (raise effective independent bets)';
     if (g === 'concentration') return 'reduce the single biggest concentration (dilute the largest theme cluster)';
+    if (g === 'growth') return 'tilt the book toward growth (favor names with real revenue/earnings growth, and raise exposure to growth-categorized themes)';
     return g;
   }).join('; AND ');
 }
 
 function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, direction, exclude) {
-  var p = [];
+  var p = [], wantGrowth = goals.indexOf('growth') >= 0;
   p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' and your job is to PROPOSE candidates \u2014 individual STOCKS or ETFs \u2014 that would serve the stated objective(s) TOGETHER, so an engine can score each one\u2019s real impact on their book.');
   p.push('OBJECTIVE' + (goals.length > 1 ? 'S (a good candidate should serve these together)' : '') + ': ' + optGoalPhrase(goals, factorCol) + '.');
   var allowGeo = geos.map(function (g) { return OPT_GEO_DESC[g]; }).join(', ');
@@ -6150,6 +6154,10 @@ function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, dir
   p.push('ALLOWED VEHICLES: ' + allowVeh + '.' + (blockVeh.length ? ' Do NOT propose ' + blockVeh.join(' or ') + '; they will be rejected.' : ''));
   if (geos.length === 1 && geos[0] === 'us' && vehicles.indexOf('broad') < 0) p.push('This is a deliberately TIGHT universe (US, no broad funds). Do NOT fall back on the obvious broad-diversifier answer \u2014 the value is in finding genuinely useful, less-obvious US names (single stocks or focused sector funds) that still move the objective.');
   if (goals.indexOf('diversify') >= 0 && vehicles.indexOf('broad') >= 0) p.push('For diversification, broad ETFs are often the better vehicle \u2014 include strong ETF options where allowed, alongside single-stock ideas.');
+  if (wantGrowth) {
+    p.push('GROWTH GOAL: favor names with genuine growth characteristics (real revenue/earnings growth, expanding addressable market) that ALSO serve the other selected objective(s). Be careful: if the other goals push defensive (e.g. diversify + cut Rate), find the growthiest names that STILL satisfy them rather than abandoning growth or abandoning the structural goal.');
+    p.push('For EACH candidate also return a "growth" field: a short real growth figure or characterization (e.g. "rev +22% YoY, EPS +30% est" or "double-digit FCF growth"). Set "growthSourced" true ONLY if you pulled the figure from a web search THIS run; otherwise give a brief recollection and set growthSourced false. Never invent a precise figure.');
+  }
   if (direction && direction.trim()) p.push('USER DIRECTION (honor this preference; it overrides your default tendencies but NOT the universe or evidence rules): ' + direction.trim());
   if (exclude && exclude.length) p.push('GO DEEPER \u2014 these names were ALREADY proposed; do NOT repeat any of them, return DIFFERENT names: ' + exclude.join(', ') + '. Cast wider within the universe, surface less-obvious or smaller names, and dig into the most promising under-explored angle for the objective(s).');
   p.push('Their current book (so your proposals fit what they already own and where they are concentrated):');
@@ -6160,9 +6168,9 @@ function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, dir
   p.push('Mark each candidate\u2019s "type" as "stock" or "etf". For an ETF, set "broad" to true if it is a broadly diversified fund (whole-market/regional/multi-sector) or false if it is a concentrated sector/thematic fund.');
   if (goals.indexOf('concentration') >= 0) p.push('For the concentration goal, favor candidates whose theme is DIFFERENT from the user\u2019s largest existing cluster.');
   if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor.');
-  if (web) p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts in the relevant space, within the allowed universe) \u2014 be economical. For any catalyst from a search, set sourced=true and keep it tied to what the result said.');
-  p.push('EVIDENCE: any specific real-world fact is UNVERIFIED unless you found it via web search this run. If you did not search, keep the catalyst a short recollection and set sourced=false. Never invent a price, figure, or date.');
-  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","type":"stock"|"etf","broad":true|false,"theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true}]. Return nothing but the JSON array.');
+  if (web) p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts' + (wantGrowth ? ', and real growth figures' : '') + ' in the relevant space, within the allowed universe) \u2014 be economical. For anything from a search, set the matching sourced flag true and keep it tied to what the result said.');
+  p.push('EVIDENCE: any specific real-world fact is UNVERIFIED unless you found it via web search this run. If you did not search, keep it a short recollection and set the sourced flag false. Never invent a price, figure, or date.');
+  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","type":"stock"|"etf","broad":true|false,"theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true' + (wantGrowth ? ',"growth":"short growth figure","growthSourced":true' : '') + '}]. Return nothing but the JSON array.');
   return p.join('\n');
 }
 
@@ -6175,7 +6183,7 @@ function optParseCandidates(text) {
   try { arr = JSON.parse(s.slice(a, b + 1)); } catch (e) { return []; }
   if (!Array.isArray(arr)) return [];
   return arr.filter(function (c) { return c && c.ticker && c.theme; }).map(function (c) {
-    return { ticker: String(c.ticker).toUpperCase().trim(), name: c.name || '', type: (c.type === 'etf' ? 'etf' : 'stock'), broad: !!c.broad, theme: String(c.theme).trim(), catalyst: c.catalyst || '', sourced: !!c.sourced };
+    return { ticker: String(c.ticker).toUpperCase().trim(), name: c.name || '', type: (c.type === 'etf' ? 'etf' : 'stock'), broad: !!c.broad, theme: String(c.theme).trim(), catalyst: c.catalyst || '', sourced: !!c.sourced, growth: c.growth ? String(c.growth) : '', growthSourced: !!c.growthSourced };
   });
 }
 
@@ -6184,12 +6192,14 @@ function optScore(cands, amount, goals, factorCol) {
   var ebBefore = before.effectiveBets || 0;
   var topLabel = (before.clusters && before.clusters[0]) ? before.clusters[0].label : null;
   var topBeforePct = (before.clusters && before.clusters[0]) ? before.clusters[0].pct : 0;
+  var growthBefore = optGrowthWeight(before.clusters);
   var rows = cands.map(function (c) {
     var adj = optBuildAdjustments(c, amount);
-    var ebAfter = ebBefore, topAfterPct = topBeforePct, fB = null, fA = null;
+    var ebAfter = ebBefore, topAfterPct = topBeforePct, growthAfter = growthBefore, fB = null, fA = null;
     try {
       var after = computeThemeClusters({ adjustments: adj });
       ebAfter = after.effectiveBets || 0;
+      growthAfter = optGrowthWeight(after.clusters);
       if (topLabel && after.clusters) { for (var i = 0; i < after.clusters.length; i++) { if (after.clusters[i].label === topLabel) { topAfterPct = after.clusters[i].pct; break; } } }
       if (goals.indexOf('factor') >= 0 && typeof window !== 'undefined' && window._riskReplay && window._riskReplay.riskFactorProfileHypothetical) {
         var fs = window._riskReplay.riskFactorProfileHypothetical(adj);
@@ -6198,10 +6208,11 @@ function optScore(cands, amount, goals, factorCol) {
     } catch (e) {}
     var ebDelta = +(ebAfter - ebBefore).toFixed(2);
     var topDelta = +(topAfterPct - topBeforePct).toFixed(2);
+    var growthDelta = +(growthAfter - growthBefore).toFixed(2);
     return {
-      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced,
-      ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA,
-      g_diversify: ebDelta, g_concentration: -topDelta, g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null
+      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced, growth: c.growth, growthSourced: c.growthSourced,
+      ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA, growthDelta: growthDelta,
+      g_diversify: ebDelta, g_concentration: -topDelta, g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null, g_growth: growthDelta
     };
   });
   goals.forEach(function (g) {
@@ -6219,7 +6230,7 @@ function optScore(cands, amount, goals, factorCol) {
   return rows;
 }
 
-function optReadGoals() { var goals = []; ['diversify', 'concentration', 'factor'].forEach(function (g) { var el = document.getElementById('opt-goal-' + g); if (el && el.checked) goals.push(g); }); return goals.length ? goals : ['diversify']; }
+function optReadGoals() { var goals = []; ['diversify', 'concentration', 'factor', 'growth'].forEach(function (g) { var el = document.getElementById('opt-goal-' + g); if (el && el.checked) goals.push(g); }); return goals.length ? goals : ['diversify']; }
 function optReadGeos() { var x = OPT_GEOS.map(function (g) { return g.id; }).filter(function (id) { var el = document.getElementById('opt-geo-' + id); return el ? el.checked : true; }); return x.length ? x : ['us', 'intl', 'em']; }
 function optReadVehicles() { var x = OPT_VEHICLES.map(function (v) { return v.id; }).filter(function (id) { var el = document.getElementById('opt-veh-' + id); return el ? el.checked : true; }); return x.length ? x : ['stock', 'sector', 'broad']; }
 function optReadDirection() { var el = document.getElementById('opt-direction'); var v = el ? (el.value || '') : optDirection; optDirection = v; return v; }
@@ -6298,32 +6309,36 @@ function renderOptimizerResults() {
   var multi = R.goals.length > 1;
   var goalText = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : OPT_GOAL_LABELS[g]; }).join(' + ');
   var showFactor = R.goals.indexOf('factor') >= 0;
+  var showGrowth = R.goals.indexOf('growth') >= 0;
   var anyEtf = R.rows.some(function (r) { return r.type === 'etf'; });
   var geoSummary = (R.geos.length === 3) ? 'all regions' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join(' + ');
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
   var html = '';
-  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 catalysts sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ' candidates)' : '') + '.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ' candidates)' : '') + '.</div>';
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:6px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped (outside universe)' : '') + '.</div>';
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);line-height:1.55;margin-bottom:6px;border-left:2px solid var(--color-border-tertiary);padding-left:8px">';
   html += '<strong>Eff. bets</strong> = effective independent bets, a diversification score: roughly how many genuinely independent positions your book behaves like \u2014 higher is more spread out. The +number is how much this name raises it.<br>';
   html += '<strong>Top cluster \u0394</strong> = the change in the weight of your single biggest theme, in percentage points; negative means it dilutes your largest concentration.';
   if (showFactor) html += '<br><strong>' + e(R.factorCol) + ' \u0394</strong> = how that risk factor\u2019s share of the book moves (before\u2192after) when you add this name.';
+  if (showGrowth) html += '<br><strong>Growth tilt</strong> = MEASURED shift of your book toward growth-categorized themes (' + OPT_GROWTH_THEMES.slice(0, 3).join(', ') + '\u2026), in pp. This is a coarse, theme-level EXPOSURE shift \u2014 NOT a return forecast \u2014 and it is what enters the ranking. The per-name <strong>Growth:</strong> figure on each card is the model\u2019s sourced/recalled number and is NOT in the ranking.';
   if (multi) html += '<br><strong>Fit</strong> = your selected goals blended: each goal is scaled 0\u2013100 across these candidates, then averaged, so a name ranks high only if it helps across all of them.';
   if (anyEtf) html += '<br><strong>ETF scoring is approximate.</strong> A broad fund is modeled as spread across many positions; a sector fund like its theme. Exact impact needs the fund\u2019s real holdings \u2014 add its look-through in Evaluate a Trade.';
   html += '</div>';
-  html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:10px;line-height:1.5">\u26a0 Each theme is the model\u2019s [inference] and drives the math \u2014 a wrong theme means wrong numbers. Confirm a name in Evaluate a Trade before acting. Catalysts not marked sourced are recollection, not verified.</div>';
+  html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:10px;line-height:1.5">\u26a0 Each theme is the model\u2019s [inference] and drives the math \u2014 a wrong theme means wrong numbers. Confirm a name in Evaluate a Trade before acting. Anything not marked sourced is recollection, not verified.</div>';
 
   R.rows.forEach(function (r, i) {
     var headline;
     if (multi) headline = 'Fit ' + Math.round((r.fit || 0) * 100) + '/100';
     else if (R.goals[0] === 'diversify') headline = (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ' eff. bets';
     else if (R.goals[0] === 'concentration') headline = (-r.topDelta).toFixed(2) + ' pp top cluster';
+    else if (R.goals[0] === 'growth') headline = (r.growthDelta >= 0 ? '+' : '') + r.growthDelta + ' pp growth tilt';
     else headline = (r.factorBefore != null) ? ('\u2212' + (r.factorBefore - r.factorAfter).toFixed(1) + ' pp ' + R.factorCol) : '\u2014';
     var badge = (r.type === 'etf') ? (' <span style="font-size:8.5px;color:var(--color-text-info,#60a5fa);border:1px solid var(--color-text-info,#60a5fa);border-radius:3px;padding:0 3px">ETF' + (r.broad ? ' \u00b7 broad' : ' \u00b7 sector') + '</span>') : '';
     var parts = [];
     parts.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
     parts.push('Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp');
     if (showFactor && r.factorBefore != null) parts.push(R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1));
+    if (showGrowth) parts.push('Growth tilt ' + (r.growthDelta >= 0 ? '+' : '') + r.growthDelta + ' pp');
     var srcTag = r.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>';
     html += '<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:7px;background:var(--color-background-tertiary)">';
     html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">';
@@ -6332,6 +6347,7 @@ function renderOptimizerResults() {
     html += '</div>';
     html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-top:3px">' + e(r.theme) + ' <span style="font-style:italic">[model\u2019s inference \u2014 confirm]</span></div>';
     html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + e(parts.join('  \u00b7  ')) + '</div>';
+    if (showGrowth && r.growth) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Growth: ' + e(r.growth) + '  ' + (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>') + ' <span style="color:var(--color-text-tertiary);font-style:italic">(not in ranking)</span></div>';
     html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
     html += '</div>';
   });
@@ -6359,6 +6375,7 @@ function renderOptimizerTab() {
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-concentration"' + dis + '> Cut my biggest concentration</label>';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-factor" onchange="document.getElementById(\'opt-factor-wrap\').style.display=this.checked?\'block\':\'none\'"' + dis + '> Cut a specific risk factor</label>';
   html += '<div id="opt-factor-wrap" style="display:none;margin-top:2px"><select id="opt-factor" style="' + inp + ';font-size:11px;padding:4px 7px;cursor:pointer">' + factorOpts + '</select></div>';
+  html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer" title="Tilts the candidate pool toward growth and ranks by a MEASURED theme-exposure tilt. The per-name growth figure is the model\u2019s and is shown but not ranked."><input type="checkbox" id="opt-goal-growth"' + dis + '> Tilt toward growth</label>';
   html += '</div></div>';
   html += '<div style="align-self:flex-end"><button class="btn btn-primary" onclick="runOptimizer()" style="white-space:nowrap"' + dis + '>Rank candidates</button></div>';
   html += '</div>';
@@ -31464,6 +31481,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bk</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bl</div>
 </body>
 </html>
