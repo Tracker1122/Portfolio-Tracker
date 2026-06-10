@@ -1459,6 +1459,7 @@
         <button class="btn" onclick="cmpCompare()" style="font-size:11px;padding:6px 16px">Compare overlap</button>
         <button class="btn" onclick="cmpAnalyzeOne()" style="font-size:11px;padding:6px 16px" title="Run the book-impact analysis on just the one side you've filled">Analyze one ETF</button>
         <button class="btn btn-sm" onclick="cmpClear()" style="font-size:10px">Clear</button>
+        <button class="btn btn-sm" onclick="cmpExportPdf()" style="font-size:10px" title="Open a print-friendly report of the holdings overlap, theme tilt, and (if pulled) recent performance — then use your browser’s Save as PDF.">⤓ Export PDF</button>
       </div>
       <div id="cmp-results" style="margin-top:16px"></div>
       <div style="border-top:1px solid var(--color-border-tertiary);margin-top:26px"></div>
@@ -21546,6 +21547,81 @@ function cmpThemeMapHtml(A, B) {
   </div>`;
 }
 
+// Export the holdings-overlap comparison (ETF & Stock Dissection tab) as a clean, light-themed
+// printable document -> the browser's "Save as PDF" for sharing with an advisor. Mirrors candExportPdf:
+// dependency-free (works offline), reuses the shared HS_LOGO letterhead + the same light CSS, clones the
+// on-screen results, strips interactive controls, reveals the per-theme drill-down rows, recolors for
+// white paper. NOTE: unlike candExportPdf's cleaner (which removes EVERY [onclick]), the overlap's
+// theme-% cells are clickable but carry the numbers, so here we strip the handler and KEEP the cell.
+function cmpExportPdf() {
+  const resEl = document.getElementById('cmp-results');
+  const resHtmlRaw = resEl ? (resEl.innerHTML || '').trim() : '';
+  if (!resHtmlRaw) { alert('Nothing to export yet \u2014 fill in two sides (or one ETF) and press "Compare overlap" first.'); return; }
+
+  const esc2 = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const cleanFrag = (html) => {
+    const t = document.createElement('div');
+    t.innerHTML = html || '';
+    t.querySelectorAll('select').forEach(el => el.remove());                                  // tag dropdowns
+    t.querySelectorAll('[onclick*="showTickerInfoInto"]').forEach(el => el.remove());         // info buttons
+    ['cmp-overlap-info', 'cmp-untagged-info'].forEach(id => { const e = t.querySelector('#' + id); if (e) e.remove(); }); // empty on-click info slots
+    t.querySelectorAll('tr[id^="cmpdtl-"]').forEach(tr => { tr.style.display = ''; });          // reveal per-theme holdings drill-downs
+    t.querySelectorAll('[onclick]').forEach(el => { el.removeAttribute('onclick'); el.style.cursor = 'default'; el.style.textDecoration = 'none'; }); // theme-% cells: keep, drop affordance
+    return t.innerHTML
+      .replace(/#fbbf24/g, '#b45309')
+      .replace(/#34d399/g, '#15803d')
+      .replace(/#f87171/g, '#dc2626')
+      .replace(/#60a5fa/g, '#1d4ed8');
+  };
+
+  const overlapHtml = cleanFrag(resHtmlRaw);
+
+  const sideLabel = (side) => {
+    const m = (typeof _cmpMode !== 'undefined' && _cmpMode) ? _cmpMode[side] : 'etf';
+    const id = m === 'stock' ? ('cmp-' + side + '-stock-ticker') : ('cmp-' + side + '-etf-ticker');
+    const v = (((document.getElementById(id) || {}).value) || '').trim().toUpperCase();
+    return v ? (v + (m === 'stock' ? '' : ' (ETF)')) : '';
+  };
+  const la = sideLabel('A'), lb = sideLabel('B');
+  const pairSub = (la && lb) ? (esc2(la) + ' &nbsp;vs&nbsp; ' + esc2(lb)) : ((la || lb) ? esc2(la || lb) : '');
+
+  const perfA = cleanFrag((((document.getElementById('cmp-A-perf') || {}).innerHTML) || '').trim());
+  const perfB = cleanFrag((((document.getElementById('cmp-B-perf') || {}).innerHTML) || '').trim());
+  const perfHtml = (perfA || perfB)
+    ? (`<div style="display:flex;gap:24px;flex-wrap:wrap">` +
+       (perfA ? `<div style="flex:1;min-width:240px"><div style="font-weight:700;font-size:11px;margin-bottom:3px">${esc2(la || 'A')}</div>${perfA}</div>` : '') +
+       (perfB ? `<div style="flex:1;min-width:240px"><div style="font-weight:700;font-size:11px;margin-bottom:3px">${esc2(lb || 'B')}</div>${perfB}</div>` : '') +
+       `</div>`)
+    : '';
+
+  const now = new Date();
+  const title = 'Holdings Overlap \u2014 ETF & Stock Dissection';
+  const doc =
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc2(title)}</title><style>` +
+    `:root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}` +
+    `*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
+    `.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}` +
+    `h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px}` +
+    `.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}` +
+    `table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}` +
+    `</style></head><body><div class="doc"><div class="letterhead"><img src="${HS_LOGO}" alt="Harlan Shelby"></div>` +
+    `<h1>${esc2(title)}</h1>` +
+    (pairSub ? `<div class="sub">${pairSub}</div>` : '') +
+    `<div class="sub">Prepared ${esc2(now.toLocaleDateString())} for discussion with my advisor.</div>` +
+    `<div class="note">Overlap is computed only on the holdings I pasted, and each fund is labeled with how much of it that covers \u2014 a partial paste is not the whole ETF. Theme tilt is a share of my whole book (direct + look-through inside the funds I hold). Figures are estimates from my own tracker. Not investment advice.</div>` +
+    `<h2>Holdings overlap &amp; theme tilt</h2><div class="section">${overlapHtml}</div>` +
+    (perfHtml ? `<h2>Recent performance</h2><div class="section">${perfHtml}</div><div class="note">Trailing price-only returns (excludes dividends) via Polygon \u2014 approximate, may be stale. Past performance is not predictive.</div>` : '') +
+    `</div></body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) { alert('Allow pop-ups for this site to export the PDF, then try again.'); return; }
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+  setTimeout(function () { try { w.focus(); w.print(); } catch (e) { } }, 400);
+}
+
 function cmpToggleThemeDetail(id) {
   var el = document.getElementById(id);
   if (!el) return;
@@ -30469,6 +30545,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ao</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ap</div>
 </body>
 </html>
