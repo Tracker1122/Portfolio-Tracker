@@ -6290,6 +6290,7 @@ function renderOptimizerResults() {
 
 function renderOptimizerTab() {
   var el = document.getElementById('tab-optimizer'); if (!el) return;
+  if (typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
   var noWorker = !aiWorkerUrl;
   var dis = noWorker ? ' disabled' : '';
   var factorOpts = OPT_FACTORS.map(function (f) { return '<option value="' + f.col + '">' + f.label + '</option>'; }).join('');
@@ -6297,7 +6298,7 @@ function renderOptimizerTab() {
   var html = '<div style="max-width:900px;margin:0 auto">';
   html += '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Deploy Optimizer</h2>';
   html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount and one or more goals. The model proposes candidate names \u2014 stocks or ETFs, any name, not just your pipeline \u2014 and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact on your book and ranks them. With more than one goal it blends them into a single fit score. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
-  if (noWorker) html += '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set. Paste your Cloudflare AI worker URL and Save \u2014 it is shared across Ask, Deploy Optimizer, and Evaluate a Trade.<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="opt-worker-url" type="text" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:200px;' + inp + ';font-size:10px;padding:4px 7px"><button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById(\'opt-worker-url\').value); renderOptimizerTab()" style="font-size:9px">Save</button></div></div>';
+  html += aiWorkerUrlFieldHtml('opt-worker-url', 'renderOptimizerTab()');
   html += '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:8px">';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="15000" style="width:120px;' + inp + '"' + dis + '></div>';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Goals (pick one or more)</div><div style="display:flex;flex-direction:column;gap:3px">';
@@ -6320,12 +6321,13 @@ function renderAskTab() {
   var panel = document.getElementById('tab-ask');
   if (!panel) return;
   if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
+  if (typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
   var noWorker = !aiWorkerUrl;
   panel.innerHTML =
     '<div style="max-width:860px;margin:0 auto">' +
       '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Ask your portfolio</h2>' +
       '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Conversational analysis of your held-only book. It sees the same true-exposure and theme-cluster figures the rest of the tracker computes. It reads only \u2014 it cannot place trades or change anything.</div>' +
-      (noWorker ? '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set. Paste your Cloudflare AI worker URL and Save \u2014 it is shared across Ask, Deploy Optimizer, and Evaluate a Trade.<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="ask-worker-url" type="text" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:200px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px"><button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById(\'ask-worker-url\').value); renderAskTab()" style="font-size:9px">Save</button></div></div>' : '') +
+      aiWorkerUrlFieldHtml('ask-worker-url', 'renderAskTab()') +
       '<div id="ask-thread" style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px"></div>' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' + '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer" title="When on, the assistant may search the web for current news or facts. Costs roughly 1-4 cents only on questions where it actually searches.">' + '<input type="checkbox" id="ask-web-toggle"' + (askWebOn ? ' checked' : '') + ' onchange="askWebOn=this.checked"' + (noWorker ? ' disabled' : '') + '> Allow web search' + '</label>' + '<span style="font-size:9px;color:var(--color-text-tertiary)">~1\u20134\u00a2 when it searches</span>' + '</div>' + '<div style="display:flex;gap:8px;align-items:flex-end">' +
         '<textarea id="ask-input" placeholder="Ask about your exposure, concentration, themes\u2026" onkeydown="askKey(event)" style="flex:1;min-height:52px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;line-height:1.5;padding:8px;box-sizing:border-box;resize:vertical"' + (noWorker ? ' disabled' : '') + '></textarea>' +
@@ -9210,6 +9212,21 @@ function loadAiWorkerUrl() {
 function saveAiWorkerUrl(u) {
   aiWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
   try { localStorage.setItem('ai_worker_url', aiWorkerUrl); } catch(e) {}
+}
+
+// Shared AI worker URL field: always visible (collapsed when set), pre-filled with the saved value so
+// persistence is verifiable, editable any time. saveAiWorkerUrl writes localStorage; the rerenderCall
+// re-renders so the summary flips to "set". Used by the Ask and Deploy Optimizer tabs.
+function aiWorkerUrlFieldHtml(inputId, rerenderCall) {
+  if (typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
+  var set = !!aiWorkerUrl;
+  var ev = (typeof esc === 'function') ? esc(aiWorkerUrl) : aiWorkerUrl;
+  return '<details style="margin:6px 0 10px"' + (set ? '' : ' open') + '>' +
+    '<summary style="font-size:9px;color:' + (set ? 'var(--color-text-tertiary)' : '#fbbf24') + ';cursor:pointer">AI worker URL ' + (set ? '\u2713 set \u2014 click to view or change' : '\u2014 not set (required)') + '</summary>' +
+    '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="' + inputId + '" type="text" value="' + ev + '" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:220px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:10px;padding:4px 7px">' +
+    '<button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById(\'' + inputId + '\').value); ' + rerenderCall + '" style="font-size:9px">Save</button></div>' +
+    '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:3px">Shared across Ask, Deploy Optimizer, and Evaluate a Trade \u00b7 saved in this browser.</div>' +
+    '</details>';
 }
 
 // Normalize an Alpha Vantage ETF_PROFILE response into the common shape.
@@ -31389,6 +31406,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bh</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bi</div>
 </body>
 </html>
