@@ -6095,28 +6095,29 @@ function buildAskSystem() {
 }
 
 // ===== Deploy Optimizer: propose -> theme -> score -> rank (its own surface, not the chat). =====
-// The model proposes themed candidates (STOCKS or ETFs, optionally from objective-level news); the REAL
-// engine (computeThemeClusters + riskFactorProfileHypothetical) scores each name's true impact. Goals
-// are multi-select: pick 1-3 and each candidate gets a normalized "fit" blended across them. Theme is
-// [inference]; ETF impact is APPROXIMATE (no look-through here) until confirmed in Evaluate a Trade.
+// The model proposes themed candidates (STOCKS or ETFs, optionally from objective-level news, within a
+// user-set UNIVERSE); the REAL engine (computeThemeClusters + riskFactorProfileHypothetical) scores each
+// name's true impact. Goals are multi-select with a blended "fit". Theme is [inference]; ETF impact is
+// APPROXIMATE (no look-through here) until confirmed in Evaluate a Trade.
 var optBusy = false;
 var optWebOn = true; // objective-level news default ON
 var optResults = null;
 var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities'];
 var OPT_FACTORS = [{ col: 'Rate', label: 'Rate / duration' }, { col: 'Liquidity', label: 'Liquidity / funding' }, { col: 'Credit', label: 'Credit' }, { col: 'Policy', label: 'Policy shock' }, { col: 'Crowding', label: 'Positioning / leverage' }, { col: 'Cyclical', label: 'Demand cyclicality' }];
 var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor' };
-// Broad asset-class / regional buckets: an ETF in one of these spreads across many names, so it adds
-// diversification (lands in the base), vs a sector ETF that concentrates into a single theme.
 var OPT_BROAD_THEMES = ['Broad ETF', 'International Developed', 'Emerging Markets', 'Small Caps', 'Bonds'];
+var OPT_GEOS = [{ id: 'us', label: 'US' }, { id: 'intl', label: 'Intl developed' }, { id: 'em', label: 'Emerging mkts' }];
+var OPT_VEHICLES = [{ id: 'stock', label: 'Stocks' }, { id: 'sector', label: 'Sector ETFs' }, { id: 'broad', label: 'Broad ETFs' }];
+var OPT_GEO_DESC = { us: 'US-domiciled companies and US-market funds', intl: 'developed international (ex-US)', em: 'emerging markets' };
+var OPT_VEH_DESC = { stock: 'individual stocks', sector: 'sector/thematic ETFs', broad: 'broad / diversified ETFs' };
+var OPT_GEO_SHORT = { us: 'US', intl: 'intl-developed', em: 'emerging' };
+var OPT_VEH_SHORT = { stock: 'stocks', sector: 'sector ETFs', broad: 'broad ETFs' };
 
 function optIsBroadEtf(c) { return c.type === 'etf' && (c.broad === true || OPT_BROAD_THEMES.indexOf(c.theme) >= 0); }
+function optCandGeo(c) { if (c.theme === 'International Developed') return 'intl'; if (c.theme === 'Emerging Markets') return 'em'; return 'us'; }
+function optCandVehicle(c) { if (optIsBroadEtf(c)) return 'broad'; if (c.type === 'etf') return 'sector'; return 'stock'; }
+function optApplyConstraints(cands, geos, vehicles) { return cands.filter(function (c) { return geos.indexOf(optCandGeo(c)) >= 0 && vehicles.indexOf(optCandVehicle(c)) >= 0; }); }
 
-// Build the per-candidate exposure adjustments the engine scores:
-//  - stock: one direct add routed to its theme.
-//  - sector ETF: spread within its theme (via-funds) -> behaves like the theme cluster.
-//  - broad ETF: APPROXIMATED as ~K small diversified slices that land in the base (each ~0 to HHI),
-//    so a broad fund is credited with the diversification a single name can't give. Exact impact needs
-//    the fund's real look-through (added in Evaluate a Trade); this is a directional estimate.
 function optBuildAdjustments(c, amount) {
   if (optIsBroadEtf(c)) {
     var K = 20, adj = [], slice = amount / K, i;
@@ -6136,21 +6137,29 @@ function optGoalPhrase(goals, factorCol) {
   }).join('; AND ');
 }
 
-function buildOptimizerSystem(amount, goals, factorCol, web) {
+function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles) {
   var p = [];
   p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' and your job is to PROPOSE candidates \u2014 individual STOCKS or ETFs \u2014 that would serve the stated objective(s) TOGETHER, so an engine can score each one\u2019s real impact on their book.');
   p.push('OBJECTIVE' + (goals.length > 1 ? 'S (a good candidate should serve these together)' : '') + ': ' + optGoalPhrase(goals, factorCol) + '.');
-  if (goals.indexOf('diversify') >= 0) p.push('For diversification, ETFs are often the better vehicle than single names \u2014 include strong ETF options (broad-market, regional, or sector funds) where they fit, alongside any single-stock ideas.');
+  // universe constraints (hard filter)
+  var allowGeo = geos.map(function (g) { return OPT_GEO_DESC[g]; }).join(', ');
+  var blockGeo = ['us', 'intl', 'em'].filter(function (g) { return geos.indexOf(g) < 0; }).map(function (g) { return OPT_GEO_DESC[g]; });
+  p.push('UNIVERSE \u2014 propose ONLY names within: ' + allowGeo + '.' + (blockGeo.length ? ' Do NOT propose ' + blockGeo.join(' or ') + ' names; they will be rejected.' : ''));
+  var allowVeh = vehicles.map(function (v) { return OPT_VEH_DESC[v]; }).join(', ');
+  var blockVeh = ['stock', 'sector', 'broad'].filter(function (v) { return vehicles.indexOf(v) < 0; }).map(function (v) { return OPT_VEH_DESC[v]; });
+  p.push('ALLOWED VEHICLES: ' + allowVeh + '.' + (blockVeh.length ? ' Do NOT propose ' + blockVeh.join(' or ') + '; they will be rejected.' : ''));
+  if (geos.length === 1 && geos[0] === 'us' && vehicles.indexOf('broad') < 0) p.push('This is a deliberately TIGHT universe (US, no broad funds). Do NOT fall back on the obvious broad-diversifier answer \u2014 the value is in finding genuinely useful, less-obvious US names (single stocks or focused sector funds) that still move the objective. Lean on low-correlation domestic sectors the book is light in.');
+  if (goals.indexOf('diversify') >= 0 && vehicles.indexOf('broad') >= 0) p.push('For diversification, broad ETFs are often the better vehicle \u2014 include strong ETF options where allowed, alongside single-stock ideas.');
   p.push('Their current book (so your proposals fit what they already own and where they are concentrated):');
   p.push(buildAskSnapshot());
   p.push('---');
   p.push('PROPOSE 8 to 10 candidates. For EACH, assign exactly one THEME from this list, verbatim (this is how the engine buckets it, so it MUST match one of these): ' + OPT_THEMES.join(', ') + '.');
   p.push('The theme you assign is YOUR inference and DRIVES the scoring math, so pick the single best fit; the user confirms it later in Evaluate a Trade.');
-  p.push('Mark each candidate\u2019s "type" as "stock" or "etf". For an ETF, set "broad" to true if it is a broadly diversified fund (whole-market, regional, or multi-sector \u2014 hundreds of holdings) or false if it is a concentrated sector/thematic fund. The engine scores a broad ETF as diversifying (spread across many positions) and a sector ETF like its theme.');
+  p.push('Mark each candidate\u2019s "type" as "stock" or "etf". For an ETF, set "broad" to true if it is a broadly diversified fund (whole-market/regional/multi-sector) or false if it is a concentrated sector/thematic fund.');
   if (goals.indexOf('concentration') >= 0) p.push('For the concentration goal, favor candidates whose theme is DIFFERENT from the user\u2019s largest existing cluster.');
-  if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor, or broad ETFs that dilute it.');
-  if (web) p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts in the relevant space) \u2014 be economical, this is the expensive step. For any catalyst from a search, set sourced=true and keep it tied to what the result said.');
-  p.push('EVIDENCE: any specific real-world fact (what a fund/company holds or does, a catalyst, a figure) is UNVERIFIED unless you found it via web search this run. If you did not search, keep the catalyst a short recollection and set sourced=false. Never invent a price, figure, or date.');
+  if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor.');
+  if (web) p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts in the relevant space, within the allowed universe) \u2014 be economical. For any catalyst from a search, set sourced=true and keep it tied to what the result said.');
+  p.push('EVIDENCE: any specific real-world fact is UNVERIFIED unless you found it via web search this run. If you did not search, keep the catalyst a short recollection and set sourced=false. Never invent a price, figure, or date.');
   p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","type":"stock"|"etf","broad":true|false,"theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true}]. Return nothing but the JSON array.');
   return p.join('\n');
 }
@@ -6219,21 +6228,28 @@ async function runOptimizer() {
   ['diversify', 'concentration', 'factor'].forEach(function (g) { var el = document.getElementById('opt-goal-' + g); if (el && el.checked) goals.push(g); });
   if (!goals.length) goals = ['diversify'];
   var factorCol = (document.getElementById('opt-factor') || {}).value || 'Rate';
+  var geos = OPT_GEOS.map(function (g) { return g.id; }).filter(function (id) { var el = document.getElementById('opt-geo-' + id); return el ? el.checked : true; });
+  if (!geos.length) geos = ['us', 'intl', 'em'];
+  var vehicles = OPT_VEHICLES.map(function (v) { return v.id; }).filter(function (id) { var el = document.getElementById('opt-veh-' + id); return el ? el.checked : true; });
+  if (!vehicles.length) vehicles = ['stock', 'sector', 'broad'];
   var webEl = document.getElementById('opt-web');
   optWebOn = webEl ? !!webEl.checked : optWebOn;
   optBusy = true;
   var resEl = document.getElementById('opt-results');
   if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:var(--color-text-tertiary);padding:8px 0">Scouting candidates' + (optWebOn ? ' (searching current catalysts)' : '') + '\u2026</div>';
   try {
-    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn);
+    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn, geos, vehicles);
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose the candidates now as the JSON array.' }], system, [], { web: optWebOn });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
     var cands = optParseCandidates(text);
-    if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">No candidates came back \u2014 try again, or adjust the goals.</div>'; optBusy = false; return; }
+    var rawN = cands.length;
+    cands = optApplyConstraints(cands, geos, vehicles);
+    var filtered = rawN - cands.length;
+    if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">Nothing came back inside your universe' + (rawN ? ' (' + rawN + ' proposed, all outside your toggles)' : '') + ' \u2014 loosen the constraints or try again.</div>'; optBusy = false; return; }
     var scored = optScore(cands, amount, goals, factorCol);
     scored.sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
-    optResults = { amount: amount, goals: goals, factorCol: factorCol, usedWeb: usedWeb, ranOn: Date.now(), rows: scored };
+    optResults = { amount: amount, goals: goals, factorCol: factorCol, geos: geos, vehicles: vehicles, filtered: filtered, usedWeb: usedWeb, ranOn: Date.now(), rows: scored };
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6252,14 +6268,17 @@ function renderOptimizerResults() {
   var goalText = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : OPT_GOAL_LABELS[g]; }).join(' + ');
   var showFactor = R.goals.indexOf('factor') >= 0;
   var anyEtf = R.rows.some(function (r) { return r.type === 'etf'; });
+  var geoSummary = (R.geos.length === 3) ? 'all regions' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join(' + ');
+  var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
   var html = '';
-  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 6px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 catalysts sourced</span>' : '') + '.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 catalysts sourced</span>' : '') + '.</div>';
+  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:6px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.filtered ? ' \u00b7 ' + R.filtered + ' proposed name' + (R.filtered === 1 ? '' : 's') + ' dropped for falling outside it' : '') + '.</div>';
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);line-height:1.55;margin-bottom:6px;border-left:2px solid var(--color-border-tertiary);padding-left:8px">';
   html += '<strong>Eff. bets</strong> = effective independent bets, a diversification score: roughly how many genuinely independent positions your book behaves like \u2014 higher is more spread out. The +number is how much this name raises it.<br>';
   html += '<strong>Top cluster \u0394</strong> = the change in the weight of your single biggest theme, in percentage points; negative means it dilutes your largest concentration.';
   if (showFactor) html += '<br><strong>' + e(R.factorCol) + ' \u0394</strong> = how that risk factor\u2019s share of the book moves (before\u2192after) when you add this name.';
   if (multi) html += '<br><strong>Fit</strong> = your selected goals blended: each goal is scaled 0\u2013100 across these candidates, then averaged, so a name ranks high only if it helps across all of them.';
-  if (anyEtf) html += '<br><strong>ETF scoring is approximate.</strong> A broad fund is modeled as spread across many diversified positions; a sector fund like its theme. The exact impact needs the fund\u2019s real holdings \u2014 add its look-through in Evaluate a Trade to get precise numbers.';
+  if (anyEtf) html += '<br><strong>ETF scoring is approximate.</strong> A broad fund is modeled as spread across many positions; a sector fund like its theme. Exact impact needs the fund\u2019s real holdings \u2014 add its look-through in Evaluate a Trade.';
   html += '</div>';
   html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:10px;line-height:1.5">\u26a0 Each theme is the model\u2019s [inference] and drives the math \u2014 a wrong theme means wrong numbers. Confirm a name in Evaluate a Trade before acting. Catalysts not marked sourced are recollection, not verified.</div>';
 
@@ -6295,9 +6314,10 @@ function renderOptimizerTab() {
   var dis = noWorker ? ' disabled' : '';
   var factorOpts = OPT_FACTORS.map(function (f) { return '<option value="' + f.col + '">' + f.label + '</option>'; }).join('');
   var inp = 'background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px';
+  var chk = function (id, label) { return '<label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="' + id + '" checked' + dis + '> ' + label + '</label>'; };
   var html = '<div style="max-width:900px;margin:0 auto">';
   html += '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Deploy Optimizer</h2>';
-  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount and one or more goals. The model proposes candidate names \u2014 stocks or ETFs, any name, not just your pipeline \u2014 and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact on your book and ranks them. With more than one goal it blends them into a single fit score. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount, one or more goals, and the universe to draw from. The model proposes candidate names within your constraints and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact and ranks them. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
   html += aiWorkerUrlFieldHtml('opt-worker-url', 'renderOptimizerTab()');
   html += '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:8px">';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="15000" style="width:120px;' + inp + '"' + dis + '></div>';
@@ -6309,6 +6329,10 @@ function renderOptimizerTab() {
   html += '</div></div>';
   html += '<div style="align-self:flex-end"><button class="btn btn-primary" onclick="runOptimizer()" style="white-space:nowrap"' + dis + '>Rank candidates</button></div>';
   html += '</div>';
+  html += '<div style="margin-bottom:8px"><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Universe (untoggle to exclude \u2014 e.g. US only, no broad ETFs)</div><div style="display:flex;flex-wrap:wrap;gap:16px">';
+  html += '<div style="display:flex;gap:8px;align-items:center"><span style="font-size:9px;color:var(--color-text-tertiary)">Geography:</span>' + OPT_GEOS.map(function (g) { return chk('opt-geo-' + g.id, g.label); }).join('') + '</div>';
+  html += '<div style="display:flex;gap:8px;align-items:center"><span style="font-size:9px;color:var(--color-text-tertiary)">Vehicle:</span>' + OPT_VEHICLES.map(function (v) { return chk('opt-veh-' + v.id, v.label); }).join('') + '</div>';
+  html += '</div></div>';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer;margin-bottom:4px" title="Searches current catalysts at the objective level (a few cents per run)."><input type="checkbox" id="opt-web"' + (optWebOn ? ' checked' : '') + dis + '> Use current news (objective-level web search) <span style="font-size:9px">~a few \u00a2 per run</span></label>';
   html += '<div id="opt-results"></div>';
   html += '</div>';
@@ -31406,6 +31430,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bi</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bj</div>
 </body>
 </html>
