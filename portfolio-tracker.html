@@ -1338,6 +1338,7 @@
       </div>
       <div id="qr-index-editor"></div>
     </details>
+    <div id="benchmark-fees-editor" style="margin-top:28px;border-top:1px solid var(--color-border-tertiary);padding-top:12px"></div>
   </div><!-- end tab-distribution -->
 
   <!-- Analysis and Performance Tab -->
@@ -8135,6 +8136,7 @@ function renderDistributionTab() {
     </div>`;
   }
   if (typeof renderIndexEditor === 'function') renderIndexEditor();
+  if (typeof renderBenchmarkFeesEditor === 'function') renderBenchmarkFeesEditor(); // fees card now lives at the bottom of this tab
 }
 
 
@@ -19637,13 +19639,6 @@ function renderThemeUniverse() {
     <div id="theme-diversification-analysis" style="margin-bottom:18px"></div>
     <details open>
       <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:8px;list-style:none">▾ Theme universe — benchmark performance &amp; your exposure <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(click to collapse)</span></summary>
-    <div style="margin-bottom:14px;padding:10px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
-      <span style="font-size:13px;color:var(--color-text-info);margin-right:6px">ⓘ</span>
-      <strong style="color:var(--color-text-primary)">Awareness surface, not recommendation.</strong>
-      Shows performance of theme benchmarks across windows alongside your current exposure. Helps surface "what you don't know you don't know" without prescribing action. Highlighted rows are themes you currently own; unhighlighted rows are theme universe additions for context.
-      <div style="margin-top:6px;font-size:10px;color:var(--color-text-tertiary);line-height:1.5">YTD/1Y are the <strong>benchmark's</strong> window returns (e.g. QQQ's YTD) — <em>not</em> your own return, which depends on when you bought. They're here so every theme is comparable for screening, not to tell you how your positions did. For your entry-timed performance, see Industry Reference / Industry Spotlight.</div>
-      <div style="margin-top:4px;font-size:10px;color:var(--color-text-tertiary);font-style:italic">YTD and 1Y are populated via Polygon free tier. (5Y/10Y windows are no longer shown — the free tier rejects dates older than two years.)</div>
-    </div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
       <button class="btn btn-sm" onclick="backfillThemeUniverse()" style="font-size:10px;padding:5px 12px">⟳ Backfill Theme Universe</button>
       <span id="theme-universe-backfill-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
@@ -19674,7 +19669,6 @@ function renderThemeUniverse() {
         return `<span style="font-size:10px;color:${muted};cursor:help" title="${anchorTip}">Owned baselines: ${newestStr} · oldest: ${oldestStr}</span>${action}`;
       })()}
     </div>
-    <div id="benchmark-fees-editor" style="margin-bottom:14px"></div>
     <div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:6px;line-height:1.5">${tuCaption}</div>
     <div class="rebal-table-wrap">
       <table class="rebal-table">
@@ -19694,10 +19688,15 @@ function renderThemeUniverse() {
     <div id="theme-sector-panel" style="margin-top:18px"></div>
     <div class="section-heading" style="margin-top:18px">Theme Research <span style="font-size:9px;color:var(--color-text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">— big players, the ETFs, how it trades, current news · AI-generated, cached &amp; editable</span></div>
     <div id="theme-research-section" style="margin-bottom:8px"></div>
+    <details style="margin-top:22px">
+      <summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--color-text-secondary);list-style:none">▾ About the theme universe <span style="font-size:9px;font-weight:400;color:var(--color-text-tertiary)">(awareness surface, not a recommendation · click to expand)</span></summary>
+      <div style="margin-top:8px;padding:10px 14px;background:var(--color-background-secondary);border-left:3px solid var(--color-text-info);border-radius:var(--border-radius-sm);font-size:11px;color:var(--color-text-secondary);line-height:1.55">
+        Benchmark performance across windows alongside your current exposure — to surface "what you don't know you don't know," not to prescribe action. Highlighted rows are themes you own; unhighlighted are universe additions for context. YTD/1Y are the <strong>benchmark's</strong> window returns (e.g. QQQ's YTD), not your own entry-timed return — they're here so themes stay comparable for screening; for entry-timed performance see Industry Reference / Industry Spotlight. (Via Polygon free tier; 5Y/10Y aren't shown — the tier rejects dates older than two years.)
+      </div>
+    </details>
   `;
   renderSectorPanel();
   renderThemeClusters();
-  renderBenchmarkFeesEditor();
   if (typeof renderThemeResearch === 'function') renderThemeResearch();
 }
 
@@ -29653,6 +29652,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09q</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09r</div>
 </body>
 </html>
