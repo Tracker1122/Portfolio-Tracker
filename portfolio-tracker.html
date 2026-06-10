@@ -21362,23 +21362,24 @@ function cmpThemeMapHtml(A, B) {
 
   // Book look-through (funds you actually hold only): owned-name set + theme dollars rolled to %.
   const bookKeys = new Set(); let bookTotal = 0; const bookThemeVal = {};
+  // Take the WHOLE-book denominator (sleeve + VOO + cash) and the undecomposed tail from the SAME engine
+  // that powers "How your holdings move together", so the two views share a denominator and agree.
+  // computeTrueExposure() here returns ONLY itemized named rows — no fund tail, no total field — so
+  // summing them undercounts the book by the ~40% VOO/ETF tail and inflates every theme by ~1.6x.
+  let _cl = null;
+  try { if (typeof computeThemeClusters === 'function') _cl = computeThemeClusters(); } catch (e) {}
   if (typeof computeTrueExposure === 'function') {
     try {
       const te = computeTrueExposure();
-      let _itemized = 0;
       (te && te.rows ? te.rows : []).forEach(r => {
-        bookKeys.add(r.key); _itemized += (r.total || 0);
+        bookKeys.add(r.key);
         const t = themeOf(r.key, r.display) || '__un';
         bookThemeVal[t] = (bookThemeVal[t] || 0) + (r.total || 0);
       });
-      // Denominator must be the WHOLE book (te.total = itemized rows + the undecomposed VOO/ETF tail),
-      // matching "How your holdings move together". Rows alone exclude the ~40% fund tail and inflate
-      // every theme's book % by ~1.6x. Fold the tail into Untagged so the column reconciles to 100%.
-      bookTotal = (te && te.total > 0) ? te.total : _itemized;
-      const _tail = Math.max(0, bookTotal - _itemized);
-      if (_tail > 0) bookThemeVal['__un'] = (bookThemeVal['__un'] || 0) + _tail;
     } catch (e) {}
   }
+  bookTotal = (_cl && _cl.fullBook > 0) ? _cl.fullBook : Object.values(bookThemeVal).reduce((s, v) => s + v, 0);
+  if (_cl && _cl.tail > 0) bookThemeVal['__un'] = (bookThemeVal['__un'] || 0) + _cl.tail; // fold tail into Untagged → column reconciles to 100%
   const bookPct = (t) => bookTotal > 0 ? (bookThemeVal[t] || 0) / bookTotal * 100 : null;
 
   // Per side: split pasted holdings into NEW (not owned) vs OWNED (deepened), and theme weights.
@@ -30291,6 +30292,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ai</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09aj</div>
 </body>
 </html>
