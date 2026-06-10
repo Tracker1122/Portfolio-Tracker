@@ -6095,16 +6095,37 @@ function buildAskSystem() {
 }
 
 // ===== Deploy Optimizer: propose -> theme -> score -> rank (its own surface, not the chat). =====
-// The model proposes themed candidates (optionally from objective-level news); the REAL engine
-// (computeThemeClusters + riskFactorProfileHypothetical) scores each name's true impact. Goals are
-// multi-select: pick 1-3 and each candidate gets a normalized "fit" blended across them. Theme is
-// flagged [inference] because a wrong theme = wrong math (confirmed later in Evaluate a Trade).
+// The model proposes themed candidates (STOCKS or ETFs, optionally from objective-level news); the REAL
+// engine (computeThemeClusters + riskFactorProfileHypothetical) scores each name's true impact. Goals
+// are multi-select: pick 1-3 and each candidate gets a normalized "fit" blended across them. Theme is
+// [inference]; ETF impact is APPROXIMATE (no look-through here) until confirmed in Evaluate a Trade.
 var optBusy = false;
 var optWebOn = true; // objective-level news default ON
 var optResults = null;
 var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities'];
 var OPT_FACTORS = [{ col: 'Rate', label: 'Rate / duration' }, { col: 'Liquidity', label: 'Liquidity / funding' }, { col: 'Credit', label: 'Credit' }, { col: 'Policy', label: 'Policy shock' }, { col: 'Crowding', label: 'Positioning / leverage' }, { col: 'Cyclical', label: 'Demand cyclicality' }];
 var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor' };
+// Broad asset-class / regional buckets: an ETF in one of these spreads across many names, so it adds
+// diversification (lands in the base), vs a sector ETF that concentrates into a single theme.
+var OPT_BROAD_THEMES = ['Broad ETF', 'International Developed', 'Emerging Markets', 'Small Caps', 'Bonds'];
+
+function optIsBroadEtf(c) { return c.type === 'etf' && (c.broad === true || OPT_BROAD_THEMES.indexOf(c.theme) >= 0); }
+
+// Build the per-candidate exposure adjustments the engine scores:
+//  - stock: one direct add routed to its theme.
+//  - sector ETF: spread within its theme (via-funds) -> behaves like the theme cluster.
+//  - broad ETF: APPROXIMATED as ~K small diversified slices that land in the base (each ~0 to HHI),
+//    so a broad fund is credited with the diversification a single name can't give. Exact impact needs
+//    the fund's real look-through (added in Evaluate a Trade); this is a directional estimate.
+function optBuildAdjustments(c, amount) {
+  if (optIsBroadEtf(c)) {
+    var K = 20, adj = [], slice = amount / K, i;
+    for (i = 0; i < K; i++) adj.push({ ticker: c.ticker + '~slice' + i, deltaDirect: slice, display: c.ticker });
+    return adj;
+  }
+  if (c.type === 'etf') return [{ ticker: c.ticker, deltaViaFunds: amount, themeTag: c.theme, display: c.ticker }];
+  return [{ ticker: c.ticker, deltaDirect: amount, themeTag: c.theme, display: c.ticker }];
+}
 
 function optGoalPhrase(goals, factorCol) {
   return goals.map(function (g) {
@@ -6117,18 +6138,20 @@ function optGoalPhrase(goals, factorCol) {
 
 function buildOptimizerSystem(amount, goals, factorCol, web) {
   var p = [];
-  p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' into one stock and your job is to PROPOSE candidate stocks (individual names, not funds) that would serve the stated objective(s) TOGETHER, so an engine can then score each one\u2019s real impact on their book.');
+  p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' and your job is to PROPOSE candidates \u2014 individual STOCKS or ETFs \u2014 that would serve the stated objective(s) TOGETHER, so an engine can score each one\u2019s real impact on their book.');
   p.push('OBJECTIVE' + (goals.length > 1 ? 'S (a good candidate should serve these together)' : '') + ': ' + optGoalPhrase(goals, factorCol) + '.');
+  if (goals.indexOf('diversify') >= 0) p.push('For diversification, ETFs are often the better vehicle than single names \u2014 include strong ETF options (broad-market, regional, or sector funds) where they fit, alongside any single-stock ideas.');
   p.push('Their current book (so your proposals fit what they already own and where they are concentrated):');
   p.push(buildAskSnapshot());
   p.push('---');
-  p.push('PROPOSE 8 to 10 individual stocks. For EACH, assign exactly one THEME from this list, verbatim (this is how the engine buckets the name, so it MUST match one of these): ' + OPT_THEMES.join(', ') + '.');
-  p.push('The theme you assign is YOUR inference and it DRIVES the scoring math, so pick the single best fit; the user confirms it later in Evaluate a Trade.');
-  if (goals.indexOf('concentration') >= 0) p.push('For the concentration goal, favor names whose theme is DIFFERENT from the user\u2019s largest existing cluster \u2014 a name in the same theme would concentrate further, not dilute.');
-  if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor, so the addition genuinely dilutes it.');
-  if (web) p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts in the relevant theme/space) \u2014 be economical, this is the expensive step. For any catalyst taken from a search, set sourced=true and keep it tied to what the result said.');
-  p.push('EVIDENCE: any specific real-world fact about a company is UNVERIFIED unless you found it via web search this run. If you did not search, keep the catalyst to a short recollection and set sourced=false. Never invent a price, figure, or date.');
-  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true}]. Return nothing but the JSON array.');
+  p.push('PROPOSE 8 to 10 candidates. For EACH, assign exactly one THEME from this list, verbatim (this is how the engine buckets it, so it MUST match one of these): ' + OPT_THEMES.join(', ') + '.');
+  p.push('The theme you assign is YOUR inference and DRIVES the scoring math, so pick the single best fit; the user confirms it later in Evaluate a Trade.');
+  p.push('Mark each candidate\u2019s "type" as "stock" or "etf". For an ETF, set "broad" to true if it is a broadly diversified fund (whole-market, regional, or multi-sector \u2014 hundreds of holdings) or false if it is a concentrated sector/thematic fund. The engine scores a broad ETF as diversifying (spread across many positions) and a sector ETF like its theme.');
+  if (goals.indexOf('concentration') >= 0) p.push('For the concentration goal, favor candidates whose theme is DIFFERENT from the user\u2019s largest existing cluster.');
+  if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor, or broad ETFs that dilute it.');
+  if (web) p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts in the relevant space) \u2014 be economical, this is the expensive step. For any catalyst from a search, set sourced=true and keep it tied to what the result said.');
+  p.push('EVIDENCE: any specific real-world fact (what a fund/company holds or does, a catalyst, a figure) is UNVERIFIED unless you found it via web search this run. If you did not search, keep the catalyst a short recollection and set sourced=false. Never invent a price, figure, or date.');
+  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","type":"stock"|"etf","broad":true|false,"theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true}]. Return nothing but the JSON array.');
   return p.join('\n');
 }
 
@@ -6141,7 +6164,7 @@ function optParseCandidates(text) {
   try { arr = JSON.parse(s.slice(a, b + 1)); } catch (e) { return []; }
   if (!Array.isArray(arr)) return [];
   return arr.filter(function (c) { return c && c.ticker && c.theme; }).map(function (c) {
-    return { ticker: String(c.ticker).toUpperCase().trim(), name: c.name || '', theme: String(c.theme).trim(), catalyst: c.catalyst || '', sourced: !!c.sourced };
+    return { ticker: String(c.ticker).toUpperCase().trim(), name: c.name || '', type: (c.type === 'etf' ? 'etf' : 'stock'), broad: !!c.broad, theme: String(c.theme).trim(), catalyst: c.catalyst || '', sourced: !!c.sourced };
   });
 }
 
@@ -6151,7 +6174,7 @@ function optScore(cands, amount, goals, factorCol) {
   var topLabel = (before.clusters && before.clusters[0]) ? before.clusters[0].label : null;
   var topBeforePct = (before.clusters && before.clusters[0]) ? before.clusters[0].pct : 0;
   var rows = cands.map(function (c) {
-    var adj = [{ ticker: c.ticker, deltaDirect: amount, themeTag: c.theme, display: c.ticker }];
+    var adj = optBuildAdjustments(c, amount);
     var ebAfter = ebBefore, topAfterPct = topBeforePct, fB = null, fA = null;
     try {
       var after = computeThemeClusters({ adjustments: adj });
@@ -6165,14 +6188,11 @@ function optScore(cands, amount, goals, factorCol) {
     var ebDelta = +(ebAfter - ebBefore).toFixed(2);
     var topDelta = +(topAfterPct - topBeforePct).toFixed(2);
     return {
-      ticker: c.ticker, name: c.name, theme: c.theme, catalyst: c.catalyst, sourced: c.sourced,
+      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced,
       ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA,
-      g_diversify: ebDelta,                                  // higher = better
-      g_concentration: -topDelta,                            // higher = more dilution of top cluster
-      g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null // higher = more reduction
+      g_diversify: ebDelta, g_concentration: -topDelta, g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null
     };
   });
-  // normalize each selected goal 0..1 across candidates, then average -> composite "fit"
   goals.forEach(function (g) {
     var key = 'g_' + g;
     var vals = rows.map(function (r) { return r[key]; }).filter(function (v) { return v != null; });
@@ -6231,14 +6251,15 @@ function renderOptimizerResults() {
   var multi = R.goals.length > 1;
   var goalText = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : OPT_GOAL_LABELS[g]; }).join(' + ');
   var showFactor = R.goals.indexOf('factor') >= 0;
+  var anyEtf = R.rows.some(function (r) { return r.type === 'etf'; });
   var html = '';
   html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 6px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong> \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 catalysts sourced</span>' : '') + '.</div>';
-  // plain-language legend
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);line-height:1.55;margin-bottom:6px;border-left:2px solid var(--color-border-tertiary);padding-left:8px">';
   html += '<strong>Eff. bets</strong> = effective independent bets, a diversification score: roughly how many genuinely independent positions your book behaves like \u2014 higher is more spread out. The +number is how much this name raises it.<br>';
   html += '<strong>Top cluster \u0394</strong> = the change in the weight of your single biggest theme, in percentage points; negative means it dilutes your largest concentration.';
   if (showFactor) html += '<br><strong>' + e(R.factorCol) + ' \u0394</strong> = how that risk factor\u2019s share of the book moves (before\u2192after) when you add this name.';
   if (multi) html += '<br><strong>Fit</strong> = your selected goals blended: each goal is scaled 0\u2013100 across these candidates, then averaged, so a name ranks high only if it helps across all of them.';
+  if (anyEtf) html += '<br><strong>ETF scoring is approximate.</strong> A broad fund is modeled as spread across many diversified positions; a sector fund like its theme. The exact impact needs the fund\u2019s real holdings \u2014 add its look-through in Evaluate a Trade to get precise numbers.';
   html += '</div>';
   html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:10px;line-height:1.5">\u26a0 Each theme is the model\u2019s [inference] and drives the math \u2014 a wrong theme means wrong numbers. Confirm a name in Evaluate a Trade before acting. Catalysts not marked sourced are recollection, not verified.</div>';
 
@@ -6248,6 +6269,7 @@ function renderOptimizerResults() {
     else if (R.goals[0] === 'diversify') headline = (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ' eff. bets';
     else if (R.goals[0] === 'concentration') headline = (-r.topDelta).toFixed(2) + ' pp top cluster';
     else headline = (r.factorBefore != null) ? ('\u2212' + (r.factorBefore - r.factorAfter).toFixed(1) + ' pp ' + R.factorCol) : '\u2014';
+    var badge = (r.type === 'etf') ? (' <span style="font-size:8.5px;color:var(--color-text-info,#60a5fa);border:1px solid var(--color-text-info,#60a5fa);border-radius:3px;padding:0 3px">ETF' + (r.broad ? ' \u00b7 broad' : ' \u00b7 sector') + '</span>') : '';
     var parts = [];
     parts.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
     parts.push('Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp');
@@ -6255,7 +6277,7 @@ function renderOptimizerResults() {
     var srcTag = r.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>';
     html += '<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:7px;background:var(--color-background-tertiary)">';
     html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">';
-    html += '<div style="font-size:12px;color:var(--color-text-primary)"><span style="color:var(--color-text-tertiary)">#' + (i + 1) + '</span> <strong>' + e(r.ticker) + '</strong>' + (r.name ? ' <span style="font-size:10px;color:var(--color-text-tertiary)">' + e(r.name) + '</span>' : '') + '</div>';
+    html += '<div style="font-size:12px;color:var(--color-text-primary)"><span style="color:var(--color-text-tertiary)">#' + (i + 1) + '</span> <strong>' + e(r.ticker) + '</strong>' + badge + (r.name ? ' <span style="font-size:10px;color:var(--color-text-tertiary)">' + e(r.name) + '</span>' : '') + '</div>';
     html += '<div style="font-size:12px;font-weight:700;color:var(--color-text-info,#60a5fa);white-space:nowrap">' + e(headline) + '</div>';
     html += '</div>';
     html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-top:3px">' + e(r.theme) + ' <span style="font-style:italic">[model\u2019s inference \u2014 confirm]</span></div>';
@@ -6274,7 +6296,7 @@ function renderOptimizerTab() {
   var inp = 'background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;padding:6px 8px';
   var html = '<div style="max-width:900px;margin:0 auto">';
   html += '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Deploy Optimizer</h2>';
-  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount and one or more goals. The model proposes candidate names (any stock, not just your pipeline) and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact on your book and ranks them. With more than one goal it blends them into a single fit score. Themes are the model\u2019s [inference] \u2014 take a winner into Evaluate a Trade to confirm.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount and one or more goals. The model proposes candidate names \u2014 stocks or ETFs, any name, not just your pipeline \u2014 and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact on your book and ranks them. With more than one goal it blends them into a single fit score. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
   if (noWorker) html += '<div style="border:1px solid #fbbf24;border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">No AI worker URL set. Paste your Cloudflare AI worker URL and Save \u2014 it is shared across Ask, Deploy Optimizer, and Evaluate a Trade.<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="opt-worker-url" type="text" placeholder="https://your-ai-worker.workers.dev" style="flex:1;min-width:200px;' + inp + ';font-size:10px;padding:4px 7px"><button class="btn btn-sm" onclick="saveAiWorkerUrl(document.getElementById(\'opt-worker-url\').value); renderOptimizerTab()" style="font-size:9px">Save</button></div></div>';
   html += '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:8px">';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="15000" style="width:120px;' + inp + '"' + dis + '></div>';
@@ -31367,6 +31389,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bg</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bh</div>
 </body>
 </html>
