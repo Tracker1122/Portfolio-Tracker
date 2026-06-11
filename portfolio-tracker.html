@@ -6110,6 +6110,7 @@ var optView = 'candidates'; // 'candidates' (facts, proposal order, sortable) | 
 var optSortBy = 'proposal'; // candidates-view sort: 'proposal' | 'theme' | 'eff' | 'factor'
 var OPT_THEME_COLORS = { 'AI Infrastructure': '#61afef', 'Semiconductors': '#56b6c2', 'Mag 7-ish': '#c678dd', 'Cybersecurity': '#e06c75', 'Financials': '#d19a66', 'Energy & Grid': '#98c379', 'Commodities': '#e5c07b', 'Space & Defense': '#7f95c4', 'Healthcare': '#ec6fa9', 'Consumer Discretionary': '#56a3d9', 'Real Estate': '#b48ead', 'Emerging Markets': '#d98e5a', 'Bonds': '#8fbcbb', 'Consumer Staples': '#a3be8c', 'International Developed': '#88c0d0', 'Small Caps': '#d0876f', 'Utilities': '#b0a060' };
 function optThemeColor(t) { return OPT_THEME_COLORS[t] || '#9aa0a6'; }
+function optStaleNote(ranOn) { if (!ranOn) return ''; var m = (Date.now() - ranOn) / 60000; if (m < 30) return ''; if (m < 60) return Math.round(m) + 'm old'; var h = m / 60; if (h < 24) return Math.round(h) + 'h old'; return Math.round(h / 24) + 'd old'; }
 function optSortRows(R, view, sortBy) {
   var rows = R.rows.slice();
   if (view === 'momentum') { rows.sort(function (a, b) { return (b.momentum == null ? -1 : b.momentum) - (a.momentum == null ? -1 : a.momentum); }); return rows; }
@@ -6382,11 +6383,12 @@ function optPrintBody(R, view, sortBy) {
   var rows = optSortRows(R, v, sortBy || 'proposal');
   var orderName = (v === 'momentum') ? 'the model\u2019s current-momentum read [inference]' : (sortBy === 'theme' ? 'theme' : sortBy === 'eff' ? 'effective-bets impact' : sortBy === 'factor' ? (R.factorCol + ' reduction') : 'the order the model proposed them');
   var h = '';
-  h += '<p class="sub2">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + '.</p>';
+  h += '<p class="sub2">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + (optStaleNote(R.ranOn) ? '<span style="color:#b45309"> \u00b7 \u26a0 run is ' + optStaleNote(R.ranOn) + ' \u2014 prices and the news read may have moved' : '') + '.</p>';
   h += '<p class="note" style="margin:-8px 0 12px">Not a ranking \u2014 candidate names proposed within my constraints, ordered by ' + e(orderName) + '.</p>';
   h += '<div class="legendbox"><div class="lgh">How to read each box</div>';
   h += '<div><strong>Color</strong> marks the theme \u2014 names sharing a color share identical measured structural impact, because the engine scores the theme and the dollar amount, not the individual company.</div>';
   h += '<div><strong>Eff. bets</strong> = change in effective independent bets (a diversification score; higher means more spread out). <strong>Top cluster \u0394</strong> = shift in the biggest theme\u2019s weight, in percentage points.</div>';
+  h += '<div><strong style="color:#dc2626">A red number</strong> = a measured value moving against a goal you selected (for example, the rate factor rising while you are trying to cut it).</div>';
   if (showFactor) h += '<div><strong>' + e(R.factorCol) + ' \u0394</strong> = how that risk factor\u2019s share of the book moves, before\u2192after.</div>';
   if (showGrowth) h += '<div><strong>Growth</strong> = the model\u2019s growth figure; it steered which names were proposed and is shown for context \u2014 not measured, not a ranking input.</div>';
   if (hasMomentum) h += '<div><strong>Momentum</strong> = the model\u2019s 0\u2013100 read of how strong and timely the catalyst is right now [inference] \u2014 not measured.</div>';
@@ -6394,14 +6396,16 @@ function optPrintBody(R, view, sortBy) {
   h += '<div style="margin-top:5px"><strong>Theme</strong> is the model\u2019s inference and drives the measured numbers above it \u2014 a wrong theme means wrong numbers. <strong>(sourced)</strong> means pulled from a web search this run; otherwise it is recollection, not verified. Confirm any name before acting.</div></div>';
   rows.forEach(function (r) {
     var col = optThemeColor(r.theme);
+    var wantDiv = R.goals.indexOf('diversify') >= 0, wantConc = R.goals.indexOf('concentration') >= 0;
+    var redIf = function (cond, txt) { return cond ? '<span style="color:#dc2626">' + txt + '</span>' : txt; };
     var metrics = [];
-    metrics.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
-    metrics.push('Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp');
-    if (showFactor && r.factorBefore != null) metrics.push(R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1));
+    metrics.push(redIf(wantDiv && r.ebDelta < 0, 'Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta));
+    metrics.push(redIf(wantConc && r.topDelta > 0, 'Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp'));
+    if (showFactor && r.factorBefore != null) metrics.push(redIf(r.factorAfter > r.factorBefore, R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1)));
     h += '<div class="card" style="border-left:3px solid ' + col + '">';
     h += '<div class="cardhead"><strong>' + e(r.ticker) + '</strong>' + (r.type === 'etf' ? (' <span class="etf">ETF \u00b7 ' + (r.broad ? 'broad' : 'sector') + '</span>') : '') + (r.name ? (' <span class="nm">' + e(r.name) + '</span>') : '') + ' <span class="themechip" style="color:' + col + ';border-color:' + col + '">' + e(r.theme) + '</span></div>';
     h += '<div class="theme">theme is the model\u2019s inference \u2014 confirm</div>';
-    h += '<div class="metrics">' + e(metrics.join('  \u00b7  ')) + '</div>';
+    h += '<div class="metrics">' + metrics.join('  \u00b7  ') + '</div>';
     if (showGrowth && r.growth) h += '<div class="growth">Growth: ' + e(r.growth) + ' ' + (r.growthSourced ? '(sourced)' : '(unsourced)') + '</div>';
     if (r.momentum != null) h += '<div class="mom">Momentum: ' + r.momentum + '/100 [model\u2019s news read]</div>';
     h += '<div class="cat">' + e(r.catalyst || '') + ' ' + (r.sourced ? '(sourced)' : '(unsourced)') + '</div>';
@@ -6431,7 +6435,7 @@ function optExportPdf(id) {
     + (logo ? ('<div class="letterhead"><img src="' + logo + '" alt="Harlan Shelby"></div>') : '')
     + '<h1>Deploy Optimizer \u2014 Candidate Review</h1>'
     + '<div class="sub">Prepared ' + e(now.toLocaleDateString()) + ' for discussion with my advisor.</div>'
-    + '<div class="note">Candidates are model-proposed within constraints I set. Structural impact (effective bets, cluster and factor shifts) is measured by my own tracker via true-exposure look-through using fund weights I maintain. Theme labels are the model\u2019s inferences and drive those numbers. Growth figures and current-momentum scores are the model\u2019s read, not measured, and are not part of the ranking. ETF impact is approximate. Hypothetical; not tax or investment advice.</div>'
+    + '<div class="note">Candidates are model-proposed within constraints I set. Structural impact (effective bets, cluster and factor shifts) is measured by my own tracker via true-exposure look-through using fund weights I maintain. Theme labels are the model\u2019s inferences and drive those numbers. Growth figures and current-momentum scores are the model\u2019s read, shown for context, not measured. ETF impact is approximate. Hypothetical; not tax or investment advice.</div>'
     + '<h2>Candidates</h2>'
     + optPrintBody(R, id ? 'candidates' : optView, id ? 'proposal' : optSortBy)
     + '<div class="note" style="margin-top:24px">Generated from my Deploy Optimizer. Confirm any name in Evaluate a Trade (with the fund\u2019s real holdings for ETFs) before acting.</div>'
@@ -6459,7 +6463,7 @@ function renderOptimizerResults() {
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
   var html = '';
   html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' <span style="color:var(--color-text-tertiary)">(growth lens on)</span>' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ')' : '') + '.</div>';
-  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:8px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped' : '') + ' \u00b7 run ' + e(new Date(R.ranOn).toLocaleString()) + '.</div>';
+  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:8px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped' : '') + ' \u00b7 run ' + e(new Date(R.ranOn).toLocaleString()) + (optStaleNote(R.ranOn) ? ' \u00b7 <span style="color:#fbbf24">\u26a0 ' + optStaleNote(R.ranOn) + '</span>' : '') + '.</div>';
   html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">';
   html += '<button class="btn btn-sm" style="font-size:10px;' + (view === 'candidates' ? 'font-weight:700' : 'opacity:.55') + '" onclick="optSetView(\'candidates\')">Candidates</button>';
   if (hasMomentum) html += '<button class="btn btn-sm" style="font-size:10px;' + (view === 'momentum' ? 'font-weight:700' : 'opacity:.55') + '" onclick="optSetView(\'momentum\')">Momentum \u26a1 [model read]</button>';
@@ -6479,6 +6483,7 @@ function renderOptimizerResults() {
   html += 'Candidate names the model proposed within your constraints \u2014 <strong>not a ranking</strong>. The tracker measures each one\u2019s structural effect on your book; you decide what to do with them.<br>';
   html += '<strong>Color = theme.</strong> Same color means the engine sees them the same way: $' + Math.round(R.amount / 1000) + 'K into a theme moves your book by that theme\u2019s weight, so names sharing a theme share identical measured impact \u2014 the company itself is invisible to the engine. Use Evaluate a Trade for name-level depth.<br>';
   html += '<strong>Eff. bets</strong> = change in effective independent bets (diversification). <strong>Top cluster \u0394</strong> = shift in your biggest theme\u2019s weight (pp).';
+  html += '<br><strong style="color:#f87171">Red number</strong> = a measured value moving against a goal you selected (e.g. Rate rising while you\u2019re cutting it).';
   if (showFactor) html += ' <strong>' + e(R.factorCol) + ' \u0394</strong> = that risk factor\u2019s before\u2192after share.';
   if (showGrowth) html += '<br><strong>Growth:</strong> model\u2019s sourced/recalled figure \u2014 steered selection, shown for your eye, not measured.';
   if (hasMomentum) html += '<br><strong>Momentum:</strong> model\u2019s 0\u2013100 read of current catalyst strength [inference] \u2014 the Momentum view sorts by it.';
@@ -6489,10 +6494,12 @@ function renderOptimizerResults() {
   rows.forEach(function (r) {
     var col = optThemeColor(r.theme);
     var badge = (r.type === 'etf') ? (' <span style="font-size:8.5px;color:var(--color-text-tertiary);border:1px solid var(--color-border-tertiary);border-radius:3px;padding:0 3px">ETF \u00b7 ' + (r.broad ? 'broad' : 'sector') + '</span>') : '';
+    var wantDiv = R.goals.indexOf('diversify') >= 0, wantConc = R.goals.indexOf('concentration') >= 0;
+    var redIf = function (cond, txt) { return cond ? '<span style="color:#f87171">' + txt + '</span>' : txt; };
     var parts = [];
-    parts.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
-    parts.push('Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp');
-    if (showFactor && r.factorBefore != null) parts.push(R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1));
+    parts.push(redIf(wantDiv && r.ebDelta < 0, 'Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta));
+    parts.push(redIf(wantConc && r.topDelta > 0, 'Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp'));
+    if (showFactor && r.factorBefore != null) parts.push(redIf(r.factorAfter > r.factorBefore, R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1)));
     var srcTag = r.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>';
     html += '<div style="border:1px solid var(--color-border-tertiary);border-left:3px solid ' + col + ';border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:7px;background:var(--color-background-tertiary)">';
     html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">';
@@ -6500,7 +6507,7 @@ function renderOptimizerResults() {
     html += '<span style="font-size:9.5px;color:' + col + ';border:1px solid ' + col + ';border-radius:3px;padding:0 5px;white-space:nowrap">' + e(r.theme) + '</span>';
     html += '</div>';
     html += '<div style="font-size:8.5px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">theme is the model\u2019s inference \u2014 confirm</div>';
-    html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + e(parts.join('  \u00b7  ')) + '</div>';
+    html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + parts.join('  \u00b7  ') + '</div>';
     if (showGrowth && r.growth) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Growth: ' + e(r.growth) + '  ' + (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>') + '</div>';
     if (r.momentum != null) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Momentum: <strong>' + r.momentum + '</strong>/100 <span style="color:var(--color-text-tertiary);font-style:italic">[model\u2019s news read]</span></div>';
     html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
@@ -31639,6 +31646,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bs</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bt</div>
 </body>
 </html>
