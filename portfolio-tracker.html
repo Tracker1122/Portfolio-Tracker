@@ -6107,6 +6107,8 @@ var optWebOn = true; // objective-level news default ON
 var optResults = null;
 var optDirection = ''; // free-hand steer, persisted across re-renders in this session
 var optSortMode = 'fit'; // 'fit' (measured) | 'momentum' (model's current-news read, inference)
+var OPT_LAST_KEY = 'portfolio-optimizer-last-v1'; // auto-restored latest run
+var OPT_RUNS_KEY = 'portfolio-optimizer-runs-v1'; // explicitly saved-for-review runs
 var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities'];
 var OPT_FACTORS = [{ col: 'Rate', label: 'Rate / duration' }, { col: 'Liquidity', label: 'Liquidity / funding' }, { col: 'Credit', label: 'Credit' }, { col: 'Policy', label: 'Policy shock' }, { col: 'Crowding', label: 'Positioning / leverage' }, { col: 'Cyclical', label: 'Demand cyclicality' }];
 var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor' };
@@ -6306,9 +6308,121 @@ function optDeepenButtonHtml(R) {
   return '<button class="btn btn-sm" onclick="optDeepen()" style="font-size:10px"' + (optBusy ? ' disabled' : '') + '>\u21bb Deepen \u2014 find more (excluding the ' + R.rows.length + ' shown)</button>';
 }
 
+function optPersistLast() { try { if (optResults) localStorage.setItem(OPT_LAST_KEY, JSON.stringify(optResults)); } catch (e) { /* quota / private mode: non-fatal */ } }
+function optRestoreLast() { try { var s = localStorage.getItem(OPT_LAST_KEY); if (s) { var r = JSON.parse(s); if (r && r.rows && r.rows.length) return r; } } catch (e) { } return null; }
+function optLoadSavedRuns() { try { var s = localStorage.getItem(OPT_RUNS_KEY); var a = s ? JSON.parse(s) : []; return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+function optWriteSavedRuns(list) { try { localStorage.setItem(OPT_RUNS_KEY, JSON.stringify(list)); return true; } catch (e) { return false; } }
+
+function optRunLabel(R) {
+  var gt = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : OPT_GOAL_LABELS[g]; }).join(' + ');
+  var geo = (R.geos.length === 3) ? 'all geo' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join('+');
+  var veh = (R.vehicles.length === 3) ? 'all veh' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join('+');
+  var amt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole(R.amount) : ('$' + Math.round(R.amount).toLocaleString());
+  return gt + (R.growthLean ? ' + growth lens' : '') + ' \u00b7 ' + geo + ' \u00b7 ' + veh + ' \u00b7 ' + amt;
+}
+function optFlash(msg) { var el = document.getElementById('opt-action-status'); if (el) { el.textContent = msg; setTimeout(function () { var e2 = document.getElementById('opt-action-status'); if (e2) e2.textContent = ''; }, 2200); } }
+
+function optSaveForReview() {
+  if (!optResults) return;
+  var list = optLoadSavedRuns();
+  for (var i = 0; i < list.length; i++) { if (list[i].run && list[i].run.ranOn === optResults.ranOn) { optFlash('Already saved'); return; } }
+  list.unshift({ id: 'r' + Date.now(), savedAt: Date.now(), label: optRunLabel(optResults), run: optResults });
+  if (list.length > 50) list = list.slice(0, 50);
+  var ok = optWriteSavedRuns(list);
+  optFlash(ok ? 'Saved \u2713' : 'Save failed (storage full?)');
+  renderOptSavedList();
+}
+function optLoadRun(id) {
+  var list = optLoadSavedRuns();
+  for (var i = 0; i < list.length; i++) { if (list[i].id === id) { optResults = list[i].run; optSortMode = 'fit'; optPersistLast(); renderOptimizerResults(); var r = document.getElementById('opt-results'); if (r && r.scrollIntoView) r.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; } }
+}
+function optDeleteRun(id) { var list = optLoadSavedRuns().filter(function (it) { return it.id !== id; }); optWriteSavedRuns(list); renderOptSavedList(); }
+
+function renderOptSavedList() {
+  var el = document.getElementById('opt-saved'); if (!el) return;
+  var list = optLoadSavedRuns();
+  if (!list.length) { el.innerHTML = ''; return; }
+  var e = (typeof esc === 'function') ? esc : function (s) { return s; };
+  var h = '<details style="margin-top:14px"><summary style="cursor:pointer;font-size:11px;color:var(--color-text-secondary)">Saved runs (' + list.length + ') \u2014 click to review</summary><div style="margin-top:6px">';
+  list.forEach(function (it) {
+    var when = new Date(it.savedAt).toLocaleString();
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:6px 9px;margin-bottom:5px;background:var(--color-background-tertiary)">';
+    h += '<div style="font-size:10px;color:var(--color-text-secondary);min-width:0"><div>' + e(it.label || 'run') + '</div><div style="font-size:9px;color:var(--color-text-tertiary)">saved ' + e(when) + ((it.run && it.run.rows) ? (' \u00b7 ' + it.run.rows.length + ' names') : '') + '</div></div>';
+    h += '<div style="display:flex;gap:5px;flex-shrink:0">';
+    h += '<button class="btn btn-sm" style="font-size:9.5px" onclick="optLoadRun(\'' + it.id + '\')">Load</button>';
+    h += '<button class="btn btn-sm" style="font-size:9.5px" onclick="optExportPdf(\'' + it.id + '\')">PDF</button>';
+    h += '<button class="btn btn-sm" style="font-size:9.5px" onclick="optDeleteRun(\'' + it.id + '\')">Delete</button>';
+    h += '</div></div>';
+  });
+  h += '</div></details>';
+  el.innerHTML = h;
+}
+
+function optPrintBody(R) {
+  var e = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
+  var goalText = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : OPT_GOAL_LABELS[g]; }).join(' + ');
+  var showFactor = R.goals.indexOf('factor') >= 0;
+  var showGrowth = !!R.growthLean;
+  var geoSummary = (R.geos.length === 3) ? 'all regions' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join(' + ');
+  var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
+  var rows = R.rows.slice().sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
+  var h = '';
+  h += '<p class="sub2">Ranked to <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on \u2014 steers picks, not ranking)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + '.</p>';
+  rows.forEach(function (r, i) {
+    var metrics = [];
+    metrics.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
+    metrics.push('Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp');
+    if (showFactor && r.factorBefore != null) metrics.push(R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1));
+    var fitTxt = (R.goals.length > 1) ? ('Fit ' + Math.round((r.fit || 0) * 100) + '/100') : '';
+    h += '<div class="card">';
+    h += '<div class="cardhead"><span class="rank">#' + (i + 1) + '</span> <strong>' + e(r.ticker) + '</strong>' + (r.type === 'etf' ? (' <span class="etf">ETF \u00b7 ' + (r.broad ? 'broad' : 'sector') + '</span>') : '') + (r.name ? (' <span class="nm">' + e(r.name) + '</span>') : '') + (fitTxt ? (' <span class="fit">' + e(fitTxt) + '</span>') : '') + '</div>';
+    h += '<div class="theme">' + e(r.theme) + ' [model\u2019s inference \u2014 confirm]</div>';
+    h += '<div class="metrics">' + e(metrics.join('  \u00b7  ')) + '</div>';
+    if (showGrowth && r.growth) h += '<div class="growth">Growth: ' + e(r.growth) + ' ' + (r.growthSourced ? '(sourced)' : '(unsourced)') + ' \u2014 not in ranking</div>';
+    if (r.momentum != null) h += '<div class="mom">Current momentum: ' + r.momentum + '/100 [model\u2019s read of current news \u2014 not measured]</div>';
+    h += '<div class="cat">' + e(r.catalyst || '') + ' ' + (r.sourced ? '(sourced)' : '(unsourced)') + '</div>';
+    h += '</div>';
+  });
+  return h;
+}
+
+function optExportPdf(id) {
+  var R = optResults;
+  if (id) { var list = optLoadSavedRuns(); for (var i = 0; i < list.length; i++) { if (list[i].id === id) { R = list[i].run; break; } } }
+  if (!R || !R.rows || !R.rows.length) { alert('No optimizer run to export yet \u2014 rank some candidates first.'); return; }
+  var e = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var now = new Date();
+  var logo = (typeof HS_LOGO !== 'undefined') ? HS_LOGO : '';
+  var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Deploy Optimizer \u2014 Candidate Review</title><style>'
+    + '*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + '.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.sub2{color:#374151;font-size:11.5px;line-height:1.5;margin:6px 0 14px}'
+    + '.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}'
+    + '.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}'
+    + 'h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:20px 0 10px}'
+    + '.card{border:1px solid #d4d4d8;border-radius:6px;padding:9px 11px;margin:0 0 7px;page-break-inside:avoid}'
+    + '.cardhead{font-size:13px;color:#111}.rank{color:#777}.etf{font-size:9px;color:#1d4ed8;border:1px solid #1d4ed8;border-radius:3px;padding:0 3px}.nm{font-size:11px;color:#555}.fit{font-size:12px;font-weight:700;color:#1d4ed8}'
+    + '.theme{font-size:10px;color:#777;font-style:italic;margin-top:3px}.metrics{font-size:10.5px;color:#374151;margin-top:4px}.growth{font-size:10px;color:#444;margin-top:3px}.mom{font-size:10px;color:#444;margin-top:3px}.cat{font-size:11px;color:#111;line-height:1.5;margin-top:5px}'
+    + '@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}'
+    + '</style></head><body><div class="doc">'
+    + (logo ? ('<div class="letterhead"><img src="' + logo + '" alt="Harlan Shelby"></div>') : '')
+    + '<h1>Deploy Optimizer \u2014 Candidate Review</h1>'
+    + '<div class="sub">Prepared ' + e(now.toLocaleDateString()) + ' for discussion with my advisor.</div>'
+    + '<div class="note">Candidates are model-proposed within constraints I set. Structural impact (effective bets, cluster and factor shifts) is measured by my own tracker via true-exposure look-through using fund weights I maintain. Theme labels are the model\u2019s inferences and drive those numbers. Growth figures and current-momentum scores are the model\u2019s read, not measured, and are not part of the ranking. ETF impact is approximate. Hypothetical; not tax or investment advice.</div>'
+    + '<h2>Ranked candidates</h2>'
+    + optPrintBody(R)
+    + '<div class="note" style="margin-top:24px">Generated from my Deploy Optimizer. Confirm any name in Evaluate a Trade (with the fund\u2019s real holdings for ETFs) before acting.</div>'
+    + '</div></body></html>';
+  var w = window.open('', '_blank');
+  if (!w) { alert('Allow pop-ups for this site to export the PDF, then try again.'); return; }
+  w.document.open(); w.document.write(doc); w.document.close();
+  setTimeout(function () { try { w.focus(); w.print(); } catch (e) { } }, 400);
+}
+
 function renderOptimizerResults() {
   var el = document.getElementById('opt-results'); if (!el) return;
   if (!optResults || !optResults.rows || !optResults.rows.length) { el.innerHTML = ''; return; }
+  optPersistLast();
   var R = optResults, e = (typeof esc === 'function') ? esc : function (s) { return s; };
   var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
   var multi = R.goals.length > 1;
@@ -6325,8 +6439,13 @@ function renderOptimizerResults() {
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
   var html = '';
   html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Ranked to <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' <span style="color:var(--color-text-tertiary)">(growth lens on \u2014 steers picks, not ranking)</span>' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ' candidates)' : '') + (mode === 'momentum' ? ' \u00b7 <span style="color:#fbbf24">sorted by current momentum [inference]</span>' : '') + '.</div>';
-  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:6px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped (outside universe)' : '') + '.</div>';
+  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:6px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped (outside universe)' : '') + ' \u00b7 run ' + e(new Date(R.ranOn).toLocaleString()) + '.</div>';
   if (showGrowth && !R.usedWeb) html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:6px">Growth lens is current-event-aware only with the news toggle on \u2014 it was off this run, so growth figures are recollection and there\u2019s no momentum sort.</div>';
+  html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">';
+  html += '<button class="btn btn-sm" style="font-size:10px" onclick="optSaveForReview()">\u2605 Save for review</button>';
+  html += '<button class="btn btn-sm" style="font-size:10px" onclick="optExportPdf()">Export PDF</button>';
+  html += '<span id="opt-action-status" style="font-size:10px;color:var(--color-text-success)"></span>';
+  html += '</div>';
   if (hasMomentum) {
     html += '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap"><span style="font-size:9.5px;color:var(--color-text-tertiary)">Sort:</span>';
     html += '<button class="btn btn-sm" onclick="optSetSort(\'fit\')" style="font-size:10px;' + (mode === 'fit' ? 'font-weight:700' : 'opacity:.55') + '">Structural fit (measured)</button>';
@@ -6404,9 +6523,12 @@ function renderOptimizerTab() {
   html += '<div style="margin-bottom:8px"><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Free-hand direction (optional) \u2014 steer the search</div><textarea id="opt-direction" oninput="optDirection=this.value" placeholder="e.g. prefer dividend growers; avoid tobacco; lean defensive; smaller under-the-radar names; emphasize cash-flow quality" style="width:100%;max-width:560px;min-height:38px;box-sizing:border-box;' + inp + ';font-size:11px;resize:vertical"' + dis + '>' + e(optDirection) + '</textarea></div>';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer;margin-bottom:4px" title="Searches current catalysts at the objective level (a few cents per run). Required when the growth lens is on; also powers the current-momentum sort."><input type="checkbox" id="opt-web"' + (optWebOn ? ' checked' : '') + dis + '> Use current news (objective-level web search) <span style="font-size:9px">~a few \u00a2 per run</span></label>';
   html += '<div id="opt-results"></div>';
+  html += '<div id="opt-saved"></div>';
   html += '</div>';
+  if (!optResults) { var _rr = optRestoreLast(); if (_rr) optResults = _rr; }
   el.innerHTML = html;
   renderOptimizerResults();
+  renderOptSavedList();
 }
 
 var askWebOn = false; // per-question web-search toggle (in-memory; sticky until turned off)
@@ -31499,6 +31621,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bn</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bo</div>
 </body>
 </html>
