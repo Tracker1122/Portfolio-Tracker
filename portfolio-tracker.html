@@ -6468,6 +6468,10 @@ function renderOptimizerResults() {
   html += '</div>';
   html += '<div style="font-size:9px;color:#fbbf24;margin-bottom:10px;line-height:1.5">\u26a0 Each theme is the model\u2019s [inference] and drives the math \u2014 a wrong theme means wrong numbers. Confirm a name in Evaluate a Trade before acting. Anything not marked sourced is recollection, not verified.</div>';
 
+  var fitCounts = {};
+  rows.forEach(function (r) { var k = Math.round((r.fit || 0) * 100); fitCounts[k] = (fitCounts[k] || 0) + 1; });
+  var tieExists = (multi && mode !== 'momentum') && Object.keys(fitCounts).some(function (k) { return fitCounts[k] > 1; });
+  if (tieExists) html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:10px;line-height:1.5;border-left:2px solid var(--color-border-tertiary);padding-left:8px">Names showing the same Fit are <strong>tied</strong> \u2014 they share identical measured structural impact, so the engine can\u2019t separate them (it scores the theme and dollar amount, not the individual company). The growth figure and current momentum, not the ranking, are what distinguish tied names.</div>';
   rows.forEach(function (r, i) {
     var headline;
     if (mode === 'momentum') headline = 'Momentum ' + (r.momentum == null ? '\u2014' : r.momentum);
@@ -6475,6 +6479,7 @@ function renderOptimizerResults() {
     else if (R.goals[0] === 'diversify') headline = (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ' eff. bets';
     else if (R.goals[0] === 'concentration') headline = (-r.topDelta).toFixed(2) + ' pp top cluster';
     else headline = (r.factorBefore != null) ? ('\u2212' + (r.factorBefore - r.factorAfter).toFixed(1) + ' pp ' + R.factorCol) : '\u2014';
+    var tiedTag = ((multi && mode !== 'momentum') && fitCounts[Math.round((r.fit || 0) * 100)] > 1) ? ' <span style="font-size:8.5px;font-weight:400;color:var(--color-text-tertiary)">\u00b7 tied</span>' : '';
     var badge = (r.type === 'etf') ? (' <span style="font-size:8.5px;color:var(--color-text-info,#60a5fa);border:1px solid var(--color-text-info,#60a5fa);border-radius:3px;padding:0 3px">ETF' + (r.broad ? ' \u00b7 broad' : ' \u00b7 sector') + '</span>') : '';
     var parts = [];
     parts.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
@@ -6484,7 +6489,7 @@ function renderOptimizerResults() {
     html += '<div style="border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:7px;background:var(--color-background-tertiary)">';
     html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">';
     html += '<div style="font-size:12px;color:var(--color-text-primary)"><span style="color:var(--color-text-tertiary)">#' + (i + 1) + '</span> <strong>' + e(r.ticker) + '</strong>' + badge + (r.name ? ' <span style="font-size:10px;color:var(--color-text-tertiary)">' + e(r.name) + '</span>' : '') + '</div>';
-    html += '<div style="font-size:12px;font-weight:700;color:var(--color-text-info,#60a5fa);white-space:nowrap">' + e(headline) + '</div>';
+    html += '<div style="font-size:12px;font-weight:700;color:var(--color-text-info,#60a5fa);white-space:nowrap">' + e(headline) + tiedTag + '</div>';
     html += '</div>';
     html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-top:3px">' + e(r.theme) + ' <span style="font-style:italic">[model\u2019s inference \u2014 confirm]</span></div>';
     html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + e(parts.join('  \u00b7  ')) + '</div>';
@@ -31626,6 +31631,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bp</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bq</div>
 </body>
 </html>
