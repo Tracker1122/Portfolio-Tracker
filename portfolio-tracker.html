@@ -6375,6 +6375,7 @@ function optPrintBody(R, view, sortBy) {
   var showFactor = R.goals.indexOf('factor') >= 0;
   var showGrowth = !!R.growthLean;
   var hasMomentum = R.rows.some(function (r) { return r.momentum != null; });
+  var anyEtf = R.rows.some(function (r) { return r.type === 'etf'; });
   var v = (view === 'momentum' && hasMomentum) ? 'momentum' : 'candidates';
   var geoSummary = (R.geos.length === 3) ? 'all regions' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join(' + ');
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v2) { return OPT_VEH_SHORT[v2]; }).join(' + ');
@@ -6382,7 +6383,15 @@ function optPrintBody(R, view, sortBy) {
   var orderName = (v === 'momentum') ? 'the model\u2019s current-momentum read [inference]' : (sortBy === 'theme' ? 'theme' : sortBy === 'eff' ? 'effective-bets impact' : sortBy === 'factor' ? (R.factorCol + ' reduction') : 'the order the model proposed them');
   var h = '';
   h += '<p class="sub2">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + '.</p>';
-  h += '<p class="note" style="margin:-8px 0 12px">Not a ranking \u2014 candidate names proposed within my constraints, ordered by ' + e(orderName) + '. Color marks the theme: names sharing a color share identical measured structural impact, because the engine scores the theme and dollar amount, not the company. The growth and momentum lines are the model\u2019s read, not measured.</p>';
+  h += '<p class="note" style="margin:-8px 0 12px">Not a ranking \u2014 candidate names proposed within my constraints, ordered by ' + e(orderName) + '.</p>';
+  h += '<div class="legendbox"><div class="lgh">How to read each box</div>';
+  h += '<div><strong>Color</strong> marks the theme \u2014 names sharing a color share identical measured structural impact, because the engine scores the theme and the dollar amount, not the individual company.</div>';
+  h += '<div><strong>Eff. bets</strong> = change in effective independent bets (a diversification score; higher means more spread out). <strong>Top cluster \u0394</strong> = shift in the biggest theme\u2019s weight, in percentage points.</div>';
+  if (showFactor) h += '<div><strong>' + e(R.factorCol) + ' \u0394</strong> = how that risk factor\u2019s share of the book moves, before\u2192after.</div>';
+  if (showGrowth) h += '<div><strong>Growth</strong> = the model\u2019s growth figure; it steered which names were proposed and is shown for context \u2014 not measured, not a ranking input.</div>';
+  if (hasMomentum) h += '<div><strong>Momentum</strong> = the model\u2019s 0\u2013100 read of how strong and timely the catalyst is right now [inference] \u2014 not measured.</div>';
+  if (anyEtf) h += '<div><strong>ETF impact is approximate</strong> \u2014 modeled from the theme, not the fund\u2019s real holdings.</div>';
+  h += '<div style="margin-top:5px"><strong>Theme</strong> is the model\u2019s inference and drives the measured numbers above it \u2014 a wrong theme means wrong numbers. <strong>(sourced)</strong> means pulled from a web search this run; otherwise it is recollection, not verified. Confirm any name before acting.</div></div>';
   rows.forEach(function (r) {
     var col = optThemeColor(r.theme);
     var metrics = [];
@@ -6416,7 +6425,7 @@ function optExportPdf(id) {
     + 'h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:20px 0 10px}'
     + '.card{border:1px solid #d4d4d8;border-radius:6px;padding:9px 11px;margin:0 0 7px;page-break-inside:avoid}'
     + '.cardhead{font-size:13px;color:#111}.rank{color:#777}.etf{font-size:9px;color:#1d4ed8;border:1px solid #1d4ed8;border-radius:3px;padding:0 3px}.nm{font-size:11px;color:#555}.fit{font-size:12px;font-weight:700;color:#1d4ed8}'
-    + '.theme{font-size:10px;color:#777;font-style:italic;margin-top:3px}.metrics{font-size:10.5px;color:#374151;margin-top:4px}.growth{font-size:10px;color:#444;margin-top:3px}.mom{font-size:10px;color:#444;margin-top:3px}.cat{font-size:11px;color:#111;line-height:1.5;margin-top:5px}.themechip{font-size:9px;border:1px solid #999;border-radius:3px;padding:0 4px;margin-left:4px}'
+    + '.theme{font-size:10px;color:#777;font-style:italic;margin-top:3px}.metrics{font-size:10.5px;color:#374151;margin-top:4px}.growth{font-size:10px;color:#444;margin-top:3px}.mom{font-size:10px;color:#444;margin-top:3px}.cat{font-size:11px;color:#111;line-height:1.5;margin-top:5px}.themechip{font-size:9px;border:1px solid #999;border-radius:3px;padding:0 4px;margin-left:4px}.legendbox{border:1px solid #e5e7eb;background:#fafafa;border-radius:6px;padding:9px 11px;margin:0 0 14px;font-size:10px;color:#374151;line-height:1.5;page-break-inside:avoid}.legendbox .lgh{font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px}.legendbox>div{margin:2px 0}'
     + '@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}'
     + '</style></head><body><div class="doc">'
     + (logo ? ('<div class="letterhead"><img src="' + logo + '" alt="Harlan Shelby"></div>') : '')
@@ -31630,6 +31639,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09br</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bs</div>
 </body>
 </html>
