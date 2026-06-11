@@ -6358,7 +6358,7 @@ function renderOptSavedList() {
   el.innerHTML = h;
 }
 
-function optPrintBody(R) {
+function optPrintBody(R, mode) {
   var e = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
   var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
   var goalText = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : OPT_GOAL_LABELS[g]; }).join(' + ');
@@ -6366,17 +6366,22 @@ function optPrintBody(R) {
   var showGrowth = !!R.growthLean;
   var geoSummary = (R.geos.length === 3) ? 'all regions' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join(' + ');
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
-  var rows = R.rows.slice().sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
+  var hasMomentum = R.rows.some(function (r) { return r.momentum != null; });
+  var byMom = (mode === 'momentum' && hasMomentum);
+  var rows = R.rows.slice();
+  if (byMom) rows.sort(function (a, b) { return (b.momentum == null ? -1 : b.momentum) - (a.momentum == null ? -1 : a.momentum); });
+  else rows.sort(function (a, b) { return (b.fit || 0) - (a.fit || 0); });
   var h = '';
   h += '<p class="sub2">Ranked to <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on \u2014 steers picks, not ranking)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + '.</p>';
+  h += '<p class="note" style="margin:-8px 0 12px">Ordered by ' + (byMom ? 'the model\u2019s current-momentum read [inference] \u2014 not a measured quantity' : 'measured structural impact (effective independent bets). Several names can share identical structural metrics: they are tied on the ranking, and the growth and momentum lines (not the ranking) are what distinguish them') + '.</p>';
   rows.forEach(function (r, i) {
     var metrics = [];
     metrics.push('Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta);
     metrics.push('Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp');
     if (showFactor && r.factorBefore != null) metrics.push(R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1));
-    var fitTxt = (R.goals.length > 1) ? ('Fit ' + Math.round((r.fit || 0) * 100) + '/100') : '';
+    var headTxt = byMom ? ('Momentum ' + (r.momentum == null ? '\u2014' : r.momentum) + '/100') : ((r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ' eff. bets');
     h += '<div class="card">';
-    h += '<div class="cardhead"><span class="rank">#' + (i + 1) + '</span> <strong>' + e(r.ticker) + '</strong>' + (r.type === 'etf' ? (' <span class="etf">ETF \u00b7 ' + (r.broad ? 'broad' : 'sector') + '</span>') : '') + (r.name ? (' <span class="nm">' + e(r.name) + '</span>') : '') + (fitTxt ? (' <span class="fit">' + e(fitTxt) + '</span>') : '') + '</div>';
+    h += '<div class="cardhead"><span class="rank">#' + (i + 1) + '</span> <strong>' + e(r.ticker) + '</strong>' + (r.type === 'etf' ? (' <span class="etf">ETF \u00b7 ' + (r.broad ? 'broad' : 'sector') + '</span>') : '') + (r.name ? (' <span class="nm">' + e(r.name) + '</span>') : '') + ' <span class="fit">' + e(headTxt) + '</span>' + '</div>';
     h += '<div class="theme">' + e(r.theme) + ' [model\u2019s inference \u2014 confirm]</div>';
     h += '<div class="metrics">' + e(metrics.join('  \u00b7  ')) + '</div>';
     if (showGrowth && r.growth) h += '<div class="growth">Growth: ' + e(r.growth) + ' ' + (r.growthSourced ? '(sourced)' : '(unsourced)') + ' \u2014 not in ranking</div>';
@@ -6410,7 +6415,7 @@ function optExportPdf(id) {
     + '<div class="sub">Prepared ' + e(now.toLocaleDateString()) + ' for discussion with my advisor.</div>'
     + '<div class="note">Candidates are model-proposed within constraints I set. Structural impact (effective bets, cluster and factor shifts) is measured by my own tracker via true-exposure look-through using fund weights I maintain. Theme labels are the model\u2019s inferences and drive those numbers. Growth figures and current-momentum scores are the model\u2019s read, not measured, and are not part of the ranking. ETF impact is approximate. Hypothetical; not tax or investment advice.</div>'
     + '<h2>Ranked candidates</h2>'
-    + optPrintBody(R)
+    + optPrintBody(R, id ? 'fit' : optSortMode)
     + '<div class="note" style="margin-top:24px">Generated from my Deploy Optimizer. Confirm any name in Evaluate a Trade (with the fund\u2019s real holdings for ETFs) before acting.</div>'
     + '</div></body></html>';
   var w = window.open('', '_blank');
@@ -31621,6 +31626,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bo</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bp</div>
 </body>
 </html>
