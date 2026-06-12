@@ -6462,8 +6462,55 @@ function optParseVerify(text) {
 
 function optVerifyButtonHtml(R) {
   var n = (R.cands ? R.cands.length : 0);
-  var vtxt = R.verifiedAt ? ('\u2713 verified ' + new Date(R.verifiedAt).toLocaleTimeString() + (R.verifiedCount != null ? ' (' + R.verifiedCount + '/' + n + ' refreshed)' : '') + ' \u2014 re-verify') : '\u2713 Verify latest quarter \u2014 per-name search (~$0.30+)';
+  var vtxt = R.verifiedAt ? ('\u2713 ' + R.verifiedCount + '/' + n + ' verified \u2014 re-verify all') : '\u2713 Verify all names \u2014 one batched pass (per-card \u21bb is more reliable)';
   return '<button class="btn btn-sm" style="font-size:10px" onclick="optVerifyLatest()"' + (optBusy ? ' disabled' : '') + '>' + vtxt + '</button>';
+}
+
+function optParseVerifyOne(text) {
+  if (!text) return null;
+  var s = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+  var a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a < 0 || b < 0 || b <= a) return null;
+  var o; try { o = JSON.parse(s.slice(a, b + 1)); } catch (e) { return null; }
+  if (!o) return null;
+  var m = (o.momentum != null) ? parseFloat(o.momentum) : NaN;
+  return { growth: o.growth ? String(o.growth) : '', growthSourced: !!o.growthSourced, momentum: isNaN(m) ? null : Math.max(0, Math.min(100, Math.round(m))) };
+}
+
+async function optVerifyOne(ticker) {
+  if (optBusy || !optResults || !optResults.cands) return;
+  if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
+  if (!aiWorkerUrl) return;
+  var R = optResults, cand = null, i;
+  for (i = 0; i < R.cands.length; i++) { if (R.cands[i].ticker === ticker) { cand = R.cands[i]; break; } }
+  if (!cand) return;
+  optBusy = true;
+  var st = document.getElementById('opt-gv-' + ticker);
+  if (st) st.innerHTML = '<span style="color:var(--color-text-tertiary)">checking\u2026</span>';
+  try {
+    var label = cand.ticker + (cand.name ? ' (' + cand.name + ')' : '');
+    var sys = 'You verify CURRENT fundamentals for ONE company using web search. Search ' + label + ' for its MOST RECENT reported quarter and return its latest top-line growth (revenue and/or EPS, year-over-year) WITH the period in ABSOLUTE terms (e.g. "Q1 2026"). Use the newest reported quarter \u2014 not an older one. NEVER use relative terms like "next year" or "last year". Also give a momentum score 0-100 from what you find. If you genuinely cannot find a recent figure, set growthSourced false.\nReturn ONLY a JSON object, nothing before or after: {"growth":"Q1 2026 rev +27% YoY, EPS +24%","growthSourced":true,"momentum":75}.';
+    var data = await aiWorkerCallStructured([{ role: 'user', content: 'Search ' + label + ' now and return the JSON object.' }], sys, [], { web: true });
+    var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
+    var obj = optParseVerifyOne(text);
+    if (obj) {
+      if (obj.growth) cand.growth = obj.growth;
+      cand.growthSourced = !!obj.growthSourced;
+      if (obj.momentum != null) cand.momentum = obj.momentum;
+      cand.verifiedLatest = !!obj.growthSourced;
+    }
+    R.rows = optScore(R.cands, R.amount, R.goals, R.factorCol);
+    R.verifiedAt = Date.now();
+    R.verifiedCount = R.cands.filter(function (c) { return c.verifiedLatest; }).length;
+    optBusy = false;
+    optPersistLast();
+    renderOptimizerResults();
+  } catch (err) {
+    optBusy = false;
+    var info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed' };
+    var st2 = document.getElementById('opt-gv-' + ticker);
+    if (st2) st2.innerHTML = '<span style="color:#ef4444">' + ((info.title || 'error') + ' \u2014 retry') + '</span>';
+  }
 }
 
 async function optVerifyLatest() {
@@ -6567,7 +6614,11 @@ function renderOptimizerResults() {
     html += '</div>';
     html += '<div style="font-size:8.5px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">theme is the model\u2019s inference \u2014 confirm</div>';
     html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + parts.join('  \u00b7  ') + '</div>';
-    if (showGrowth && r.growth) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Growth: ' + e(r.growth) + '  ' + (r.verifiedLatest ? '<span style="color:var(--color-text-success)">\u2713 latest quarter</span>' : (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>')) + '</div>';
+    if (showGrowth && r.growth) {
+      var gstatus = (r.verifiedLatest ? '<span style="color:var(--color-text-success)">\u2713 latest quarter</span>' : (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>'));
+      var gbtn = (view === 'candidates') ? ' <button onclick="optVerifyOne(\'' + e(r.ticker) + '\')" style="font-size:9px;background:none;border:1px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-tertiary);cursor:pointer;padding:0 4px"' + (optBusy ? ' disabled' : '') + '>\u21bb ' + (r.verifiedLatest ? 're-verify' : 'verify') + '</button>' : '';
+      html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Growth: ' + e(r.growth) + '  <span id="opt-gv-' + e(r.ticker) + '">' + gstatus + '</span>' + gbtn + '</div>';
+    }
     if (r.momentum != null) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Momentum: <strong>' + r.momentum + '</strong>/100 <span style="color:var(--color-text-tertiary);font-style:italic">[model\u2019s news read]</span></div>';
     html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
     html += '</div>';
@@ -31706,6 +31757,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bu</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bv</div>
 </body>
 </html>
