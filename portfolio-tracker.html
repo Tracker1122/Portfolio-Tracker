@@ -6442,7 +6442,7 @@ function optPrintBody(R, view, sortBy) {
     if (r.dossier) {
       var D = r.dossier, naRe = /^n\/?a\b/i;
       var dft = function (f) { return f.sourced ? '(sourced)' : (f.v ? '(\u26a0 unconfirmed)' : '(not found)'); };
-      var dfr = function (lab, f) { if (!f) return ''; if (f.v && naRe.test(f.v)) return '<div>' + lab + ': ' + e(f.v) + '</div>'; return '<div>' + lab + ': ' + (f.v ? e(f.v) : '') + ' <span style="color:#777">' + dft(f) + '</span></div>'; };
+      var dfr = function (lab, f) { if (!f || (!f.v && !f.headline)) return ''; if (f.v && naRe.test(f.v)) return '<div>' + lab + ': ' + e(f.v) + '</div>'; var head = f.headline ? (lab + ' \u2014 ' + e(f.headline)) : lab; return '<div style="margin:3px 0"><strong>' + head + '</strong> <span style="color:#777">' + dft(f) + '</span>' + (f.v ? '<div style="color:#555">' + e(f.v) + '</div>' : '') + '</div>'; };
       h += '<div class="dossier"><div class="dh">Verified facts \u00b7 pulled ' + e(new Date(D.pulledAt).toLocaleString()) + ' \u00b7 model search, not an audit</div>';
       h += dfr('Valuation', D.valuation) + dfr('Margins', D.margins) + dfr('Balance sheet', D.balance) + dfr('Next catalyst', D.nextCatalyst);
       h += '</div>';
@@ -6517,10 +6517,10 @@ function optParseVerifyOne(text) {
 }
 
 function optFactNorm(x) {
-  if (x == null) return { v: '', sourced: false };
-  if (typeof x === 'string') return { v: x, sourced: false };
-  if (typeof x === 'object') return { v: (x.v != null ? String(x.v) : (x.value != null ? String(x.value) : '')), sourced: !!(x.sourced || x.source) };
-  return { v: String(x), sourced: false };
+  if (x == null) return { v: '', headline: '', sourced: false };
+  if (typeof x === 'string') return { v: x, headline: '', sourced: false };
+  if (typeof x === 'object') return { v: (x.v != null ? String(x.v) : (x.value != null ? String(x.value) : '')), headline: (x.headline != null ? String(x.headline) : (x.means != null ? String(x.means) : '')), sourced: !!(x.sourced || x.source) };
+  return { v: String(x), headline: '', sourced: false };
 }
 
 function optParseDossier(text) {
@@ -6555,7 +6555,20 @@ async function optVerifyOne(ticker) {
   if (st) st.innerHTML = '<span style="color:var(--color-text-tertiary)">running a full review (valuation, margins, balance sheet, catalysts)\u2026</span>';
   try {
     var label = cand.ticker + (cand.name ? ' (' + cand.name + ')' : '');
-    var sys = 'You compile a VERIFIED fundamentals dossier on ONE company using web search. Run as many searches as needed on ' + label + ' to fill the fields below from CURRENT sources. For each fact field return {"v":"...","sourced":true} ONLY if you confirmed it by a search THIS pull; if you cannot confirm a field, set "sourced":false and either give a brief recollection or leave "v" empty. State every period/date in ABSOLUTE terms (e.g. "Q1 2026", "April 2026"); NEVER "next year" or "last year". Fields:\n- quarter: most recent reported quarter, revenue and EPS with YoY change.\n- valuation: a current multiple (P/E if profitable, else P/S or EV/Sales); note if unprofitable.\n- margins: gross and operating margin, plus direction (improving/declining).\n- balance: cash, debt, or net cash/debt.\n- nextCatalyst: the next DATED catalyst (earnings date, PDUFA, launch) and any near-term driver.\n- thesis: one or two sentences on why this name fits a diversification / low-rate role, grounded in what you found (sourced true only if the factual claims were searched).\n- momentum: 0-100 score from what you find.\nIf ' + label + ' is an ETF or fund, adapt: quarter\u2192recent performance, valuation\u2192expense ratio & yield, margins\u2192"n/a \u2014 fund", balance\u2192AUM, nextCatalyst\u2192fund flows or none.\nReturn ONLY this JSON object, nothing before or after: {"quarter":{"v":"Q1 2026: rev $X, +Y% YoY; EPS $Z","sourced":true},"valuation":{"v":"P/S ~14x (unprofitable)","sourced":true},"margins":{"v":"gross ~88%, op margin negative, narrowing","sourced":false},"balance":{"v":"$300M cash, $200M debt","sourced":true},"nextCatalyst":{"v":"PDUFA Apr 2026; next earnings ~Aug 2026","sourced":true},"thesis":{"v":"...","sourced":true},"momentum":68}.';
+    var goalBits = [];
+    if (R.goals.indexOf('diversify') >= 0) goalBits.push('add genuine diversification \u2014 raise the number of effective independent bets and reduce overlap with the book\u2019s existing concentration (it is heavy in tech / AI / semiconductors)');
+    if (R.goals.indexOf('concentration') >= 0) goalBits.push('cut the book\u2019s single biggest cluster concentration');
+    if (R.goals.indexOf('factor') >= 0) goalBits.push('cut the book\u2019s ' + R.factorCol + ' risk-factor exposure (lower the share of the book that moves with ' + R.factorCol + ')');
+    var goalStr = goalBits.length ? goalBits.join('; and ') : 'improve diversification';
+    var mrow = null; for (var mi = 0; mi < R.rows.length; mi++) { if (R.rows[mi].ticker === ticker) { mrow = R.rows[mi]; break; } }
+    var measured = mrow ? ('The tracker already MEASURED what adding ' + (typeof fmtDollarWhole === 'function' ? fmtDollarWhole(R.amount) : ('$' + R.amount)) + ' of this name does to the book: effective independent bets ' + (mrow.ebDelta >= 0 ? '+' : '') + mrow.ebDelta + ', biggest-cluster weight ' + (mrow.topDelta > 0 ? '+' : '') + mrow.topDelta + 'pp' + (mrow.factorBefore != null ? (', ' + R.factorCol + ' factor ' + mrow.factorBefore.toFixed(1) + '\u2192' + mrow.factorAfter.toFixed(1)) : '') + '. In the thesis, explain in plain terms the FUNDAMENTAL REASON those numbers come out that way.') : '';
+    var sys = 'You compile a VERIFIED, PLAIN-ENGLISH fundamentals dossier on ONE company using web search, written for a smart non-specialist who wants to understand what each number MEANS and why it matters \u2014 not a 10-K dump. Run as many searches as needed on ' + label + '. '
+      + 'For each FACT field return an object {"headline":"...","v":"...","sourced":true}: "headline" is a \u22648-word plain-English takeaway of what the figure MEANS for someone deciding whether to buy (e.g. "cheaper than its peers", "GAAP loss is one-time noise", "low debt, lots of room"); "v" holds the actual figures in support; "sourced" is true ONLY if you confirmed it by a search THIS pull (else false, with a brief recollection or empty v). State every period/date in ABSOLUTE terms (e.g. "Q1 2026"); NEVER "next year" or "last year". '
+      + 'FACT fields:\n- quarter: most recent reported quarter \u2014 revenue and EPS with YoY change.\n- valuation: a current multiple (P/E if profitable, else P/S or EV/Sales) compared to peers or its own history; note if unprofitable.\n- margins: gross and operating margin and direction \u2014 and CALL OUT one-time distortions (impairments, charges) in the headline so the reader knows whether the UNDERLYING trend is healthy.\n- balance: cash, debt, net debt, and whether leverage is rising or falling.\n- nextCatalyst: the next DATED catalyst (earnings date, PDUFA, launch) and the near-term driver.\n'
+      + 'Then two NON-fact fields:\n- thesis: 3 to 5 sentences of flowing, PLAIN-LANGUAGE narrative (no jargon, no bullet fragments, no metric soup) that tell this company\u2019s story and what is driving it right now, weaving the key figures in naturally, AND \u2014 most important \u2014 explain concretely HOW and WHY this name OFFSETS the specific exposure the user is trying to reduce. Name the mechanism: why its cash flows or business are insensitive to the targeted risk, or why it is uncorrelated with what the book is already heavy in. A reader should finish understanding why this reduces THEIR risk, not just that the company is fine. Return {"v":"...","sourced":true} (sourced true only if the factual claims were searched).\n- momentum: 0-100 score from what you find (number).\n'
+      + 'THE USER\u2019S GOAL FOR THIS ' + (typeof fmtDollarWhole === 'function' ? fmtDollarWhole(R.amount) : R.amount) + ' DEPLOYMENT: ' + goalStr + '. ' + measured + '\n'
+      + 'If ' + label + ' is an ETF or fund, adapt the FACT fields (quarter\u2192recent performance, valuation\u2192expense ratio & yield, margins\u2192"n/a \u2014 fund", balance\u2192AUM, nextCatalyst\u2192fund flows or none) and still write the plain-English thesis.\n'
+      + 'Return ONLY this JSON object, nothing before or after: {"quarter":{"headline":"earnings beat, GAAP optically low","v":"Q1 2026: rev $X +Y% YoY; adj EPS $Z","sourced":true},"valuation":{"headline":"cheaper than peers","v":"fwd P/E ~12x vs peers ~15x","sourced":true},"margins":{"headline":"one-time charge hides healthy trend","v":"gross ~74%; GAAP op margin 6% on a $1.4B impairment, underlying improving","sourced":true},"balance":{"headline":"levered but paying down fast","v":"net debt $13.9B, $3.7B cut since 2025","sourced":true},"nextCatalyst":{"headline":"next print Aug 3","v":"Q2 2026 earnings ~Aug 3; debt-reduction execution","sourced":true},"thesis":{"v":"...","sourced":true},"momentum":74}.';
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Search ' + label + ' now and return the JSON object.' }], sys, [], { web: true });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var dos = optParseDossier(text);
@@ -6692,7 +6705,7 @@ function renderOptimizerResults() {
     if (r.dossier) {
       var D = r.dossier, naRe = /^n\/?a\b/i;
       var dtag = function (f) { return f.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : (f.v ? '<span style="color:#fbbf24">\u26a0 unconfirmed</span>' : '<span style="color:var(--color-text-tertiary)">not found</span>'); };
-      var drow = function (lab, f) { if (!f) return ''; if (f.v && naRe.test(f.v)) return '<div><span style="color:var(--color-text-tertiary)">' + lab + ':</span> ' + e(f.v) + '</div>'; return '<div><span style="color:var(--color-text-tertiary)">' + lab + ':</span> ' + (f.v ? e(f.v) : '') + ' ' + dtag(f) + '</div>'; };
+      var drow = function (lab, f) { if (!f || (!f.v && !f.headline)) return ''; if (f.v && naRe.test(f.v)) return '<div style="margin:3px 0"><span style="color:var(--color-text-tertiary)">' + lab + ':</span> ' + e(f.v) + '</div>'; var head = f.headline ? (lab + ' \u2014 ' + e(f.headline)) : lab; var det = f.v ? '<div style="color:var(--color-text-tertiary);margin-top:1px">' + e(f.v) + '</div>' : ''; return '<div style="margin:5px 0"><span style="color:var(--color-text-primary);font-weight:600">' + head + '</span> ' + dtag(f) + det + '</div>'; };
       html += '<div style="margin-top:6px;padding:7px 9px;border:1px solid var(--color-border-tertiary);border-radius:6px;background:var(--color-background-secondary);font-size:9.5px;color:var(--color-text-secondary);line-height:1.65">';
       html += '<div style="font-weight:600;color:var(--color-text-primary);margin-bottom:2px">Verified facts <span style="font-weight:400;color:var(--color-text-tertiary)">\u00b7 pulled ' + e(new Date(D.pulledAt).toLocaleTimeString()) + ' \u00b7 model search, not an audit</span></div>';
       html += drow('Valuation', D.valuation) + drow('Margins', D.margins) + drow('Balance sheet', D.balance) + drow('Next catalyst', D.nextCatalyst);
@@ -31921,6 +31934,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bz</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ca</div>
 </body>
 </html>
