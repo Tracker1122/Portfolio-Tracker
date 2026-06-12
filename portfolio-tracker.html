@@ -6656,7 +6656,7 @@ function renderOptimizerResults() {
     html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + parts.join('  \u00b7  ') + '</div>';
     if (showGrowth && r.growth) {
       var gstatus = (r.verifiedLatest ? '<span style="color:var(--color-text-success)">\u2713 latest quarter</span>' : (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>'));
-      var gbtn = (view === 'candidates') ? ' <button onclick="optVerifyOne(\'' + e(r.ticker) + '\')" style="font-size:9px;background:none;border:1px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-tertiary);cursor:pointer;padding:0 4px"' + (optBusy ? ' disabled' : '') + '>\u21bb ' + (r.verifiedLatest ? 're-review' : 'full review') + '</button>' : '';
+      var gbtn = ' <button onclick="optVerifyOne(\'' + e(r.ticker) + '\')" style="font-size:9px;background:none;border:1px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-tertiary);cursor:pointer;padding:0 4px"' + (optBusy ? ' disabled' : '') + '>\u21bb ' + (r.verifiedLatest ? 're-review' : 'full review') + '</button>';
       html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Growth: ' + e(r.growth) + '  <span id="opt-gv-' + e(r.ticker) + '">' + gstatus + '</span>' + gbtn + '</div>';
     }
     if (r.momentum != null) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Momentum: <strong>' + r.momentum + '</strong>/100 <span style="color:var(--color-text-tertiary);font-style:italic">[model\u2019s news read]</span></div>';
@@ -31888,6 +31888,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bx</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09by</div>
 </body>
 </html>
