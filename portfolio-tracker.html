@@ -1066,8 +1066,7 @@
 
   <!-- Tab Bar -->
   <div class="tab-bar">
-    <button class="tab-btn" onclick="switchTab('ask')">Ask</button>
-    <button class="tab-btn" onclick="switchTab('optimizer')">Deploy Optimizer</button>
+    <button class="tab-btn" onclick="switchTab('optimizer')">Deploy &amp; Ask</button>
     <button class="tab-btn active" onclick="switchTab('dashboard')">Home</button>
     <button class="tab-btn" onclick="switchTab('distribution')">True Exposure</button>
     <button class="tab-btn" onclick="switchTab('analysis')">Book Performance / Analysis</button>
@@ -6064,6 +6063,33 @@ function buildAskSnapshot() {
   return lines.join('\n');
 }
 
+function buildOptimizerContextForAsk() {
+  var R = (typeof optResults !== 'undefined') ? optResults : null;
+  if (!R || !R.rows || !R.rows.length) return '';
+  var money = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
+  var goalText = R.goals.map(function (g) { return g === 'factor' ? ('cut ' + R.factorCol) : ((typeof OPT_GOAL_LABELS !== 'undefined' && OPT_GOAL_LABELS[g]) || g); }).join(' + ');
+  var L = [];
+  L.push('=== DEPLOY OPTIMIZER \u2014 CURRENT RUN (live on the user\u2019s screen right now) ===');
+  L.push('Setup: deploy ' + money(R.amount) + ' into EACH candidate \u00b7 goal(s): ' + goalText + (R.growthLean ? ' \u00b7 growth lens ON' : '') + (R.direction ? ' \u00b7 direction: "' + R.direction + '"' : '') + (R.usedWeb ? ' \u00b7 web-sourced' : '') + (R.verifiedAt ? ' \u00b7 some names verified' : '') + '.');
+  L.push('These are MODEL-PROPOSED candidate names (NOT held). The tracker measured each one\u2019s structural impact. Names sharing a theme have IDENTICAL measured impact (the engine scores theme + dollars, not the company) \u2014 so picking between same-theme names requires company-level facts, not the measured metrics. Key: ebDelta = change in effective independent bets (higher = more diversified); topDelta = biggest-cluster weight shift (pp); factor = targeted risk factor before\u2192after.');
+  R.rows.forEach(function (r, i) {
+    var b = [];
+    b.push((i + 1) + '. ' + r.ticker + (r.name ? ' (' + r.name + ')' : '') + (r.type === 'etf' ? ' [ETF]' : '') + ' \u2014 theme(inferred): ' + r.theme);
+    b.push('   measured: ebDelta ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ', topDelta ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + 'pp' + (r.factorBefore != null ? (', ' + R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1)) : ''));
+    if (r.growth) b.push('   growth: ' + r.growth + (r.verifiedLatest ? ' [verified latest quarter]' : (r.growthSourced ? ' [sourced]' : ' [unverified recollection]')));
+    if (r.momentum != null) b.push('   momentum (model read): ' + r.momentum + '/100');
+    if (r.dossier) {
+      var D = r.dossier;
+      var df = function (lab, f) { return (f && f.v) ? (lab + ': ' + f.v + (f.sourced ? ' [sourced]' : ' [unconfirmed]')) : ''; };
+      var ds = [df('valuation', D.valuation), df('margins', D.margins), df('balance', D.balance), df('next catalyst', D.nextCatalyst)].filter(Boolean);
+      if (ds.length) b.push('   verified dossier \u2014 ' + ds.join('; '));
+    }
+    if (r.catalyst) b.push('   thesis: ' + r.catalyst + (r.sourced ? ' [sourced]' : ' [unverified]'));
+    L.push(b.join('\n'));
+  });
+  return L.join('\n');
+}
+
 function buildAskSystem() {
   var snap = buildAskSnapshot();
   var p = [];
@@ -6072,6 +6098,8 @@ function buildAskSystem() {
   p.push('=== THE USER\'S BOOK (held-only, computed right now from their data) ===');
   p.push(snap || '(snapshot unavailable)');
   p.push('');
+  var optCtx = (typeof buildOptimizerContextForAsk === 'function') ? buildOptimizerContextForAsk() : '';
+  if (optCtx) { p.push(optCtx); p.push(''); }
   p.push('RULES:');
   p.push('- The book above is the ONLY thing you can see. It is held-only: every name listed is actually owned. Do NOT invent holdings or assume positions that are not shown.');
   p.push('- "% of book" in the THEME CLUSTERS section is % of the public-book FULL BOOK figure. Private / pre-IPO deals (if any are listed) are held but counted SEPARATELY as additional direct exposure; the true all-in size is stated in that section. When the user asks about overall concentration, account for both and say which basis (cost vs self-mark) you used.');
@@ -6093,6 +6121,7 @@ function buildAskSystem() {
   p.push('- EVIDENCE DISCIPLINE (same convention as the other tabs): mark the BASIS of what you say. Facts from the snapshot above or fetched by a tool this turn (the ones shown with receipts) are verified \u2014 state them plainly. Your own reasoning or interpretation built on those numbers is an INFERENCE \u2014 prefix it inline with "[inference]". Example: "VST is down 12% over 1Y" is a fetched fact; "the market is selling the story" is [inference]. Do not let an inference borrow the certainty of the numbers it sits next to.');
   p.push('- Any specific outside real-world fact NOT in the snapshot and NOT fetched this turn (what a company does, its products/market share, a news event, a valuation, any figure recalled from training) is UNVERIFIED and possibly stale. Do not assert it inline as fact: flag it \u26a0UNVERIFIED, say why it matters, and point to where the user would confirm it (e.g. "issuer fact sheet", "company 10-Q", "stockanalysis.com") \u2014 a pointer, never a fabricated citation or as-of date. If you are unsure of a figure, say so rather than filling the gap.');
   p.push('- If web search is available to you this turn (the user enabled it), you MAY search for CURRENT, time-sensitive facts \u2014 news, a recent price, a current event \u2014 but be economical (a couple of targeted searches, not many; each one costs). Anything you state FROM SEARCH must cite its source URL inline, and that counts as verified for this turn. Facts you did NOT actually find via search this turn stay \u26a0UNVERIFIED: never present a recalled figure as if you searched it, and never fabricate a URL or as-of date. If web search is not available, do not claim current facts \u2014 flag them \u26a0UNVERIFIED instead.');
+  p.push('- DEPLOY OPTIMIZER \u2014 CURRENT RUN (if present above): it is live on the user\u2019s screen. When they say "these", "the candidates", "this run", name a ticker shown there, or ask which to pick, use that section. ebDelta/topDelta/factor are real engine output; growth/momentum/dossier/thesis carry their own [verified]/[sourced]/[unconfirmed] tags \u2014 respect them and never upgrade an unconfirmed figure to verified. Same-theme names have IDENTICAL measured metrics by construction, so to choose between them reason from company-level facts (the verified dossier, growth, valuation), not the metrics. Candidates are NOT held; do not treat them as positions. If a needed fact is missing, say so or (with web on) search \u2014 do not fabricate.');
   return p.join('\n');
 }
 
@@ -6707,6 +6736,7 @@ function renderOptimizerTab() {
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer;margin-bottom:8px" title="A model-driven SELECTION lens, not a ranking goal. Biases the candidate pool toward names with real growth and shows a growth figure on each card. With news on, the search is required and verifies a recent figure per name. Does NOT affect the measured Fit ranking."><input type="checkbox" id="opt-growth-lean"' + dis + '> Growth lens <span style="font-size:9px;color:var(--color-text-tertiary)">\u2014 steers picks toward growthy names &amp; shows growth figures (not a ranking goal)</span></label>';
   html += '<div style="margin-bottom:8px"><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Free-hand direction (optional) \u2014 steer the search</div><textarea id="opt-direction" oninput="optDirection=this.value" placeholder="e.g. prefer dividend growers; avoid tobacco; lean defensive; smaller under-the-radar names; emphasize cash-flow quality" style="width:100%;max-width:560px;min-height:38px;box-sizing:border-box;' + inp + ';font-size:11px;resize:vertical"' + dis + '>' + e(optDirection) + '</textarea></div>';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer;margin-bottom:4px" title="Searches current catalysts at the objective level (a few cents per run). Required when the growth lens is on; also powers the current-momentum sort."><input type="checkbox" id="opt-web"' + (optWebOn ? ' checked' : '') + dis + '> Use current news (objective-level web search) <span style="font-size:9px">~a few \u00a2 per run</span></label>';
+  html += '<div id="opt-chat" style="margin-top:16px"></div>';
   html += '<div id="opt-results"></div>';
   html += '<div id="opt-saved"></div>';
   html += '</div>';
@@ -6714,24 +6744,26 @@ function renderOptimizerTab() {
   el.innerHTML = html;
   renderOptimizerResults();
   renderOptSavedList();
+  renderAskInto('opt-chat', true);
 }
 
 var askWebOn = false; // per-question web-search toggle (in-memory; sticky until turned off)
-function renderAskTab() {
-  var panel = document.getElementById('tab-ask');
+function renderAskInto(containerId, embedded) {
+  var panel = document.getElementById(containerId);
   if (!panel) return;
   if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
   if (typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
   var noWorker = !aiWorkerUrl;
   if (!askConversation.length) { var _rr = askRestoreLast(); if (_rr && _rr.length) askConversation = _rr; }
+  var head = embedded
+    ? '<div style="border-top:1px solid var(--color-border-tertiary);margin-top:4px;padding-top:14px"><h3 style="font-size:13px;margin:0 0 3px;color:var(--color-text-primary)">Ask about your book \u2014 and this run</h3><div style="font-size:10.5px;color:var(--color-text-tertiary);margin-bottom:10px;line-height:1.5">A chat that sees your held-only book \u2014 and, once you run the optimizer above, the candidates it proposes with their measured metrics and any verified dossiers. Ask it to compare names, break a same-theme tie, or pressure-test a pick: the company-level depth the ranking can\u2019t give. Reads only; it cannot trade.</div></div>'
+    : '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Ask your portfolio</h2><div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Conversational analysis of your held-only book. It sees the same true-exposure and theme-cluster figures the rest of the tracker computes. It reads only \u2014 it cannot place trades or change anything.</div>' + aiWorkerUrlFieldHtml('ask-worker-url', 'renderAskTab()');
   panel.innerHTML =
     '<div style="max-width:860px;margin:0 auto">' +
-      '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Ask your portfolio</h2>' +
-      '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Conversational analysis of your held-only book. It sees the same true-exposure and theme-cluster figures the rest of the tracker computes. It reads only \u2014 it cannot place trades or change anything.</div>' +
-      aiWorkerUrlFieldHtml('ask-worker-url', 'renderAskTab()') +
+      head +
       '<div id="ask-thread" style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px"></div>' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' + '<label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--color-text-tertiary);cursor:pointer" title="When on, the assistant may search the web for current news or facts. Costs roughly 1-4 cents only on questions where it actually searches.">' + '<input type="checkbox" id="ask-web-toggle"' + (askWebOn ? ' checked' : '') + ' onchange="askWebOn=this.checked"' + (noWorker ? ' disabled' : '') + '> Allow web search' + '</label>' + '<span style="font-size:9px;color:var(--color-text-tertiary)">~1\u20134\u00a2 when it searches</span>' + '</div>' + '<div style="display:flex;gap:8px;align-items:flex-end">' +
-        '<textarea id="ask-input" placeholder="Ask about your exposure, concentration, themes\u2026" onkeydown="askKey(event)" style="flex:1;min-height:52px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;line-height:1.5;padding:8px;box-sizing:border-box;resize:vertical"' + (noWorker ? ' disabled' : '') + '></textarea>' +
+        '<textarea id="ask-input" placeholder="Compare these candidates, break a tie, or ask about your exposure\u2026" onkeydown="askKey(event)" style="flex:1;min-height:52px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;line-height:1.5;padding:8px;box-sizing:border-box;resize:vertical"' + (noWorker ? ' disabled' : '') + '></textarea>' +
         '<button class="btn" onclick="sendAskMessage()" style="white-space:nowrap"' + (noWorker ? ' disabled' : '') + '>Send</button>' +
       '</div>' +
       (askConversation.length ? '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
@@ -6745,6 +6777,7 @@ function renderAskTab() {
   renderAskThread();
   renderAskSavedList();
 }
+function renderAskTab() { renderAskInto('opt-chat', true); }
 
 function renderAskThread() {
   var t = document.getElementById('ask-thread');
@@ -31888,6 +31921,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09by</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bz</div>
 </body>
 </html>
