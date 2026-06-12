@@ -6329,6 +6329,7 @@ async function runOptimizer() {
     if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">Nothing came back inside your universe \u2014 loosen the constraints or try again.</div>'; optBusy = false; return; }
     var scored = optScore(cands, amount, goals, factorCol);
     optResults = { amount: amount, goals: goals, factorCol: factorCol, geos: geos, vehicles: vehicles, direction: direction, growthLean: growthLean, maxPerTheme: maxPerTheme, filtered: filtered, usedWeb: usedWeb, deepened: 0, added: 0, ranOn: Date.now(), cands: cands, seen: cands.map(function (c) { return c.ticker; }), rows: scored };
+    optBasket = []; optResults.basket = [];
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6371,6 +6372,7 @@ async function optDeepen() {
     if (allCands.length <= R.cands.length) { if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:#fbbf24">New names came back, but they were all in themes already at your per-theme cap (' + (R.maxPerTheme || 3) + '). Raise \u201cMax per theme\u201d or add free-hand direction to reach new themes.</span> ' + optDeepenButtonHtml(R); R.seen = allSeen; optBusy = false; return; }
     var scored = optScore(allCands, R.amount, R.goals, R.factorCol);
     optResults = { amount: R.amount, goals: R.goals, factorCol: R.factorCol, geos: R.geos, vehicles: R.vehicles, direction: direction, growthLean: R.growthLean, maxPerTheme: R.maxPerTheme, filtered: R.filtered, usedWeb: R.usedWeb || usedWeb, deepened: (R.deepened || 0) + 1, added: allCands.length - R.cands.length, ranOn: Date.now(), cands: allCands, seen: allSeen, rows: scored };
+    optResults.basket = optBasket.map(function (it) { return { ticker: it.ticker, pct: it.pct }; });
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6410,7 +6412,7 @@ function optSaveForReview() {
 }
 function optLoadRun(id) {
   var list = optLoadSavedRuns();
-  for (var i = 0; i < list.length; i++) { if (list[i].id === id) { optResults = list[i].run; optView = 'candidates'; optSortBy = 'proposal'; optPersistLast(); renderOptimizerResults(); var r = document.getElementById('opt-results'); if (r && r.scrollIntoView) r.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; } }
+  for (var i = 0; i < list.length; i++) { if (list[i].id === id) { optResults = list[i].run; optBasketLoadFromRun(); optView = 'candidates'; optSortBy = 'proposal'; optPersistLast(); renderOptimizerResults(); var r = document.getElementById('opt-results'); if (r && r.scrollIntoView) r.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; } }
 }
 function optDeleteRun(id) { var list = optLoadSavedRuns().filter(function (it) { return it.id !== id; }); optWriteSavedRuns(list); renderOptSavedList(); }
 
@@ -6450,6 +6452,7 @@ function optPrintBody(R, view, sortBy) {
   var h = '';
   h += '<p class="sub2">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' to deploy (each card = that amount in one name) \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + (optStaleNote(R.ranOn) ? '<span style="color:#b45309"> \u00b7 \u26a0 run is ' + optStaleNote(R.ranOn) + ' \u2014 prices and the news read may have moved' : '') + '.</p>';
   h += '<p class="note" style="margin:-6px 0 12px"><strong>' + e(optThemeSpread(R.rows).text) + '</strong> \u2014 same-theme names share identical measured impact, so more than one or two of a theme mostly re-buys the same exposure.</p>';
+  h += optBasketPrintHtml(e, fmt);
   h += '<p class="note" style="margin:-8px 0 12px">Not a ranking \u2014 candidate names proposed within my constraints, ordered by ' + e(orderName) + '.</p>';
   if (R.verifiedAt) h += '<p class="note" style="margin:-8px 0 12px;color:#15803d">\u2713 Growth figures verified against each name\u2019s most recent reported quarter as of ' + e(new Date(R.verifiedAt).toLocaleString()) + '.</p>';
   h += '<div class="legendbox"><div class="lgh">How to read each box</div>';
@@ -6669,6 +6672,332 @@ async function optVerifyLatest() {
   }
 }
 
+var optBasket = []; // [{ticker,pct}] per-run basket; persisted in optResults.basket
+var optBasketCap = 40; // recommend-weighting: ceiling on any one name's % (session dial)
+function optSgn(x) { return (x >= 0 ? '+' : '') + x; }
+function optBasketFind(t) { for (var i = 0; i < optBasket.length; i++) { if (optBasket[i].ticker === t) return optBasket[i]; } return null; }
+function optBasketEqualize() { var n = optBasket.length; if (!n) return; var base = Math.floor(100 / n), rem = 100 - base * n; optBasket.forEach(function (it, i) { it.pct = base + (i < rem ? 1 : 0); }); }
+function optBasketSync() { if (optResults) optResults.basket = optBasket.map(function (it) { return { ticker: it.ticker, pct: it.pct }; }); optPersistLast(); }
+function optBasketLoadFromRun() { optBasket = (optResults && optResults.basket && optResults.basket.map) ? optResults.basket.map(function (it) { return { ticker: it.ticker, pct: it.pct }; }) : []; }
+function optBasketAdd(t) { if (optBusy || !optResults) return; if (optBasketFind(t)) return; optBasket.push({ ticker: t, pct: 0 }); optBasketEqualize(); optBasketSync(); renderOptimizerResults(); }
+function optBasketRemove(t) { optBasket = optBasket.filter(function (it) { return it.ticker !== t; }); optBasketEqualize(); optBasketSync(); renderOptimizerResults(); }
+function optBasketSetPct(t, val) { var it = optBasketFind(t); if (!it) return; var v = parseFloat(val); if (isNaN(v)) v = 0; it.pct = Math.max(0, Math.min(100, Math.round(v))); optBasketSync(); renderOptBasket(); }
+function optBasketEqualizeClick() { optBasketEqualize(); optBasketSync(); renderOptBasket(); }
+function optBasketClear() { optBasket = []; optBasketSync(); renderOptimizerResults(); }
+function optBasketCardControl(ticker) {
+  var e = (typeof esc === 'function') ? esc : function (s) { return s; };
+  if (optBasketFind(ticker)) return '<button onclick="optBasketRemove(\'' + e(ticker) + '\')" title="Remove from basket" style="font-size:10px;background:var(--color-background-secondary);border:1px solid var(--color-text-success);border-radius:4px;color:var(--color-text-success);cursor:pointer;padding:2px 7px">\u2713 In basket \u2014 remove</button>';
+  return '<button onclick="optBasketAdd(\'' + e(ticker) + '\')" title="Add to your basket (panel sits at the top of the results)" style="font-size:10px;background:none;border:1px solid var(--color-border-tertiary);border-radius:4px;color:var(--color-text-secondary);cursor:pointer;padding:2px 7px">+ Add to basket</button>';
+}
+
+// Weighted multi-name scorer: merges each name's adjustments at its dollar slice into ONE set,
+// scores the whole basket vs the book in a single pass, then derives each name's marginal
+// contribution by leave-one-out (basket-with minus basket-without), plus its standalone-at-slice.
+function optBasketBusy(msg) { var el = document.getElementById('opt-basket'); if (el) el.innerHTML = '<div style="border:1px solid var(--color-border-secondary);border-radius:8px;padding:14px;margin:6px 0 14px;background:var(--color-background-secondary);font-size:11px;color:var(--color-text-tertiary)">' + msg + '</div>'; }
+function optBasketFlash(msg) { var el = document.getElementById('opt-basket-status'); if (el) { el.textContent = msg; setTimeout(function () { if (el) el.textContent = ''; }, 2800); } }
+function optBasketThemeWeights() {
+  var byT = {}; optResults.cands.forEach(function (c) { byT[c.ticker] = c; });
+  var tw = {}, total = 0;
+  optBasket.forEach(function (it) { var c = byT[it.ticker]; if (!c) return; tw[c.theme] = (tw[c.theme] || 0) + (it.pct || 0); total += (it.pct || 0); });
+  var arr = Object.keys(tw).map(function (t) { return { theme: t, pct: tw[t] }; }).sort(function (a, b) { return b.pct - a.pct; });
+  return { byTheme: arr, total: total };
+}
+
+// LOCAL recommend-weighting optimizer: greedy chunk-fill that maximizes the selected goal(s)
+// as hard as possible subject to a per-name % cap, then a light pairwise polish. Pure math on
+// the engine's own numbers \u2014 no model call. Returns weights + the resulting basket scoring.
+function optComputeRecommended(total, goals, factorCol, cap) {
+  if (!optResults || !optResults.cands || !(total > 0) || !optBasket.length) return null;
+  var names = optBasket.map(function (it) { return it.ticker; });
+  var N = names.length;
+  var byT = {}; optResults.cands.forEach(function (c) { byT[c.ticker] = c; });
+  var before = computeThemeClusters();
+  var ebBefore = before.effectiveBets || 0;
+  var topLabel = (before.clusters && before.clusters[0]) ? before.clusters[0].label : null;
+  var topBeforePct = (before.clusters && before.clusters[0]) ? before.clusters[0].pct : 0;
+  var wantFactor = goals.indexOf('factor') >= 0 && typeof window !== 'undefined' && window._riskReplay && window._riskReplay.riskFactorProfileHypothetical;
+  var step = 5, totalUnits = Math.round(100 / step);
+  var capUnits = Math.max(Math.floor(cap / step), Math.ceil(totalUnits / N));
+  var evals = 0, EVAL_CAP = 800;
+  function scoreUnits(units) {
+    evals++;
+    var adj = [];
+    for (var i = 0; i < N; i++) { if (units[i] > 0) { var c = byT[names[i]]; if (c) adj = adj.concat(optBuildAdjustments(c, total * (units[i] * step) / 100)); } }
+    var ebA = ebBefore, topA = topBeforePct, fB = null, fA = null;
+    try {
+      var after = computeThemeClusters({ adjustments: adj });
+      ebA = after.effectiveBets || 0;
+      if (topLabel && after.clusters) { for (var k = 0; k < after.clusters.length; k++) { if (after.clusters[k].label === topLabel) { topA = after.clusters[k].pct; break; } } }
+      if (wantFactor) { var fs = window._riskReplay.riskFactorProfileHypothetical(adj); if (fs) { for (var j = 0; j < fs.length; j++) { if (fs[j].col === factorCol) { fB = fs[j].beforePct; fA = fs[j].afterPct; break; } } } }
+    } catch (e) {}
+    return { ebDelta: ebA - ebBefore, topDelta: topA - topBeforePct, factorBefore: fB, factorAfter: fA };
+  }
+  function goalVal(sc, g) { if (g === 'diversify') return sc.ebDelta; if (g === 'concentration') return -sc.topDelta; if (g === 'factor') return (sc.factorBefore != null && sc.factorAfter != null) ? (sc.factorBefore - sc.factorAfter) : 0; return 0; }
+  var eq = []; var base = Math.floor(totalUnits / N), rem = totalUnits - base * N;
+  for (var i = 0; i < N; i++) eq.push(base + (i < rem ? 1 : 0));
+  var eqSc = scoreUnits(eq); var scaleRef = {};
+  goals.forEach(function (g) { scaleRef[g] = Math.abs(goalVal(eqSc, g)) || 1; });
+  function objective(sc) { var s = 0; goals.forEach(function (g) { s += goalVal(sc, g) / (scaleRef[g] || 1); }); return s; }
+  var w = []; for (var i = 0; i < N; i++) w.push(0);
+  var assigned = 0, guard = 0;
+  while (assigned < totalUnits && guard < totalUnits + 5) {
+    guard++; var bestI = -1, bestObj = -Infinity;
+    for (var i = 0; i < N; i++) { if (w[i] >= capUnits) continue; w[i]++; var o = objective(scoreUnits(w)); w[i]--; if (o > bestObj) { bestObj = o; bestI = i; } }
+    if (bestI < 0) break; w[bestI]++; assigned++;
+  }
+  var improved = true, passes = 0;
+  while (improved && passes < 2 && evals < EVAL_CAP) {
+    improved = false; passes++; var curObj = objective(scoreUnits(w));
+    for (var a = 0; a < N && evals < EVAL_CAP; a++) { for (var b = 0; b < N; b++) { if (a === b || w[a] === 0 || w[b] >= capUnits) continue; w[a]--; w[b]++; var o = objective(scoreUnits(w)); if (o > curObj + 1e-9) { curObj = o; improved = true; } else { w[a]++; w[b]--; } } }
+  }
+  var fin = scoreUnits(w);
+  return {
+    weights: names.map(function (t, i) { return { ticker: t, pct: w[i] * step }; }),
+    ebBefore: ebBefore, ebDelta: +fin.ebDelta.toFixed(2), topBefore: topBeforePct, topDelta: +fin.topDelta.toFixed(2), topLabel: topLabel,
+    factorBefore: fin.factorBefore, factorAfter: fin.factorAfter, effectiveCapPct: capUnits * step, requestedCapPct: cap
+  };
+}
+
+function optRecommendWeights() {
+  if (optBusy || !optResults || !optResults.cands) return;
+  if (optBasket.length < 2) { optBasketFlash('Add at least 2 names to recommend a weighting.'); return; }
+  if (!(optResults.amount > 0)) { optBasketFlash('Enter a Total to deploy first.'); return; }
+  optBasketBusy('Optimizing the split for your goal under the per-name cap\u2026 (local math, a moment)');
+  setTimeout(function () {
+    var rec = optComputeRecommended(optResults.amount, optResults.goals, optResults.factorCol, optBasketCap);
+    if (rec) { rec.weights.forEach(function (rw) { var it = optBasketFind(rw.ticker); if (it) it.pct = rw.pct; }); optBasketSync(); }
+    renderOptimizerResults();
+    if (rec) { var st = document.getElementById('opt-basket-status'); if (st) { st.style.color = 'var(--color-text-success)'; optBasketFlash('Applied the optimized split (cap ' + rec.effectiveCapPct + '%/name).'); } }
+  }, 30);
+}
+
+function optBasketSummary() {
+  if (optBusy || !optResults || !optResults.cands) return;
+  if (optBasket.length < 1) { optBasketFlash('Add names to the basket first.'); return; }
+  if (!(optResults.amount > 0)) { optBasketFlash('Enter a Total to deploy first.'); return; }
+  var wrap = document.getElementById('opt-basket-summary');
+  if (wrap) wrap.innerHTML = '<div style="font-size:10px;color:var(--color-text-tertiary);padding:6px 0">Writing the plain-English read \u2014 your weighting and the optimized one (local, a moment)\u2026</div>';
+  setTimeout(function () { var h = optBuildBasketSummaryHtml(); var w2 = document.getElementById('opt-basket-summary'); if (w2) w2.innerHTML = h; }, 30);
+}
+
+function optBuildBasketSummaryHtml() {
+  var total = optResults.amount, goals = optResults.goals, factorCol = optResults.factorCol;
+  var sc = optScoreBasket(total, goals, factorCol);
+  var rec = optComputeRecommended(total, goals, factorCol, optBasketCap);
+  var card = function (title, body, accent) { return '<div style="border:1px solid var(--color-border-tertiary);border-left:3px solid ' + accent + ';border-radius:6px;padding:9px 11px;margin-bottom:7px;background:var(--color-background-tertiary)"><div style="font-size:11px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">' + title + '</div><div style="font-size:10.5px;color:var(--color-text-secondary);line-height:1.6">' + body + '</div></div>'; };
+  var h = '';
+  h += card('Your basket \u2014 as you\u2019ve weighted it', esc(optYourBasketParagraph(sc, goals, factorCol)), 'var(--color-text-tertiary)');
+  h += card('Optimized basket \u2014 the tracker\u2019s recommended split', esc(optOptimizedParagraph(rec, sc, goals, factorCol)), 'var(--color-text-success)');
+  h += '<div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5">Both written locally from the tracker\u2019s own numbers \u2014 no model call. The optimizer maximizes your selected goal(s) under the ' + (rec ? rec.effectiveCapPct : optBasketCap) + '%-per-name cap; it cannot weigh what you didn\u2019t select (valuation, conviction, taxes) \u2014 that judgment stays yours.</div>';
+  return h;
+}
+
+function optYourBasketParagraph(sc, goals, factorCol) {
+  var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
+  var total = optResults.amount;
+  var items = optBasket.filter(function (it) { return it.pct > 0; }).slice().sort(function (a, b) { return b.pct - a.pct; });
+  var n = items.length;
+  if (!n) return 'Every name is at 0% \u2014 set some weights to see the read.';
+  var s = [];
+  var topList = items.slice(0, 3).map(function (it) { return it.ticker + ' ' + it.pct + '% (' + fmt(total * it.pct / 100) + ')'; }).join(', ');
+  s.push('You\u2019ve put ' + fmt(total) + ' across ' + n + ' name' + (n === 1 ? '' : 's') + ', weighted toward ' + topList + (items.length > 3 ? ', with smaller slices in the rest' : '') + '.');
+  var tw = optBasketThemeWeights();
+  if (tw.byTheme.length && tw.total > 0) {
+    var top = tw.byTheme[0], share = Math.round(top.pct / tw.total * 100);
+    if (tw.byTheme.length === 1) s.push('It all sits in ' + top.theme + ' \u2014 a single-theme bet, not a spread.');
+    else if (share >= 50) s.push('Despite ' + n + ' names, about ' + share + '% of the money sits in ' + top.theme + ', so it still leans like a ' + top.theme + ' bet.');
+    else s.push('It spreads across ' + tw.byTheme.length + ' themes, the largest (' + top.theme + ') about ' + share + '% of the money.');
+  }
+  if (sc) {
+    var eff = ['effective independent bets ' + sc.ebBefore.toFixed(1) + '\u2192' + sc.ebAfter.toFixed(1)];
+    if (sc.topLabel) eff.push('your biggest cluster ' + sc.topBefore.toFixed(1) + '%\u2192' + sc.topAfter.toFixed(1) + '%');
+    if (sc.factorBefore != null) eff.push(factorCol + ' ' + sc.factorBefore.toFixed(1) + '\u2192' + sc.factorAfter.toFixed(1));
+    s.push('As weighted, the basket moves ' + eff.join(', ') + '.');
+    var warns = [];
+    if (goals.indexOf('diversify') >= 0 && sc.ebDelta < 0) warns.push('it lowers your effective bets');
+    if (goals.indexOf('concentration') >= 0 && sc.topDelta > 0) warns.push('it grows your biggest cluster rather than shrinking it');
+    if (goals.indexOf('factor') >= 0 && sc.factorBefore != null && sc.factorAfter > sc.factorBefore) warns.push('it raises ' + factorCol + ' rather than cutting it');
+    if (warns.length) s.push('Against your stated goal, ' + warns.join(', and ') + ' \u2014 worth a rethink.');
+    var g0 = goals[0] || 'diversify', red = [];
+    sc.items.forEach(function (x) {
+      var here, alone;
+      if (g0 === 'factor') { here = (x.mFactor != null ? -x.mFactor : null); alone = (x.sFactor != null ? -x.sFactor : null); }
+      else if (g0 === 'concentration') { here = -x.mTop; alone = -x.sTop; }
+      else { here = x.mEb; alone = x.sEb; }
+      if (alone != null && here != null && alone > 0.05 && here < alone * 0.5) red.push(x.ticker + ' (adds ' + optSgn(+here.toFixed(2)) + ' here vs ' + optSgn(+alone.toFixed(2)) + ' alone)');
+    });
+    if (red.length) s.push('Redundancy to note: ' + red.join('; ') + ' \u2014 ' + (red.length === 1 ? 'that name is' : 'those names are') + ' partly re-buying exposure the rest of the basket already gives.');
+  }
+  var sum = optBasket.reduce(function (a, it) { return a + (it.pct || 0); }, 0);
+  if (Math.round(sum) !== 100) s.push('Your weights sum to ' + Math.round(sum) + '%, not 100% \u2014 the figures above are at the dollars those percentages imply.');
+  return s.join(' ');
+}
+
+function optOptimizedParagraph(rec, scYours, goals, factorCol) {
+  if (!rec) return 'Could not compute an optimized split for this basket.';
+  var ws = rec.weights.slice().sort(function (a, b) { return b.pct - a.pct; });
+  var nonzero = ws.filter(function (w) { return w.pct > 0; });
+  var zeros = ws.filter(function (w) { return w.pct === 0; });
+  var atCap = nonzero.filter(function (w) { return w.pct >= rec.effectiveCapPct; });
+  var goalName = goals.map(function (g) { return g === 'factor' ? ('cutting ' + factorCol) : g === 'concentration' ? 'cutting your biggest concentration' : 'diversification'; }).join(' and ');
+  var s = [];
+  s.push('Optimizing hardest for ' + goalName + ' under a ' + rec.effectiveCapPct + '%-per-name cap, the tracker would weight ' + nonzero.map(function (w) { return w.ticker + ' ' + w.pct + '%'; }).join(', ') + '.');
+  if (rec.effectiveCapPct !== rec.requestedCapPct) s.push('(Your ' + rec.requestedCapPct + '% cap was loosened to ' + rec.effectiveCapPct + '% \u2014 with ' + optBasket.length + ' names a tighter cap can\u2019t reach 100%.)');
+  if (atCap.length) s.push(atCap.map(function (w) { return w.ticker; }).join(' and ') + (atCap.length === 1 ? ' hits' : ' hit') + ' the cap \u2014 ' + (atCap.length === 1 ? 'it is the strongest per-dollar mover' : 'they are the strongest per-dollar movers') + ' for this goal, held back only by the cap so the basket stays spread.');
+  if (zeros.length) s.push(zeros.map(function (w) { return w.ticker; }).join(', ') + (zeros.length === 1 ? ' is' : ' are') + ' taken to 0% \u2014 ' + (zeros.length === 1 ? 'it adds' : 'they add') + ' little to this goal given the others, so the money goes where it does more.');
+  var eff = ['effective bets ' + rec.ebBefore.toFixed(1) + '\u2192' + (rec.ebBefore + rec.ebDelta).toFixed(1)];
+  if (rec.topLabel) eff.push(rec.topLabel + ' cluster ' + rec.topBefore.toFixed(1) + '%\u2192' + (rec.topBefore + rec.topDelta).toFixed(1) + '%');
+  if (rec.factorBefore != null) eff.push(factorCol + ' ' + rec.factorBefore.toFixed(1) + '\u2192' + rec.factorAfter.toFixed(1));
+  s.push('That lands at ' + eff.join(', ') + '.');
+  if (scYours) {
+    var p = goals[0], yv = null, ov = null, lab = '';
+    if (p === 'factor' && scYours.factorBefore != null && rec.factorBefore != null) { yv = scYours.factorBefore - scYours.factorAfter; ov = rec.factorBefore - rec.factorAfter; lab = factorCol + ' cut (pp)'; }
+    else if (p === 'concentration') { yv = -scYours.topDelta; ov = -rec.topDelta; lab = 'cluster reduction (pp)'; }
+    else { yv = scYours.ebDelta; ov = rec.ebDelta; lab = 'added effective bets'; }
+    if (yv != null && ov != null) {
+      var diff = ov - yv;
+      if (Math.abs(diff) < 0.02) s.push('On ' + lab + ', that\u2019s about even with your current weighting \u2014 your split is already close to optimal for this goal.');
+      else if (diff > 0) s.push('On ' + lab + ', it beats your current weighting (' + ov.toFixed(2) + ' vs ' + yv.toFixed(2) + ') \u2014 that gap is what reweighting buys.');
+      else s.push('On ' + lab + ', your current weighting actually edges it (' + yv.toFixed(2) + ' vs ' + ov.toFixed(2) + ') \u2014 likely because you\u2019re balancing more than the one goal it maximizes.');
+    }
+  }
+  s.push('Hit \u201c\u2728 Recommend weighting\u201d above to apply this split, or keep yours \u2014 that choice is the point.');
+  return s.join(' ');
+}
+
+function optBasketPrintHtml(e, fmt) {
+  if (!optBasket || !optBasket.length || !optResults) return '';
+  var total = optResults.amount || 0, goals = optResults.goals, factorCol = optResults.factorCol;
+  var byT = {}; optResults.cands.forEach(function (c) { byT[c.ticker] = c; });
+  var sc = optScoreBasket(total, goals, factorCol);
+  var sumPct = optBasket.reduce(function (a, it) { return a + (it.pct || 0); }, 0);
+  var h = '<div style="margin:14px 0 6px;border:1.5px solid #444;border-radius:8px;padding:12px 14px">';
+  h += '<div style="font-weight:700;font-size:13px;margin-bottom:6px">Your basket \u2014 ' + optBasket.length + ' name' + (optBasket.length === 1 ? '' : 's') + ' \u00b7 ' + e(fmt(total)) + ' total \u00b7 ' + Math.round(sumPct) + '% allocated</div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="text-align:left;color:#555"><th style="padding:2px 4px">Name</th><th>Theme</th><th>Weight</th><th>$</th><th>Marginal (here \u00b7 alone)</th></tr></thead><tbody>';
+  optBasket.forEach(function (it) {
+    var c = byT[it.ticker]; if (!c) return;
+    var m = sc ? sc.items.filter(function (x) { return x.ticker === it.ticker; })[0] : null;
+    h += '<tr><td style="padding:2px 4px"><strong>' + e(it.ticker) + '</strong></td><td>' + e(c.theme) + '</td><td>' + it.pct + '%</td><td>' + e(fmt(total * it.pct / 100)) + '</td><td>' + (m ? e(optBasketMarginalText(m, goals, factorCol)) : '\u2014') + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  if (sc) h += '<div style="margin-top:8px;font-size:11px;line-height:1.5"><strong>Whole basket vs your book:</strong> ' + optBasketReadoutText(sc, goals, factorCol).replace(/<div>/g, '').replace(/<\/div>/g, ' \u00b7 ') + '</div>';
+  var para = optYourBasketParagraph(sc, goals, factorCol);
+  if (para) h += '<div style="margin-top:8px;font-size:11px;line-height:1.55;color:#222">' + e(para) + '</div>';
+  h += '<div style="margin-top:6px;font-size:9.5px;color:#777">Basket scored locally by true-exposure look-through; \u201chere\u201d = contribution given the rest of the basket, \u201calone\u201d = the same dollars as the only buy. Theme is the model\u2019s inference. Hypothetical; not advice.</div>';
+  h += '</div>';
+  return h;
+}
+
+function optScoreBasket(total, goals, factorCol) {
+  if (!optResults || !optResults.cands || !(total > 0)) return null;
+  var byT = {}; optResults.cands.forEach(function (c) { byT[c.ticker] = c; });
+  var perItem = [];
+  optBasket.forEach(function (it) {
+    var c = byT[it.ticker];
+    if (!c || !(it.pct > 0)) return;
+    var dollars = total * (it.pct / 100);
+    perItem.push({ ticker: it.ticker, cand: c, pct: it.pct, dollars: dollars, adj: optBuildAdjustments(c, dollars) });
+  });
+  if (!perItem.length) return null;
+  var before = computeThemeClusters();
+  var ebBefore = before.effectiveBets || 0;
+  var topLabel = (before.clusters && before.clusters[0]) ? before.clusters[0].label : null;
+  var topBeforePct = (before.clusters && before.clusters[0]) ? before.clusters[0].pct : 0;
+  var wantFactor = goals.indexOf('factor') >= 0 && typeof window !== 'undefined' && window._riskReplay && window._riskReplay.riskFactorProfileHypothetical;
+  function scoreAdj(adjArr) {
+    var ebA = ebBefore, topA = topBeforePct, fB = null, fA = null;
+    try {
+      var after = computeThemeClusters({ adjustments: adjArr });
+      ebA = after.effectiveBets || 0;
+      if (topLabel && after.clusters) { for (var i = 0; i < after.clusters.length; i++) { if (after.clusters[i].label === topLabel) { topA = after.clusters[i].pct; break; } } }
+      if (wantFactor) { var fs = window._riskReplay.riskFactorProfileHypothetical(adjArr); if (fs) { for (var j = 0; j < fs.length; j++) { if (fs[j].col === factorCol) { fB = fs[j].beforePct; fA = fs[j].afterPct; break; } } } }
+    } catch (e) {}
+    return { eb: ebA, top: topA, fB: fB, fA: fA };
+  }
+  var fullAdj = []; perItem.forEach(function (x) { fullAdj = fullAdj.concat(x.adj); });
+  var full = scoreAdj(fullAdj);
+  perItem.forEach(function (x) {
+    var without = []; perItem.forEach(function (y) { if (y.ticker !== x.ticker) without = without.concat(y.adj); });
+    var w = without.length ? scoreAdj(without) : { eb: ebBefore, top: topBeforePct, fB: full.fB, fA: full.fB };
+    var solo = scoreAdj(x.adj);
+    x.mEb = +(full.eb - w.eb).toFixed(2);
+    x.mTop = +(full.top - w.top).toFixed(2);
+    x.mFactor = (full.fA != null && w.fA != null) ? +(full.fA - w.fA).toFixed(2) : null;
+    x.sEb = +(solo.eb - ebBefore).toFixed(2);
+    x.sTop = +(solo.top - topBeforePct).toFixed(2);
+    x.sFactor = (solo.fA != null && solo.fB != null) ? +(solo.fA - solo.fB).toFixed(2) : null;
+  });
+  return { ebBefore: ebBefore, ebAfter: full.eb, ebDelta: +(full.eb - ebBefore).toFixed(2), topLabel: topLabel, topBefore: topBeforePct, topAfter: full.top, topDelta: +(full.top - topBeforePct).toFixed(2), factorBefore: full.fB, factorAfter: full.fA, items: perItem, total: total };
+}
+
+function optBasketMarginalText(m, goals, factorCol) {
+  var g = goals[0] || 'diversify';
+  if (g === 'factor' && m.mFactor != null) return factorCol + ' ' + optSgn(m.mFactor) + 'pp here' + (m.sFactor != null ? ' \u00b7 ' + optSgn(m.sFactor) + 'pp alone' : '');
+  if (g === 'concentration') return 'top cluster ' + optSgn(m.mTop) + 'pp here \u00b7 ' + optSgn(m.sTop) + 'pp alone';
+  return 'bets ' + optSgn(m.mEb) + ' here \u00b7 ' + optSgn(m.sEb) + ' alone';
+}
+function optBasketReadoutText(sc, goals, factorCol) {
+  var b = [];
+  b.push('Effective independent bets: ' + sc.ebBefore.toFixed(1) + ' \u2192 ' + sc.ebAfter.toFixed(1) + ' (' + optSgn(sc.ebDelta) + ')');
+  if (sc.topLabel) b.push('Biggest cluster \u2014 ' + sc.topLabel + ': ' + sc.topBefore.toFixed(1) + '% \u2192 ' + sc.topAfter.toFixed(1) + '% (' + optSgn(sc.topDelta) + 'pp)');
+  if (sc.factorBefore != null) b.push(factorCol + ' factor: ' + sc.factorBefore.toFixed(1) + ' \u2192 ' + sc.factorAfter.toFixed(1) + ' (' + optSgn(+(sc.factorAfter - sc.factorBefore).toFixed(1)) + 'pp)');
+  return b.map(function (x) { return '<div>' + x + '</div>'; }).join('');
+}
+
+function renderOptBasket() {
+  var el = document.getElementById('opt-basket'); if (!el) return;
+  if (!optResults || !optResults.cands) { el.innerHTML = ''; return; }
+  var e = (typeof esc === 'function') ? esc : function (s) { return s; };
+  var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n || 0).toLocaleString(); };
+  if (!optBasket.length) {
+    el.innerHTML = '<div style="border:1px dashed var(--color-border-tertiary);border-radius:8px;padding:10px 12px;margin:6px 0 12px;font-size:10.5px;color:var(--color-text-tertiary);line-height:1.55">Your basket is empty. Use <strong>+ Add to basket</strong> on the cards below to assemble a few names, then set each one\u2019s weight here. The tracker scores the whole basket <em>together</em> \u2014 and shows how much each name actually adds <em>given the others</em>, so a redundant pick shows a small marginal even when it looks strong on its own.</div>';
+    return;
+  }
+  var total = optResults.amount || 0, goals = optResults.goals, factorCol = optResults.factorCol;
+  var sumPct = optBasket.reduce(function (a, it) { return a + (it.pct || 0); }, 0);
+  var sc = optScoreBasket(total, goals, factorCol);
+  var byT = {}; optResults.cands.forEach(function (c) { byT[c.ticker] = c; });
+  var okSum = Math.round(sumPct) === 100;
+  var html = '<div style="border:1px solid var(--color-border-secondary);border-radius:8px;padding:11px 13px;margin:6px 0 14px;background:var(--color-background-secondary)">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  html += '<div style="font-size:12px;font-weight:700;color:var(--color-text-primary)">Your basket \u00b7 ' + optBasket.length + ' name' + (optBasket.length === 1 ? '' : 's') + ' \u00b7 ' + e(fmt(total)) + ' total</div>';
+  html += '<div style="font-size:10.5px;color:' + (okSum ? 'var(--color-text-success)' : '#fbbf24') + '">' + sumPct.toFixed(0) + '% allocated' + (okSum ? ' \u2713' : ' \u2014 ' + (sumPct < 100 ? 'under' : 'over') + ' by ' + Math.abs(100 - sumPct).toFixed(0) + 'pp') + '</div>';
+  html += '</div>';
+  if (!(total > 0)) html += '<div style="font-size:10px;color:#fbbf24;margin-bottom:6px">Enter a <strong>Total to deploy</strong> above to score the basket.</div>';
+  optBasket.forEach(function (it) {
+    var c = byT[it.ticker]; if (!c) return;
+    var col = optThemeColor(c.theme);
+    var m = sc ? sc.items.filter(function (x) { return x.ticker === it.ticker; })[0] : null;
+    html += '<div style="display:flex;align-items:center;gap:9px;padding:6px 0;border-top:1px solid var(--color-border-tertiary);flex-wrap:wrap">';
+    html += '<span style="width:9px;height:9px;border-radius:2px;background:' + col + ';flex:none"></span>';
+    html += '<div style="min-width:116px"><strong style="font-size:11px;color:var(--color-text-primary)">' + e(it.ticker) + '</strong> <span style="font-size:9px;color:' + col + '">' + e(c.theme) + '</span></div>';
+    html += '<input type="number" min="0" max="100" value="' + it.pct + '" onchange="optBasketSetPct(\'' + e(it.ticker) + '\',this.value)" style="width:56px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:4px;color:var(--color-text-primary);font-size:11px;padding:3px 5px">';
+    html += '<span style="font-size:10px;color:var(--color-text-tertiary)">% \u00b7 ' + e(fmt(total * (it.pct / 100))) + '</span>';
+    if (m) html += '<span style="flex:1;min-width:8px"></span><span style="font-size:9.5px;color:var(--color-text-secondary)" title="here = what this name changes GIVEN the rest of the basket \u00b7 alone = the same dollars as your only buy. A wide gap means the name overlaps the others.">' + optBasketMarginalText(m, goals, factorCol) + '</span>';
+    html += '<button onclick="optBasketRemove(\'' + e(it.ticker) + '\')" title="Remove from basket" style="font-size:13px;line-height:1;background:none;border:none;color:var(--color-text-tertiary);cursor:pointer;flex:none">\u00d7</button>';
+    html += '</div>';
+  });
+  if (sc) {
+    html += '<div style="margin-top:9px;padding-top:8px;border-top:1px solid var(--color-border-secondary);font-size:10.5px;color:var(--color-text-secondary);line-height:1.6">';
+    html += '<div style="font-weight:600;color:var(--color-text-primary);margin-bottom:3px">Whole basket vs your book' + (!okSum ? ' <span style="color:#fbbf24;font-weight:400">(weights ' + (sumPct < 100 ? 'under' : 'over') + ' 100% \u2014 scored at the dollars these %s imply)</span>' : '') + '</div>';
+    html += optBasketReadoutText(sc, goals, factorCol);
+    html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.5"><strong>here</strong> vs <strong>alone</strong> on each name: \u201chere\u201d is what it adds given the rest of the basket; \u201calone\u201d is the same dollars as your only buy. When they diverge, that name overlaps the others \u2014 the honest number is \u201chere\u201d.</div>';
+    html += '</div>';
+  }
+  var inpS = 'background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:4px;color:var(--color-text-primary);font-size:11px;padding:3px 5px';
+  html += '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
+  html += '<button class="btn btn-primary btn-sm" style="font-size:10px" onclick="optRecommendWeights()" title="Local optimizer \u2014 find the split that maximizes your selected goal(s) as hard as possible under the per-name cap. Pure math on the tracker\u2019s own numbers; no model call.">\u2728 Recommend weighting</button>';
+  html += '<span style="font-size:9px;color:var(--color-text-tertiary)">max per name</span><input type="number" min="10" max="100" value="' + optBasketCap + '" onchange="optBasketCap=Math.max(10,Math.min(100,parseInt(this.value,10)||40))" title="Ceiling on any one name\u2019s share when recommending a weighting \u2014 stops the optimizer piling 100% into one name. Auto-loosened if too tight for the number of names." style="width:46px;' + inpS + '"><span style="font-size:9px;color:var(--color-text-tertiary)">%</span>';
+  html += '<button class="btn btn-sm" style="font-size:10px" onclick="optBasketEqualizeClick()" title="Set every name to an equal share.">Equal-weight</button>';
+  html += '<button class="btn btn-sm" style="font-size:10px" onclick="optBasketSummary()" title="Plain-English read of your weighting and the optimized one \u2014 written locally from the numbers, no model call.">Explain this basket</button>';
+  html += '<button class="btn btn-sm" style="font-size:10px" onclick="optBasketClear()" title="Empty the basket.">Clear</button>';
+  html += '<span id="opt-basket-status" style="font-size:9.5px;color:var(--color-text-success)"></span>';
+  html += '</div>';
+  html += '<div id="opt-basket-summary" style="margin-top:8px"></div>';
+  html += '</div>';
+  el.innerHTML = html;
+}
+
 function renderOptimizerResults() {
   var el = document.getElementById('opt-results'); if (!el) return;
   if (!optResults || !optResults.rows || !optResults.rows.length) { el.innerHTML = ''; return; }
@@ -6688,6 +7017,7 @@ function renderOptimizerResults() {
   html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' <span style="color:var(--color-text-tertiary)">(growth lens on)</span>' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' to deploy \u00b7 each card = that amount in one name (standalone)' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ')' : '') + '.</div>';
   (function () { var sp = optThemeSpread(R.rows); html += '<div style="font-size:10px;color:var(--color-text-secondary);margin:0 0 8px;line-height:1.5"><strong>' + e(sp.text) + '</strong>' + (sp.maxOne > 2 ? ' <span style="color:#fbbf24">\u2014 same-theme names don\u2019t stack; picking more than one or two of a color mostly re-buys the same exposure</span>' : '') + '</div>'; })();
   html += '<div style="margin:0 0 8px"><button class="btn btn-sm" onclick="optRescore()" style="font-size:10px" title="Re-apply the current Total-to-deploy and goals to these same names \u2014 instant local math, no new model fetch or spend.">\u21bb Re-score at current amount</button></div>';
+  html += '<div id="opt-basket"></div>';
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:8px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped' : '') + ' \u00b7 run ' + e(new Date(R.ranOn).toLocaleString()) + (optStaleNote(R.ranOn) ? ' \u00b7 <span style="color:#fbbf24">\u26a0 ' + optStaleNote(R.ranOn) + '</span>' : '') + (R.verifiedAt ? ' \u00b7 <span style="color:var(--color-text-success)">\u2713 figures verified ' + e(new Date(R.verifiedAt).toLocaleTimeString()) + '</span>' : '') + '.</div>';
   html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">';
   html += '<button class="btn btn-sm" style="font-size:10px;' + (view === 'candidates' ? 'font-weight:700' : 'opacity:.55') + '" onclick="optSetView(\'candidates\')">Candidates</button>';
@@ -6751,11 +7081,13 @@ function renderOptimizerResults() {
       html += '</div>';
     }
     html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
+    html += '<div style="margin-top:7px">' + optBasketCardControl(r.ticker) + '</div>';
     html += '</div>';
   });
   if (showGrowth) html += '<div id="opt-verify-wrap" style="margin-top:6px">' + optVerifyButtonHtml(R) + '</div>';
   html += '<div id="opt-deepen-wrap" style="margin-top:6px">' + optDeepenButtonHtml(R) + '</div>';
   el.innerHTML = html;
+  renderOptBasket();
 }
 
 function renderOptimizerTab() {
@@ -6794,6 +7126,7 @@ function renderOptimizerTab() {
   html += '<div id="opt-saved"></div>';
   html += '</div>';
   if (!optResults) { var _rr = optRestoreLast(); if (_rr) optResults = _rr; }
+  optBasketLoadFromRun();
   el.innerHTML = html;
   renderOptimizerResults();
   renderOptSavedList();
@@ -31974,6 +32307,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cd</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cf</div>
 </body>
 </html>
