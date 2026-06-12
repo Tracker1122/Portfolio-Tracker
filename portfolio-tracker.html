@@ -6075,16 +6075,17 @@ function buildOptimizerContextForAsk() {
   R.rows.forEach(function (r, i) {
     var b = [];
     b.push((i + 1) + '. ' + r.ticker + (r.name ? ' (' + r.name + ')' : '') + (r.type === 'etf' ? ' [ETF]' : '') + ' \u2014 theme(inferred): ' + r.theme);
+    if (r.lead) b.push('   lead: ' + r.lead);
     b.push('   measured: ebDelta ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ', topDelta ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + 'pp' + (r.factorBefore != null ? (', ' + R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1)) : ''));
     if (r.growth) b.push('   growth: ' + r.growth + (r.verifiedLatest ? ' [verified latest quarter]' : (r.growthSourced ? ' [sourced]' : ' [unverified recollection]')));
     if (r.momentum != null) b.push('   momentum (model read): ' + r.momentum + '/100');
     if (r.dossier) {
       var D = r.dossier;
       var df = function (lab, f) { return (f && f.v) ? (lab + ': ' + f.v + (f.sourced ? ' [sourced]' : ' [unconfirmed]')) : ''; };
-      var ds = [df('valuation', D.valuation), df('margins', D.margins), df('balance', D.balance), df('next catalyst', D.nextCatalyst)].filter(Boolean);
+      var ds = [df('valuation', D.valuation), df('margins', D.margins), df('balance', D.balance), df('next catalyst', D.nextCatalyst), df('why it fits (thesis)', D.thesis)].filter(Boolean);
       if (ds.length) b.push('   verified dossier \u2014 ' + ds.join('; '));
     }
-    if (r.catalyst) b.push('   thesis: ' + r.catalyst + (r.sourced ? ' [sourced]' : ' [unverified]'));
+    if (r.catalyst) b.push('   near-term reason: ' + r.catalyst + (r.sourced ? ' [sourced]' : ' [unverified]'));
     L.push(b.join('\n'));
   });
   return L.join('\n');
@@ -6219,7 +6220,8 @@ function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, dir
     p.push('Also assign each candidate a "momentum" score from 0 to 100: YOUR read of how STRONG and TIMELY its catalyst is RIGHT NOW, based on what you found in search (recent earnings beats, guidance raises, product/cycle inflections, fresh demand or policy signals). This is an INFERENCE from current news, not a computation \u2014 a solid company with no fresh catalyst should score low. Base it on what you actually found, and reflect the same reasoning in the catalyst line.');
   }
   p.push('EVIDENCE: any specific real-world fact is UNVERIFIED unless you found it via web search this run. If you did not search, keep it a short recollection and set the sourced flag false. Never invent a price, figure, or date.');
-  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","type":"stock"|"etf","broad":true|false,"theme":"<one theme from the list>","catalyst":"one short line on why it fits the objective(s) now","sourced":true' + (growthLean ? ',"growth":"short growth figure","growthSourced":true' : '') + (web ? ',"momentum":<integer 0-100, current-catalyst strength>' : '') + '}]. Return nothing but the JSON array.');
+  p.push('Also give each candidate a "lead": ONE plain-English line a non-specialist instantly gets \u2014 what the company IS in everyday words, then a semicolon, then the single reason it is a candidate for THIS book/goal. No jargon, no metrics, no ticker. Examples: "Big-pharma cash machine; rate-insensitive healthcare you don\u2019t own" \u00b7 "Small-cap brain-drug maker; uncorrelated bet with a binary catalyst coming".');
+  p.push('OUTPUT: return ONLY a JSON array \u2014 no prose, no markdown, nothing before or after \u2014 of the form: [{"ticker":"XYZ","name":"Full Name","type":"stock"|"etf","broad":true|false,"theme":"<one theme from the list>","lead":"plain-English: what it is; the one reason it is a candidate","catalyst":"ONE plain, jargon-free sentence on the single near-term reason it fits now","sourced":true' + (growthLean ? ',"growth":"short growth figure","growthSourced":true' : '') + (web ? ',"momentum":<integer 0-100, current-catalyst strength>' : '') + '}]. Return nothing but the JSON array.');
   return p.join('\n');
 }
 
@@ -6233,7 +6235,7 @@ function optParseCandidates(text) {
   if (!Array.isArray(arr)) return [];
   return arr.filter(function (c) { return c && c.ticker && c.theme; }).map(function (c) {
     var m = (c.momentum != null) ? parseFloat(c.momentum) : NaN;
-    return { ticker: String(c.ticker).toUpperCase().trim(), name: c.name || '', type: (c.type === 'etf' ? 'etf' : 'stock'), broad: !!c.broad, theme: String(c.theme).trim(), catalyst: c.catalyst || '', sourced: !!c.sourced, growth: c.growth ? String(c.growth) : '', growthSourced: !!c.growthSourced, momentum: isNaN(m) ? null : Math.max(0, Math.min(100, Math.round(m))) };
+    return { ticker: String(c.ticker).toUpperCase().trim(), name: c.name || '', type: (c.type === 'etf' ? 'etf' : 'stock'), broad: !!c.broad, theme: String(c.theme).trim(), lead: c.lead ? String(c.lead) : '', catalyst: c.catalyst || '', sourced: !!c.sourced, growth: c.growth ? String(c.growth) : '', growthSourced: !!c.growthSourced, momentum: isNaN(m) ? null : Math.max(0, Math.min(100, Math.round(m))) };
   });
 }
 
@@ -6257,7 +6259,7 @@ function optScore(cands, amount, goals, factorCol) {
     var ebDelta = +(ebAfter - ebBefore).toFixed(2);
     var topDelta = +(topAfterPct - topBeforePct).toFixed(2);
     return {
-      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced, growth: c.growth, growthSourced: c.growthSourced, verifiedLatest: !!c.verifiedLatest, dossier: c.dossier, momentum: (c.momentum == null ? null : c.momentum),
+      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, lead: c.lead, catalyst: c.catalyst, sourced: c.sourced, growth: c.growth, growthSourced: c.growthSourced, verifiedLatest: !!c.verifiedLatest, dossier: c.dossier, momentum: (c.momentum == null ? null : c.momentum),
       ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA,
       g_diversify: ebDelta, g_concentration: -topDelta, g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null
     };
@@ -6431,12 +6433,13 @@ function optPrintBody(R, view, sortBy) {
     var wantDiv = R.goals.indexOf('diversify') >= 0, wantConc = R.goals.indexOf('concentration') >= 0;
     var redIf = function (cond, txt) { return cond ? '<span style="color:#dc2626">' + txt + '</span>' : txt; };
     var metrics = [];
-    metrics.push(redIf(wantDiv && r.ebDelta < 0, 'Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta));
-    metrics.push(redIf(wantConc && r.topDelta > 0, 'Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp'));
-    if (showFactor && r.factorBefore != null) metrics.push(redIf(r.factorAfter > r.factorBefore, R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1)));
+    metrics.push(redIf(wantDiv && r.ebDelta < 0, 'Diversification: ' + (r.ebDelta >= 0 ? 'better' : 'worse') + ' (' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ')'));
+    metrics.push(redIf(wantConc && r.topDelta > 0, 'Your biggest cluster: ' + (r.topDelta < 0 ? 'smaller' : (r.topDelta > 0 ? 'larger' : 'unchanged')) + ' (' + (r.topDelta > 0 ? '+' : '') + r.topDelta + 'pp)'));
+    if (showFactor && r.factorBefore != null) metrics.push(redIf(r.factorAfter > r.factorBefore, R.factorCol + ' risk: ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1) + ', ' + (r.factorAfter < r.factorBefore ? 'lower' : (r.factorAfter > r.factorBefore ? 'higher' : 'flat'))));
     h += '<div class="card" style="border-left:3px solid ' + col + '">';
     h += '<div class="cardhead"><strong>' + e(r.ticker) + '</strong>' + (r.type === 'etf' ? (' <span class="etf">ETF \u00b7 ' + (r.broad ? 'broad' : 'sector') + '</span>') : '') + (r.name ? (' <span class="nm">' + e(r.name) + '</span>') : '') + ' <span class="themechip" style="color:' + col + ';border-color:' + col + '">' + e(r.theme) + '</span></div>';
     h += '<div class="theme">theme is the model\u2019s inference \u2014 confirm</div>';
+    if (r.lead) h += '<div class="lead">' + e(r.lead) + '</div>';
     h += '<div class="metrics">' + metrics.join('  \u00b7  ') + '</div>';
     if (showGrowth && r.growth) h += '<div class="growth">Growth: ' + e(r.growth) + ' ' + (r.verifiedLatest ? '(latest quarter, verified)' : (r.growthSourced ? '(sourced)' : '(unsourced)')) + '</div>';
     if (r.dossier) {
@@ -6445,6 +6448,7 @@ function optPrintBody(R, view, sortBy) {
       var dfr = function (lab, f) { if (!f || (!f.v && !f.headline)) return ''; if (f.v && naRe.test(f.v)) return '<div>' + lab + ': ' + e(f.v) + '</div>'; var head = f.headline ? (lab + ' \u2014 ' + e(f.headline)) : lab; return '<div style="margin:3px 0"><strong>' + head + '</strong> <span style="color:#777">' + dft(f) + '</span>' + (f.v ? '<div style="color:#555">' + e(f.v) + '</div>' : '') + '</div>'; };
       h += '<div class="dossier"><div class="dh">Verified facts \u00b7 pulled ' + e(new Date(D.pulledAt).toLocaleString()) + ' \u00b7 model search, not an audit</div>';
       h += dfr('Valuation', D.valuation) + dfr('Margins', D.margins) + dfr('Balance sheet', D.balance) + dfr('Next catalyst', D.nextCatalyst);
+      if (D.thesis && D.thesis.v) h += '<div style="margin-top:5px;padding-top:5px;border-top:1px solid #e5e7eb"><strong>Why it fits your goal</strong> <span style="color:#777">' + (D.thesis.sourced ? '(sourced)' : '(unverified)') + '</span><div style="color:#333;margin-top:1px">' + e(D.thesis.v) + '</div></div>';
       h += '</div>';
     }
     if (r.momentum != null) h += '<div class="mom">Momentum: ' + r.momentum + '/100 [model\u2019s news read]</div>';
@@ -6469,7 +6473,7 @@ function optExportPdf(id) {
     + 'h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:20px 0 10px}'
     + '.card{border:1px solid #d4d4d8;border-radius:6px;padding:9px 11px;margin:0 0 7px;page-break-inside:avoid}'
     + '.cardhead{font-size:13px;color:#111}.rank{color:#777}.etf{font-size:9px;color:#1d4ed8;border:1px solid #1d4ed8;border-radius:3px;padding:0 3px}.nm{font-size:11px;color:#555}.fit{font-size:12px;font-weight:700;color:#1d4ed8}'
-    + '.theme{font-size:10px;color:#777;font-style:italic;margin-top:3px}.metrics{font-size:10.5px;color:#374151;margin-top:4px}.growth{font-size:10px;color:#444;margin-top:3px}.mom{font-size:10px;color:#444;margin-top:3px}.cat{font-size:11px;color:#111;line-height:1.5;margin-top:5px}.themechip{font-size:9px;border:1px solid #999;border-radius:3px;padding:0 4px;margin-left:4px}.legendbox{border:1px solid #e5e7eb;background:#fafafa;border-radius:6px;padding:9px 11px;margin:0 0 14px;font-size:10px;color:#374151;line-height:1.5;page-break-inside:avoid}.legendbox .lgh{font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px}.legendbox>div{margin:2px 0}.dossier{border:1px solid #e5e7eb;background:#fafafa;border-radius:5px;padding:6px 9px;margin:5px 0;font-size:9.5px;color:#374151;line-height:1.55;page-break-inside:avoid}.dossier .dh{font-weight:700;color:#111;margin-bottom:2px}.dossier>div{margin:1px 0}'
+    + '.theme{font-size:10px;color:#777;font-style:italic;margin-top:3px}.lead{font-size:11px;color:#111;margin:3px 0 2px;line-height:1.4}.metrics{font-size:10.5px;color:#374151;margin-top:4px}.growth{font-size:10px;color:#444;margin-top:3px}.mom{font-size:10px;color:#444;margin-top:3px}.cat{font-size:11px;color:#111;line-height:1.5;margin-top:5px}.themechip{font-size:9px;border:1px solid #999;border-radius:3px;padding:0 4px;margin-left:4px}.legendbox{border:1px solid #e5e7eb;background:#fafafa;border-radius:6px;padding:9px 11px;margin:0 0 14px;font-size:10px;color:#374151;line-height:1.5;page-break-inside:avoid}.legendbox .lgh{font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px}.legendbox>div{margin:2px 0}.dossier{border:1px solid #e5e7eb;background:#fafafa;border-radius:5px;padding:6px 9px;margin:5px 0;font-size:9.5px;color:#374151;line-height:1.55;page-break-inside:avoid}.dossier .dh{font-weight:700;color:#111;margin-bottom:2px}.dossier>div{margin:1px 0}'
     + '@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}'
     + '</style></head><body><div class="doc">'
     + (logo ? ('<div class="letterhead"><img src="' + logo + '" alt="Harlan Shelby"></div>') : '')
@@ -6576,8 +6580,6 @@ async function optVerifyOne(ticker) {
       cand.dossier = dos;
       if (dos.quarter.v) cand.growth = dos.quarter.v;
       cand.growthSourced = !!dos.quarter.sourced;
-      if (dos.thesis.v) cand.catalyst = dos.thesis.v;
-      cand.sourced = !!dos.thesis.sourced;
       if (dos.momentum != null) cand.momentum = dos.momentum;
       cand.verifiedLatest = !!(dos.quarter.sourced || dos.valuation.sourced || dos.balance.sourced || dos.nextCatalyst.sourced);
     }
@@ -6685,9 +6687,9 @@ function renderOptimizerResults() {
     var wantDiv = R.goals.indexOf('diversify') >= 0, wantConc = R.goals.indexOf('concentration') >= 0;
     var redIf = function (cond, txt) { return cond ? '<span style="color:#f87171">' + txt + '</span>' : txt; };
     var parts = [];
-    parts.push(redIf(wantDiv && r.ebDelta < 0, 'Eff. bets ' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta));
-    parts.push(redIf(wantConc && r.topDelta > 0, 'Top cluster ' + (r.topDelta > 0 ? '+' : '') + r.topDelta + ' pp'));
-    if (showFactor && r.factorBefore != null) parts.push(redIf(r.factorAfter > r.factorBefore, R.factorCol + ' ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1)));
+    parts.push(redIf(wantDiv && r.ebDelta < 0, 'Diversification: ' + (r.ebDelta >= 0 ? 'better' : 'worse') + ' (' + (r.ebDelta >= 0 ? '+' : '') + r.ebDelta + ')'));
+    parts.push(redIf(wantConc && r.topDelta > 0, 'Your biggest cluster: ' + (r.topDelta < 0 ? 'smaller' : (r.topDelta > 0 ? 'larger' : 'unchanged')) + ' (' + (r.topDelta > 0 ? '+' : '') + r.topDelta + 'pp)'));
+    if (showFactor && r.factorBefore != null) parts.push(redIf(r.factorAfter > r.factorBefore, R.factorCol + ' risk: ' + r.factorBefore.toFixed(1) + '\u2192' + r.factorAfter.toFixed(1) + ', ' + (r.factorAfter < r.factorBefore ? 'lower' : (r.factorAfter > r.factorBefore ? 'higher' : 'flat'))));
     var srcTag = r.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>';
     html += '<div style="border:1px solid var(--color-border-tertiary);border-left:3px solid ' + col + ';border-radius:var(--border-radius-md);padding:9px 11px;margin-bottom:7px;background:var(--color-background-tertiary)">';
     html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">';
@@ -6695,6 +6697,7 @@ function renderOptimizerResults() {
     html += '<span style="font-size:9.5px;color:' + col + ';border:1px solid ' + col + ';border-radius:3px;padding:0 5px;white-space:nowrap">' + e(r.theme) + '</span>';
     html += '</div>';
     html += '<div style="font-size:8.5px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">theme is the model\u2019s inference \u2014 confirm</div>';
+    if (r.lead) html += '<div style="font-size:11px;color:var(--color-text-primary);margin-top:5px;line-height:1.45">' + e(r.lead) + '</div>';
     html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + parts.join('  \u00b7  ') + '</div>';
     if (showGrowth && r.growth) {
       var gstatus = (r.verifiedLatest ? '<span style="color:var(--color-text-success)">\u2713 latest quarter</span>' : (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>'));
@@ -6709,6 +6712,7 @@ function renderOptimizerResults() {
       html += '<div style="margin-top:6px;padding:7px 9px;border:1px solid var(--color-border-tertiary);border-radius:6px;background:var(--color-background-secondary);font-size:9.5px;color:var(--color-text-secondary);line-height:1.65">';
       html += '<div style="font-weight:600;color:var(--color-text-primary);margin-bottom:2px">Verified facts <span style="font-weight:400;color:var(--color-text-tertiary)">\u00b7 pulled ' + e(new Date(D.pulledAt).toLocaleTimeString()) + ' \u00b7 model search, not an audit</span></div>';
       html += drow('Valuation', D.valuation) + drow('Margins', D.margins) + drow('Balance sheet', D.balance) + drow('Next catalyst', D.nextCatalyst);
+      if (D.thesis && D.thesis.v) html += '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--color-border-tertiary)"><span style="font-weight:600;color:var(--color-text-primary)">Why it fits your goal</span> ' + (D.thesis.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unverified</span>') + '<div style="margin-top:2px;line-height:1.5;color:var(--color-text-secondary)">' + e(D.thesis.v) + '</div></div>';
       html += '</div>';
     }
     html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
@@ -31934,6 +31938,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ca</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cb</div>
 </body>
 </html>
