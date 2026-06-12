@@ -5838,6 +5838,8 @@ function renderAccountBreakdown() {
 // ─────────────────────────────────────────────
 // ===== Ask-the-Portfolio chatbox (Ship 1: multi-turn conversation over a held-only snapshot; no tools yet) =====
 var askConversation = []; // [{role:'user'|'assistant', content}]
+var ASK_LAST_KEY = 'portfolio-ask-last-v1';
+var ASK_CHATS_KEY = 'portfolio-ask-saved-v1';
 var askBusy = false;
 
 // Held-only book snapshot from the canonical engines. computeThemeClusters gates on held funds and
@@ -6674,6 +6676,7 @@ function renderAskTab() {
   if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
   if (typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
   var noWorker = !aiWorkerUrl;
+  if (!askConversation.length) { var _rr = askRestoreLast(); if (_rr && _rr.length) askConversation = _rr; }
   panel.innerHTML =
     '<div style="max-width:860px;margin:0 auto">' +
       '<h2 style="font-size:15px;margin:0 0 4px;color:var(--color-text-primary)">Ask your portfolio</h2>' +
@@ -6684,9 +6687,16 @@ function renderAskTab() {
         '<textarea id="ask-input" placeholder="Ask about your exposure, concentration, themes\u2026" onkeydown="askKey(event)" style="flex:1;min-height:52px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);color:var(--color-text-primary);font-family:inherit;font-size:12px;line-height:1.5;padding:8px;box-sizing:border-box;resize:vertical"' + (noWorker ? ' disabled' : '') + '></textarea>' +
         '<button class="btn" onclick="sendAskMessage()" style="white-space:nowrap"' + (noWorker ? ' disabled' : '') + '>Send</button>' +
       '</div>' +
-      (askConversation.length ? '<div style="margin-top:8px"><button class="btn btn-sm" onclick="clearAsk()" style="font-size:10px">Clear conversation</button></div>' : '') +
+      (askConversation.length ? '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+        '<button class="btn btn-sm" onclick="askSaveForReview()" style="font-size:10px">\u2605 Save for review</button>' +
+        '<button class="btn btn-sm" onclick="askExportPdf()" style="font-size:10px">Export PDF</button>' +
+        '<button class="btn btn-sm" onclick="clearAsk()" style="font-size:10px">Clear conversation</button>' +
+        '<span id="ask-action-status" style="font-size:10px;color:var(--color-text-success)"></span>' +
+      '</div>' : '') +
+      '<div id="ask-saved"></div>' +
     '</div>';
   renderAskThread();
+  renderAskSavedList();
 }
 
 function renderAskThread() {
@@ -6709,13 +6719,87 @@ function renderAskThread() {
     }
   });
   t.innerHTML = html;
+  askPersistLast();
 }
 
 function askKey(ev) {
   if (ev && ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendAskMessage(); }
 }
 
-function clearAsk() { askConversation = []; renderAskTab(); }
+function clearAsk() { askConversation = []; askPersistLast(); renderAskTab(); }
+
+// ===== Ask-the-Portfolio: persistence, saved chats, PDF (mirrors the optimizer) =====
+function askPersistLast() { try { localStorage.setItem(ASK_LAST_KEY, JSON.stringify(askConversation)); } catch (e) { } }
+function askRestoreLast() { try { var s = localStorage.getItem(ASK_LAST_KEY); if (s) { var a = JSON.parse(s); if (Array.isArray(a)) return a; } } catch (e) { } return null; }
+function askLoadSaved() { try { var s = localStorage.getItem(ASK_CHATS_KEY); var a = s ? JSON.parse(s) : []; return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+function askWriteSaved(list) { try { localStorage.setItem(ASK_CHATS_KEY, JSON.stringify(list)); return true; } catch (e) { return false; } }
+function askChatTitle(conv) { var first = null, i; for (i = 0; i < conv.length; i++) { if (conv[i].role === 'user' && conv[i].content) { first = conv[i].content; break; } } if (!first) return 'Conversation'; first = String(first).replace(/\s+/g, ' ').trim(); return first.length > 60 ? first.slice(0, 60) + '\u2026' : first; }
+function askFlash(msg) { var el = document.getElementById('ask-action-status'); if (el) { el.textContent = msg; setTimeout(function () { var e2 = document.getElementById('ask-action-status'); if (e2) e2.textContent = ''; }, 2200); } }
+function askSaveForReview() { if (!askConversation.length) return; var list = askLoadSaved(); var entry = { id: 'c' + Date.now(), savedAt: Date.now(), title: askChatTitle(askConversation), turns: askConversation.length, conv: askConversation.slice() }; list.unshift(entry); if (list.length > 50) list = list.slice(0, 50); var ok = askWriteSaved(list); askFlash(ok ? 'Saved \u2713' : 'Save failed (storage full?)'); renderAskSavedList(); }
+function askLoadChat(id) { var list = askLoadSaved(), i; for (i = 0; i < list.length; i++) { if (list[i].id === id) { askConversation = (list[i].conv || []).slice(); askPersistLast(); renderAskTab(); return; } } }
+function askDeleteChat(id) { var list = askLoadSaved().filter(function (x) { return x.id !== id; }); askWriteSaved(list); renderAskSavedList(); }
+function renderAskSavedList() {
+  var el = document.getElementById('ask-saved'); if (!el) return;
+  var list = askLoadSaved();
+  if (!list.length) { el.innerHTML = ''; return; }
+  var e = (typeof esc === 'function') ? esc : function (s) { return s; };
+  var h = '<details style="margin-top:14px"><summary style="cursor:pointer;font-size:11px;color:var(--color-text-secondary)">Saved chats (' + list.length + ') \u2014 click to review</summary><div style="margin-top:6px">';
+  list.forEach(function (it) {
+    var when = new Date(it.savedAt).toLocaleString();
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:6px 9px;margin-bottom:5px;background:var(--color-background-tertiary)">';
+    h += '<div style="font-size:10px;color:var(--color-text-secondary);min-width:0;flex:1"><div>' + e(it.title || 'Conversation') + '</div><div style="font-size:9px;color:var(--color-text-tertiary)">saved ' + e(when) + ' \u00b7 ' + (it.turns || (it.conv ? it.conv.length : 0)) + ' messages</div></div>';
+    h += '<div style="display:flex;gap:5px;flex-shrink:0">';
+    h += '<button class="btn btn-sm" style="font-size:9.5px" onclick="askLoadChat(\'' + it.id + '\')">Load</button>';
+    h += '<button class="btn btn-sm" style="font-size:9.5px" onclick="askExportPdf(\'' + it.id + '\')">PDF</button>';
+    h += '<button class="btn btn-sm" style="font-size:9.5px" onclick="askDeleteChat(\'' + it.id + '\')">Delete</button>';
+    h += '</div></div>';
+  });
+  h += '</div></details>';
+  el.innerHTML = h;
+}
+function askExportPdf(id) {
+  var conv = askConversation, i;
+  if (id) { var list = askLoadSaved(); for (i = 0; i < list.length; i++) { if (list[i].id === id) { conv = list[i].conv || []; break; } } }
+  if (!conv || !conv.length) { alert('No conversation to export yet.'); return; }
+  var e = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var now = new Date();
+  var logo = '';
+  try { if (typeof HS_LOGO !== 'undefined' && HS_LOGO) logo = HS_LOGO; } catch (e0) { logo = ''; }
+  var body = '';
+  conv.forEach(function (turn) {
+    if (turn.role === 'user') {
+      body += '<div class="qa user"><div class="lab">You asked</div><div class="msg">' + e(turn.content) + '</div></div>';
+    } else {
+      var foot = '', fb = [];
+      if (turn.receipts && turn.receipts.length) fb.push('live data: ' + turn.receipts.join(', '));
+      if (turn.cacheReused) fb.push('cache reused ' + turn.cacheReused.toLocaleString() + ' tok');
+      if (fb.length) foot = '<div class="rcpt">\u21B3 ' + e(fb.join(' \u00b7 ')) + '</div>';
+      body += '<div class="qa ai"><div class="lab">Portfolio AI</div><div class="msg">' + e(turn.content) + '</div>' + foot + '</div>';
+    }
+  });
+  var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Portfolio Q&amp;A \u2014 Saved Conversation</title><style>'
+    + '*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + '.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}'
+    + '.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}'
+    + '.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}'
+    + '.qa{margin:0 0 13px;page-break-inside:avoid}.lab{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#374151;margin-bottom:3px}'
+    + '.msg{font-size:11.5px;line-height:1.55;color:#111;white-space:pre-wrap;word-break:break-word}'
+    + '.qa.user .msg{background:#f3f4f6;border-left:3px solid #3b82f6;border-radius:4px;padding:7px 10px}'
+    + '.qa.ai .msg{padding:2px 0}.rcpt{font-size:9.5px;color:#777;margin-top:4px}'
+    + '@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}'
+    + '</style></head><body><div class="doc">'
+    + (logo ? ('<div class="letterhead"><img src="' + logo + '" alt="Harlan Shelby"></div>') : '')
+    + '<h1>Portfolio Q&amp;A \u2014 Saved Conversation</h1>'
+    + '<div class="sub">Prepared ' + e(now.toLocaleDateString()) + '.</div>'
+    + '<div class="note">A saved conversation with my portfolio assistant. It reads my held-only book and may cite web sources where shown (\u21B3 live data); figures without that marker are the model\u2019s own recollection, not verified. Hypothetical; not tax or investment advice.</div>'
+    + '<div style="margin-top:18px">' + body + '</div>'
+    + '<div class="note" style="margin-top:24px">Generated from my portfolio Q&amp;A. Confirm any figure before acting.</div>'
+    + '</div></body></html>';
+  var w = window.open('', '_blank');
+  if (!w) { alert('Allow pop-ups for this site to export the PDF, then try again.'); return; }
+  w.document.open(); w.document.write(doc); w.document.close();
+  setTimeout(function () { try { w.focus(); w.print(); } catch (e1) { } }, 400);
+}
 
 // ===== Ask-the-Portfolio: tool use (Ship 2) =====
 // Read-only tools the model may call mid-conversation. Each returns engine/cache data; the model
@@ -31757,6 +31841,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bv</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bw</div>
 </body>
 </html>
