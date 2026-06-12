@@ -6138,10 +6138,19 @@ var optBusy = false;
 var optWebOn = true; // objective-level news default ON
 var optResults = null;
 var optDirection = ''; // free-hand steer, persisted across re-renders in this session
+var optMaxPerTheme = 3; // cap on how many names per theme the model may propose (menu of distinct bets)
 var optView = 'candidates'; // 'candidates' (facts, proposal order, sortable) | 'momentum' (model-read, momentum-sorted)
 var optSortBy = 'proposal'; // candidates-view sort: 'proposal' | 'theme' | 'eff' | 'factor'
 var OPT_THEME_COLORS = { 'AI Infrastructure': '#61afef', 'Semiconductors': '#56b6c2', 'Mag 7-ish': '#c678dd', 'Cybersecurity': '#e06c75', 'Financials': '#d19a66', 'Energy & Grid': '#98c379', 'Commodities': '#e5c07b', 'Space & Defense': '#7f95c4', 'Healthcare': '#ec6fa9', 'Consumer Discretionary': '#56a3d9', 'Real Estate': '#b48ead', 'Emerging Markets': '#d98e5a', 'Bonds': '#8fbcbb', 'Consumer Staples': '#a3be8c', 'International Developed': '#88c0d0', 'Small Caps': '#d0876f', 'Utilities': '#b0a060' };
 function optThemeColor(t) { return OPT_THEME_COLORS[t] || '#9aa0a6'; }
+function optThemeSpread(rows) {
+  var counts = {}, order = [];
+  (rows || []).forEach(function (r) { if (counts[r.theme] == null) { counts[r.theme] = 0; order.push(r.theme); } counts[r.theme]++; });
+  order.sort(function (a, b) { return counts[b] - counts[a]; });
+  var parts = order.map(function (t) { return t + ' \u00d7' + counts[t]; });
+  var n = (rows || []).length;
+  return { themes: order.length, total: n, maxOne: order.length ? counts[order[0]] : 0, text: n + ' name' + (n === 1 ? '' : 's') + ' across ' + order.length + ' theme' + (order.length === 1 ? '' : 's') + ' \u2014 ' + parts.join(', ') };
+}
 function optStaleNote(ranOn) { if (!ranOn) return ''; var m = (Date.now() - ranOn) / 60000; if (m < 30) return ''; if (m < 60) return Math.round(m) + 'm old'; var h = m / 60; if (h < 24) return Math.round(h) + 'h old'; return Math.round(h / 24) + 'd old'; }
 function optSortRows(R, view, sortBy) {
   var rows = R.rows.slice();
@@ -6188,8 +6197,9 @@ function optGoalPhrase(goals, factorCol) {
   }).join('; AND ');
 }
 
-function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, direction, exclude, growthLean) {
+function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, direction, exclude, growthLean, maxPerTheme) {
   var p = [];
+  maxPerTheme = Math.max(1, parseInt(maxPerTheme, 10) || 3);
   p.push('You are a deployment scout for THIS specific portfolio. The user wants to deploy about $' + Math.round(amount).toLocaleString() + ' and your job is to PROPOSE candidates \u2014 individual STOCKS or ETFs \u2014 that would serve the stated objective(s) TOGETHER, so an engine can score each one\u2019s real impact on their book.');
   p.push('RANKING OBJECTIVE' + (goals.length > 1 ? 'S (a good candidate should serve these together)' : '') + ': ' + optGoalPhrase(goals, factorCol) + '.');
   var allowGeo = geos.map(function (g) { return OPT_GEO_DESC[g]; }).join(', ');
@@ -6211,6 +6221,8 @@ function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, dir
   p.push('---');
   p.push('PROPOSE 8 to 10 candidates. For EACH, assign exactly one THEME from this list, verbatim (this is how the engine buckets it, so it MUST match one of these): ' + OPT_THEMES.join(', ') + '.');
   p.push('The theme you assign is YOUR inference and DRIVES the scoring math, so pick the single best fit; the user confirms it later in Evaluate a Trade.');
+  p.push('THIS IS A MENU OF DISTINCT BETS, NOT A SHORTLIST OF ONE IDEA. The user picks a FEW of these and SPLITS their deployment across them, so EVERY name must be a genuinely DIFFERENT diversifying idea. Same-theme names have IDENTICAL measured impact to the engine (it scores theme + dollars, not the company), so proposing many names from one theme WASTES the run — the 2nd, 3rd, 4th name in a theme mostly re-buys exposure the first already gave.');
+  p.push('HARD RULE: at most ' + maxPerTheme + ' name(s) per theme. Give your single best pick (or up to ' + maxPerTheme + ') in a theme, then MOVE ON to a DIFFERENT gap in their book. SPAN as many DISTINCT themes as the universe allows, prioritizing themes that are ABSENT or thin in their current book. A list that is mostly one sector is a FAILED run even if every name is individually fine — breadth of distinct bets is the whole point.');
   p.push('Mark each candidate\u2019s "type" as "stock" or "etf". For an ETF, set "broad" to true if it is a broadly diversified fund (whole-market/regional/multi-sector) or false if it is a concentrated sector/thematic fund.');
   if (goals.indexOf('concentration') >= 0) p.push('For the concentration goal, favor candidates whose theme is DIFFERENT from the user\u2019s largest existing cluster.');
   if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor.');
@@ -6296,13 +6308,14 @@ async function runOptimizer() {
   if (amount <= 0) { if (amtEl) { amtEl.style.borderColor = '#fbbf24'; setTimeout(function () { if (amtEl) amtEl.style.borderColor = 'var(--color-border-tertiary)'; }, 800); } return; }
   var goals = optReadGoals(), factorCol = (document.getElementById('opt-factor') || {}).value || 'Rate';
   var geos = optReadGeos(), vehicles = optReadVehicles(), direction = optReadDirection(), growthLean = optReadGrowthLean();
+  var maxThemeEl = document.getElementById('opt-maxtheme'); var maxPerTheme = Math.max(1, parseInt(maxThemeEl ? maxThemeEl.value : '', 10) || 3); optMaxPerTheme = maxPerTheme;
   var webEl = document.getElementById('opt-web'); optWebOn = webEl ? !!webEl.checked : optWebOn;
   optView = 'candidates'; optSortBy = 'proposal';
   optBusy = true;
   var resEl = document.getElementById('opt-results');
   if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:var(--color-text-tertiary);padding:8px 0">Scouting candidates' + (optWebOn ? ' (searching current catalysts)' : '') + '\u2026</div>';
   try {
-    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn, geos, vehicles, direction, [], growthLean);
+    var system = buildOptimizerSystem(amount, goals, factorCol, optWebOn, geos, vehicles, direction, [], growthLean, maxPerTheme);
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose the candidates now as the JSON array.' }], system, [], { web: optWebOn });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
@@ -6310,7 +6323,7 @@ async function runOptimizer() {
     var filtered = optParseCandidates(text).length - cands.length;
     if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">Nothing came back inside your universe \u2014 loosen the constraints or try again.</div>'; optBusy = false; return; }
     var scored = optScore(cands, amount, goals, factorCol);
-    optResults = { amount: amount, goals: goals, factorCol: factorCol, geos: geos, vehicles: vehicles, direction: direction, growthLean: growthLean, filtered: filtered, usedWeb: usedWeb, deepened: 0, added: 0, ranOn: Date.now(), cands: cands, seen: cands.map(function (c) { return c.ticker; }), rows: scored };
+    optResults = { amount: amount, goals: goals, factorCol: factorCol, geos: geos, vehicles: vehicles, direction: direction, growthLean: growthLean, maxPerTheme: maxPerTheme, filtered: filtered, usedWeb: usedWeb, deepened: 0, added: 0, ranOn: Date.now(), cands: cands, seen: cands.map(function (c) { return c.ticker; }), rows: scored };
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6328,7 +6341,7 @@ async function optDeepen() {
   var wrap = document.getElementById('opt-deepen-wrap');
   if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:var(--color-text-tertiary)">Deepening \u2014 searching for more names\u2026</span>';
   try {
-    var system = buildOptimizerSystem(R.amount, R.goals, R.factorCol, optWebOn, R.geos, R.vehicles, direction, R.seen, R.growthLean);
+    var system = buildOptimizerSystem(R.amount, R.goals, R.factorCol, optWebOn, R.geos, R.vehicles, direction, R.seen, R.growthLean, R.maxPerTheme);
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose MORE candidates now (excluding the ones already listed) as the JSON array.' }], system, [], { web: optWebOn });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
@@ -6416,7 +6429,8 @@ function optPrintBody(R, view, sortBy) {
   var rows = optSortRows(R, v, sortBy || 'proposal');
   var orderName = (v === 'momentum') ? 'the model\u2019s current-momentum read [inference]' : (sortBy === 'theme' ? 'theme' : sortBy === 'eff' ? 'effective-bets impact' : sortBy === 'factor' ? (R.factorCol + ' reduction') : 'the order the model proposed them');
   var h = '';
-  h += '<p class="sub2">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + (optStaleNote(R.ranOn) ? '<span style="color:#b45309"> \u00b7 \u26a0 run is ' + optStaleNote(R.ranOn) + ' \u2014 prices and the news read may have moved' : '') + '.</p>';
+  h += '<p class="sub2">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' to deploy (each card = that amount in one name) \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + (optStaleNote(R.ranOn) ? '<span style="color:#b45309"> \u00b7 \u26a0 run is ' + optStaleNote(R.ranOn) + ' \u2014 prices and the news read may have moved' : '') + '.</p>';
+  h += '<p class="note" style="margin:-6px 0 12px"><strong>' + e(optThemeSpread(R.rows).text) + '</strong> \u2014 same-theme names share identical measured impact, so more than one or two of a theme mostly re-buys the same exposure.</p>';
   h += '<p class="note" style="margin:-8px 0 12px">Not a ranking \u2014 candidate names proposed within my constraints, ordered by ' + e(orderName) + '.</p>';
   if (R.verifiedAt) h += '<p class="note" style="margin:-8px 0 12px;color:#15803d">\u2713 Growth figures verified against each name\u2019s most recent reported quarter as of ' + e(new Date(R.verifiedAt).toLocaleString()) + '.</p>';
   h += '<div class="legendbox"><div class="lgh">How to read each box</div>';
@@ -6652,7 +6666,8 @@ function renderOptimizerResults() {
   var geoSummary = (R.geos.length === 3) ? 'all regions' : R.geos.map(function (g) { return OPT_GEO_SHORT[g]; }).join(' + ');
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
   var html = '';
-  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' <span style="color:var(--color-text-tertiary)">(growth lens on)</span>' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ')' : '') + '.</div>';
+  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' <span style="color:var(--color-text-tertiary)">(growth lens on)</span>' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' to deploy \u00b7 each card = that amount in one name (standalone)' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ')' : '') + '.</div>';
+  (function () { var sp = optThemeSpread(R.rows); html += '<div style="font-size:10px;color:var(--color-text-secondary);margin:0 0 8px;line-height:1.5"><strong>' + e(sp.text) + '</strong>' + (sp.maxOne > 2 ? ' <span style="color:#fbbf24">\u2014 same-theme names don\u2019t stack; picking more than one or two of a color mostly re-buys the same exposure</span>' : '') + '</div>'; })();
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:8px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped' : '') + ' \u00b7 run ' + e(new Date(R.ranOn).toLocaleString()) + (optStaleNote(R.ranOn) ? ' \u00b7 <span style="color:#fbbf24">\u26a0 ' + optStaleNote(R.ranOn) + '</span>' : '') + (R.verifiedAt ? ' \u00b7 <span style="color:var(--color-text-success)">\u2713 figures verified ' + e(new Date(R.verifiedAt).toLocaleTimeString()) + '</span>' : '') + '.</div>';
   html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">';
   html += '<button class="btn btn-sm" style="font-size:10px;' + (view === 'candidates' ? 'font-weight:700' : 'opacity:.55') + '" onclick="optSetView(\'candidates\')">Candidates</button>';
@@ -6737,7 +6752,8 @@ function renderOptimizerTab() {
   html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount, one or more goals, and the universe to draw from; add free-hand direction to steer it. The model proposes candidate names within your constraints and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact and ranks them. The growth lens and current-momentum sort are model reads that shape selection and display but never the measured ranking. Use Deepen to pull more names. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
   html += aiWorkerUrlFieldHtml('opt-worker-url', 'renderOptimizerTab()');
   html += '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:8px">';
-  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Amount to deploy</div><input id="opt-amount" type="number" placeholder="15000" style="width:120px;' + inp + '"' + dis + '></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Total to deploy</div><input id="opt-amount" type="number" placeholder="35000" style="width:120px;' + inp + '"' + dis + '></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px" title="Caps how many names from any one theme the model may propose, so the run spans distinct bets instead of mining one sector.">Max per theme</div><input id="opt-maxtheme" type="number" min="1" max="10" value="' + (typeof optMaxPerTheme !== 'undefined' ? optMaxPerTheme : 3) + '" oninput="optMaxPerTheme=Math.max(1,parseInt(this.value,10)||3)" style="width:72px;' + inp + '"' + dis + '></div>';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Goals (pick one or more) \u2014 these are what the ranking measures</div><div style="display:flex;flex-direction:column;gap:3px">';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-diversify" checked' + dis + '> Improve diversification</label>';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-concentration"' + dis + '> Cut my biggest concentration</label>';
@@ -31938,6 +31954,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cb</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cc</div>
 </body>
 </html>
