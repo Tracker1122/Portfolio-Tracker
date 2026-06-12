@@ -6143,6 +6143,11 @@ var optView = 'candidates'; // 'candidates' (facts, proposal order, sortable) | 
 var optSortBy = 'proposal'; // candidates-view sort: 'proposal' | 'theme' | 'eff' | 'factor'
 var OPT_THEME_COLORS = { 'AI Infrastructure': '#61afef', 'Semiconductors': '#56b6c2', 'Mag 7-ish': '#c678dd', 'Cybersecurity': '#e06c75', 'Financials': '#d19a66', 'Energy & Grid': '#98c379', 'Commodities': '#e5c07b', 'Space & Defense': '#7f95c4', 'Healthcare': '#ec6fa9', 'Consumer Discretionary': '#56a3d9', 'Real Estate': '#b48ead', 'Emerging Markets': '#d98e5a', 'Bonds': '#8fbcbb', 'Consumer Staples': '#a3be8c', 'International Developed': '#88c0d0', 'Small Caps': '#d0876f', 'Utilities': '#b0a060' };
 function optThemeColor(t) { return OPT_THEME_COLORS[t] || '#9aa0a6'; }
+function optCapPerTheme(cands, maxPerTheme) {
+  var cap = Math.max(1, parseInt(maxPerTheme, 10) || 3), counts = {}, out = [];
+  (cands || []).forEach(function (c) { var t = c.theme || ''; counts[t] = counts[t] || 0; if (counts[t] < cap) { counts[t]++; out.push(c); } });
+  return out;
+}
 function optThemeSpread(rows) {
   var counts = {}, order = [];
   (rows || []).forEach(function (r) { if (counts[r.theme] == null) { counts[r.theme] = 0; order.push(r.theme); } counts[r.theme]++; });
@@ -6319,7 +6324,7 @@ async function runOptimizer() {
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Propose the candidates now as the JSON array.' }], system, [], { web: optWebOn });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
     var usedWeb = (data.content || []).some(function (b) { return b.type === 'server_tool_use' || b.type === 'web_search_tool_result'; });
-    var cands = optApplyConstraints(optParseCandidates(text), geos, vehicles);
+    var cands = optCapPerTheme(optApplyConstraints(optParseCandidates(text), geos, vehicles), maxPerTheme);
     var filtered = optParseCandidates(text).length - cands.length;
     if (!cands.length) { if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#fbbf24;padding:8px 0">Nothing came back inside your universe \u2014 loosen the constraints or try again.</div>'; optBusy = false; return; }
     var scored = optScore(cands, amount, goals, factorCol);
@@ -6331,6 +6336,18 @@ async function runOptimizer() {
     var info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed' };
     if (resEl) resEl.innerHTML = '<div style="font-size:11px;color:#ef4444;padding:8px 0">' + ((info.title || 'Error') + ': ' + (info.detail || '')) + '</div>';
   }
+}
+
+function optRescore() {
+  if (optBusy || !optResults || !optResults.cands || !optResults.cands.length) return;
+  var amtEl = document.getElementById('opt-amount');
+  var amount = parseFloat(amtEl ? amtEl.value : '') || 0;
+  if (amount <= 0) { if (amtEl) { amtEl.style.borderColor = '#fbbf24'; setTimeout(function () { if (amtEl) amtEl.style.borderColor = 'var(--color-border-tertiary)'; }, 800); } return; }
+  var goals = optReadGoals(), factorCol = (document.getElementById('opt-factor') || {}).value || optResults.factorCol || 'Rate';
+  optResults.amount = amount; optResults.goals = goals; optResults.factorCol = factorCol;
+  optResults.rows = optScore(optResults.cands, amount, goals, factorCol);
+  optPersistLast();
+  renderOptimizerResults();
 }
 
 async function optDeepen() {
@@ -6349,9 +6366,11 @@ async function optDeepen() {
     var seenSet = {}; R.seen.forEach(function (t) { seenSet[t] = 1; });
     fresh = fresh.filter(function (c) { return !seenSet[c.ticker]; });
     if (!fresh.length) { if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:#fbbf24">No new names this pass \u2014 try adding free-hand direction, or loosen the universe.</span> ' + optDeepenButtonHtml(R); optBusy = false; return; }
-    var allCands = R.cands.concat(fresh);
+    var allSeen = (R.seen || []).concat(fresh.map(function (c) { return c.ticker; }));
+    var allCands = optCapPerTheme(R.cands.concat(fresh), R.maxPerTheme);
+    if (allCands.length <= R.cands.length) { if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:#fbbf24">New names came back, but they were all in themes already at your per-theme cap (' + (R.maxPerTheme || 3) + '). Raise \u201cMax per theme\u201d or add free-hand direction to reach new themes.</span> ' + optDeepenButtonHtml(R); R.seen = allSeen; optBusy = false; return; }
     var scored = optScore(allCands, R.amount, R.goals, R.factorCol);
-    optResults = { amount: R.amount, goals: R.goals, factorCol: R.factorCol, geos: R.geos, vehicles: R.vehicles, direction: direction, growthLean: R.growthLean, filtered: R.filtered, usedWeb: R.usedWeb || usedWeb, deepened: (R.deepened || 0) + 1, added: fresh.length, ranOn: Date.now(), cands: allCands, seen: allCands.map(function (c) { return c.ticker; }), rows: scored };
+    optResults = { amount: R.amount, goals: R.goals, factorCol: R.factorCol, geos: R.geos, vehicles: R.vehicles, direction: direction, growthLean: R.growthLean, maxPerTheme: R.maxPerTheme, filtered: R.filtered, usedWeb: R.usedWeb || usedWeb, deepened: (R.deepened || 0) + 1, added: allCands.length - R.cands.length, ranOn: Date.now(), cands: allCands, seen: allSeen, rows: scored };
     optBusy = false;
     renderOptimizerResults();
   } catch (err) {
@@ -6668,6 +6687,7 @@ function renderOptimizerResults() {
   var html = '';
   html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' <span style="color:var(--color-text-tertiary)">(growth lens on)</span>' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' to deploy \u00b7 each card = that amount in one name (standalone)' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ')' : '') + '.</div>';
   (function () { var sp = optThemeSpread(R.rows); html += '<div style="font-size:10px;color:var(--color-text-secondary);margin:0 0 8px;line-height:1.5"><strong>' + e(sp.text) + '</strong>' + (sp.maxOne > 2 ? ' <span style="color:#fbbf24">\u2014 same-theme names don\u2019t stack; picking more than one or two of a color mostly re-buys the same exposure</span>' : '') + '</div>'; })();
+  html += '<div style="margin:0 0 8px"><button class="btn btn-sm" onclick="optRescore()" style="font-size:10px" title="Re-apply the current Total-to-deploy and goals to these same names \u2014 instant local math, no new model fetch or spend.">\u21bb Re-score at current amount</button></div>';
   html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:8px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped' : '') + ' \u00b7 run ' + e(new Date(R.ranOn).toLocaleString()) + (optStaleNote(R.ranOn) ? ' \u00b7 <span style="color:#fbbf24">\u26a0 ' + optStaleNote(R.ranOn) + '</span>' : '') + (R.verifiedAt ? ' \u00b7 <span style="color:var(--color-text-success)">\u2713 figures verified ' + e(new Date(R.verifiedAt).toLocaleTimeString()) + '</span>' : '') + '.</div>';
   html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">';
   html += '<button class="btn btn-sm" style="font-size:10px;' + (view === 'candidates' ? 'font-weight:700' : 'opacity:.55') + '" onclick="optSetView(\'candidates\')">Candidates</button>';
@@ -6752,7 +6772,7 @@ function renderOptimizerTab() {
   html += '<div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:12px;line-height:1.5">Pick an amount, one or more goals, and the universe to draw from; add free-hand direction to steer it. The model proposes candidate names within your constraints and assigns each a theme; the tracker\u2019s real engine then scores each name\u2019s actual impact and ranks them. The growth lens and current-momentum sort are model reads that shape selection and display but never the measured ranking. Use Deepen to pull more names. Themes are the model\u2019s [inference] and ETF impact is approximate \u2014 take a winner into Evaluate a Trade to confirm.</div>';
   html += aiWorkerUrlFieldHtml('opt-worker-url', 'renderOptimizerTab()');
   html += '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;margin-bottom:8px">';
-  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Total to deploy</div><input id="opt-amount" type="number" placeholder="35000" style="width:120px;' + inp + '"' + dis + '></div>';
+  html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Total to deploy</div><input id="opt-amount" type="number" placeholder="35000" onchange="if(typeof optResults!==\'undefined\'&&optResults)optRescore()" style="width:120px;' + inp + '"' + dis + '><div style="font-size:8px;color:var(--color-text-tertiary);margin-top:2px">edits re-score instantly \u2014 no new fetch</div></div>';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px" title="Caps how many names from any one theme the model may propose, so the run spans distinct bets instead of mining one sector.">Max per theme</div><input id="opt-maxtheme" type="number" min="1" max="10" value="' + (typeof optMaxPerTheme !== 'undefined' ? optMaxPerTheme : 3) + '" oninput="optMaxPerTheme=Math.max(1,parseInt(this.value,10)||3)" style="width:72px;' + inp + '"' + dis + '></div>';
   html += '<div><div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:3px">Goals (pick one or more) \u2014 these are what the ranking measures</div><div style="display:flex;flex-direction:column;gap:3px">';
   html += '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" id="opt-goal-diversify" checked' + dis + '> Improve diversification</label>';
@@ -31954,6 +31974,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cc</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cd</div>
 </body>
 </html>
