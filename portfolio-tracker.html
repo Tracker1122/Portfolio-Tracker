@@ -6170,7 +6170,7 @@ function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, dir
   if (goals.indexOf('diversify') >= 0 && vehicles.indexOf('broad') >= 0) p.push('For diversification, broad ETFs are often the better vehicle \u2014 include strong ETF options where allowed, alongside single-stock ideas.');
   if (growthLean) {
     p.push('GROWTH LENS (a SELECTION steer, NOT a ranking objective): among names that serve the ranking objective(s) above, FAVOR those with genuine growth characteristics (real revenue/earnings growth, expanding addressable market). Do not sacrifice the ranking objective to chase growth \u2014 find the growthiest names that STILL satisfy it.');
-    p.push('For EACH candidate return a "growth" field: a short real growth figure or characterization (e.g. "rev +22% YoY, EPS +30% est"). Set "growthSourced" true ONLY if you pulled the figure from a web search THIS run; otherwise a brief recollection with growthSourced false. Never invent a precise figure.');
+    p.push('For EACH candidate return a "growth" field: a short real growth figure with the PERIOD in ABSOLUTE terms (e.g. "Q1 2026 rev +22% YoY, EPS +30%"). Always target the MOST RECENT reported quarter, and NEVER use relative terms like "next year" or "last year" \u2014 name the absolute fiscal period. Set "growthSourced" true ONLY if you pulled it from a web search THIS run; otherwise a brief recollection with growthSourced false. Never invent a precise figure.');
   }
   if (direction && direction.trim()) p.push('USER DIRECTION (honor this preference; it overrides your default tendencies but NOT the universe or evidence rules): ' + direction.trim());
   if (exclude && exclude.length) p.push('GO DEEPER \u2014 these names were ALREADY proposed; do NOT repeat any of them, return DIFFERENT names: ' + exclude.join(', ') + '. Cast wider within the universe, surface less-obvious or smaller names, and dig into the most promising under-explored angle for the objective(s).');
@@ -6183,7 +6183,7 @@ function buildOptimizerSystem(amount, goals, factorCol, web, geos, vehicles, dir
   if (goals.indexOf('concentration') >= 0) p.push('For the concentration goal, favor candidates whose theme is DIFFERENT from the user\u2019s largest existing cluster.');
   if (goals.indexOf('factor') >= 0) p.push('For the factor goal (cutting ' + factorCol + '), favor themes that do NOT carry that factor.');
   if (web) {
-    if (growthLean) p.push('SEARCH IS REQUIRED this run: run targeted web searches for CURRENT growth catalysts in this space and, for EACH name you propose, verify a RECENT growth figure (latest-quarter revenue/EPS growth or fresh guidance). Set growthSourced true for figures you confirmed by search. Be reasonably economical, but do NOT skip the search.');
+    if (growthLean) p.push('SEARCH IS REQUIRED this run: run targeted web searches for CURRENT growth catalysts in this space and, for EACH name, verify the growth figure from its MOST RECENT reported quarter (search its latest results; do NOT use an older quarter if a newer one has been reported). State the period in absolute terms (e.g. Q1 2026), never "next year". Set growthSourced true for figures you confirmed by search. Be reasonably economical, but do NOT skip the search.');
     else p.push('You MAY run 2-3 targeted web searches at the OBJECTIVE level first (current catalysts in the relevant space, within the allowed universe) \u2014 be economical. For any catalyst from a search, set sourced true and keep it tied to what the result said.');
     p.push('Also assign each candidate a "momentum" score from 0 to 100: YOUR read of how STRONG and TIMELY its catalyst is RIGHT NOW, based on what you found in search (recent earnings beats, guidance raises, product/cycle inflections, fresh demand or policy signals). This is an INFERENCE from current news, not a computation \u2014 a solid company with no fresh catalyst should score low. Base it on what you actually found, and reflect the same reasoning in the catalyst line.');
   }
@@ -6226,7 +6226,7 @@ function optScore(cands, amount, goals, factorCol) {
     var ebDelta = +(ebAfter - ebBefore).toFixed(2);
     var topDelta = +(topAfterPct - topBeforePct).toFixed(2);
     return {
-      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced, growth: c.growth, growthSourced: c.growthSourced, momentum: (c.momentum == null ? null : c.momentum),
+      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced, growth: c.growth, growthSourced: c.growthSourced, verifiedLatest: !!c.verifiedLatest, momentum: (c.momentum == null ? null : c.momentum),
       ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA,
       g_diversify: ebDelta, g_concentration: -topDelta, g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null
     };
@@ -6385,6 +6385,7 @@ function optPrintBody(R, view, sortBy) {
   var h = '';
   h += '<p class="sub2">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' (growth lens on)' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each \u00b7 universe: ' + e(geoSummary) + ', ' + e(vehSummary) + (R.direction ? (' \u00b7 direction: \u201c' + e(R.direction) + '\u201d') : '') + '. Run ' + e(new Date(R.ranOn).toLocaleString()) + (R.usedWeb ? ' \u00b7 web-sourced' : '') + (optStaleNote(R.ranOn) ? '<span style="color:#b45309"> \u00b7 \u26a0 run is ' + optStaleNote(R.ranOn) + ' \u2014 prices and the news read may have moved' : '') + '.</p>';
   h += '<p class="note" style="margin:-8px 0 12px">Not a ranking \u2014 candidate names proposed within my constraints, ordered by ' + e(orderName) + '.</p>';
+  if (R.verifiedAt) h += '<p class="note" style="margin:-8px 0 12px;color:#15803d">\u2713 Growth figures verified against each name\u2019s most recent reported quarter as of ' + e(new Date(R.verifiedAt).toLocaleString()) + '.</p>';
   h += '<div class="legendbox"><div class="lgh">How to read each box</div>';
   h += '<div><strong>Color</strong> marks the theme \u2014 names sharing a color share identical measured structural impact, because the engine scores the theme and the dollar amount, not the individual company.</div>';
   h += '<div><strong>Eff. bets</strong> = change in effective independent bets (a diversification score; higher means more spread out). <strong>Top cluster \u0394</strong> = shift in the biggest theme\u2019s weight, in percentage points.</div>';
@@ -6406,7 +6407,7 @@ function optPrintBody(R, view, sortBy) {
     h += '<div class="cardhead"><strong>' + e(r.ticker) + '</strong>' + (r.type === 'etf' ? (' <span class="etf">ETF \u00b7 ' + (r.broad ? 'broad' : 'sector') + '</span>') : '') + (r.name ? (' <span class="nm">' + e(r.name) + '</span>') : '') + ' <span class="themechip" style="color:' + col + ';border-color:' + col + '">' + e(r.theme) + '</span></div>';
     h += '<div class="theme">theme is the model\u2019s inference \u2014 confirm</div>';
     h += '<div class="metrics">' + metrics.join('  \u00b7  ') + '</div>';
-    if (showGrowth && r.growth) h += '<div class="growth">Growth: ' + e(r.growth) + ' ' + (r.growthSourced ? '(sourced)' : '(unsourced)') + '</div>';
+    if (showGrowth && r.growth) h += '<div class="growth">Growth: ' + e(r.growth) + ' ' + (r.verifiedLatest ? '(latest quarter, verified)' : (r.growthSourced ? '(sourced)' : '(unsourced)')) + '</div>';
     if (r.momentum != null) h += '<div class="mom">Momentum: ' + r.momentum + '/100 [model\u2019s news read]</div>';
     h += '<div class="cat">' + e(r.catalyst || '') + ' ' + (r.sourced ? '(sourced)' : '(unsourced)') + '</div>';
     h += '</div>';
@@ -6446,6 +6447,64 @@ function optExportPdf(id) {
   setTimeout(function () { try { w.focus(); w.print(); } catch (e) { } }, 400);
 }
 
+function optParseVerify(text) {
+  if (!text) return [];
+  var s = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+  var a = s.indexOf('['), b = s.lastIndexOf(']');
+  if (a < 0 || b < 0 || b <= a) return [];
+  var arr; try { arr = JSON.parse(s.slice(a, b + 1)); } catch (e) { return []; }
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(function (x) { return x && x.ticker; }).map(function (x) {
+    var m = (x.momentum != null) ? parseFloat(x.momentum) : NaN;
+    return { ticker: String(x.ticker).toUpperCase().trim(), growth: x.growth ? String(x.growth) : '', growthSourced: !!x.growthSourced, momentum: isNaN(m) ? null : Math.max(0, Math.min(100, Math.round(m))) };
+  });
+}
+
+function optVerifyButtonHtml(R) {
+  var n = (R.cands ? R.cands.length : 0);
+  var vtxt = R.verifiedAt ? ('\u2713 verified ' + new Date(R.verifiedAt).toLocaleTimeString() + (R.verifiedCount != null ? ' (' + R.verifiedCount + '/' + n + ' refreshed)' : '') + ' \u2014 re-verify') : '\u2713 Verify latest quarter \u2014 per-name search (~$0.30+)';
+  return '<button class="btn btn-sm" style="font-size:10px" onclick="optVerifyLatest()"' + (optBusy ? ' disabled' : '') + '>' + vtxt + '</button>';
+}
+
+async function optVerifyLatest() {
+  if (optBusy || !optResults || !optResults.cands || !optResults.cands.length) return;
+  if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
+  if (!aiWorkerUrl) return;
+  var R = optResults;
+  optBusy = true;
+  var wrap = document.getElementById('opt-verify-wrap');
+  if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:var(--color-text-tertiary)">Verifying the latest reported quarter for each name (searching every ticker)\u2026</span>';
+  try {
+    var list = R.cands.map(function (c) { return c.ticker + (c.name ? ' (' + c.name + ')' : ''); }).join(', ');
+    var sys = 'You verify CURRENT fundamentals for a list of tickers using web search, one ticker at a time. For EACH ticker: search its MOST RECENT reported quarter and return the latest top-line growth (revenue and/or EPS, year-over-year) WITH the period stated in ABSOLUTE terms (e.g. "Q1 2026"). Always use the newest reported quarter \u2014 do NOT use an older quarter if a newer one has been reported. NEVER use relative terms like "next year" or "last year"; always name the absolute fiscal period. Also give a fresh momentum score 0-100 from what you find. If you cannot confirm a recent figure for a ticker, set growthSourced false and keep growth brief.\nTickers: ' + list + '\nReturn ONLY a JSON array, nothing before or after: [{"ticker":"XYZ","growth":"Q1 2026 rev +27% YoY, EPS +24%","growthSourced":true,"momentum":75}].';
+    var data = await aiWorkerCallStructured([{ role: 'user', content: 'Verify the latest reported quarter for each ticker now and return the JSON array.' }], sys, [], { web: true });
+    var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
+    var arr = optParseVerify(text);
+    var byT = {}; arr.forEach(function (x) { byT[x.ticker] = x; });
+    var updated = 0;
+    R.cands.forEach(function (c) {
+      var x = byT[c.ticker];
+      if (x) {
+        if (x.growth) c.growth = x.growth;
+        c.growthSourced = !!x.growthSourced;
+        if (x.momentum != null) c.momentum = x.momentum;
+        c.verifiedLatest = !!x.growthSourced;
+        if (c.verifiedLatest) updated++;
+      }
+    });
+    R.rows = optScore(R.cands, R.amount, R.goals, R.factorCol);
+    R.verifiedAt = Date.now();
+    R.verifiedCount = updated;
+    optBusy = false;
+    optPersistLast();
+    renderOptimizerResults();
+  } catch (err) {
+    optBusy = false;
+    var info = (typeof aiErrorMessage === 'function') ? aiErrorMessage(err) : { title: 'Error', detail: (err && err.message) || 'failed' };
+    if (wrap) wrap.innerHTML = '<span style="font-size:10px;color:#ef4444">' + ((info.title || 'Error') + ': ' + (info.detail || '')) + '</span> ' + optVerifyButtonHtml(R);
+  }
+}
+
 function renderOptimizerResults() {
   var el = document.getElementById('opt-results'); if (!el) return;
   if (!optResults || !optResults.rows || !optResults.rows.length) { el.innerHTML = ''; return; }
@@ -6463,7 +6522,7 @@ function renderOptimizerResults() {
   var vehSummary = (R.vehicles.length === 3) ? 'all vehicles' : R.vehicles.map(function (v) { return OPT_VEH_SHORT[v]; }).join(' + ');
   var html = '';
   html += '<div style="font-size:11px;color:var(--color-text-secondary);margin:14px 0 4px;line-height:1.5">Candidates for <strong>' + e(goalText) + '</strong>' + (showGrowth ? ' <span style="color:var(--color-text-tertiary)">(growth lens on)</span>' : '') + ' \u00b7 ' + e(fmt(R.amount)) + ' into each' + (R.usedWeb ? ' \u00b7 <span style="color:var(--color-text-success)">web \u2713 sourced</span>' : '') + (R.deepened ? ' \u00b7 deepened ' + R.deepened + '\u00d7 (' + R.rows.length + ')' : '') + '.</div>';
-  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:8px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped' : '') + ' \u00b7 run ' + e(new Date(R.ranOn).toLocaleString()) + (optStaleNote(R.ranOn) ? ' \u00b7 <span style="color:#fbbf24">\u26a0 ' + optStaleNote(R.ranOn) + '</span>' : '') + '.</div>';
+  html += '<div style="font-size:9.5px;color:var(--color-text-tertiary);margin-bottom:8px">Universe: ' + e(geoSummary) + ' \u00b7 ' + e(vehSummary) + (R.direction ? ' \u00b7 direction: \u201c' + e(R.direction) + '\u201d' : '') + (R.filtered ? ' \u00b7 ' + R.filtered + ' dropped' : '') + ' \u00b7 run ' + e(new Date(R.ranOn).toLocaleString()) + (optStaleNote(R.ranOn) ? ' \u00b7 <span style="color:#fbbf24">\u26a0 ' + optStaleNote(R.ranOn) + '</span>' : '') + (R.verifiedAt ? ' \u00b7 <span style="color:var(--color-text-success)">\u2713 figures verified ' + e(new Date(R.verifiedAt).toLocaleTimeString()) + '</span>' : '') + '.</div>';
   html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">';
   html += '<button class="btn btn-sm" style="font-size:10px;' + (view === 'candidates' ? 'font-weight:700' : 'opacity:.55') + '" onclick="optSetView(\'candidates\')">Candidates</button>';
   if (hasMomentum) html += '<button class="btn btn-sm" style="font-size:10px;' + (view === 'momentum' ? 'font-weight:700' : 'opacity:.55') + '" onclick="optSetView(\'momentum\')">Momentum \u26a1 [model read]</button>';
@@ -6508,11 +6567,12 @@ function renderOptimizerResults() {
     html += '</div>';
     html += '<div style="font-size:8.5px;color:var(--color-text-tertiary);font-style:italic;margin-top:2px">theme is the model\u2019s inference \u2014 confirm</div>';
     html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + parts.join('  \u00b7  ') + '</div>';
-    if (showGrowth && r.growth) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Growth: ' + e(r.growth) + '  ' + (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>') + '</div>';
+    if (showGrowth && r.growth) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Growth: ' + e(r.growth) + '  ' + (r.verifiedLatest ? '<span style="color:var(--color-text-success)">\u2713 latest quarter</span>' : (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>')) + '</div>';
     if (r.momentum != null) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Momentum: <strong>' + r.momentum + '</strong>/100 <span style="color:var(--color-text-tertiary);font-style:italic">[model\u2019s news read]</span></div>';
     html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
     html += '</div>';
   });
+  if (showGrowth) html += '<div id="opt-verify-wrap" style="margin-top:6px">' + optVerifyButtonHtml(R) + '</div>';
   html += '<div id="opt-deepen-wrap" style="margin-top:6px">' + optDeepenButtonHtml(R) + '</div>';
   el.innerHTML = html;
 }
@@ -31646,6 +31706,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bt</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bu</div>
 </body>
 </html>
