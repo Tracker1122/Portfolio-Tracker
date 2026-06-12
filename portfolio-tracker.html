@@ -6228,7 +6228,7 @@ function optScore(cands, amount, goals, factorCol) {
     var ebDelta = +(ebAfter - ebBefore).toFixed(2);
     var topDelta = +(topAfterPct - topBeforePct).toFixed(2);
     return {
-      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced, growth: c.growth, growthSourced: c.growthSourced, verifiedLatest: !!c.verifiedLatest, momentum: (c.momentum == null ? null : c.momentum),
+      ticker: c.ticker, name: c.name, type: c.type, broad: optIsBroadEtf(c), theme: c.theme, catalyst: c.catalyst, sourced: c.sourced, growth: c.growth, growthSourced: c.growthSourced, verifiedLatest: !!c.verifiedLatest, dossier: c.dossier, momentum: (c.momentum == null ? null : c.momentum),
       ebDelta: ebDelta, topDelta: topDelta, factorBefore: fB, factorAfter: fA,
       g_diversify: ebDelta, g_concentration: -topDelta, g_factor: (fB != null && fA != null) ? +(fB - fA).toFixed(2) : null
     };
@@ -6410,6 +6410,14 @@ function optPrintBody(R, view, sortBy) {
     h += '<div class="theme">theme is the model\u2019s inference \u2014 confirm</div>';
     h += '<div class="metrics">' + metrics.join('  \u00b7  ') + '</div>';
     if (showGrowth && r.growth) h += '<div class="growth">Growth: ' + e(r.growth) + ' ' + (r.verifiedLatest ? '(latest quarter, verified)' : (r.growthSourced ? '(sourced)' : '(unsourced)')) + '</div>';
+    if (r.dossier) {
+      var D = r.dossier, naRe = /^n\/?a\b/i;
+      var dft = function (f) { return f.sourced ? '(sourced)' : (f.v ? '(\u26a0 unconfirmed)' : '(not found)'); };
+      var dfr = function (lab, f) { if (!f) return ''; if (f.v && naRe.test(f.v)) return '<div>' + lab + ': ' + e(f.v) + '</div>'; return '<div>' + lab + ': ' + (f.v ? e(f.v) : '') + ' <span style="color:#777">' + dft(f) + '</span></div>'; };
+      h += '<div class="dossier"><div class="dh">Verified facts \u00b7 pulled ' + e(new Date(D.pulledAt).toLocaleString()) + ' \u00b7 model search, not an audit</div>';
+      h += dfr('Valuation', D.valuation) + dfr('Margins', D.margins) + dfr('Balance sheet', D.balance) + dfr('Next catalyst', D.nextCatalyst);
+      h += '</div>';
+    }
     if (r.momentum != null) h += '<div class="mom">Momentum: ' + r.momentum + '/100 [model\u2019s news read]</div>';
     h += '<div class="cat">' + e(r.catalyst || '') + ' ' + (r.sourced ? '(sourced)' : '(unsourced)') + '</div>';
     h += '</div>';
@@ -6432,7 +6440,7 @@ function optExportPdf(id) {
     + 'h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:20px 0 10px}'
     + '.card{border:1px solid #d4d4d8;border-radius:6px;padding:9px 11px;margin:0 0 7px;page-break-inside:avoid}'
     + '.cardhead{font-size:13px;color:#111}.rank{color:#777}.etf{font-size:9px;color:#1d4ed8;border:1px solid #1d4ed8;border-radius:3px;padding:0 3px}.nm{font-size:11px;color:#555}.fit{font-size:12px;font-weight:700;color:#1d4ed8}'
-    + '.theme{font-size:10px;color:#777;font-style:italic;margin-top:3px}.metrics{font-size:10.5px;color:#374151;margin-top:4px}.growth{font-size:10px;color:#444;margin-top:3px}.mom{font-size:10px;color:#444;margin-top:3px}.cat{font-size:11px;color:#111;line-height:1.5;margin-top:5px}.themechip{font-size:9px;border:1px solid #999;border-radius:3px;padding:0 4px;margin-left:4px}.legendbox{border:1px solid #e5e7eb;background:#fafafa;border-radius:6px;padding:9px 11px;margin:0 0 14px;font-size:10px;color:#374151;line-height:1.5;page-break-inside:avoid}.legendbox .lgh{font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px}.legendbox>div{margin:2px 0}'
+    + '.theme{font-size:10px;color:#777;font-style:italic;margin-top:3px}.metrics{font-size:10.5px;color:#374151;margin-top:4px}.growth{font-size:10px;color:#444;margin-top:3px}.mom{font-size:10px;color:#444;margin-top:3px}.cat{font-size:11px;color:#111;line-height:1.5;margin-top:5px}.themechip{font-size:9px;border:1px solid #999;border-radius:3px;padding:0 4px;margin-left:4px}.legendbox{border:1px solid #e5e7eb;background:#fafafa;border-radius:6px;padding:9px 11px;margin:0 0 14px;font-size:10px;color:#374151;line-height:1.5;page-break-inside:avoid}.legendbox .lgh{font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px}.legendbox>div{margin:2px 0}.dossier{border:1px solid #e5e7eb;background:#fafafa;border-radius:5px;padding:6px 9px;margin:5px 0;font-size:9.5px;color:#374151;line-height:1.55;page-break-inside:avoid}.dossier .dh{font-weight:700;color:#111;margin-bottom:2px}.dossier>div{margin:1px 0}'
     + '@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}'
     + '</style></head><body><div class="doc">'
     + (logo ? ('<div class="letterhead"><img src="' + logo + '" alt="Harlan Shelby"></div>') : '')
@@ -6479,6 +6487,33 @@ function optParseVerifyOne(text) {
   return { growth: o.growth ? String(o.growth) : '', growthSourced: !!o.growthSourced, momentum: isNaN(m) ? null : Math.max(0, Math.min(100, Math.round(m))) };
 }
 
+function optFactNorm(x) {
+  if (x == null) return { v: '', sourced: false };
+  if (typeof x === 'string') return { v: x, sourced: false };
+  if (typeof x === 'object') return { v: (x.v != null ? String(x.v) : (x.value != null ? String(x.value) : '')), sourced: !!(x.sourced || x.source) };
+  return { v: String(x), sourced: false };
+}
+
+function optParseDossier(text) {
+  if (!text) return null;
+  var s = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+  var a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a < 0 || b < 0 || b <= a) return null;
+  var o; try { o = JSON.parse(s.slice(a, b + 1)); } catch (e) { return null; }
+  if (!o || typeof o !== 'object') return null;
+  var m = (o.momentum != null) ? parseFloat(o.momentum) : NaN;
+  return {
+    quarter: optFactNorm(o.quarter),
+    valuation: optFactNorm(o.valuation),
+    margins: optFactNorm(o.margins),
+    balance: optFactNorm(o.balance),
+    nextCatalyst: optFactNorm(o.nextCatalyst || o.catalyst),
+    thesis: optFactNorm(o.thesis),
+    momentum: isNaN(m) ? null : Math.max(0, Math.min(100, Math.round(m))),
+    pulledAt: Date.now()
+  };
+}
+
 async function optVerifyOne(ticker) {
   if (optBusy || !optResults || !optResults.cands) return;
   if (!aiWorkerUrl && typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl();
@@ -6488,18 +6523,21 @@ async function optVerifyOne(ticker) {
   if (!cand) return;
   optBusy = true;
   var st = document.getElementById('opt-gv-' + ticker);
-  if (st) st.innerHTML = '<span style="color:var(--color-text-tertiary)">checking\u2026</span>';
+  if (st) st.innerHTML = '<span style="color:var(--color-text-tertiary)">running a full review (valuation, margins, balance sheet, catalysts)\u2026</span>';
   try {
     var label = cand.ticker + (cand.name ? ' (' + cand.name + ')' : '');
-    var sys = 'You verify CURRENT fundamentals for ONE company using web search. Search ' + label + ' for its MOST RECENT reported quarter and return its latest top-line growth (revenue and/or EPS, year-over-year) WITH the period in ABSOLUTE terms (e.g. "Q1 2026"). Use the newest reported quarter \u2014 not an older one. NEVER use relative terms like "next year" or "last year". Also give a momentum score 0-100 from what you find. If you genuinely cannot find a recent figure, set growthSourced false.\nReturn ONLY a JSON object, nothing before or after: {"growth":"Q1 2026 rev +27% YoY, EPS +24%","growthSourced":true,"momentum":75}.';
+    var sys = 'You compile a VERIFIED fundamentals dossier on ONE company using web search. Run as many searches as needed on ' + label + ' to fill the fields below from CURRENT sources. For each fact field return {"v":"...","sourced":true} ONLY if you confirmed it by a search THIS pull; if you cannot confirm a field, set "sourced":false and either give a brief recollection or leave "v" empty. State every period/date in ABSOLUTE terms (e.g. "Q1 2026", "April 2026"); NEVER "next year" or "last year". Fields:\n- quarter: most recent reported quarter, revenue and EPS with YoY change.\n- valuation: a current multiple (P/E if profitable, else P/S or EV/Sales); note if unprofitable.\n- margins: gross and operating margin, plus direction (improving/declining).\n- balance: cash, debt, or net cash/debt.\n- nextCatalyst: the next DATED catalyst (earnings date, PDUFA, launch) and any near-term driver.\n- thesis: one or two sentences on why this name fits a diversification / low-rate role, grounded in what you found (sourced true only if the factual claims were searched).\n- momentum: 0-100 score from what you find.\nIf ' + label + ' is an ETF or fund, adapt: quarter\u2192recent performance, valuation\u2192expense ratio & yield, margins\u2192"n/a \u2014 fund", balance\u2192AUM, nextCatalyst\u2192fund flows or none.\nReturn ONLY this JSON object, nothing before or after: {"quarter":{"v":"Q1 2026: rev $X, +Y% YoY; EPS $Z","sourced":true},"valuation":{"v":"P/S ~14x (unprofitable)","sourced":true},"margins":{"v":"gross ~88%, op margin negative, narrowing","sourced":false},"balance":{"v":"$300M cash, $200M debt","sourced":true},"nextCatalyst":{"v":"PDUFA Apr 2026; next earnings ~Aug 2026","sourced":true},"thesis":{"v":"...","sourced":true},"momentum":68}.';
     var data = await aiWorkerCallStructured([{ role: 'user', content: 'Search ' + label + ' now and return the JSON object.' }], sys, [], { web: true });
     var text = (data.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('\n');
-    var obj = optParseVerifyOne(text);
-    if (obj) {
-      if (obj.growth) cand.growth = obj.growth;
-      cand.growthSourced = !!obj.growthSourced;
-      if (obj.momentum != null) cand.momentum = obj.momentum;
-      cand.verifiedLatest = !!obj.growthSourced;
+    var dos = optParseDossier(text);
+    if (dos) {
+      cand.dossier = dos;
+      if (dos.quarter.v) cand.growth = dos.quarter.v;
+      cand.growthSourced = !!dos.quarter.sourced;
+      if (dos.thesis.v) cand.catalyst = dos.thesis.v;
+      cand.sourced = !!dos.thesis.sourced;
+      if (dos.momentum != null) cand.momentum = dos.momentum;
+      cand.verifiedLatest = !!(dos.quarter.sourced || dos.valuation.sourced || dos.balance.sourced || dos.nextCatalyst.sourced);
     }
     R.rows = optScore(R.cands, R.amount, R.goals, R.factorCol);
     R.verifiedAt = Date.now();
@@ -6618,10 +6656,19 @@ function renderOptimizerResults() {
     html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:4px">' + parts.join('  \u00b7  ') + '</div>';
     if (showGrowth && r.growth) {
       var gstatus = (r.verifiedLatest ? '<span style="color:var(--color-text-success)">\u2713 latest quarter</span>' : (r.growthSourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : '<span style="color:#fbbf24">\u26a0 unsourced</span>'));
-      var gbtn = (view === 'candidates') ? ' <button onclick="optVerifyOne(\'' + e(r.ticker) + '\')" style="font-size:9px;background:none;border:1px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-tertiary);cursor:pointer;padding:0 4px"' + (optBusy ? ' disabled' : '') + '>\u21bb ' + (r.verifiedLatest ? 're-verify' : 'verify') + '</button>' : '';
+      var gbtn = (view === 'candidates') ? ' <button onclick="optVerifyOne(\'' + e(r.ticker) + '\')" style="font-size:9px;background:none;border:1px solid var(--color-border-tertiary);border-radius:3px;color:var(--color-text-tertiary);cursor:pointer;padding:0 4px"' + (optBusy ? ' disabled' : '') + '>\u21bb ' + (r.verifiedLatest ? 're-review' : 'full review') + '</button>' : '';
       html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Growth: ' + e(r.growth) + '  <span id="opt-gv-' + e(r.ticker) + '">' + gstatus + '</span>' + gbtn + '</div>';
     }
     if (r.momentum != null) html += '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:3px">Momentum: <strong>' + r.momentum + '</strong>/100 <span style="color:var(--color-text-tertiary);font-style:italic">[model\u2019s news read]</span></div>';
+    if (r.dossier) {
+      var D = r.dossier, naRe = /^n\/?a\b/i;
+      var dtag = function (f) { return f.sourced ? '<span style="color:var(--color-text-success)">\u2713 sourced</span>' : (f.v ? '<span style="color:#fbbf24">\u26a0 unconfirmed</span>' : '<span style="color:var(--color-text-tertiary)">not found</span>'); };
+      var drow = function (lab, f) { if (!f) return ''; if (f.v && naRe.test(f.v)) return '<div><span style="color:var(--color-text-tertiary)">' + lab + ':</span> ' + e(f.v) + '</div>'; return '<div><span style="color:var(--color-text-tertiary)">' + lab + ':</span> ' + (f.v ? e(f.v) : '') + ' ' + dtag(f) + '</div>'; };
+      html += '<div style="margin-top:6px;padding:7px 9px;border:1px solid var(--color-border-tertiary);border-radius:6px;background:var(--color-background-secondary);font-size:9.5px;color:var(--color-text-secondary);line-height:1.65">';
+      html += '<div style="font-weight:600;color:var(--color-text-primary);margin-bottom:2px">Verified facts <span style="font-weight:400;color:var(--color-text-tertiary)">\u00b7 pulled ' + e(new Date(D.pulledAt).toLocaleTimeString()) + ' \u00b7 model search, not an audit</span></div>';
+      html += drow('Valuation', D.valuation) + drow('Margins', D.margins) + drow('Balance sheet', D.balance) + drow('Next catalyst', D.nextCatalyst);
+      html += '</div>';
+    }
     html += '<div style="font-size:10.5px;color:var(--color-text-primary);line-height:1.5;margin-top:5px;white-space:normal;word-break:break-word">' + e(r.catalyst || '') + '  ' + srcTag + '</div>';
     html += '</div>';
   });
@@ -31841,6 +31888,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bw</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09bx</div>
 </body>
 </html>
