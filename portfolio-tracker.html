@@ -2154,6 +2154,7 @@
         <div class="drive-section-title">Status</div>
         <div class="drive-row"><span class="label">State</span><span id="drive-state-value" class="value success">Connected</span></div>
         <div class="drive-row"><span class="label">Last backup</span><span id="drive-last-backup" class="value">—</span></div>
+        <div class="drive-row"><span class="label">This device</span><span class="value"><input id="drive-device-name-input" class="modal-input" type="text" placeholder="name this device" style="font-size:11px;padding:2px 6px;width:150px;text-align:right" onchange="driveSetDeviceName(this.value)" onblur="driveSetDeviceName(this.value)"></span></div>
         <div class="drive-row"><span class="label">Backup file</span><span id="drive-file-link" class="value">—</span></div>
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
           <button class="btn btn-primary" onclick="backupNowManual()" style="font-size:10px">Backup now</button>
@@ -29662,7 +29663,7 @@ function driveBuildBackupPayload() {
     })(),
     version: '2.2',
     benchmarks: typeof BENCHMARKS !== 'undefined' ? BENCHMARKS : null,
-    _backupMeta: { backedUpAt: new Date().toISOString(), source: 'portfolio-tracker-auto' },
+    _backupMeta: { backedUpAt: new Date().toISOString(), source: 'portfolio-tracker-auto', device: driveGetDevice() },
   };
 }
 
@@ -29809,6 +29810,8 @@ function driveRenderModalState() {
     const sizeStr = DriveState.lastBackupSize ? ` · ${(DriveState.lastBackupSize/1024).toFixed(1)} KB` : '';
     lastEl.textContent = d.toLocaleString() + sizeStr;
   } else { lastEl.textContent = 'Never'; }
+  const dni = document.getElementById('drive-device-name-input');
+  if (dni && !dni.value) dni.value = driveGetDevice().name;
   if (DriveState.fileId) {
     fileEl.innerHTML = `<a href="https://drive.google.com/file/d/${DriveState.fileId}/view" target="_blank" rel="noopener" style="color:var(--color-text-info);text-decoration:none">View in Drive ↗</a>`;
   } else { fileEl.textContent = '—'; }
@@ -29981,10 +29984,13 @@ async function previewRevision(revId) {
     const spLotCount = (data.spLots || []).length;
     const meta = data._backupMeta || {};
     const label = meta.snapshotLabel ? `<div class="preview-row"><span>Label</span><span style="color:var(--color-text-info)">"${meta.snapshotLabel}"</span></div>` : '';
+    const devName = meta.device && meta.device.name ? meta.device.name : null;
+    const devRow = devName ? `<div class="preview-row"><span>Saved from</span><span style="color:var(--color-text-info)">${devName}</span></div>` : '';
     previewArea.innerHTML = `
       <div class="revision-preview">
         <div class="preview-title">Revision preview</div>
         ${label}
+        ${devRow}
         <div class="preview-row"><span>Open positions</span><span>${openPos.length}</span></div>
         <div class="preview-row"><span>Closed positions</span><span>${closedPos.length}</span></div>
         <div class="preview-row"><span>SPY/VOO lots</span><span>${spLotCount}</span></div>
@@ -30154,7 +30160,8 @@ async function driveCheckIfDriveIsNewer() {
         // Set here (not just in connectDrive) so the lock also holds on a plain reload of an
         // unreconciled fresh device, not only at the connect moment.
         DriveState.needsReconcile = true;
-        showNewerBanner(driveModTime, meta.size, 'setup');
+        const rnSetup = await driveFetchRemoteDeviceName();
+        showNewerBanner(driveModTime, meta.size, 'setup', rnSetup);
       }
       return;
     }
@@ -30164,13 +30171,14 @@ async function driveCheckIfDriveIsNewer() {
 
     // Drive IS newer. If we have unsynced local edits, that's a GENUINE CONFLICT — always ask first,
     // never silently overwrite. This is the one case where last-write-wins could lose your work.
-    if (DriveState.localDirty) { showNewerBanner(driveModTime, meta.size, 'conflict'); return; }
+    if (DriveState.localDirty) { const rnC = await driveFetchRemoteDeviceName(); showNewerBanner(driveModTime, meta.size, 'conflict', rnC); return; }
 
     // SAFE PATH: Drive newer, local clean — the seamless walk-to-the-other-device case.
     if (DRIVE_AUTO_PULL) {
       await drivePullLatest(driveModTime);
     } else {
-      showNewerBanner(driveModTime, meta.size, 'catchup');
+      const rnCatch = await driveFetchRemoteDeviceName();
+      showNewerBanner(driveModTime, meta.size, 'catchup', rnCatch);
     }
   } catch (e) {
     console.warn('Newer-check failed', e.message);
@@ -30183,15 +30191,16 @@ async function drivePullLatest(driveModTime) {
     const resp = await driveApi(`/files/${DriveState.fileId}?alt=media`);
     const data = await resp.json();
     if (!data.positions) return;  // never auto-apply a malformed/empty file — bail quietly
+    const remoteName = (data._backupMeta && data._backupMeta.device && data._backupMeta.device.name) || null;
     await driveApplyBackupData(data);
-    showCaughtUpBanner(driveModTime);
+    showCaughtUpBanner(driveModTime, remoteName);
   } catch (e) {
     console.warn('Auto-pull failed', e.message);
     showNewerBanner(driveModTime, null, 'catchup');  // degrade to one-tap so you can still catch up
   }
 }
 
-function showNewerBanner(driveModTime, driveSize, mode) {
+function showNewerBanner(driveModTime, driveSize, mode, remoteName) {
   mode = mode || 'catchup';
   const banner = document.getElementById('drive-newer-banner');
   const titleEl = document.getElementById('drive-newer-title');
@@ -30211,12 +30220,14 @@ function showNewerBanner(driveModTime, driveSize, mode) {
   banner.classList.remove('caught-up');
   if (titleEl) titleEl.textContent = copy.title;
   if (actionEl) { actionEl.textContent = copy.action; actionEl.style.display = ''; }
-  if (detailEl) detailEl.textContent = `Drive modified ${agoStr} (${d.toLocaleString()}${sizeKB}). Probably from another device or browser.`;
+  const fromStr = remoteName ? `Saved from ${remoteName} · ` : '';
+  const tailStr = remoteName ? '' : ' Probably from another device or browser.';
+  if (detailEl) detailEl.textContent = `${fromStr}modified ${agoStr} (${d.toLocaleString()}${sizeKB}).${tailStr}`;
   banner.classList.remove('hidden');
 }
 
 // Reuse the banner as a transient success confirmation after a silent auto-pull.
-function showCaughtUpBanner(driveModTime) {
+function showCaughtUpBanner(driveModTime, remoteName) {
   const banner = document.getElementById('drive-newer-banner');
   const titleEl = document.getElementById('drive-newer-title');
   const detailEl = document.getElementById('drive-newer-detail');
@@ -30224,9 +30235,9 @@ function showCaughtUpBanner(driveModTime) {
   if (!banner) return;
   DriveState._bannerMode = null;
   const ago = driveModTime ? Math.round((Date.now() - driveModTime) / 60000) : 0;
-  const when = ago < 1 ? 'your latest' : ago < 60 ? `your latest from ${ago}m ago` : ago < 1440 ? `your latest from ${Math.round(ago/60)}h ago` : `your latest from ${Math.round(ago/1440)}d ago`;
-  if (titleEl) titleEl.textContent = '✓ Caught up to ' + when;
-  if (detailEl) detailEl.textContent = 'This device adopted the newer version from Drive automatically.';
+  const whenAgo = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : ago < 1440 ? `${Math.round(ago/60)}h ago` : `${Math.round(ago/1440)}d ago`;
+  if (titleEl) titleEl.textContent = '✓ Caught up to your latest' + (remoteName ? ' from ' + remoteName : '');
+  if (detailEl) detailEl.textContent = `Adopted the newer version (saved ${whenAgo}) from Drive automatically.`;
   if (actionEl) actionEl.style.display = 'none';  // nothing to do — informational only
   banner.classList.add('caught-up');
   banner.classList.remove('hidden');
@@ -30248,6 +30259,67 @@ async function restoreFromBannerPrompt() {
 }
 
 // ─── Init: load config, attempt silent reconnect, check newer ───
+// ─── ck: device identity (local) + flush-on-leave ───
+// A per-browser label, defaulted from the user agent and renameable. Stored device-local under
+// portfolio-drive-* (never synced), like the Client ID and API keys. The NAME travels inside each
+// backup's _backupMeta so other devices can see "saved from X"; the config here stays put.
+function driveDefaultDeviceName() {
+  const ua = navigator.userAgent || '';
+  let os = 'Device';
+  if (/iPhone/.test(ua)) os = 'iPhone';
+  else if (/iPad/.test(ua)) os = 'iPad';
+  else if (/Android/.test(ua)) os = 'Android';
+  else if (/Macintosh|Mac OS X/.test(ua)) os = 'Mac';
+  else if (/Windows/.test(ua)) os = 'Windows';
+  else if (/Linux/.test(ua)) os = 'Linux';
+  let br = '';
+  if (/Edg\//.test(ua)) br = 'Edge';
+  else if (/CriOS|Chrome\//.test(ua)) br = 'Chrome';   // check before Safari (Chrome UA also says Safari)
+  else if (/Firefox\//.test(ua)) br = 'Firefox';
+  else if (/Safari\//.test(ua)) br = 'Safari';
+  return br ? os + ' · ' + br : os;
+}
+function driveGetDevice() {
+  let id = driveStoreGet('device-id');
+  if (!id) { id = 'dev-' + Math.random().toString(36).slice(2, 10); driveStoreSet('device-id', id); }
+  let name = driveStoreGet('device-name');
+  if (!name) { name = driveDefaultDeviceName(); driveStoreSet('device-name', name); }
+  return { id, name };
+}
+function driveSetDeviceName(name) {
+  name = (name || '').trim();
+  if (name) driveStoreSet('device-name', name);
+}
+// Read the device name out of the current Drive file (one content fetch). Used only when a banner
+// is about to show, to attribute "saved from X". Returns null on any failure — never blocks the banner.
+async function driveFetchRemoteDeviceName() {
+  try {
+    const resp = await driveApi(`/files/${DriveState.fileId}?alt=media`);
+    const data = await resp.json();
+    return (data && data._backupMeta && data._backupMeta.device && data._backupMeta.device.name) || null;
+  } catch (e) { return null; }
+}
+
+// Flush any pending debounced push the moment the page is hidden or closed, so leaving the device
+// IS the sync — no 5-second lingering required. Best-effort: an abrupt power-kill mid-upload may
+// not complete, but tab-switch / minimize / lid-close / tab-close all fire one of these events.
+function driveFlushPendingSync() {
+  try {
+    if (!DriveState.accessToken || DriveState.needsReconcile) return;
+    if (DriveState.syncTimer) {
+      clearTimeout(DriveState.syncTimer);
+      DriveState.syncTimer = null;
+      driveExecuteSync();
+    } else if (DriveState.localDirty && !DriveState.syncInFlight) {
+      driveExecuteSync();
+    }
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'hidden') driveFlushPendingSync();
+});
+window.addEventListener('pagehide', driveFlushPendingSync);
+
 async function driveInit() {
   driveLoadConfig();
   if (!DriveState.clientId) {
@@ -32450,6 +32522,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cj</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ck</div>
 </body>
 </html>
