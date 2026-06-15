@@ -438,6 +438,9 @@
   .drive-newer-banner .msg { flex: 1; }
   .drive-newer-banner .msg-detail { font-size: 10px; color: var(--color-text-tertiary); margin-top: 2px; }
   .drive-newer-banner.hidden { display: none; }
+  /* Stage B: same banner, success styling, shown briefly after a silent auto-pull. */
+  .drive-newer-banner.caught-up { background: var(--color-background-success); border-bottom-color: var(--color-text-success); }
+  .drive-newer-banner.caught-up .icon { color: var(--color-text-success); }
 
   /* ── CSV Import ── */
   .csv-modal { max-width: 720px; }
@@ -988,10 +991,10 @@
 <div id="drive-newer-banner" class="drive-newer-banner hidden">
   <span class="icon">↻</span>
   <div class="msg">
-    <div>Drive has a newer version of your data than this device.</div>
+    <div id="drive-newer-title">Drive has a newer version of your data than this device.</div>
     <div class="msg-detail" id="drive-newer-detail">Modified on Drive at unknown time. Probably from another device or browser.</div>
   </div>
-  <button class="btn btn-primary" onclick="restoreFromBannerPrompt()" style="font-size:10px">Restore latest</button>
+  <button id="drive-newer-action" class="btn btn-primary" onclick="restoreFromBannerPrompt()" style="font-size:10px">Restore latest</button>
   <button class="btn" onclick="dismissNewerBanner()" style="font-size:10px">Dismiss</button>
 </div>
 
@@ -29421,6 +29424,16 @@ document.addEventListener('DOMContentLoaded', () => {
 const DRIVE_FILE_NAME = 'personal-tracker-backup.json';
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE_SYNC_DEBOUNCE_MS = 5000;
+// ─── Stage B (multi-device sync) tunables ───
+// Drive must be at least this much newer than our local baseline before we react — absorbs clock
+// jitter and the brief window around our own uploads. (Replaces a former inline 120000 literal.)
+const DRIVE_NEWER_BUFFER_MS = 120000;
+// How aggressive catch-up is when it's SAFE (Drive newer AND this device has no unsynced edits):
+//   true  → pull + apply automatically, with a quiet "Caught up" confirmation   [recommended default]
+//   false → show a one-tap "Catch up" banner instead of applying silently
+// A genuine conflict (Drive newer + unsynced local edits) ALWAYS asks first; a fresh device ALWAYS
+// asks before seeding. This switch only governs the unambiguously-safe case. Flip the one line.
+const DRIVE_AUTO_PULL = true;
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
@@ -29439,6 +29452,11 @@ const DriveState = {
   syncInFlight: false,
   pendingSync: false,
   suppressNextSync: false,
+  // Stage B: true when local has edits not yet confirmed-uploaded. Mirrored to localStorage
+  // ('portfolio-drive-dirty') so it survives reloads and offline/failed pushes — the auto-pull
+  // guard must never silently overwrite unsynced work, even across a restart.
+  localDirty: false,
+  _bannerMode: null,  // 'setup' | 'conflict' | 'catchup' — drives the banner's action behavior
 };
 
 // ─── Drive-specific localStorage (single prefix to keep it tidy) ───
@@ -29458,6 +29476,7 @@ function driveLoadConfig() {
   if (lastAt) DriveState.lastBackupAt = parseInt(lastAt, 10);
   const lastSize = driveStoreGet('last-backup-size');
   if (lastSize) DriveState.lastBackupSize = parseInt(lastSize, 10);
+  DriveState.localDirty = driveStoreGet('dirty') === '1';
 }
 
 // ─── Google Identity Services bootstrap ───
@@ -29644,6 +29663,8 @@ function driveScheduleSync() {
   if (!DriveState.clientId || !DriveState.accessToken) return;
   if (DriveState.status === 'disconnected') return;
   if (DriveState.suppressNextSync) { DriveState.suppressNextSync = false; return; }
+  // A real local change reached us → mark dirty (persisted) until a successful upload clears it.
+  DriveState.localDirty = true; driveStoreSet('dirty', '1');
   if (DriveState.syncInFlight) { DriveState.pendingSync = true; return; }
   clearTimeout(DriveState.syncTimer);
   DriveState.syncTimer = setTimeout(() => driveExecuteSync(), DRIVE_SYNC_DEBOUNCE_MS);
@@ -29674,6 +29695,7 @@ async function driveExecuteSync({ manual = false } = {}) {
     driveStoreSet('last-backup-size', String(DriveState.lastBackupSize));
     driveSetStatus('synced');
     DriveState.errorMessage = null;
+    DriveState.localDirty = false; driveStoreSet('dirty', '0');  // local now matches Drive
   } catch (e) {
     console.warn('Drive sync failed', e.message);
     DriveState.errorMessage = e.message;
@@ -29991,6 +30013,78 @@ function checkRestoreConfirm() {
   document.getElementById('drive-restore-confirm-btn').disabled = val.trim().toUpperCase() !== 'RESTORE';
 }
 
+// ─── Shared apply path — used by BOTH manual restore and silent auto-pull ───
+// Applies a downloaded backup payload to in-memory state + localStorage, then re-renders.
+// Mirrors importData(). Touches no modal/button chrome — each caller owns its own UI.
+async function driveApplyBackupData(data) {
+  // Apply data — mirrors importData()
+  positions = data.positions || [];
+  migrateThemeTags();
+  nextId = data.nextId || positions.length + 1;
+  if (data.spxLive) spxLive = data.spxLive;
+  if (data.spxLiveDate) spxLiveDate = data.spxLiveDate;
+  if (data.cashBuckets) cashBuckets = data.cashBuckets;
+  if (data.cashLedger) cashLedger = data.cashLedger;
+  if (data.spLots) spLots = data.spLots;
+  if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
+  if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
+  if (Array.isArray(data.priceHistory)) priceHistory = data.priceHistory;
+  if (data.benchmarkFees && typeof data.benchmarkFees === 'object') benchmarkFees = Object.assign({}, benchmarkFees, data.benchmarkFees);
+  if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
+  if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
+  if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
+  if (Array.isArray(data.realizedPeDeals)) realizedPeDeals = data.realizedPeDeals;
+  if (data.tickerInfo && typeof data.tickerInfo === 'object') tickerInfo = data.tickerInfo;
+  if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
+  if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
+  if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
+  if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
+  if (data.taxProfile && typeof data.taxProfile === 'object') { taxProfile = { ...taxProfile, ...data.taxProfile }; applyTaxProfile(); }
+  if (data.bookAiReview && typeof data.bookAiReview === 'object') { bookAiReview = data.bookAiReview; saveBookAiReview(); }
+
+  // Restore connection + settings (worker URLs, Polygon key, overrides, mappings) so a restore
+  // brings back full SETUP, not just data. Write to storage, then re-run the void loaders so the
+  // values apply immediately — deliberately NOT a page reload, which would drop the in-memory
+  // Drive token. Older backups without _settings simply skip this block.
+  if (data._settings && typeof data._settings === 'object') {
+    Object.keys(data._settings).forEach(function(k){
+      try { if (data._settings[k] != null) localStorage.setItem(k, data._settings[k]); } catch(e){}
+    });
+    try { if (typeof loadPolygonKey === 'function') loadPolygonKey(); } catch(e){}
+    try { if (typeof loadAvWorkerUrl === 'function') loadAvWorkerUrl(); } catch(e){}
+    try { if (typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl(); } catch(e){}
+    try { if (typeof loadIndexLookthrough === 'function') loadIndexLookthrough(); } catch(e){}
+    try { if (typeof loadBookExclude === 'function') loadBookExclude(); } catch(e){}
+  }
+
+  // Stage A: the optimizer "last run" and Ask "last conversation" lazy-load from localStorage
+  // ONLY when their in-memory var is empty (guarded by `if (!optResults)` / `if (!askConversation.length)`).
+  // Since we deliberately don't reload the page (would drop the Drive token), clear those caches so the
+  // freshly-restored values are picked up on next open. Saved runs / saved chats always re-read, so they
+  // need no help. If the backup predates these keys, storage keeps this device's own values — no data loss.
+  try { optResults = null; } catch(e){}
+  try { askConversation = []; } catch(e){}
+
+  migratePositionsV1ToV2();
+
+  // Save locally — suppress immediate Drive re-upload of what we just downloaded
+  DriveState.suppressNextSync = true;
+  await savePositions();
+
+  // We've adopted Drive's state, so local now matches it. Clear dirty and move our freshness baseline
+  // to now — this stops the newer-check from immediately re-flagging the version we just took (and
+  // quietly fixes the old "re-prompt right after a restore" quirk).
+  DriveState.localDirty = false; driveStoreSet('dirty', '0');
+  DriveState.lastBackupAt = Date.now(); driveStoreSet('last-backup-at', String(DriveState.lastBackupAt));
+
+  restoreSpxInput();
+  renderAll();
+  renderSpBar();
+  renderSpSummary();
+  renderSleeveBreakdown();
+  renderSleeveRef();
+}
+
 async function executeRestore() {
   const btn = document.getElementById('drive-restore-confirm-btn');
   btn.disabled = true;
@@ -30002,67 +30096,7 @@ async function executeRestore() {
     const resp = await driveApi(url);
     const data = await resp.json();
     if (!data.positions) throw new Error('Backup file missing positions array');
-
-    // Apply data — mirrors importData()
-    positions = data.positions || [];
-    migrateThemeTags();
-    nextId = data.nextId || positions.length + 1;
-    if (data.spxLive) spxLive = data.spxLive;
-    if (data.spxLiveDate) spxLiveDate = data.spxLiveDate;
-    if (data.cashBuckets) cashBuckets = data.cashBuckets;
-    if (data.cashLedger) cashLedger = data.cashLedger;
-    if (data.spLots) spLots = data.spLots;
-    if (data.spCurrentPrice) spCurrentPrice = data.spCurrentPrice;
-    if (Array.isArray(data.snapshots)) snapshots = data.snapshots;
-    if (Array.isArray(data.priceHistory)) priceHistory = data.priceHistory;
-    if (data.benchmarkFees && typeof data.benchmarkFees === 'object') benchmarkFees = Object.assign({}, benchmarkFees, data.benchmarkFees);
-    if (data.benchmarkPrices && typeof data.benchmarkPrices === 'object') benchmarkPrices = data.benchmarkPrices;
-    if (data.benchmarkPricesDate) benchmarkPricesDate = data.benchmarkPricesDate;
-    if (Array.isArray(data.peDeals)) peDeals = data.peDeals;
-    if (Array.isArray(data.realizedPeDeals)) realizedPeDeals = data.realizedPeDeals;
-    if (data.tickerInfo && typeof data.tickerInfo === 'object') tickerInfo = data.tickerInfo;
-    if (Array.isArray(data.qualityReviews)) qualityReviews = data.qualityReviews;
-    if (data.themeUniverseHistory && typeof data.themeUniverseHistory === 'object') themeUniverseHistory = data.themeUniverseHistory;
-    if (typeof data.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = data.trackRecordMatureOnly;
-    if (typeof data.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = data.industryAlphaMatureOnly;
-    if (data.taxProfile && typeof data.taxProfile === 'object') { taxProfile = { ...taxProfile, ...data.taxProfile }; applyTaxProfile(); }
-    if (data.bookAiReview && typeof data.bookAiReview === 'object') { bookAiReview = data.bookAiReview; saveBookAiReview(); }
-
-    // Restore connection + settings (worker URLs, Polygon key, overrides, mappings) so a restore
-    // brings back full SETUP, not just data. Write to storage, then re-run the void loaders so the
-    // values apply immediately — deliberately NOT a page reload, which would drop the in-memory
-    // Drive token. Older backups without _settings simply skip this block.
-    if (data._settings && typeof data._settings === 'object') {
-      Object.keys(data._settings).forEach(function(k){
-        try { if (data._settings[k] != null) localStorage.setItem(k, data._settings[k]); } catch(e){}
-      });
-      try { if (typeof loadPolygonKey === 'function') loadPolygonKey(); } catch(e){}
-      try { if (typeof loadAvWorkerUrl === 'function') loadAvWorkerUrl(); } catch(e){}
-      try { if (typeof loadAiWorkerUrl === 'function') loadAiWorkerUrl(); } catch(e){}
-      try { if (typeof loadIndexLookthrough === 'function') loadIndexLookthrough(); } catch(e){}
-      try { if (typeof loadBookExclude === 'function') loadBookExclude(); } catch(e){}
-    }
-
-    // Stage A: the optimizer "last run" and Ask "last conversation" lazy-load from localStorage
-    // ONLY when their in-memory var is empty (guarded by `if (!optResults)` / `if (!askConversation.length)`).
-    // Since we deliberately don't reload the page (would drop the Drive token), clear those caches so the
-    // freshly-restored values are picked up on next open. Saved runs / saved chats always re-read, so they
-    // need no help. If the backup predates these keys, storage keeps this device's own values — no data loss.
-    try { optResults = null; } catch(e){}
-    try { askConversation = []; } catch(e){}
-
-    migratePositionsV1ToV2();
-
-    // Save locally — suppress immediate Drive re-upload of what we just downloaded
-    DriveState.suppressNextSync = true;
-    await savePositions();
-    restoreSpxInput();
-    renderAll();
-    renderSpBar();
-    renderSpSummary();
-    renderSleeveBreakdown();
-    renderSleeveRef();
-
+    await driveApplyBackupData(data);
     dismissNewerBanner();
     driveShowModalToast('Restore complete ✓', 'success');
     cancelRestoreConfirm();
@@ -30081,41 +30115,104 @@ async function executeRestore() {
 async function driveCheckIfDriveIsNewer() {
   try {
     if (!DriveState.fileId) return;
-    // Skip the check on first-ever connect — no local baseline to compare against.
-    // (lastBackupAt is null until the first successful local-then-upload cycle completes.)
-    if (!DriveState.lastBackupAt) return;
     const resp = await driveApi(`/files/${DriveState.fileId}?fields=id,modifiedTime,size`);
-    const data = await resp.json();
-    const driveModTime = new Date(data.modifiedTime).getTime();
-    // If Drive is meaningfully newer than our last successful local-then-upload (>2 min buffer to avoid jitter)
-    if (driveModTime > DriveState.lastBackupAt + 120000) {
-      showNewerBanner(driveModTime, data.size);
+    const meta = await resp.json();
+    const driveModTime = new Date(meta.modifiedTime).getTime();
+    const driveHasData = meta.size && parseInt(meta.size, 10) > 2;  // '{}' ≈ 2 bytes → effectively empty
+
+    // FRESH DEVICE (no local baseline yet): never auto-seed silently — it could clobber local data,
+    // or surprise you on a deliberately-empty device. If Drive holds real data, OFFER an explicit pull.
+    if (!DriveState.lastBackupAt) {
+      if (driveHasData) showNewerBanner(driveModTime, meta.size, 'setup');
+      return;
+    }
+
+    // Drive not meaningfully newer than our baseline → nothing to do.
+    if (driveModTime <= DriveState.lastBackupAt + DRIVE_NEWER_BUFFER_MS) return;
+
+    // Drive IS newer. If we have unsynced local edits, that's a GENUINE CONFLICT — always ask first,
+    // never silently overwrite. This is the one case where last-write-wins could lose your work.
+    if (DriveState.localDirty) { showNewerBanner(driveModTime, meta.size, 'conflict'); return; }
+
+    // SAFE PATH: Drive newer, local clean — the seamless walk-to-the-other-device case.
+    if (DRIVE_AUTO_PULL) {
+      await drivePullLatest(driveModTime);
+    } else {
+      showNewerBanner(driveModTime, meta.size, 'catchup');
     }
   } catch (e) {
     console.warn('Newer-check failed', e.message);
   }
 }
 
-function showNewerBanner(driveModTime, driveSize) {
+// Silent catch-up: download latest, apply via the shared path, confirm. SAFE-path only.
+async function drivePullLatest(driveModTime) {
+  try {
+    const resp = await driveApi(`/files/${DriveState.fileId}?alt=media`);
+    const data = await resp.json();
+    if (!data.positions) return;  // never auto-apply a malformed/empty file — bail quietly
+    await driveApplyBackupData(data);
+    showCaughtUpBanner(driveModTime);
+  } catch (e) {
+    console.warn('Auto-pull failed', e.message);
+    showNewerBanner(driveModTime, null, 'catchup');  // degrade to one-tap so you can still catch up
+  }
+}
+
+function showNewerBanner(driveModTime, driveSize, mode) {
+  mode = mode || 'catchup';
   const banner = document.getElementById('drive-newer-banner');
+  const titleEl = document.getElementById('drive-newer-title');
   const detailEl = document.getElementById('drive-newer-detail');
+  const actionEl = document.getElementById('drive-newer-action');
   if (!banner) return;
+  DriveState._bannerMode = mode;
   const d = new Date(driveModTime);
   const ago = Math.round((Date.now() - driveModTime) / 60000);
-  const agoStr = ago < 60 ? `${ago}m ago` : ago < 1440 ? `${Math.round(ago/60)}h ago` : `${Math.round(ago/1440)}d ago`;
+  const agoStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : ago < 1440 ? `${Math.round(ago/60)}h ago` : `${Math.round(ago/1440)}d ago`;
   const sizeKB = driveSize ? `, ${(parseInt(driveSize,10)/1024).toFixed(1)} KB` : '';
-  detailEl.textContent = `Drive modified ${agoStr} (${d.toLocaleString()}${sizeKB}). Probably from another device or browser.`;
+  const copy = {
+    setup:    { title: 'Set up this device from your Drive backup?',                                  action: 'Set up this device' },
+    conflict: { title: 'Drive has newer changes, but this device has edits you haven’t synced yet.',   action: 'Review…' },
+    catchup:  { title: 'A newer version of your data is on Drive.',                                     action: 'Catch up' },
+  }[mode] || { title: 'A newer version of your data is on Drive.', action: 'Catch up' };
+  banner.classList.remove('caught-up');
+  if (titleEl) titleEl.textContent = copy.title;
+  if (actionEl) { actionEl.textContent = copy.action; actionEl.style.display = ''; }
+  if (detailEl) detailEl.textContent = `Drive modified ${agoStr} (${d.toLocaleString()}${sizeKB}). Probably from another device or browser.`;
   banner.classList.remove('hidden');
 }
 
+// Reuse the banner as a transient success confirmation after a silent auto-pull.
+function showCaughtUpBanner(driveModTime) {
+  const banner = document.getElementById('drive-newer-banner');
+  const titleEl = document.getElementById('drive-newer-title');
+  const detailEl = document.getElementById('drive-newer-detail');
+  const actionEl = document.getElementById('drive-newer-action');
+  if (!banner) return;
+  DriveState._bannerMode = null;
+  const ago = driveModTime ? Math.round((Date.now() - driveModTime) / 60000) : 0;
+  const when = ago < 1 ? 'your latest' : ago < 60 ? `your latest from ${ago}m ago` : ago < 1440 ? `your latest from ${Math.round(ago/60)}h ago` : `your latest from ${Math.round(ago/1440)}d ago`;
+  if (titleEl) titleEl.textContent = '✓ Caught up to ' + when;
+  if (detailEl) detailEl.textContent = 'This device adopted the newer version from Drive automatically.';
+  if (actionEl) actionEl.style.display = 'none';  // nothing to do — informational only
+  banner.classList.add('caught-up');
+  banner.classList.remove('hidden');
+  setTimeout(function(){ dismissNewerBanner(); }, 6000);
+}
+
 function dismissNewerBanner() {
-  document.getElementById('drive-newer-banner').classList.add('hidden');
+  const b = document.getElementById('drive-newer-banner');
+  if (b) { b.classList.add('hidden'); b.classList.remove('caught-up'); }
 }
 
 async function restoreFromBannerPrompt() {
+  const mode = DriveState._bannerMode;
   dismissNewerBanner();
   openDriveModal();
-  confirmRestoreLatest();
+  // Conflict → just open the modal so you can preview revisions before replacing your unsynced edits.
+  // Setup / catch-up → no local edits at risk, so jump straight to the restore-latest confirmation.
+  if (mode !== 'conflict') confirmRestoreLatest();
 }
 
 // ─── Init: load config, attempt silent reconnect, check newer ───
@@ -32321,6 +32418,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cg</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ch</div>
 </body>
 </html>
