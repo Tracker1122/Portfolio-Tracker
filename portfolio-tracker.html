@@ -3149,6 +3149,26 @@ function usMarketSession(nowMs) {
     : 'after close';
   return { state: state, phrase: phrase, weekday: wd, etMins: mins };
 }
+// Most recent ET calendar date for which a regular-session close SHOULD exist.
+// Weekends + the 16:00 ET close are modeled; holidays are NOT (advisory, like usMarketSession).
+// A ~20-min buffer past 16:00 ET lets the closing print post before we claim "today".
+// Returns 'YYYY-MM-DD' (ET) so it string-compares chronologically against _etDayKey(...).
+function latestExpectedCloseKey(nowMs) {
+  var ms = (typeof nowMs === 'number' && nowMs > 0) ? nowMs : Date.now();
+  var sess = usMarketSession(ms);
+  var key = _etDayKey(ms);
+  if (!key) return '';
+  var cur = new Date(key + 'T12:00:00Z'); // noon UTC keeps the ET date stable for day math
+  var CLOSE_BUFFER_MIN = 20;
+  var todayHasClose = (sess.state === 'post') && (sess.etMins >= 16 * 60 + CLOSE_BUFFER_MIN);
+  if (!todayHasClose) cur.setUTCDate(cur.getUTCDate() - 1);
+  for (var g = 0; g < 8; g++) {
+    var dow = cur.getUTCDay();
+    if (dow >= 1 && dow <= 5) break; // Mon..Fri
+    cur.setUTCDate(cur.getUTCDate() - 1);
+  }
+  return cur.toISOString().slice(0, 10);
+}
 // ET trading date "Fri Jun 6" from a ms epoch OR a 'YYYY-MM-DD' string.
 function _etDateLabel(v) {
   try {
@@ -8552,12 +8572,27 @@ function renderStaleTags() {
     const ago = fmtTimeAgo(isoTimestamp);
     el.style.color = staleColorFor(isoTimestamp);
     if (kind === 'prevclose') {
-      // Polygon /prev returns the PREVIOUS completed daily close \u2014 never a live mid-session quote.
-      // Label it by what it is (with the close's real date), so it can't be misread as "live now".
-      let dlbl = '';
-      if (asOfMs) { try { dlbl = _etDateLabel(new Date(asOfMs).toISOString().slice(0, 10)); } catch (e) {} }
-      el.textContent = 'Last: ' + (ago || '\u2014') + (dlbl ? ' \u00b7 prev close ' + dlbl : ' \u00b7 prev close');
-      el.title = 'Previous trading day\u2019s closing prices' + (dlbl ? ' (' + dlbl + ')' : '') + ', fetched ' + (ago || 'recently') + '. This source returns end-of-day closes only \u2014 NOT a live quote; the market being open now does not make it live. Re-fetch after the next close to advance the date.';
+      // Two clocks, shown separately: (1) when we FETCHED, and (2) which trading-day CLOSE
+      // that data is, plus whether a newer close already exists. A 13h-old fetch on a Sunday
+      // is still Friday's close \u2014 this makes that explicit instead of just "13h ago".
+      var sess = (typeof usMarketSession === 'function') ? usMarketSession() : { phrase: '' };
+      var dlbl = '', loadedKey = '';
+      if (asOfMs) { try { dlbl = _etDateLabel(asOfMs); loadedKey = _etDayKey(asOfMs); } catch (e) {} }
+      var latestKey = (typeof latestExpectedCloseKey === 'function') ? latestExpectedCloseKey() : '';
+      var verdict = '', stale = false;
+      if (loadedKey && latestKey) {
+        if (loadedKey >= latestKey) { verdict = '\u2713 latest close'; }
+        else { stale = true; verdict = '\u26a0 stale \u2014 ' + (_etDateLabel(latestKey) || 'newer') + ' close available'; }
+      }
+      var bits = ['Last: ' + (ago || '\u2014'), dlbl ? ('close ' + dlbl) : 'prev close'];
+      if (verdict) bits.push(verdict);
+      if (sess.phrase) bits.push(sess.phrase);
+      el.textContent = bits.join(' \u00b7 ');
+      if (stale) el.style.color = 'var(--color-text-danger)';
+      el.title = 'Closing prices for ' + (dlbl || 'the last trading day') + ', fetched ' + (ago || 'recently') + '. '
+        + (stale ? ('A newer close (' + (_etDateLabel(latestKey) || '') + ') is available \u2014 click Update. ')
+                 : 'This is the latest available close. ')
+        + 'End-of-day data only, never a live mid-session quote. Session state is advisory (holidays not modeled); the data\u2019s own close date is the source of truth.';
       return;
     }
     // 'quote' (Yahoo S&P level): a live snapshot during market hours, the last close otherwise.
@@ -15084,6 +15119,23 @@ async function _fetchGroupedCloses() {
 async function updateMarketCloses() {
   const btn = document.getElementById('update-closes-btn');
   const out = document.getElementById('update-closes-status');
+  // Weekend / after-hours guard: if the market is closed AND we already hold the latest
+  // available close, updating just re-fetches identical prices and burns API calls. Warn,
+  // but let the user override (their call). Holidays not modeled \u2014 advisory only.
+  try {
+    const _sess = usMarketSession();
+    const _loadedMs = refreshPricesAsOfMs || benchmarkAsOfMs;
+    const _loadedKey = _loadedMs ? _etDayKey(_loadedMs) : '';
+    const _latestKey = latestExpectedCloseKey();
+    if (_sess.state !== 'open' && _loadedKey && _latestKey && _loadedKey >= _latestKey) {
+      const _where = _sess.state === 'weekend' ? 'closed for the weekend'
+        : _sess.state === 'pre' ? 'pre-market \u2014 today\u2019s close is not in yet'
+        : 'closed for the day (after the 4pm ET close)';
+      const _msg = 'US market is ' + _where + '.\n\nYou already have the latest available close ('
+        + (_etDateLabel(_loadedMs) || _loadedKey) + '). Updating now will re-fetch the same prices and use up API calls.\n\nUpdate anyway?';
+      if (!window.confirm(_msg)) return;
+    }
+  } catch (e) { /* never block an update on a clock error */ }
   const t0 = Date.now();
   let phase = 'Starting';
   let done = false;
@@ -32531,6 +32583,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cl</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cm</div>
 </body>
 </html>
