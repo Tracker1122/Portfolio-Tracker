@@ -29622,7 +29622,13 @@ function driveBuildBackupPayload() {
         'portfolio-sector-map-v1','portfolio-sector-ai-mode',
         'trim-watch-thresholds-v1','portfolio-csv-mappings',
         'portfolio-book-exclude-v1','portfolio-book-ai-review-v1',
-        'pe-ipo-conc-state-v1'];
+        'pe-ipo-conc-state-v1',
+        // Stage A (2026-06-09cg): sync the newer features that were previously device-local.
+        // Restore side (executeRestore) iterates _settings generically, so build-side add is sufficient.
+        'portfolio-optimizer-last-v1','portfolio-optimizer-runs-v1',
+        'portfolio-ask-last-v1','portfolio-ask-saved-v1',
+        'portfolio-evaltrade-risk-mirror-v2','portfolio-manual-analyze-v1',
+        'portfolio-etf-compare-v1','portfolio-cand-perf-v1','portfolio-cand-scenario-v1'];
       var out = {};
       keys.forEach(function(k){ try { var v = localStorage.getItem(k); if (v !== null) out[k] = v; } catch(e){} });
       return out;
@@ -30036,6 +30042,14 @@ async function executeRestore() {
       try { if (typeof loadIndexLookthrough === 'function') loadIndexLookthrough(); } catch(e){}
       try { if (typeof loadBookExclude === 'function') loadBookExclude(); } catch(e){}
     }
+
+    // Stage A: the optimizer "last run" and Ask "last conversation" lazy-load from localStorage
+    // ONLY when their in-memory var is empty (guarded by `if (!optResults)` / `if (!askConversation.length)`).
+    // Since we deliberately don't reload the page (would drop the Drive token), clear those caches so the
+    // freshly-restored values are picked up on next open. Saved runs / saved chats always re-read, so they
+    // need no help. If the backup predates these keys, storage keeps this device's own values — no data loss.
+    try { optResults = null; } catch(e){}
+    try { askConversation = []; } catch(e){}
 
     migratePositionsV1ToV2();
 
@@ -32307,6 +32321,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cf</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cg</div>
 </body>
 </html>
