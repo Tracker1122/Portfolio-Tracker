@@ -2777,7 +2777,7 @@ async function savePositions() {
         benchAlphaCache = {};
       }
     } catch (e) { /* best effort */ }
-    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache, benchmarkFees }));
+    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, refreshPricesAsOfMs, benchmarkAsOfMs, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache, benchmarkFees }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
     localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
     localStorage.setItem('portfolio-ticker-info-v1', JSON.stringify({ tickerInfo }));
@@ -2855,6 +2855,8 @@ async function loadPositions() {
       if (Array.isArray(snapParsed.snapshots)) snapshots = snapParsed.snapshots;
       if (snapParsed.benchmarkPrices && typeof snapParsed.benchmarkPrices === 'object') benchmarkPrices = snapParsed.benchmarkPrices;
       if (snapParsed.benchmarkPricesDate) benchmarkPricesDate = snapParsed.benchmarkPricesDate;
+      if (typeof snapParsed.refreshPricesAsOfMs === 'number') refreshPricesAsOfMs = snapParsed.refreshPricesAsOfMs;
+      if (typeof snapParsed.benchmarkAsOfMs === 'number') benchmarkAsOfMs = snapParsed.benchmarkAsOfMs;
       if (typeof snapParsed.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = snapParsed.trackRecordMatureOnly;
       if (typeof snapParsed.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = snapParsed.industryAlphaMatureOnly;
       if (snapParsed.themeUniverseHistory && typeof snapParsed.themeUniverseHistory === 'object') themeUniverseHistory = snapParsed.themeUniverseHistory;
@@ -3165,6 +3167,23 @@ function latestExpectedCloseKey(nowMs) {
   for (var g = 0; g < 8; g++) {
     var dow = cur.getUTCDay();
     if (dow >= 1 && dow <= 5) break; // Mon..Fri
+    cur.setUTCDate(cur.getUTCDate() - 1);
+  }
+  return cur.toISOString().slice(0, 10);
+}
+// Best-effort close date INFERRED from when a /prev fetch ran, for the case where the stored
+// bar timestamp is missing (e.g., data restored from before we persisted it, or a reload before
+// any fetch). Polygon /prev returns the prior trading day, so the close is the most recent
+// weekday STRICTLY BEFORE the fetch's ET date. This is an estimate; a stored bar date always wins.
+function inferredCloseKeyFromFetch(fetchMs) {
+  if (!(typeof fetchMs === 'number' && fetchMs > 0)) return '';
+  var key = _etDayKey(fetchMs);
+  if (!key) return '';
+  var cur = new Date(key + 'T12:00:00Z');
+  cur.setUTCDate(cur.getUTCDate() - 1); // strictly before the fetch's calendar date
+  for (var g = 0; g < 8; g++) {
+    var dow = cur.getUTCDay();
+    if (dow >= 1 && dow <= 5) break;
     cur.setUTCDate(cur.getUTCDate() - 1);
   }
   return cur.toISOString().slice(0, 10);
@@ -8576,8 +8595,16 @@ function renderStaleTags() {
       // that data is, plus whether a newer close already exists. A 13h-old fetch on a Sunday
       // is still Friday's close \u2014 this makes that explicit instead of just "13h ago".
       var sess = (typeof usMarketSession === 'function') ? usMarketSession() : { phrase: '' };
-      var dlbl = '', loadedKey = '';
+      var dlbl = '', loadedKey = '', estimated = false;
       if (asOfMs) { try { dlbl = _etDateLabel(asOfMs); loadedKey = _etDayKey(asOfMs); } catch (e) {} }
+      // Fallback: no stored bar timestamp (e.g. data restored from before we persisted it).
+      // Infer the close day from when we fetched, and mark it (est.) so it can't pose as exact.
+      if (!loadedKey && isoTimestamp) {
+        try {
+          var fk = (typeof inferredCloseKeyFromFetch === 'function') ? inferredCloseKeyFromFetch(new Date(isoTimestamp).getTime()) : '';
+          if (fk) { loadedKey = fk; dlbl = _etDateLabel(fk); estimated = true; }
+        } catch (e) {}
+      }
       var latestKey = (typeof latestExpectedCloseKey === 'function') ? latestExpectedCloseKey() : '';
       var todayKey = '';
       try { todayKey = _etDayKey(Date.now()); } catch (e) {}
@@ -8595,12 +8622,13 @@ function renderStaleTags() {
             : '\u26a0 stale \u2014 ' + (_etDateLabel(latestKey) || 'newer') + ' close available';
         }
       }
-      var bits = ['Last: ' + (ago || '\u2014'), dlbl ? ('close ' + dlbl) : 'prev close'];
+      var closeTxt = dlbl ? ('close ' + dlbl + (estimated ? ' (est.)' : '')) : 'prev close';
+      var bits = ['Last: ' + (ago || '\u2014'), closeTxt];
       if (verdict) bits.push(verdict);
       if (sess.phrase) bits.push(sess.phrase);
       el.textContent = bits.join(' \u00b7 ');
       if (stale) el.style.color = 'var(--color-text-danger)';
-      el.title = 'Closing prices for ' + (dlbl || 'the last trading day') + ', fetched ' + (ago || 'recently') + '. '
+      el.title = 'Closing prices for ' + (dlbl || 'the last trading day') + (estimated ? ' (estimated from the fetch time \u2014 re-fetch to confirm the exact close date)' : '') + ', fetched ' + (ago || 'recently') + '. '
         + (!stale ? 'This is the latest available close. '
             : sameDayPending
               ? ('Today\u2019s close (' + (_etDateLabel(latestKey) || '') + ') is not loaded yet. On the free Polygon tier the same-day close usually is not available until the next trading day \u2014 re-fetching tonight will likely just return the prior close. Try again tomorrow. ')
@@ -32596,6 +32624,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cn</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09co</div>
 </body>
 </html>
