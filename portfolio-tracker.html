@@ -29636,7 +29636,10 @@ function driveBuildBackupPayload() {
     // are deliberately NOT included in the downloadable Export file. To exclude a key from backups,
     // remove its entry ('polygon_api_key' / 'finnhub_api_key') from this list.
     _settings: (function(){
-      var keys = ['polygon_api_key','finnhub_api_key','av_worker_url','ai_worker_url','bars_worker_url',
+      // Stage C (2026-06-09ci): API keys are deliberately NOT synced. They're the one thing in the
+      // file an attacker could *reuse*, so they stay device-local — entered once per device. Worker
+      // URLs still sync (see DRIVE_DEVICE_LOCAL_KEYS note for the open question on those).
+      var keys = ['av_worker_url','ai_worker_url','bars_worker_url',
         'portfolio-index-lookthrough-v1','portfolio-cluster-overrides-v1',
         'portfolio-sector-map-v1','portfolio-sector-ai-mode',
         'trim-watch-thresholds-v1','portfolio-csv-mappings',
@@ -30047,7 +30050,12 @@ async function driveApplyBackupData(data) {
   // values apply immediately — deliberately NOT a page reload, which would drop the in-memory
   // Drive token. Older backups without _settings simply skip this block.
   if (data._settings && typeof data._settings === 'object') {
+    // Stage C: API keys are device-local. Skip them on apply too — so restoring an OLDER backup
+    // (which still contains keys uploaded before this ship) can never overwrite this device's own
+    // keys with stale ones, or re-introduce keys you've decided shouldn't travel.
+    var DRIVE_DEVICE_LOCAL_KEYS = ['polygon_api_key', 'finnhub_api_key'];
     Object.keys(data._settings).forEach(function(k){
+      if (DRIVE_DEVICE_LOCAL_KEYS.indexOf(k) !== -1) return;
       try { if (data._settings[k] != null) localStorage.setItem(k, data._settings[k]); } catch(e){}
     });
     try { if (typeof loadPolygonKey === 'function') loadPolygonKey(); } catch(e){}
@@ -32418,6 +32426,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ch</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ci</div>
 </body>
 </html>
