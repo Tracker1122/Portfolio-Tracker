@@ -29457,6 +29457,11 @@ const DriveState = {
   // guard must never silently overwrite unsynced work, even across a restart.
   localDirty: false,
   _bannerMode: null,  // 'setup' | 'conflict' | 'catchup' — drives the banner's action behavior
+  // BUGFIX (cj): a fresh device connecting to an existing remote book must NOT push its local
+  // state until it has pulled (or the user explicitly overrides). needsReconcile is that lock;
+  // _remoteHasData records whether Drive currently holds real content (set by the newer-check).
+  needsReconcile: false,
+  _remoteHasData: false,
 };
 
 // ─── Drive-specific localStorage (single prefix to keep it tidy) ───
@@ -29665,6 +29670,9 @@ function driveBuildBackupPayload() {
 function driveScheduleSync() {
   if (!DriveState.clientId || !DriveState.accessToken) return;
   if (DriveState.status === 'disconnected') return;
+  // cj: fresh device hasn't reconciled with the existing remote book yet — block every auto-push
+  // (connect-time AND edit-triggered) until it pulls or the user explicitly clicks "Backup now".
+  if (DriveState.needsReconcile) return;
   if (DriveState.suppressNextSync) { DriveState.suppressNextSync = false; return; }
   // A real local change reached us → mark dirty (persisted) until a successful upload clears it.
   DriveState.localDirty = true; driveStoreSet('dirty', '1');
@@ -29852,9 +29860,14 @@ async function connectDrive() {
     driveSetStatus('synced');
     driveShowModalToast('Connected to Drive ✓', 'success');
     driveRenderModalState();
-    // Check if Drive has newer than local before kicking off auto-sync
+    // Check if Drive has newer than local before kicking off auto-sync. This also sets the
+    // reconcile lock if this is a fresh device meeting an existing remote book (see that fn).
     await driveCheckIfDriveIsNewer();
-    driveScheduleSync();
+    // BUGFIX (cj): only start auto-sync if we're NOT holding the reconcile lock — otherwise this
+    // device's (possibly empty/stale) local state would overwrite the real book on Drive. The
+    // "set up this device" banner is already showing; the user pulls first, or overrides via
+    // "Backup now". First-ever setup (empty Drive) and returning devices fall through normally.
+    if (!DriveState.needsReconcile) driveScheduleSync();
   } catch (e) {
     console.warn('Drive connect failed', e);
     DriveState.errorMessage = e.message;
@@ -29877,6 +29890,9 @@ async function disconnectDrive() {
 
 // ─── Manual backup / named snapshot ───
 async function backupNowManual() {
+  // cj: an explicit "Backup now" is the user deliberately choosing local-wins — release the
+  // reconcile lock so this push proceeds and normal auto-sync resumes afterward.
+  DriveState.needsReconcile = false;
   await driveExecuteSync({ manual: true });
   if (DriveState.status === 'synced') driveShowModalToast('Backed up ✓', 'success');
   else if (DriveState.errorMessage) driveShowModalToast(DriveState.errorMessage, 'error');
@@ -30083,6 +30099,7 @@ async function driveApplyBackupData(data) {
   // to now — this stops the newer-check from immediately re-flagging the version we just took (and
   // quietly fixes the old "re-prompt right after a restore" quirk).
   DriveState.localDirty = false; driveStoreSet('dirty', '0');
+  DriveState.needsReconcile = false;  // cj: pulled the real book → this device is reconciled, auto-sync may resume
   DriveState.lastBackupAt = Date.now(); driveStoreSet('last-backup-at', String(DriveState.lastBackupAt));
 
   restoreSpxInput();
@@ -30127,11 +30144,18 @@ async function driveCheckIfDriveIsNewer() {
     const meta = await resp.json();
     const driveModTime = new Date(meta.modifiedTime).getTime();
     const driveHasData = meta.size && parseInt(meta.size, 10) > 2;  // '{}' ≈ 2 bytes → effectively empty
+    DriveState._remoteHasData = !!driveHasData;  // cj: used by connectDrive to decide if pushing is safe
 
     // FRESH DEVICE (no local baseline yet): never auto-seed silently — it could clobber local data,
     // or surprise you on a deliberately-empty device. If Drive holds real data, OFFER an explicit pull.
     if (!DriveState.lastBackupAt) {
-      if (driveHasData) showNewerBanner(driveModTime, meta.size, 'setup');
+      if (driveHasData) {
+        // cj: existing remote book + this device has no baseline → lock pushes until it reconciles.
+        // Set here (not just in connectDrive) so the lock also holds on a plain reload of an
+        // unreconciled fresh device, not only at the connect moment.
+        DriveState.needsReconcile = true;
+        showNewerBanner(driveModTime, meta.size, 'setup');
+      }
       return;
     }
 
@@ -32426,6 +32450,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ci</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cj</div>
 </body>
 </html>
