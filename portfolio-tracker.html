@@ -8579,10 +8579,21 @@ function renderStaleTags() {
       var dlbl = '', loadedKey = '';
       if (asOfMs) { try { dlbl = _etDateLabel(asOfMs); loadedKey = _etDayKey(asOfMs); } catch (e) {} }
       var latestKey = (typeof latestExpectedCloseKey === 'function') ? latestExpectedCloseKey() : '';
-      var verdict = '', stale = false;
+      var todayKey = '';
+      try { todayKey = _etDayKey(Date.now()); } catch (e) {}
+      var verdict = '', stale = false, sameDayPending = false;
       if (loadedKey && latestKey) {
         if (loadedKey >= latestKey) { verdict = '\u2713 latest close'; }
-        else { stale = true; verdict = '\u26a0 stale \u2014 ' + (_etDateLabel(latestKey) || 'newer') + ' close available'; }
+        else {
+          stale = true;
+          // If the close we're missing is TODAY's, the free Polygon tier typically won't serve it
+          // the same evening (the dated/same-day endpoint is 403 on free; /prev returns yesterday).
+          // So don't imply it's one click away \u2014 it usually posts the next trading day.
+          sameDayPending = (latestKey === todayKey);
+          verdict = sameDayPending
+            ? '\u26a0 ' + (_etDateLabel(latestKey) || 'today') + ' close pending \u2014 may not post until next day (free tier)'
+            : '\u26a0 stale \u2014 ' + (_etDateLabel(latestKey) || 'newer') + ' close available';
+        }
       }
       var bits = ['Last: ' + (ago || '\u2014'), dlbl ? ('close ' + dlbl) : 'prev close'];
       if (verdict) bits.push(verdict);
@@ -8590,8 +8601,10 @@ function renderStaleTags() {
       el.textContent = bits.join(' \u00b7 ');
       if (stale) el.style.color = 'var(--color-text-danger)';
       el.title = 'Closing prices for ' + (dlbl || 'the last trading day') + ', fetched ' + (ago || 'recently') + '. '
-        + (stale ? ('A newer close (' + (_etDateLabel(latestKey) || '') + ') is available \u2014 click Update. ')
-                 : 'This is the latest available close. ')
+        + (!stale ? 'This is the latest available close. '
+            : sameDayPending
+              ? ('Today\u2019s close (' + (_etDateLabel(latestKey) || '') + ') is not loaded yet. On the free Polygon tier the same-day close usually is not available until the next trading day \u2014 re-fetching tonight will likely just return the prior close. Try again tomorrow. ')
+              : ('A newer close (' + (_etDateLabel(latestKey) || '') + ') is available \u2014 click Update. '))
         + 'End-of-day data only, never a live mid-session quote. Session state is advisory (holidays not modeled); the data\u2019s own close date is the source of truth.';
       return;
     }
@@ -32583,6 +32596,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cm</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cn</div>
 </body>
 </html>
