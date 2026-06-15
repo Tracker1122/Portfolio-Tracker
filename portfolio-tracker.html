@@ -6145,7 +6145,7 @@ var optDirection = ''; // free-hand steer, persisted across re-renders in this s
 var optMaxPerTheme = 3; // cap on how many names per theme the model may propose (menu of distinct bets)
 var optView = 'candidates'; // 'candidates' (facts, proposal order, sortable) | 'momentum' (model-read, momentum-sorted)
 var optSortBy = 'proposal'; // candidates-view sort: 'proposal' | 'theme' | 'eff' | 'factor'
-var OPT_THEME_COLORS = { 'AI Infrastructure': '#61afef', 'Semiconductors': '#56b6c2', 'Mag 7-ish': '#c678dd', 'Cybersecurity': '#e06c75', 'Financials': '#d19a66', 'Energy & Grid': '#98c379', 'Commodities': '#e5c07b', 'Space & Defense': '#7f95c4', 'Healthcare': '#ec6fa9', 'Consumer Discretionary': '#56a3d9', 'Real Estate': '#b48ead', 'Emerging Markets': '#d98e5a', 'Bonds': '#8fbcbb', 'Consumer Staples': '#a3be8c', 'International Developed': '#88c0d0', 'Small Caps': '#d0876f', 'Utilities': '#b0a060' };
+var OPT_THEME_COLORS = { 'AI Infrastructure': '#61afef', 'Semiconductors': '#56b6c2', 'Mag 7-ish': '#c678dd', 'Cybersecurity': '#e06c75', 'Financials': '#d19a66', 'Energy & Grid': '#98c379', 'Commodities': '#e5c07b', 'Space & Defense': '#7f95c4', 'Healthcare': '#ec6fa9', 'Consumer Discretionary': '#56a3d9', 'Real Estate': '#b48ead', 'Emerging Markets': '#d98e5a', 'Bonds': '#8fbcbb', 'Consumer Staples': '#a3be8c', 'International Developed': '#88c0d0', 'Small Caps': '#d0876f', 'Utilities': '#b0a060', 'Cash': '#5c6370', 'Defensives': '#7fb3a3' };
 function optThemeColor(t) { return OPT_THEME_COLORS[t] || '#9aa0a6'; }
 function optCapPerTheme(cands, maxPerTheme) {
   var cap = Math.max(1, parseInt(maxPerTheme, 10) || 3), counts = {}, out = [];
@@ -6171,7 +6171,7 @@ function optSortRows(R, view, sortBy) {
 }
 var OPT_LAST_KEY = 'portfolio-optimizer-last-v1'; // auto-restored latest run
 var OPT_RUNS_KEY = 'portfolio-optimizer-runs-v1'; // explicitly saved-for-review runs
-var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities'];
+var OPT_THEMES = ['AI Infrastructure', 'Semiconductors', 'Mag 7-ish', 'Cybersecurity', 'Financials', 'Energy & Grid', 'Commodities', 'Space & Defense', 'Healthcare', 'Consumer Discretionary', 'Real Estate', 'Emerging Markets', 'Bonds', 'Consumer Staples', 'International Developed', 'Small Caps', 'Utilities', 'Cash', 'Defensives'];
 var OPT_FACTORS = [{ col: 'Rate', label: 'Rate / duration' }, { col: 'Liquidity', label: 'Liquidity / funding' }, { col: 'Credit', label: 'Credit' }, { col: 'Policy', label: 'Policy shock' }, { col: 'Crowding', label: 'Positioning / leverage' }, { col: 'Cyclical', label: 'Demand cyclicality' }];
 var OPT_GOAL_LABELS = { diversify: 'improve diversification', concentration: 'cut my biggest concentration', factor: 'cut a chosen risk factor' };
 var OPT_BROAD_THEMES = ['Broad ETF', 'International Developed', 'Emerging Markets', 'Small Caps', 'Bonds'];
@@ -20307,6 +20307,8 @@ const THEME_COLORS = {
   'International Developed': '#67e8f9',
   'Small Caps':        '#fde047',
   'Utilities':         '#d8b4fe',
+  'Cash':              '#9ca3af',
+  'Defensives':        '#2dd4bf',
   'Broad ETF':         '#94a3b8',
   'Other':             '#64748b',
 };
@@ -20343,7 +20345,9 @@ const BENCHMARK_BLURBS = {
   VWO:  'Vanguard FTSE Emerging Markets — emerging economies (FTSE Emerging All Cap China A Inclusion): China (including mainland A-shares), India, Taiwan, Brazil, and others. Notably excludes South Korea (FTSE calls it developed). Higher growth, higher volatility; no US, no developed markets.',
   XLI:  'Industrial Select Sector SPDR — the industrials slice of the S&P 500: machinery, aerospace & defense, transports (rails, airlines, logistics), building products, and capital goods. Large-cap only, market-cap weighted within the sector. A cyclical capital-goods bet (CAT/GE/HON/UPS-class), so it moves with the industrial economy, not the broad market.',
   XLB:  'Materials Select Sector SPDR — the materials slice of the S&P 500: chemicals, metals & mining, packaging, and construction materials. The smallest S&P sector, top-heavy in a few large chemical / industrial-gas names (LIN-class). Cyclical and input-cost / commodity-price sensitive — but equities (companies with earnings), not the commodity itself.',
-  XLC:  'Communication Services Select Sector SPDR — the communication-services slice of the S&P 500: telecom carriers, cable, and interactive media & entertainment. Dominated by a couple of mega-caps (GOOGL/META-class) that GICS files here, so it behaves far more like \u201cbig internet\u201d than \u201cphone companies\u201d despite the name. Very top-heavy.'
+  XLC:  'Communication Services Select Sector SPDR — the communication-services slice of the S&P 500: telecom carriers, cable, and interactive media & entertainment. Dominated by a couple of mega-caps (GOOGL/META-class) that GICS files here, so it behaves far more like \u201cbig internet\u201d than \u201cphone companies\u201d despite the name. Very top-heavy.',
+  BIL:  'SPDR Bloomberg 1\u20133 Month T-Bill \u2014 holds very short-dated US Treasury bills. A cash / cash-equivalent benchmark: its return is essentially the front-end T-bill yield with negligible price movement. Stands in for a money-market or sweep position, not an equity or bond-duration bet.',
+  USMV: 'iShares MSCI USA Min Vol Factor \u2014 large- and mid-cap US stocks selected and weighted to minimize portfolio volatility, with sector constraints that keep it multi-sector rather than a single defensive slice. A low-volatility / defensive factor benchmark, not a sector bet.'
 };
 // ─────────────────────────────────────────────
 // Each theme has:
@@ -20377,6 +20381,9 @@ const THEMES = {
   'International Developed': { benchmark: 'VEA', inUniverse: true, inUniverseAs: 'missing', dropdown: true },
   'Small Caps':            { benchmark: 'IWM', inUniverse: true, inUniverseAs: 'missing', dropdown: true },
   'Utilities':             { benchmark: 'XLU', inUniverse: true, inUniverseAs: 'missing', dropdown: true },
+  // ─── defensive / cash (held via look-through; honest benchmarks, not flattering) ───
+  'Cash':              { benchmark: 'BIL',  inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
+  'Defensives':        { benchmark: 'USMV', inUniverse: true,  inUniverseAs: 'existing', dropdown: true },
   // ─── escape hatches (no benchmark, no universe row, but selectable) ───
   'Broad ETF': { benchmark: null, inUniverse: false, dropdown: true },
   'Other':     { benchmark: null, inUniverse: false, dropdown: true }
@@ -30688,7 +30695,9 @@ init();
     'Energy & Grid':          ['policy', 'cycl'],
     'Commodities':            ['liq', 'posn'],
     'Consumer Discretionary': ['rate', 'cycl'],
-    'Utilities':              ['rate']
+    'Utilities':              ['rate'],
+    'Cash':                   [],
+    'Defensives':             ['rate']
   };
 
   // Event -> factors it STRESSED (binary). Short label = grid row head.
@@ -32522,6 +32531,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ck</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cl</div>
 </body>
 </html>
