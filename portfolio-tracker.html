@@ -27871,7 +27871,31 @@ function convertPeDealToPublic(id) {
   pos.peIpoDate = ipoDate;
   pos.peIpoPrice = ipoPrice;
   pos.peCompany = deal.company || '';
-  if (deal.theme) pos.theme = canonicalThemeName(deal.theme); // carry the private tag onto the public position
+  // Theme at conversion: let the user pick it, defaulting to the deal's existing tag.
+  // Drives the position's benchmark + cluster. Same set as the position-tagging dropdown.
+  const _dropdownThemes = Object.entries(THEMES).filter(([_, c]) => c.dropdown).map(([name]) => name);
+  const _defaultTheme = deal.theme ? canonicalThemeName(deal.theme) : '';
+  const _defIdx = _dropdownThemes.indexOf(_defaultTheme);
+  const _menu = _dropdownThemes.map((n, i) => (i + 1) + '. ' + n).join('\n');
+  const _raw = (prompt(
+    `Theme for ${ticker} (drives its benchmark + cluster).\n\n`
+    + `Enter a number, or type a name. Blank = keep ${_defaultTheme || '(none)'}.\n\n`
+    + _menu,
+    _defIdx >= 0 ? String(_defIdx + 1) : ''
+  ) || '').trim();
+  let _chosenTheme = _defaultTheme;
+  if (_raw) {
+    const _num = parseInt(_raw, 10);
+    if (Number.isInteger(_num) && _num >= 1 && _num <= _dropdownThemes.length) {
+      _chosenTheme = _dropdownThemes[_num - 1];
+    } else {
+      const _canon = canonicalThemeName(_raw);
+      const _match = _dropdownThemes.find(n => n.toLowerCase() === _canon.toLowerCase());
+      if (_match) _chosenTheme = _match;
+      else alert(`"${_raw}" is not one of the listed themes \u2014 keeping ${_defaultTheme || '(none)'}.`);
+    }
+  }
+  if (_chosenTheme) pos.theme = _chosenTheme;
   pos.peUpfrontFee = parseFloat(deal.feeUpfront) || 0;
   pos.peMaintenanceFee = parseFloat(deal.feeMaintenance) || 0;
   pos.peCarryPct = parseFloat(deal.carryPct) || 0;
@@ -27891,7 +27915,8 @@ function convertPeDealToPublic(id) {
     + `Cost basis (pre-IPO): ${fmtDollar(ppsBuy)}/sh  ·  total ${fmtDollar(c.inv)}\n`
     + `Bought (original date): ${deal.investmentDate || '—'}\n`
     + `IPO date: ${ipoDate}  ·  IPO price: ${fmtDollar(ipoPrice)}/sh\n`
-    + `Account: ${account}\n\n`
+    + `Account: ${account}\n`
+    + `Theme: ${pos.theme || '\u2014'}\n\n`
     + `The private deal will be moved to your realized private record (not deleted), and removed from active PE so it stops counting in AUM.\n\nProceed?`;
   if (!confirm(confirmMsg)) return;
 
@@ -32624,6 +32649,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09co</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cp</div>
 </body>
 </html>
