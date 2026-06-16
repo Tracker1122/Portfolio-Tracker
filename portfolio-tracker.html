@@ -2815,7 +2815,7 @@ async function savePositions() {
       }
     } catch (e) { /* best effort */ }
     localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, refreshPricesAsOfMs, benchmarkAsOfMs, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache, benchmarkFees }));
-    localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals }));
+    localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals, realizedPeDeals }));
     localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
     localStorage.setItem('portfolio-ticker-info-v1', JSON.stringify({ tickerInfo }));
     flashSave();
@@ -32729,6 +32729,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cq</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cr</div>
 </body>
 </html>
