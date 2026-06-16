@@ -7838,28 +7838,55 @@ function updateBackfillButton() {
   }
 }
 
-// Polygon's open-close endpoint returns a single day's close. Note: weekends and market holidays
-// will return an error. For simplicity, treat those failures the same as any other fetch failure
-// for now — the user can re-fetch later or we can add date-walking later.
+// Polygon's open-close endpoint returns a single day's close and 404s on weekends/holidays.
+// Position buy dates can land on a non-trading day (PE deals especially close on any calendar
+// date), so we snap to the nearest prior weekday for free, then walk back up to a few more days
+// to clear holidays. The "as-of buy" benchmark anchor is correctly the last close on/before the
+// buy date, so using a prior trading day's close is right, not a fudge. Returns dateUsed too.
+function _ymdStepDays(ymd, n) {
+  const d = new Date(ymd + 'T12:00:00Z');
+  if (isNaN(d.getTime())) return ymd;
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function _isWeekendYMD(ymd) {
+  const d = new Date(ymd + 'T12:00:00Z');
+  if (isNaN(d.getTime())) return false;
+  const dow = d.getUTCDay();
+  return dow === 0 || dow === 6;
+}
 async function fetchHistoricalBenchmarkPrice(ticker, date) {
   if (!polygonKey) return { price: null, error: 'no API key' };
-  const url = `https://api.polygon.io/v1/open-close/${ticker}/${date}?adjusted=true&apiKey=${polygonKey}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!res.ok) return { price: null, error: `HTTP ${res.status}` };
-    const data = await res.json();
-    if (data.status === 'OK' && typeof data.close === 'number') {
-      return { price: data.close, error: null };
+  let d = date;
+  // Snap a weekend date back to Friday before spending any API call.
+  let guard = 0;
+  while (_isWeekendYMD(d) && guard++ < 7) d = _ymdStepDays(d, -1);
+  // Try the date; on 404/no-data (e.g. a holiday) step back to the prior weekday and retry.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const url = `https://api.polygon.io/v1/open-close/${ticker}/${d}?adjusted=true&apiKey=${polygonKey}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === 'OK' && typeof data.close === 'number') {
+          return { price: data.close, error: null, dateUsed: d };
+        }
+        // OK status but no close in body — treat as no-data and step back.
+      } else if (res.status !== 404) {
+        // A real error (auth/rate-limit) — don't keep hammering the API.
+        return { price: null, error: `HTTP ${res.status}` };
+      }
+    } catch (e) {
+      clearTimeout(timeoutId);
+      return { price: null, error: e.message || 'network error' };
     }
-    // Polygon returns various error shapes. Treat anything non-OK as a failure.
-    return { price: null, error: data.error || data.message || 'no data' };
-  } catch (e) {
-    clearTimeout(timeoutId);
-    return { price: null, error: e.message || 'network error' };
+    // 404 or empty: walk back to the prior weekday and try again (covers holidays).
+    do { d = _ymdStepDays(d, -1); } while (_isWeekendYMD(d));
   }
+  return { price: null, error: 'no trading day with data near ' + date };
 }
 
 // Format a market cap (raw dollars) into a compact human string. Returns null if not a finite number.
@@ -32729,6 +32756,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cr</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cs</div>
 </body>
 </html>
