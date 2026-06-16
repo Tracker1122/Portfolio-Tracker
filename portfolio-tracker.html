@@ -1742,6 +1742,43 @@
       <input class="modal-input" id="edit-pos-redeployed" type="number" min="0" step="0.01" placeholder="0 (all new capital)" style="width:180px">
       <div id="edit-pos-redeployed-hint" style="font-size:10px;color:var(--color-text-tertiary);margin-top:4px"></div>
     </div>
+    <div id="edit-pos-lockup-section" style="display:none;border-top:1px solid var(--color-border);margin-top:12px;padding-top:10px">
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin:0 0 4px;text-transform:uppercase;letter-spacing:0.04em">Lockup / share-release schedule</div>
+      <div id="edit-pe-lockup-ipo-note" style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:6px"></div>
+      <div class="modal-field">
+        <label class="modal-label" title="How these shares unlock after IPO. None = freely sellable. Single cliff = fully locked, then fully free on one date. Staggered = unlocks in tranches.">Lockup structure</label>
+        <select class="modal-input" id="edit-pe-lockup-type" style="width:300px" onchange="peLockupSetType(this.value,'edit-pe-lockup-')">
+          <option value="none">None — freely sellable</option>
+          <option value="cliff">Single cliff — fully locked, then fully free on one date</option>
+          <option value="staggered">Staggered — unlocks in tranches</option>
+        </select>
+      </div>
+      <div class="modal-field" id="edit-pe-lockup-anchor-wrap" style="display:none">
+        <label class="modal-label" title="Day-based offsets resolve against this position's stored IPO date. Use specific dates only if you already know them.">Timing measured from</label>
+        <select class="modal-input" id="edit-pe-lockup-anchor" style="width:300px" onchange="peLockupSetAnchor(this.value,'edit-pe-lockup-')">
+          <option value="ipo">Days after IPO — resolved against the IPO date</option>
+          <option value="date">Specific calendar dates</option>
+        </select>
+      </div>
+      <div id="edit-pe-lockup-cliff" style="display:none">
+        <div class="modal-field">
+          <label class="modal-label">Locked until</label>
+          <span class="lk-ipo-only"><input class="modal-input" id="edit-pe-lockup-cliff-days" type="number" min="0" step="1" placeholder="180" style="width:90px"> <span style="font-size:10px;color:var(--color-text-tertiary)">days after IPO</span></span>
+          <span class="lk-date-only" style="display:none"><input class="modal-input" id="edit-pe-lockup-cliff-date" type="date" style="width:170px"></span>
+        </div>
+      </div>
+      <div id="edit-pe-lockup-staggered" style="display:none">
+        <div style="font-size:9px;color:var(--color-text-tertiary);margin:2px 0 4px">Each row is the slice that unlocks at that point — they should add up to 100%. Tick "conditional" for a release the tracker can't auto-check; it stays locked until you mark it released.</div>
+        <div id="edit-pe-lockup-tranches"></div>
+        <button type="button" class="btn btn-sm" onclick="peLockupAddTrancheRow(null,'edit-pe-lockup-')" style="font-size:10px;padding:3px 8px;margin-top:2px">+ add tranche</button>
+        <div id="edit-pe-lockup-cum" style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px"></div>
+      </div>
+      <div class="modal-field" id="edit-pe-lockup-note-wrap" style="display:none">
+        <label class="modal-label" title="Anything the tracker can't model — performance-based early-release conditions, S-1 references, caveats.">Lockup notes (optional)</label>
+        <input class="modal-input" id="edit-pe-lockup-note" type="text" placeholder="e.g. +10% early release if price 30%+ above IPO for 5 of 10 days" style="width:300px">
+      </div>
+      <div style="font-size:9px;color:var(--color-text-tertiary);margin-top:4px">Changing the schedule re-resolves the unlock dates against the IPO date. If you alter it, any manually-marked conditional releases are reset.</div>
+    </div>
     <div id="edit-pos-error" style="font-size:10px;color:var(--color-text-danger);margin-top:6px;display:none"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeEditPositionModal()">Cancel</button>
@@ -26737,41 +26774,44 @@ function renderPeDeals() {
 // Timing anchors to days-after-IPO by default (exact dates unknown until IPO); 'date' = absolute dates.
 // Conditional tranches are captured but NOT auto-evaluated (Stage B keeps them locked until released).
 
-function peLockupSetType(type) {
+function peLockupSetType(type, prefix) {
+  prefix = prefix || 'add-pe-lockup-';
   const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
   const staged = (type === 'cliff' || type === 'staggered');
-  show('add-pe-lockup-anchor-wrap', staged);
-  show('add-pe-lockup-cliff', type === 'cliff');
-  show('add-pe-lockup-staggered', type === 'staggered');
-  show('add-pe-lockup-note-wrap', staged);
+  show(prefix + 'anchor-wrap', staged);
+  show(prefix + 'cliff', type === 'cliff');
+  show(prefix + 'staggered', type === 'staggered');
+  show(prefix + 'note-wrap', staged);
   if (type === 'staggered') {
-    const cont = document.getElementById('add-pe-lockup-tranches');
-    if (cont && !cont.children.length) peLockupAddTrancheRow();
-    peLockupUpdateCum();
+    const cont = document.getElementById(prefix + 'tranches');
+    if (cont && !cont.children.length) peLockupAddTrancheRow(null, prefix);
+    peLockupUpdateCum(prefix);
   }
 }
 
-function peLockupSetAnchor(anchor) {
-  document.querySelectorAll('#add-pe-lockup-cliff .lk-ipo-only, #add-pe-lockup-staggered .lk-ipo-only')
+function peLockupSetAnchor(anchor, prefix) {
+  prefix = prefix || 'add-pe-lockup-';
+  document.querySelectorAll('#' + prefix + 'cliff .lk-ipo-only, #' + prefix + 'staggered .lk-ipo-only')
     .forEach(el => { el.style.display = (anchor === 'ipo') ? '' : 'none'; });
-  document.querySelectorAll('#add-pe-lockup-cliff .lk-date-only, #add-pe-lockup-staggered .lk-date-only')
+  document.querySelectorAll('#' + prefix + 'cliff .lk-date-only, #' + prefix + 'staggered .lk-date-only')
     .forEach(el => { el.style.display = (anchor === 'date') ? '' : 'none'; });
 }
 
-function peLockupAddTrancheRow(data) {
-  const cont = document.getElementById('add-pe-lockup-tranches');
+function peLockupAddTrancheRow(data, prefix) {
+  prefix = prefix || 'add-pe-lockup-';
+  const cont = document.getElementById(prefix + 'tranches');
   if (!cont) return;
-  const anchor = (document.getElementById('add-pe-lockup-anchor') || {}).value || 'ipo';
+  const anchor = (document.getElementById(prefix + 'anchor') || {}).value || 'ipo';
   const row = document.createElement('div');
   row.className = 'lk-row';
   row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap';
   row.innerHTML =
-    '<input class="modal-input lk-pct" type="number" min="0" max="100" step="0.1" placeholder="%" style="width:62px" oninput="peLockupUpdateCum()">'
+    '<input class="modal-input lk-pct" type="number" min="0" max="100" step="0.1" placeholder="%" style="width:62px" oninput="peLockupUpdateCum(\'' + prefix + '\')">'
     + '<span class="lk-ipo-only"' + (anchor === 'ipo' ? '' : ' style="display:none"') + '><input class="modal-input lk-days" type="number" min="0" step="1" placeholder="days" style="width:74px"> <span style="font-size:10px;color:var(--color-text-tertiary)">d after IPO</span></span>'
     + '<span class="lk-date-only"' + (anchor === 'date' ? '' : ' style="display:none"') + '><input class="modal-input lk-date" type="date" style="width:150px"></span>'
     + '<input class="modal-input lk-label" type="text" placeholder="label (optional)" style="width:140px">'
     + '<label style="font-size:10px;display:flex;align-items:center;gap:3px" title="A release the tracker cannot auto-evaluate (e.g. performance-based). Captured, but stays locked until you manually mark it released."><input type="checkbox" class="lk-cond"> conditional</label>'
-    + '<button type="button" class="btn btn-sm" onclick="peLockupRemoveTrancheRow(this)" style="font-size:10px;padding:2px 6px">\u00d7</button>';
+    + '<button type="button" class="btn btn-sm" onclick="peLockupRemoveTrancheRow(this,\'' + prefix + '\')" style="font-size:10px;padding:2px 6px">\u00d7</button>';
   cont.appendChild(row);
   if (data) {
     row.querySelector('.lk-pct').value = (data.pct != null) ? data.pct : '';
@@ -26780,20 +26820,22 @@ function peLockupAddTrancheRow(data) {
     row.querySelector('.lk-label').value = data.label || '';
     row.querySelector('.lk-cond').checked = !!data.conditional;
   }
-  peLockupUpdateCum();
+  peLockupUpdateCum(prefix);
 }
 
-function peLockupRemoveTrancheRow(btn) {
+function peLockupRemoveTrancheRow(btn, prefix) {
+  prefix = prefix || 'add-pe-lockup-';
   const row = btn.closest('.lk-row');
   if (row) row.remove();
-  peLockupUpdateCum();
+  peLockupUpdateCum(prefix);
 }
 
-function peLockupUpdateCum() {
-  const el = document.getElementById('add-pe-lockup-cum');
+function peLockupUpdateCum(prefix) {
+  prefix = prefix || 'add-pe-lockup-';
+  const el = document.getElementById(prefix + 'cum');
   if (!el) return;
   let sum = 0;
-  document.querySelectorAll('#add-pe-lockup-tranches .lk-pct').forEach(i => { const v = parseFloat(i.value); if (!isNaN(v)) sum += v; });
+  document.querySelectorAll('#' + prefix + 'tranches .lk-pct').forEach(i => { const v = parseFloat(i.value); if (!isNaN(v)) sum += v; });
   const rounded = Math.round(sum * 100) / 100;
   if (rounded > 100.0001) {
     el.style.color = 'var(--color-text-danger)';
@@ -26806,27 +26848,28 @@ function peLockupUpdateCum() {
 }
 
 // Read + validate the lockup capture into a deal.peLockup object. Returns { lockup, error }.
-function peLockupReadFromForm() {
-  const typeEl = document.getElementById('add-pe-lockup-type');
+function peLockupReadFromForm(prefix) {
+  prefix = prefix || 'add-pe-lockup-';
+  const typeEl = document.getElementById(prefix + 'type');
   const type = typeEl ? typeEl.value : 'none';
   if (type === 'none' || !type) return { lockup: null, error: null };
-  const anchor = (document.getElementById('add-pe-lockup-anchor') || {}).value || 'ipo';
-  const note = ((document.getElementById('add-pe-lockup-note') || {}).value || '').trim();
+  const anchor = (document.getElementById(prefix + 'anchor') || {}).value || 'ipo';
+  const note = ((document.getElementById(prefix + 'note') || {}).value || '').trim();
   const isISO = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T00:00:00').getTime());
 
   if (type === 'cliff') {
     if (anchor === 'ipo') {
-      const days = parseInt((document.getElementById('add-pe-lockup-cliff-days') || {}).value, 10);
+      const days = parseInt((document.getElementById(prefix + 'cliff-days') || {}).value, 10);
       if (isNaN(days) || days < 0) return { lockup: null, error: 'Lockup: enter the number of days after IPO (0 or more), or set the structure to None.' };
       return { lockup: { type: 'cliff', anchor: 'ipo', cliffDays: days, note: note }, error: null };
     }
-    const d = (document.getElementById('add-pe-lockup-cliff-date') || {}).value || '';
+    const d = (document.getElementById(prefix + 'cliff-date') || {}).value || '';
     if (!isISO(d)) return { lockup: null, error: 'Lockup: enter a valid cliff date.' };
     return { lockup: { type: 'cliff', anchor: 'date', cliffDate: d, note: note }, error: null };
   }
 
   // staggered
-  const rows = Array.from(document.querySelectorAll('#add-pe-lockup-tranches .lk-row'));
+  const rows = Array.from(document.querySelectorAll('#' + prefix + 'tranches .lk-row'));
   if (!rows.length) return { lockup: null, error: 'Lockup: add at least one tranche, or set the structure to None.' };
   const tranches = [];
   let cum = 0;
@@ -26852,13 +26895,14 @@ function peLockupReadFromForm() {
 }
 
 // Repopulate the lockup UI from a saved deal.peLockup (or reset to None for a fresh add).
-function peLockupPopulate(lockup) {
-  const typeEl = document.getElementById('add-pe-lockup-type');
-  const anchorEl = document.getElementById('add-pe-lockup-anchor');
-  const cont = document.getElementById('add-pe-lockup-tranches');
-  const noteEl = document.getElementById('add-pe-lockup-note');
-  const cliffDaysEl = document.getElementById('add-pe-lockup-cliff-days');
-  const cliffDateEl = document.getElementById('add-pe-lockup-cliff-date');
+function peLockupPopulate(lockup, prefix) {
+  prefix = prefix || 'add-pe-lockup-';
+  const typeEl = document.getElementById(prefix + 'type');
+  const anchorEl = document.getElementById(prefix + 'anchor');
+  const cont = document.getElementById(prefix + 'tranches');
+  const noteEl = document.getElementById(prefix + 'note');
+  const cliffDaysEl = document.getElementById(prefix + 'cliff-days');
+  const cliffDateEl = document.getElementById(prefix + 'cliff-date');
   if (cont) cont.innerHTML = '';
   if (cliffDaysEl) cliffDaysEl.value = '';
   if (cliffDateEl) cliffDateEl.value = '';
@@ -26871,10 +26915,10 @@ function peLockupPopulate(lockup) {
     if (lk.anchor === 'date' && cliffDateEl) cliffDateEl.value = lk.cliffDate || '';
     else if (cliffDaysEl) cliffDaysEl.value = (lk.cliffDays != null) ? lk.cliffDays : '';
   } else if (lk.type === 'staggered' && Array.isArray(lk.tranches)) {
-    lk.tranches.forEach(t => peLockupAddTrancheRow(t));
+    lk.tranches.forEach(t => peLockupAddTrancheRow(t, prefix));
   }
-  peLockupSetAnchor(lk.anchor || 'ipo');
-  peLockupSetType(lk.type || 'none');
+  peLockupSetAnchor(lk.anchor || 'ipo', prefix);
+  peLockupSetType(lk.type || 'none', prefix);
 }
 
 // Freeze a deal's lockup schedule to absolute dates against a known IPO date. Returns
@@ -27370,6 +27414,21 @@ function openEditPositionModal(posId) {
     : 'Total cost unknown (shares × price not yet entered). No upper bound enforced.';
   err.style.display = 'none';
 
+  // Lockup section — only for PE-converted positions; populate from the stored schedule.
+  const lkSection = document.getElementById('edit-pos-lockup-section');
+  if (lkSection) {
+    if (p.peConverted) {
+      lkSection.style.display = '';
+      const ipoNote = document.getElementById('edit-pe-lockup-ipo-note');
+      if (ipoNote) ipoNote.textContent = p.peIpoDate
+        ? ('Day-based offsets resolve against IPO date ' + p.peIpoDate + '.')
+        : 'No IPO date on record for this position — set one (via conversion) to resolve day-based offsets.';
+      if (typeof peLockupPopulate === 'function') peLockupPopulate(p.peLockup, 'edit-pe-lockup-');
+    } else {
+      lkSection.style.display = 'none';
+    }
+  }
+
   modal.classList.remove('hidden');
 }
 
@@ -27436,6 +27495,20 @@ function confirmEditPosition() {
     }
   }
 
+  // Lockup (PE-converted positions only): read + validate + re-resolve against the stored IPO date.
+  // Captured here so a bad schedule aborts before any field is written; applied below.
+  let _lockupApply = null;
+  const _lkSection = document.getElementById('edit-pos-lockup-section');
+  if (p.peConverted && _lkSection && _lkSection.style.display !== 'none') {
+    const _lkRead = peLockupReadFromForm('edit-pe-lockup-');
+    if (_lkRead.error) return showErr(_lkRead.error);
+    if (_lkRead.lockup && _lkRead.lockup.anchor === 'ipo' && !p.peIpoDate) {
+      return showErr('This position has no IPO date on record, so day-based offsets cannot resolve. Use specific dates, or set None.');
+    }
+    const _res = resolvePeLockup(_lkRead.lockup, p.peIpoDate);
+    _lockupApply = { lockup: _lkRead.lockup, resolved: _res.resolved, fullyUnlockedDate: _res.fullyUnlockedDate };
+  }
+
   // ── Apply ──
   const tickerChanged = (p.ticker || '').toUpperCase() !== ticker;
   const dateChanged = (p.dateBought || '') !== dateBought;
@@ -27449,6 +27522,13 @@ function confirmEditPosition() {
   p.sleeve = sleeve;
   p.notes = notes;
   p.redeployedAmount = redeployed;
+  if (_lockupApply) {
+    const _scheduleChanged = JSON.stringify(p.peLockup || null) !== JSON.stringify(_lockupApply.lockup || null);
+    p.peLockup = _lockupApply.lockup;
+    p.peLockupResolved = _lockupApply.resolved;
+    p.peFullyUnlockedDate = _lockupApply.fullyUnlockedDate;
+    if (_scheduleChanged) p.peLockupReleased = {}; // resolved indices changed — clear manual conditional marks
+  }
   if (typeof coercePositionNumerics === 'function') coercePositionNumerics(p);
 
   // If ticker or buy date changed, the frozen benchmark anchor (benchmarkAtBuy/benchmarkPriceAtBuy)
@@ -32649,6 +32729,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cp</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cq</div>
 </body>
 </html>
