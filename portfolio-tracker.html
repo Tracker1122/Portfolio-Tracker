@@ -1017,8 +1017,12 @@
     <button id="get-benchmarks-btn" onclick="getBenchmarkPrices()" style="display:none"></button>
     <span id="get-benchmarks-stale" style="display:none"></span>
     <span id="benchmark-status" style="display:none"></span>
+    <button id="pe-at-cost-btn" class="btn btn-sm" onclick="togglePeValueAtCost()" style="font-size:10px;padding:4px 12px" title="Value PE holdings at cost and exclude them from alpha.">Mute PE gains</button>
     <span id="polygon-key-toggle" style="font-size:10px;color:var(--color-text-secondary);cursor:pointer;text-decoration:underline" onclick="togglePolygonKey()">🔑 API Keys</span>
   </div>
+</div>
+<div id="pe-at-cost-banner" style="display:none;background:#b45309;color:#fff;font-size:11px;padding:5px 20px;text-align:center;letter-spacing:0.02em">
+  ● Muting PE gains — private/IPO-converted holdings are shown <strong>at cost basis</strong> and <strong>excluded from alpha &amp; performance</strong>. Totals, allocation, and theme weights reflect cost, not market. <span style="text-decoration:underline;cursor:pointer" onclick="togglePeValueAtCost()">Show market value</span>
 </div>
 
 <!-- Polygon API Key Panel -->
@@ -2594,6 +2598,7 @@ function loadTextSize() {
 loadTextSize();
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', loadTextSize);
+  document.addEventListener('DOMContentLoaded', function () { if (typeof updatePeAtCostUI === 'function') updatePeAtCostUI(); });
 }
 
 // ─────────────────────────────────────────────
@@ -2915,6 +2920,7 @@ async function loadPositions() {
       if (Array.isArray(peParsed.peDeals)) peDeals = peParsed.peDeals;
       if (Array.isArray(peParsed.realizedPeDeals)) realizedPeDeals = peParsed.realizedPeDeals;
     }
+    try { peValueAtCostMode = (localStorage.getItem('portfolio-pe-at-cost-v1') === '1'); } catch (e) {}
     const qrRes = localStorage.getItem('portfolio-quality-reviews-v1');
     if (qrRes) {
       const qrParsed = JSON.parse(qrRes);
@@ -4088,6 +4094,34 @@ function closeRealizedLedgerModal() {
 // ─────────────────────────────────────────────
 // Calculations
 // ─────────────────────────────────────────────
+// ── "Mute PE gains" view mode ────────────────────────────────────────────────
+// When engaged, PE holdings (IPO-converted positions + active private deals) are valued at
+// COST instead of market, so a pre-IPO windfall (e.g. SpaceX) stops dominating totals,
+// allocation %, and theme weights — and they are REMOVED from alpha/performance rather than
+// shown as "lagging". Display-only and non-destructive: it never touches stored prices.
+let peValueAtCostMode = false;
+function peValueAtCost() { return peValueAtCostMode; }
+function isPeHolding(pos) { return !!(pos && pos.peConverted); }
+function togglePeValueAtCost() {
+  peValueAtCostMode = !peValueAtCostMode;
+  try { localStorage.setItem('portfolio-pe-at-cost-v1', peValueAtCostMode ? '1' : '0'); } catch (e) {}
+  updatePeAtCostUI();
+  if (typeof renderAll === 'function') renderAll();
+}
+function updatePeAtCostUI() {
+  const btn = document.getElementById('pe-at-cost-btn');
+  if (btn) {
+    btn.textContent = peValueAtCostMode ? '\u25cf PE muted (at cost)' : 'Mute PE gains';
+    btn.style.background = peValueAtCostMode ? '#b45309' : '';
+    btn.style.color = peValueAtCostMode ? '#fff' : '';
+    btn.style.borderColor = peValueAtCostMode ? '#b45309' : '';
+    btn.title = peValueAtCostMode
+      ? 'PE holdings are valued at COST and excluded from alpha. Click to return to market value.'
+      : 'Value PE holdings (IPO-converted + private deals) at cost and exclude them from alpha, so a pre-IPO windfall stops skewing totals, allocation, and performance.';
+  }
+  const banner = document.getElementById('pe-at-cost-banner');
+  if (banner) banner.style.display = peValueAtCostMode ? '' : 'none';
+}
 function calcPos(pos) {
   const shares = parseFloat(pos.shares) || 0;
   const pricePaid = parseFloat(pos.pricePaid) || 0;
@@ -4128,7 +4162,15 @@ function calcPos(pos) {
     else result = 'Tied';
   }
 
-  return { invested, exitValue, gainLoss: netGainLoss, grossGainLoss: gainLoss, yourReturn, grossReturn, spxReturn, vsSpx, result, fees, brokerageFee, peFees, peCarry, netExitValue, netGainLoss };
+  if (peValueAtCost() && isPeHolding(pos)) {
+    // Value at cost: erase the unrealized PE windfall AND drop the benchmark comparison. Null spx
+    // fields → every alpha aggregate that gates on `spxReturn !== null` excludes this holding,
+    // and result=null means no Beat/Trail badge. Value totals still see exitValue = cost basis.
+    return { invested, exitValue: invested, gainLoss: 0, grossGainLoss: 0, yourReturn: 0, grossReturn: 0,
+             spxReturn: null, vsSpx: null, result: null, fees: 0, brokerageFee: 0, peFees: 0, peCarry: 0,
+             netExitValue: invested, netGainLoss: 0, peAtCostMuted: true };
+  }
+  return { invested, exitValue, gainLoss: netGainLoss, grossGainLoss: gainLoss, yourReturn, grossReturn, spxReturn, vsSpx, result, fees, brokerageFee, peFees, peCarry, netExitValue, netGainLoss, peAtCostMuted: false };
 }
 
 // ─────────────────────────────────────────────
@@ -8029,6 +8071,7 @@ async function backfillThemeBenchmarks() {
 // For closed positions: compares your-return-buy-to-sell against benchmark-return-buy-to-sell.
 // Returns null when data is missing (no benchmark for theme, no buy-date data, etc.).
 function calcThemeAlpha(pos) {
+  if (peValueAtCost() && isPeHolding(pos)) return null; // muted PE holdings are excluded from theme alpha
   // BENCHMARK ANCHOR (bug fix): the buy price (benchmarkPriceAtBuy) was captured against
   // pos.benchmarkAtBuy — the ETF this position was bought against. The benchmark RETURN must
   // therefore measure that SAME ETF end-to-end. Re-deriving the benchmark from the CURRENT
@@ -26595,9 +26638,10 @@ function calcPeDeal(d) {
   // Current value: prefer shares * current pps, fall back to cost if current pps not set.
   // If current pps is set but shares isn't derivable (no buy pps), we can't compute it
   // cleanly — leave as cost in that case.
-  const currentValue = (shares != null && ppsCur > 0)
+  let currentValue = (shares != null && ppsCur > 0)
     ? shares * ppsCur
     : inv;
+  if (peValueAtCost()) currentValue = inv; // "Mute PE gains" view: value active private deals at cost
 
   const gl = currentValue - inv;
   const multiple = currentValue / inv;
@@ -32756,6 +32800,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cs</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ct</div>
 </body>
 </html>
