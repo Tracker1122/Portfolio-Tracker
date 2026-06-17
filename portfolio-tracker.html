@@ -15248,6 +15248,32 @@ function capturePriceHistoryPoint(asOfMs) {
 // back from today to the latest session that has data (skipping weekends), and cache the result briefly
 // so the holdings pass and the benchmark pass share a single network call. Returns null on ANY failure
 // (e.g. the endpoint isn't on this key's tier) so callers fall back to the proven per-ticker path.
+// Batch Finnhub real-time quotes for a whole ticker list. Free tier is ~60/min, so we pace gently
+// (sequential with a short gap) instead of throttling like Polygon's 5/min. Returns a map
+// { TICKER: { price, asOfMs } } for names that quoted; omits any that didn't, so the caller falls
+// back to Polygon for those. asOfMs is the quote time in ms (Finnhub 't' is Unix seconds), so the
+// freshness verdict and price-history treat these as today's live marks. No key → null (caller skips).
+async function _fetchFinnhubQuotes(tickerList) {
+  if (typeof finnhubKey !== 'undefined' && !finnhubKey && typeof loadFinnhubKey === 'function') loadFinnhubKey();
+  if (typeof finnhubKey === 'undefined' || !finnhubKey) return null;
+  const out = {};
+  for (let i = 0; i < tickerList.length; i++) {
+    const T = String(tickerList[i] || '').toUpperCase();
+    if (!T) continue;
+    try {
+      const url = 'https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(T) + '&token=' + encodeURIComponent(finnhubKey);
+      const r = await fetch(url);
+      if (r.ok) {
+        const d = await r.json();
+        const px = (d && typeof d.c === 'number') ? d.c : 0;
+        if (px > 0) out[T] = { price: px, asOfMs: (typeof d.t === 'number' && d.t > 0) ? d.t * 1000 : Date.now() };
+      }
+    } catch (e) { /* omit; Polygon fallback will catch it */ }
+    if (i < tickerList.length - 1) await new Promise(s => setTimeout(s, 120)); // gentle on the 60/min cap
+  }
+  return out;
+}
+
 let _groupedClosesCache = null; // { date:'YYYY-MM-DD', map:{ TICKER:{c,t} }, fetchedAt }
 async function _fetchGroupedCloses() {
   if (_groupedClosesCache && (Date.now() - _groupedClosesCache.fetchedAt) < 120000) return _groupedClosesCache;
@@ -15361,11 +15387,15 @@ async function refreshAllPrices(onlyTickers) {
   const keyInput = document.getElementById('polygon-key-input');
   if (keyInput && keyInput.value.trim()) polygonKey = keyInput.value.trim();
   if (!polygonKey) loadPolygonKey();
+  if (typeof finnhubKey !== 'undefined' && !finnhubKey && typeof loadFinnhubKey === 'function') loadFinnhubKey();
 
-  if (!polygonKey) {
+  // A Finnhub key alone is enough now (it drives the live fast path); Polygon is the fallback. Only
+  // block when NEITHER source is available.
+  const _haveFinnhub = (typeof finnhubKey !== 'undefined' && !!finnhubKey);
+  if (!polygonKey && !_haveFinnhub) {
     togglePolygonKey();
     const status = document.getElementById('refresh-status');
-    if (status) { status.textContent = 'Enter your API key first'; status.style.color = '#fbbf24'; }
+    if (status) { status.textContent = 'Enter an API key first (Finnhub for live quotes, or Polygon for closes)'; status.style.color = '#fbbf24'; }
     return;
   }
 
@@ -15444,19 +15474,43 @@ async function refreshAllPrices(onlyTickers) {
   // Fire SPX fetch in parallel with the first batch — non-blocking, runs while Polygon batches go
   const spxPromise = tryFetchSpx();
 
-  // Fast path: one grouped-daily market call covers nearly everything; only stragglers hit /prev.
-  const _grp = await _fetchGroupedCloses();
   let results = [];
   let _toFetch = tickers;
-  if (_grp && _grp.map) {
-    const _gdMs = Date.parse(_grp.date + 'T12:00:00Z'); // noon UTC → correct date under ET-based labels too
-    _toFetch = [];
-    tickers.forEach(t => {
-      const _hit = _grp.map[t.replace('-', '.')] || _grp.map[t];
-      if (_hit && _hit.c != null) results.push({ ticker: t, price: _hit.c, asOfMs: _gdMs });
-      else _toFetch.push(t);
-    });
+
+  // PRIMARY (live): Finnhub real-time quotes. Fresh (today's quote, not yesterday's close) and fast
+  // (~60/min, no 5/min throttle). Whatever Finnhub prices fills in here; only names it can't price
+  // fall through to Polygon's previous-close paths below. asOfMs = quote time, so the freshness
+  // verdict reads these as current.
+  if (_toFetch.length) {
+    status.textContent = 'Fetching live quotes…';
+    const _live = await _fetchFinnhubQuotes(_toFetch);
+    if (_live) {
+      const _miss = [];
+      _toFetch.forEach(t => {
+        const hit = _live[String(t).toUpperCase()];
+        if (hit && hit.price > 0) results.push({ ticker: t, price: hit.price, asOfMs: hit.asOfMs });
+        else _miss.push(t);
+      });
+      _toFetch = _miss;
+    }
   }
+
+  // FALLBACK 1 (previous close): one grouped-daily market call covers most of whatever Finnhub missed.
+  if (_toFetch.length) {
+    const _grp = await _fetchGroupedCloses();
+    if (_grp && _grp.map) {
+      const _gdMs = Date.parse(_grp.date + 'T12:00:00Z'); // noon UTC → correct date under ET-based labels too
+      const _miss = [];
+      _toFetch.forEach(t => {
+        const _hit = _grp.map[t.replace('-', '.')] || _grp.map[t];
+        if (_hit && _hit.c != null) results.push({ ticker: t, price: _hit.c, asOfMs: _gdMs });
+        else _miss.push(t);
+      });
+      _toFetch = _miss;
+    }
+  }
+
+  // FALLBACK 2 (previous close): throttled per-ticker /prev for any final stragglers.
   if (_toFetch.length) results = results.concat(await runBatches(_toFetch, false));
 
   // Retry failed tickers once after a 60s cooldown (rate limit window resets)
@@ -32834,6 +32888,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cw</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cx</div>
 </body>
 </html>
