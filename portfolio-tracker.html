@@ -2781,6 +2781,40 @@ function mkPos() {
 // ─────────────────────────────────────────────
 // Storage
 // ─────────────────────────────────────────────
+// Cap the one unbounded time-series store (priceHistory appends ~once per trading day). Keeping the
+// most recent ~6 trading years bounds the snapshot blob so it can't grow past the ~5MB localStorage
+// quota over time. User-created `snapshots` are deliberately NOT capped.
+const PRICE_HISTORY_CAP = 1500;
+
+// Save-failure banner: a failed save is the worst silent failure (you'd keep working and lose it on
+// reload), so surface it loudly instead of only console.warn. Cleared automatically on the next clean
+// save. Offers an immediate Export so a backup is one click away even if storage is full.
+function showSaveFailureBanner(detail) {
+  try {
+    if (!document.body) return;
+    let el = document.getElementById('save-failure-banner');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'save-failure-banner';
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100000;background:#7f1d1d;color:#fee2e2;'
+        + 'font:12px/1.5 system-ui,sans-serif;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,.45)';
+      document.body.appendChild(el);
+    }
+    el.innerHTML = '<strong>\u26a0 Save failed \u2014 your latest changes may not have been saved.</strong> '
+      + 'Your browser storage may be full. Back up now so nothing is lost on reload. '
+      + (detail ? '<span style="opacity:.8">(' + escDiag(detail) + ')</span> ' : '')
+      + '<button id="save-fail-export" style="margin:0 6px;padding:2px 9px;cursor:pointer;border-radius:4px;border:0">Export backup now</button>'
+      + '<button id="save-fail-dismiss" style="padding:2px 9px;cursor:pointer;border-radius:4px;border:1px solid #fecaca;background:transparent;color:#fee2e2">Dismiss</button>';
+    var ex = document.getElementById('save-fail-export');
+    if (ex) ex.onclick = function () { try { if (typeof exportData === 'function') exportData(); } catch (e) {} };
+    var dm = document.getElementById('save-fail-dismiss');
+    if (dm) dm.onclick = function () { if (el && el.parentNode) el.parentNode.removeChild(el); };
+  } catch (e) { /* a banner failure must never throw back into the save path */ }
+}
+function clearSaveFailureBanner() {
+  try { var el = document.getElementById('save-failure-banner'); if (el && el.parentNode) el.parentNode.removeChild(el); } catch (e) {}
+}
+
 async function savePositions() {
   try {
     // Coerce numeric fields to numbers on write (review item 4): new/edited data
@@ -2826,24 +2860,35 @@ async function savePositions() {
         benchAlphaCache = {};
       }
     } catch (e) { /* best effort */ }
+    // Bound priceHistory before serializing so the snapshot blob can't outgrow the localStorage
+    // quota over years of daily appends. Keep the most recent entries; older ones age out.
+    if (Array.isArray(priceHistory) && priceHistory.length > PRICE_HISTORY_CAP) {
+      priceHistory = priceHistory.slice(-PRICE_HISTORY_CAP);
+    }
     localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, refreshPricesAsOfMs, refreshPricesWasLive, benchmarkAsOfMs, benchmarkWasLive, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache, benchmarkFees }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals, realizedPeDeals }));
     localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
     localStorage.setItem('portfolio-ticker-info-v1', JSON.stringify({ tickerInfo }));
     flashSave();
+    clearSaveFailureBanner(); // a clean full save means any prior failure is resolved
     // Trigger Drive backup (no-op if Drive not connected).
     if (typeof DriveState !== 'undefined' && DriveState.clientId && DriveState.accessToken) {
       driveScheduleSync();
     }
   } catch(e) {
     console.warn('Save failed', e.message);
-    // Retry once after a short delay
+    // Loud, honest surfacing — silent save loss is the worst failure mode. Banner stays up until a
+    // clean full save clears it (so it persists as long as the underlying problem, e.g. full storage).
+    showSaveFailureBanner(e && e.message);
+    // Retry once after a short delay — at least get the critical positions data down.
     setTimeout(async () => {
       try {
         const slim = positions.map(p => { const { fetchState, priceToday, ...rest } = p; return rest; });
         localStorage.setItem('portfolio-positions-v2', JSON.stringify({ positions: slim.filter(p=>!p.closed), nextId, spxLive, spxLiveDate, cashBuckets }));
         localStorage.setItem('portfolio-positions-closed', JSON.stringify({ positions: slim.filter(p=>p.closed) }));
         flashSave();
+        // NB: do NOT clear the banner here — positions saved, but the full snapshot blob (history,
+        // user snapshots, benchmarks) may not have. Only a clean full save clears the warning.
       } catch(e2) { console.warn('Retry save failed', e2.message); }
     }, 2000);
   }
@@ -32966,6 +33011,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09da</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09db</div>
 </body>
 </html>
