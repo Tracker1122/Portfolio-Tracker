@@ -2642,7 +2642,9 @@ let qualityReviews = []; // saved pre-purchase quality checklists for stock/ETF 
 // peDeal shape: { id, company, investmentDate, amountInvested, currentValue, lastValuationDate, stage, notes }
 let benchmarkPrices = {}; // { QQQ: 521.42, SMH: 499.58, ... } updated by Get Benchmarks
 let refreshPricesAsOfMs = null; // close DATE (ms) of the last Refresh Prices /prev pull (it's a prev close, not live)
+let refreshPricesWasLive = false; // true when the last position refresh's freshest price was a live Finnhub quote
 let benchmarkAsOfMs = null;     // close DATE (ms) of the last Get Benchmarks /prev pull
+let benchmarkWasLive = false;   // true when the last benchmark refresh's freshest price was a live Finnhub quote
 let benchmarkPricesDate = null; // ISO timestamp of last benchmark fetch
 // Expense ratios (annual %, e.g. 0.18 = 0.18%/yr) for benchmark ETFs. Used to decompose
 // theme alpha into "fee tailwind" (the edge you get just from not paying the benchmark's fee,
@@ -2819,7 +2821,7 @@ async function savePositions() {
         benchAlphaCache = {};
       }
     } catch (e) { /* best effort */ }
-    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, refreshPricesAsOfMs, benchmarkAsOfMs, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache, benchmarkFees }));
+    localStorage.setItem('portfolio-snapshots-v1', JSON.stringify({ snapshots, benchmarkPrices, benchmarkPricesDate, refreshPricesAsOfMs, refreshPricesWasLive, benchmarkAsOfMs, benchmarkWasLive, trackRecordMatureOnly, industryAlphaMatureOnly, themeUniverseHistory, priceHistory, benchAlphaCache, benchmarkFees }));
     localStorage.setItem('portfolio-pe-deals-v1', JSON.stringify({ peDeals, realizedPeDeals }));
     localStorage.setItem('portfolio-quality-reviews-v1', JSON.stringify({ qualityReviews }));
     localStorage.setItem('portfolio-ticker-info-v1', JSON.stringify({ tickerInfo }));
@@ -2898,7 +2900,9 @@ async function loadPositions() {
       if (snapParsed.benchmarkPrices && typeof snapParsed.benchmarkPrices === 'object') benchmarkPrices = snapParsed.benchmarkPrices;
       if (snapParsed.benchmarkPricesDate) benchmarkPricesDate = snapParsed.benchmarkPricesDate;
       if (typeof snapParsed.refreshPricesAsOfMs === 'number') refreshPricesAsOfMs = snapParsed.refreshPricesAsOfMs;
+      if (typeof snapParsed.refreshPricesWasLive === 'boolean') refreshPricesWasLive = snapParsed.refreshPricesWasLive;
       if (typeof snapParsed.benchmarkAsOfMs === 'number') benchmarkAsOfMs = snapParsed.benchmarkAsOfMs;
+      if (typeof snapParsed.benchmarkWasLive === 'boolean') benchmarkWasLive = snapParsed.benchmarkWasLive;
       if (typeof snapParsed.trackRecordMatureOnly === 'boolean') trackRecordMatureOnly = snapParsed.trackRecordMatureOnly;
       if (typeof snapParsed.industryAlphaMatureOnly === 'boolean') industryAlphaMatureOnly = snapParsed.industryAlphaMatureOnly;
       if (snapParsed.themeUniverseHistory && typeof snapParsed.themeUniverseHistory === 'object') themeUniverseHistory = snapParsed.themeUniverseHistory;
@@ -7719,11 +7723,14 @@ async function getBenchmarkPrices() {
   const keyInput = document.getElementById('polygon-key-input');
   if (keyInput && keyInput.value.trim()) polygonKey = keyInput.value.trim();
   if (!polygonKey) loadPolygonKey();
+  if (typeof finnhubKey !== 'undefined' && !finnhubKey && typeof loadFinnhubKey === 'function') loadFinnhubKey();
 
   const status = document.getElementById('benchmark-status');
-  if (!polygonKey) {
+  // Finnhub alone is enough (live fast path); Polygon is the fallback. Block only if neither exists.
+  const _haveFinnhubB = (typeof finnhubKey !== 'undefined' && !!finnhubKey);
+  if (!polygonKey && !_haveFinnhubB) {
     togglePolygonKey();
-    if (status) { status.textContent = 'Enter your Polygon API key first'; status.style.color = '#fbbf24'; }
+    if (status) { status.textContent = 'Enter an API key first (Finnhub for live quotes, or Polygon for closes)'; status.style.color = '#fbbf24'; }
     return;
   }
 
@@ -7748,7 +7755,7 @@ async function getBenchmarkPrices() {
     try {
       const res = await fetchWithTimeout(url, 8000);
       const data = await res.json();
-      if (data.results && data.results.length > 0) return { ticker, price: data.results[0].c, asOfMs: (typeof data.results[0].t === 'number' && data.results[0].t > 0) ? data.results[0].t : null };
+      if (data.results && data.results.length > 0) return { ticker, price: data.results[0].c, asOfMs: (typeof data.results[0].t === 'number' && data.results[0].t > 0) ? data.results[0].t : null, source: 'prev' };
       return { ticker, price: null };
     } catch(e) { return { ticker, price: null }; }
   }
@@ -7774,18 +7781,41 @@ async function getBenchmarkPrices() {
     return out;
   }
 
-  const _grp = await _fetchGroupedCloses();
   let results = [];
   let _toFetch = tickers;
-  if (_grp && _grp.map) {
-    const _gdMs = Date.parse(_grp.date + 'T12:00:00Z'); // noon UTC → correct date under ET-based labels too
-    _toFetch = [];
-    tickers.forEach(t => {
-      const _hit = _grp.map[t.replace('-', '.')] || _grp.map[t];
-      if (_hit && _hit.c != null) results.push({ ticker: t, price: _hit.c, asOfMs: _gdMs });
-      else _toFetch.push(t);
-    });
+
+  // PRIMARY (live): Finnhub real-time quotes for the benchmark ETFs. Fresh and fast; whatever it
+  // can't price falls through to Polygon's previous-close paths below.
+  if (_toFetch.length) {
+    status.textContent = 'Fetching live benchmark quotes…';
+    const _live = await _fetchFinnhubQuotes(_toFetch);
+    if (_live) {
+      const _miss = [];
+      _toFetch.forEach(t => {
+        const hit = _live[String(t).toUpperCase()];
+        if (hit && hit.price > 0) results.push({ ticker: t, price: hit.price, asOfMs: hit.asOfMs, source: 'live' });
+        else _miss.push(t);
+      });
+      _toFetch = _miss;
+    }
   }
+
+  // FALLBACK 1 (previous close): grouped-daily for whatever Finnhub missed.
+  if (_toFetch.length) {
+    const _grp = await _fetchGroupedCloses();
+    if (_grp && _grp.map) {
+      const _gdMs = Date.parse(_grp.date + 'T12:00:00Z'); // noon UTC → correct date under ET-based labels too
+      const _miss = [];
+      _toFetch.forEach(t => {
+        const _hit = _grp.map[t.replace('-', '.')] || _grp.map[t];
+        if (_hit && _hit.c != null) results.push({ ticker: t, price: _hit.c, asOfMs: _gdMs, source: 'prev' });
+        else _miss.push(t);
+      });
+      _toFetch = _miss;
+    }
+  }
+
+  // FALLBACK 2 (previous close): throttled per-ticker /prev for final stragglers.
   if (_toFetch.length) results = results.concat(await runBatches(_toFetch, false));
   const failedFirst = results.filter(r => !r.price).map(r => r.ticker);
   if (failedFirst.length > 0) {
@@ -7804,7 +7834,14 @@ async function getBenchmarkPrices() {
   });
 
   if (updated > 0) benchmarkPricesDate = new Date().toISOString();
-  if (updated > 0) benchmarkAsOfMs = results.reduce((m, r) => (r && r.asOfMs && (!m || r.asOfMs > m)) ? r.asOfMs : m, null);
+  if (updated > 0) {
+    // Tie the live/close flag to the FRESHEST applied price (max asOfMs), consistent with how
+    // benchmarkAsOfMs is derived — so the freshness tag matches the data it's labeling.
+    let _bMax = null, _bLive = false;
+    results.forEach(r => { if (r && r.price && typeof r.asOfMs === 'number' && r.asOfMs > 0 && (_bMax === null || r.asOfMs > _bMax)) { _bMax = r.asOfMs; _bLive = (r.source === 'live'); } });
+    benchmarkAsOfMs = _bMax;
+    benchmarkWasLive = _bLive;
+  }
 
   btn.disabled = false; btn.textContent = '\u27f3 Get Benchmarks';
   const ts = new Date().toLocaleTimeString();
@@ -8704,6 +8741,16 @@ function renderStaleTags() {
     }
     const ago = fmtTimeAgo(isoTimestamp);
     el.style.color = staleColorFor(isoTimestamp);
+    if (kind === 'live') {
+      // Real-time quote (Finnhub). Not a settled close — it's the current market price as of the
+      // fetch, refreshed each time. Session phrase tells whether the market is open right now.
+      var sessLv = (typeof usMarketSession === 'function') ? usMarketSession() : { phrase: '' };
+      var bitsLv = ['Live \u00b7 fetched ' + (ago || '\u2014')];
+      if (sessLv.phrase) bitsLv.push(sessLv.phrase);
+      el.textContent = bitsLv.join(' \u00b7 ');
+      el.title = 'Real-time quote fetched ' + (ago || 'recently') + ' (Finnhub). This is the current market price as of the fetch, not a settled daily close \u2014 each refresh updates it. During closed hours it reflects the last trade (effectively the latest close).';
+      return;
+    }
     if (kind === 'prevclose') {
       // Two clocks, shown separately: (1) when we FETCHED, and (2) which trading-day CLOSE
       // that data is, plus whether a newer close already exists. A 13h-old fetch on a Sunday
@@ -8755,9 +8802,9 @@ function renderStaleTags() {
     el.title = 'Yahoo S&P 500 level, fetched ' + (ago || 'recently') + ' \u2014 a live snapshot during market hours, the last close otherwise.';
   };
 
-  setTag('market-closes-stale', mostRecentPosFetch || benchmarkPricesDate, 'Never', 'prevclose', refreshPricesAsOfMs || benchmarkAsOfMs);
-  setTag('refresh-prices-stale', mostRecentPosFetch, 'Never', 'prevclose', refreshPricesAsOfMs);
-  setTag('get-benchmarks-stale', benchmarkPricesDate, 'Never', 'prevclose', benchmarkAsOfMs);
+  setTag('market-closes-stale', mostRecentPosFetch || benchmarkPricesDate, 'Never', (refreshPricesWasLive || benchmarkWasLive) ? 'live' : 'prevclose', refreshPricesAsOfMs || benchmarkAsOfMs);
+  setTag('refresh-prices-stale', mostRecentPosFetch, 'Never', refreshPricesWasLive ? 'live' : 'prevclose', refreshPricesAsOfMs);
+  setTag('get-benchmarks-stale', benchmarkPricesDate, 'Never', benchmarkWasLive ? 'live' : 'prevclose', benchmarkAsOfMs);
   setTag('spx-stale', spxLiveDate, 'Manual entry', 'quote');
 }
 
@@ -15435,7 +15482,7 @@ async function refreshAllPrices(onlyTickers) {
       if (data.results && data.results.length > 0) {
         const bar = data.results[0];
         const asOfMs = (typeof bar.t === 'number' && bar.t > 0) ? bar.t : null;
-        return { ticker, price: bar.c, asOfMs };
+        return { ticker, price: bar.c, asOfMs, source: 'prev' };
       }
       return { ticker, price: null, asOfMs: null };
     } catch(e) { return { ticker, price: null, asOfMs: null }; }
@@ -15488,7 +15535,7 @@ async function refreshAllPrices(onlyTickers) {
       const _miss = [];
       _toFetch.forEach(t => {
         const hit = _live[String(t).toUpperCase()];
-        if (hit && hit.price > 0) results.push({ ticker: t, price: hit.price, asOfMs: hit.asOfMs });
+        if (hit && hit.price > 0) results.push({ ticker: t, price: hit.price, asOfMs: hit.asOfMs, source: 'live' });
         else _miss.push(t);
       });
       _toFetch = _miss;
@@ -15503,7 +15550,7 @@ async function refreshAllPrices(onlyTickers) {
       const _miss = [];
       _toFetch.forEach(t => {
         const _hit = _grp.map[t.replace('-', '.')] || _grp.map[t];
-        if (_hit && _hit.c != null) results.push({ ticker: t, price: _hit.c, asOfMs: _gdMs });
+        if (_hit && _hit.c != null) results.push({ ticker: t, price: _hit.c, asOfMs: _gdMs, source: 'prev' });
         else _miss.push(t);
       });
       _toFetch = _miss;
@@ -15526,7 +15573,14 @@ async function refreshAllPrices(onlyTickers) {
 
   // Apply prices
   const fetchedAt = new Date().toISOString();
-  refreshPricesAsOfMs = results.reduce((m, r) => (r && r.asOfMs && (!m || r.asOfMs > m)) ? r.asOfMs : m, null);
+  // Tie the live/close flag to the FRESHEST applied price (max asOfMs), so the freshness tag matches
+  // the data it labels: if the most recent point came from a live quote, the tag reads "Live".
+  {
+    let _pMax = null, _pLive = false;
+    results.forEach(r => { if (r && r.asOfMs && typeof r.asOfMs === 'number' && r.asOfMs > 0 && (_pMax === null || r.asOfMs > _pMax)) { _pMax = r.asOfMs; _pLive = (r.source === 'live'); } });
+    refreshPricesAsOfMs = _pMax;
+    refreshPricesWasLive = _pLive;
+  }
   let updated = 0, failed = [];
   results.forEach(({ ticker, price }) => {
     if (!price) { failed.push(ticker); return; }
@@ -32888,6 +32942,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cx</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cy</div>
 </body>
 </html>
