@@ -4249,9 +4249,12 @@ function computeBookThemeBar(openArr) {
   const byTheme = {};
   let total = 0;
   openArr.forEach(p => {
-    const cv = (parseFloat(p.shares) || 0) * (parseFloat(p.exitPrice) || 0);
     const t = p.theme || '(untagged)';
     if (!byTheme[t]) byTheme[t] = { label: t, value: 0, names: [], positions: [] };
+    // Turned-off holdings (a single ticker, a whole theme, or a sleeve) keep their theme visible
+    // in the bar/legend so it can be toggled back on, but contribute NO value, names, or return.
+    if (isBookExcluded(p)) return;
+    const cv = calcPos(p).exitValue || 0; // via calcPos → respects the Mute toggle; identical market value otherwise
     byTheme[t].value += cv;
     byTheme[t].positions.push(p);
     if (p.ticker && !byTheme[t].names.includes(p.ticker)) byTheme[t].names.push(p.ticker);
@@ -32827,6 +32830,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cu</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cv</div>
 </body>
 </html>
