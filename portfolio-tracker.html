@@ -1006,7 +1006,7 @@
   <span class="spx-manual-hint">↑ update daily — feeds all open positions</span>
   <a class="spx-link" href="https://multpl.com/s-p-500-historical-prices/table/by-month" target="_blank" rel="noopener">↗ Historical S&P (multpl.com)</a>
   <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
-    <button id="update-closes-btn" class="btn btn-sm btn-primary" onclick="updateMarketCloses()" style="font-size:10px;padding:4px 12px" title="Pulls the latest daily CLOSING prices for your holdings AND every benchmark ETF in a single market-wide call (Polygon grouped-daily, with per-ticker fallback). Previous-close data — not a live quote.">⟳ Update Prices &amp; Benchmarks</button>
+    <button id="update-closes-btn" class="btn btn-sm btn-primary" onclick="updateMarketCloses()" style="font-size:10px;padding:4px 12px" title="Pulls current prices for your holdings AND every benchmark ETF — live quotes via Finnhub when available, with Polygon previous-close as the fallback.">⟳ Update Prices &amp; Benchmarks</button>
     <span id="market-closes-stale" style="font-size:9px;color:var(--color-text-tertiary)"></span>
     <span id="update-closes-status" style="font-size:10px;color:var(--color-text-tertiary)"></span>
     <button id="backfill-btn" class="btn btn-sm" onclick="backfillThemeBenchmarks()" style="font-size:10px;padding:4px 12px" title="One-time historical fetch of benchmark prices on each position's buy/sell dates. Enables theme-relative alpha math.">⟳ Backfill Theme Benchmarks</button>
@@ -15384,8 +15384,11 @@ async function updateMarketCloses() {
     if (done) return; done = true;
     clearInterval(timer);
     const secs = Math.round((Date.now() - t0) / 1000);
+    const wasLive = !!(refreshPricesWasLive || benchmarkWasLive);
     const grouped = !!(_groupedClosesCache && (Date.now() - _groupedClosesCache.fetchedAt) < 130000 && _groupedClosesCache.map);
-    const closeDate = (grouped && _groupedClosesCache.date) ? fmtAsOfDate(Date.parse(_groupedClosesCache.date + 'T12:00:00Z')) : '';
+    // Live quotes have no settled "close date" — only surface one when the data actually came from a close.
+    const closeDate = (!wasLive && grouped && _groupedClosesCache.date) ? fmtAsOfDate(Date.parse(_groupedClosesCache.date + 'T12:00:00Z')) : '';
+    const sourceNote = wasLive ? 'live quotes (Finnhub)' : (grouped ? 'one fast market-wide call' : 'per-ticker previous-close fallback');
     const rs = ((document.getElementById('refresh-status') || {}).textContent || '').trim();
     const bs = ((document.getElementById('benchmark-status') || {}).textContent || '').trim();
     const failed = /fail/i.test(rs) || /fail/i.test(bs);
@@ -15396,7 +15399,7 @@ async function updateMarketCloses() {
         out.textContent = '\u26a0 Finished in ' + secs + 's, but some names did not update \u2014 ' + (rs || bs || 'check API key / network, then try again');
       } else {
         out.style.color = 'var(--color-text-success)';
-        out.textContent = '\u2713 Done in ' + secs + 's \u00b7 ' + (grouped ? 'one fast market-wide call' : 'per-ticker fallback (grouped not on this key \u2014 slower)') + (closeDate ? ' \u00b7 close ' + closeDate : '') + (rs ? ' \u00b7 ' + rs.replace(/^[\u2713\s]+/, '') : '');
+        out.textContent = '\u2713 Done in ' + secs + 's \u00b7 ' + sourceNote + (closeDate ? ' \u00b7 close ' + closeDate : '') + (rs ? ' \u00b7 ' + rs.replace(/^[\u2713\s]+/, '') : '');
       }
       setTimeout(function () { if (out && /Done in|did not update/.test(out.textContent)) { out.textContent = ''; out.style.color = ''; } }, 30000);
     }
@@ -32942,6 +32945,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cy</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cz</div>
 </body>
 </html>
