@@ -2453,6 +2453,37 @@ function safeRender(label, fn) {
   }
 }
 
+// ── 3b. runMathChecks ──
+// Golden-input assertions on the money math, so a future refactor can't silently redefine
+// "your gain" the way the gross/net topline drift did. Synthetic inputs only — deterministic,
+// independent of live data. Console-only; never throws into the load path. Add a case whenever
+// you touch calcPos/calcSummary.
+function runMathChecks() {
+  var near = function(a, b){ return Math.abs(a - b) <= 0.01; };
+  var out = [];
+  try {
+    // (1) plain winner: 10 @ 100 -> 150, SPX 100 -> 120. gross gain 500, +50% vs +20% = +30pp.
+    var c1 = calcPos({ shares:10, pricePaid:100, exitPrice:150, spxBuy:100, spxExit:120 });
+    out.push(['plain_gain', near(c1.gainLoss,500) && near(c1.grossReturn,50) && near(c1.vsSpx,30)]);
+    // (2) same trade with a $50 sale fee: G/L and return go NET, but vs-S&P stays gross.
+    var c2 = calcPos({ shares:10, pricePaid:100, exitPrice:150, feesAtSale:50, spxBuy:100, spxExit:120 });
+    out.push(['net_below_gross', near(c2.gainLoss,450) && near(c2.grossGainLoss,500) && near(c2.yourReturn,45) && near(c2.grossReturn,50) && near(c2.vsSpx,30)]);
+    // (3) loser with no SPX data: alpha must be null, not zero or a number.
+    var c3 = calcPos({ shares:5, pricePaid:200, exitPrice:100 });
+    out.push(['loss_null_spx', near(c3.gainLoss,-500) && c3.spxReturn === null && c3.vsSpx === null && c3.result === null]);
+    // (4) the regression that started all this: book NET must equal the rows, book GROSS must equal
+    //     basis, and the difference must equal total fees, exactly.
+    var s = calcSummary([{ shares:10, pricePaid:100, exitPrice:150, feesAtSale:50, spxBuy:100, spxExit:120 }]);
+    out.push(['book_net_reconciles', near(s.netGainLoss,450) && near(s.gainLoss,500) && near(s.totalFees,50) && near(s.gainLoss - s.netGainLoss, s.totalFees)]);
+  } catch (e) {
+    console.error('[math-check] threw: ' + (e && e.message));
+    return;
+  }
+  var fails = out.filter(function(x){ return !x[1]; }).map(function(x){ return x[0]; });
+  if (fails.length) console.error('[math-check] FAIL: ' + fails.join(', '));
+  else console.log('[math-check] all ' + out.length + ' golden cases pass.');
+}
+
 // ── 3. runSelfChecks ──
 // Invariants the fresh-eyes review verified by hand, now automated. Each returns
 // {name, pass, detail}. Add one whenever you fix a bug, so it can't return silently.
@@ -2822,12 +2853,14 @@ async function savePositions() {
     positions.forEach(coercePositionNumerics);
     // Input-boundary sanitize: strip angle brackets from identifier/free-text fields so no
     // pasted/imported/restored value can carry executable markup into a render site.
+    // One shared list so a newly-added text field can't silently dodge the strip. Add the field
+    // name here when you add a free-text/identifier field to a position. ('fund' was previously
+    // named in sanitizeId's own doc but missing from this loop.)
+    const POSITION_TEXT_FIELDS = ['ticker', 'account', 'theme', 'sleeve', 'notes', 'fund'];
     positions.forEach(function(p){
-      if (typeof p.ticker === 'string') p.ticker = sanitizeId(p.ticker);
-      if (typeof p.account === 'string') p.account = sanitizeId(p.account);
-      if (typeof p.theme === 'string') p.theme = sanitizeId(p.theme);
-      if (typeof p.sleeve === 'string') p.sleeve = sanitizeId(p.sleeve);
-      if (typeof p.notes === 'string') p.notes = sanitizeId(p.notes);
+      POSITION_TEXT_FIELDS.forEach(function(f){
+        if (typeof p[f] === 'string') p[f] = sanitizeId(p[f]);
+      });
     });
     const slim = positions.map(p => {
       const { fetchState, priceToday, ...rest } = p;
@@ -4247,11 +4280,17 @@ function calcSummary(posArr) {
   let totalInvested = 0, totalExit = 0, countBeat = 0, countTrail = 0;
   let weightedSpxNum = 0, weightedSpxDen = 0;
   let dollarAlpha = 0;
+  // Net-of-fees aggregates. c.gainLoss from calcPos is already NET (brokerage + PE upfront/maint/carry),
+  // so summing it reconciles with the per-position G/L column by construction. The gross gainLoss
+  // (totalExit - totalInvested) is kept untouched because vs-S&P must stay gross-vs-gross.
+  let netGL = 0, totalFees = 0;
 
   posArr.forEach(p => {
     const c = calcPos(p);
     totalInvested += c.invested;
     totalExit += c.exitValue;
+    netGL += c.gainLoss;       // per-position NET gain
+    totalFees += (c.fees || 0); // brokerage + PE fees on this position
     if (c.spxReturn !== null && c.invested > 0) {
       weightedSpxNum += c.spxReturn * c.invested;
       weightedSpxDen += c.invested;
@@ -4262,12 +4301,14 @@ function calcSummary(posArr) {
     if (c.result === 'Trail') countTrail++;
   });
 
-  const gainLoss = totalExit - totalInvested;
-  const yourReturn = totalInvested > 0 ? (gainLoss / totalInvested) * 100 : null;
+  const gainLoss = totalExit - totalInvested;                                    // GROSS — basis for vs-S&P
+  const yourReturn = totalInvested > 0 ? (gainLoss / totalInvested) * 100 : null; // GROSS
+  const netGainLoss = netGL;                                                     // NET — reconciles with the rows
+  const netYourReturn = totalInvested > 0 ? (netGainLoss / totalInvested) * 100 : null; // NET
   const weightedSpx = weightedSpxDen > 0 ? weightedSpxNum / weightedSpxDen : null;
-  const vsSpx = yourReturn !== null && weightedSpx !== null ? yourReturn - weightedSpx : null;
+  const vsSpx = yourReturn !== null && weightedSpx !== null ? yourReturn - weightedSpx : null; // gross-vs-gross, unchanged
 
-  return { totalInvested, totalExit, gainLoss, yourReturn, weightedSpx, vsSpx, countBeat, countTrail, dollarAlpha };
+  return { totalInvested, totalExit, gainLoss, yourReturn, netGainLoss, netYourReturn, totalFees, weightedSpx, vsSpx, countBeat, countTrail, dollarAlpha };
 }
 
 // ─────────────────────────────────────────────
@@ -4548,11 +4589,13 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
     </div>
     <div class="summary-card">
       <div class="summary-card-label">${glLabel}${sleeveSub}</div>
-      <div class="summary-card-value ${colorClass(s.gainLoss)}">${fmtDollar(s.gainLoss)}</div>
+      <div class="summary-card-value ${colorClass(s.netGainLoss)}">${fmtDollar(s.netGainLoss)}</div>
+      ${s.totalFees > 0.005 ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:2px;line-height:1.3">net of ${fmtDollar(s.totalFees)} fees · gross ${fmtDollar(s.gainLoss)}</div>` : ''}
     </div>
     <div class="summary-card">
       <div class="summary-card-label">Your Return %${sleeveSub}</div>
-      <div class="summary-card-value ${colorClass(s.yourReturn)}">${fmtPct(s.yourReturn)}</div>
+      <div class="summary-card-value ${colorClass(s.netYourReturn)}">${fmtPct(s.netYourReturn)}</div>
+      ${s.totalFees > 0.005 ? `<div style="font-size:8px;color:var(--color-text-tertiary);margin-top:2px;line-height:1.3">net of fees · vs-S&amp;P below stays gross</div>` : ''}
     </div>
     <div class="summary-card" title="What the S&P 500 returned on the same capital over the same holding periods — your apples-to-apples benchmark.">
       <div class="summary-card-label">S&P's return${sleeveSub}</div>
@@ -5065,6 +5108,13 @@ function renderRow(pos) {
 function esc(v) {
   if (v === null || v === undefined) return '';
   return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+// URL SCHEME GUARD. esc() makes a value safe in an HTML attribute but does NOT stop a
+// javascript:/data: scheme from surviving into an href. Use this on any URL sourced from an
+// external API (e.g. a vendor-supplied homepage). Anything not http(s) collapses to '#'.
+function safeUrl(u) {
+  u = String(u === null || u === undefined ? '' : u).trim();
+  return /^https?:\/\//i.test(u) ? u : '#';
 }
 // Escape for interpolation inside a SINGLE-QUOTED JS string that sits in an HTML on*=""
 // handler attribute, e.g.  onclick="fn('${escq(x)}')". HTML entity-decoding happens BEFORE
@@ -22566,7 +22616,7 @@ function discoveryInfoCardHtml(key, state, opts) {
     } else {
       inner += `<div style="color:var(--color-text-tertiary);font-style:italic">No description available from Polygon for ${esc(key)} (common for micro-caps). Add your own below.</div>`;
     }
-    if (info.homepage) inner += `<div style="margin-top:3px"><a href="${esc(info.homepage)}" target="_blank" rel="noopener" style="color:var(--color-text-info);font-size:9px">${esc(info.homepage)} ↗</a></div>`;
+    if (info.homepage) inner += `<div style="margin-top:3px"><a href="${esc(safeUrl(info.homepage))}" target="_blank" rel="noopener" style="color:var(--color-text-info);font-size:9px">${esc(info.homepage)} ↗</a></div>`;
     if (info.fetchedDate) inner += `<div style="color:var(--color-text-tertiary);font-size:8px;margin-top:2px">via Polygon · fetched ${esc(info.fetchedDate)}</div>`;
   }
   // Research links — generic {ticker}-templated URLs to common analysis sites. No data needed/stored;
@@ -28924,6 +28974,46 @@ function exportData() {
   a.download = 'portfolio-tracker-data.json';
   a.click();
   URL.revokeObjectURL(url);
+  // Record the backup time so the reminder nudge can reset. Non-fatal if storage is full.
+  try { localStorage.setItem('portfolio-last-export-v1', String(Date.now())); } catch (e) {}
+  // Clear any standing reminder banner now that a fresh backup exists.
+  try { var rb = document.getElementById('export-reminder-banner'); if (rb && rb.parentNode) rb.parentNode.removeChild(rb); } catch (e) {}
+}
+
+// Off-device backup nudge. Reads only; appends one dismissible banner. Shows only when Drive is NOT
+// connected (so there's no automatic off-device copy) AND it's been >14 days since the last export
+// (or there's never been one). Dismiss removes it for the session; it returns next load until you
+// export or connect Drive. Wrapped so a failure here never affects load.
+function maybeShowExportReminder() {
+  try {
+    var driveOn = (typeof DriveState !== 'undefined' && DriveState && DriveState.accessToken);
+    if (driveOn) return; // Drive already backs you up off-device
+    var last = parseInt(localStorage.getItem('portfolio-last-export-v1') || '0', 10);
+    var days = last > 0 ? (Date.now() - last) / 86400000 : Infinity;
+    if (days < 14) return;
+    if (document.getElementById('export-reminder-banner')) return;
+    if (!document.body) return;
+    var el = document.createElement('div');
+    el.id = 'export-reminder-banner';
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:#1e3a5f;color:#dbeafe;font-size:12px;padding:7px 12px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.35);font-family:inherit';
+    var msg = (last > 0)
+      ? ('Backup reminder: it has been ' + Math.floor(days) + ' days since your last export.')
+      : 'Backup reminder: you have not exported a backup yet.';
+    var span = document.createElement('span');
+    span.textContent = msg + ' Your data lives only in this browser \u2014 connect Drive or export a backup.';
+    el.appendChild(span);
+    var bExp = document.createElement('button');
+    bExp.textContent = 'Export now';
+    bExp.style.cssText = 'margin-left:10px;padding:2px 10px;cursor:pointer;border-radius:4px;border:0;background:#3b82f6;color:#fff;font-size:11px';
+    bExp.onclick = function(){ try { exportData(); } catch (e) {} };
+    el.appendChild(bExp);
+    var bDis = document.createElement('button');
+    bDis.textContent = 'Dismiss';
+    bDis.style.cssText = 'margin-left:6px;padding:2px 10px;cursor:pointer;border-radius:4px;border:1px solid #3b82f6;background:transparent;color:#dbeafe;font-size:11px';
+    bDis.onclick = function(){ if (el.parentNode) el.parentNode.removeChild(el); };
+    el.appendChild(bDis);
+    document.body.appendChild(el);
+  } catch (e) { /* reminder is non-critical */ }
 }
 
 function importData(input) {
@@ -30985,6 +31075,10 @@ async function init() {
   renderAll();
   // Self-checks run after first full render, against your live data (review item 2).
   try { runSelfChecks(); } catch (e) { console.warn('Self-checks failed to run', e); }
+  // Math golden-input checks — deterministic, independent of live data.
+  try { runMathChecks(); } catch (e) { console.warn('Math-checks failed to run', e); }
+  // Off-device backup nudge — non-destructive, only shows if Drive isn't connected and it's been a while.
+  try { maybeShowExportReminder(); } catch (e) {}
   // Drive backup — runs last so it doesn't block UI render
   driveInit().catch(e => console.warn('Drive init failed', e.message));
 }
@@ -33011,6 +33105,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09db</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dc</div>
 </body>
 </html>
