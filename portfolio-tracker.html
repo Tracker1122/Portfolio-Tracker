@@ -4417,7 +4417,7 @@ function renderBookIsolateDelta(openArr) {
     </div>`;
   };
 
-  const retD = dPp(full.yourReturn, filt.yourReturn);
+  const retD = dPp(full.netYourReturn, filt.netYourReturn);
   const alphaD = dPp(full.vsSpx, filt.vsSpx);
   const dollarAlphaD = (typeof full.dollarAlpha === 'number' && typeof filt.dollarAlpha === 'number') ? filt.dollarAlpha - full.dollarAlpha : null;
 
@@ -4426,7 +4426,7 @@ function renderBookIsolateDelta(openArr) {
   const ppAbs = (d) => Math.abs(d).toFixed(1);
   let prose = `With ${esc(offList || 'the selection')} turned off, the remaining ${kept.length} of ${openArr.length} positions `;
   if (retD !== null) {
-    prose += `return ${filt.yourReturn >= 0 ? '+' : ''}${filt.yourReturn.toFixed(1)}% versus ${full.yourReturn >= 0 ? '+' : ''}${full.yourReturn.toFixed(1)}% for the full book — `;
+    prose += `return ${filt.netYourReturn >= 0 ? '+' : ''}${filt.netYourReturn.toFixed(1)}% versus ${full.netYourReturn >= 0 ? '+' : ''}${full.netYourReturn.toFixed(1)}% for the full book — `;
     prose += retD === null ? '' : (Math.abs(retD) < 0.05 ? 'essentially no change' : `your return ${dirWord(retD)} ${ppAbs(retD)} points`);
   }
   if (alphaD !== null) {
@@ -4462,9 +4462,9 @@ function renderBookIsolateDelta(openArr) {
   host.innerHTML = `
     <div style="background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px">
       <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-tertiary);margin-bottom:6px">Full book → without what's turned off</div>
-      ${fmtPair('Your return', full.yourReturn, filt.yourReturn, 'pct')}
+      ${fmtPair('Your return (net)', full.netYourReturn, filt.netYourReturn, 'pct')}
       ${fmtPair("S&P's return", full.weightedSpx, filt.weightedSpx, 'pct')}
-      ${fmtPair('Edge vs S&P', full.vsSpx, filt.vsSpx, 'pp')}
+      ${fmtPair('Edge vs S&P (gross)', full.vsSpx, filt.vsSpx, 'pp')}
       ${fmtPair('Dollar alpha vs S&P', full.dollarAlpha, filt.dollarAlpha, 'dollar')}
       <div style="font-size:11px;line-height:1.55;color:var(--color-text-primary);margin-top:8px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)">${prose}</div>
     </div>`;
@@ -4601,8 +4601,8 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
       <div class="summary-card-label">S&P's return${sleeveSub}</div>
       <div class="summary-card-value ${colorClass(s.weightedSpx)}">${fmtPct(s.weightedSpx)}</div>
     </div>
-    <div class="summary-card" title="Your return minus the S&P's return over the same capital and periods, in percentage points.">
-      <div class="summary-card-label">Edge vs S&P${sleeveSub}</div>
+    <div class="summary-card" title="Your GROSS return (before fees) minus the S&P's return over the same capital and periods, in percentage points. Kept gross on both sides so trading costs don't distort stock-selection skill — which is why it won't exactly equal the net Your Return above minus the S&P's return.">
+      <div class="summary-card-label">Edge vs S&P (gross)${sleeveSub}</div>
       <div class="summary-card-value ${colorClass(s.vsSpx)}">${fmtPp(s.vsSpx)}</div>
     </div>
     ${isOpen ? `<div class="summary-card" title="Dollar alpha = the dollars you generated above (or below) what the S&P 500 would have returned on the same capital over the same holding periods.">
@@ -33105,6 +33105,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dc</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dd</div>
 </body>
 </html>
