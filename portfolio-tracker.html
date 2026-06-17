@@ -8795,7 +8795,10 @@ function renderStaleBanner() {
       <div style="font-weight:700;margin-bottom:2px">Stale position prices — alpha numbers may be unreliable</div>
       <div style="font-size:10px;color:var(--color-text-secondary)">${allStale.length} position${allStale.length>1?'s':''} (${esc(sample)}${moreStr}) ${noStamp.length === allStale.length ? 'have never been refreshed' : 'are older than the latest benchmark fetch'}.</div>
     </div>
-    <button class="btn btn-sm btn-primary" onclick="updateMarketCloses()" style="font-size:10px">⟳ Update Prices &amp; Benchmarks</button>
+    <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-end">
+      <button id="stale-refresh-btn" class="btn btn-sm btn-primary" onclick="refreshStalePrices('${esc(allStale.join(','))}')" style="font-size:10px" title="Fetch current prices for ONLY the stale ticker(s) above — fast, and doesn't re-pull the whole book or the benchmarks.">⟳ Refresh ${allStale.length} stale</button>
+      <span onclick="updateMarketCloses()" style="font-size:9px;color:var(--color-text-tertiary);cursor:pointer;text-decoration:underline" title="Full refresh of every price and benchmark (slower).">or update everything</span>
+    </div>
   `;
 }
 
@@ -15331,7 +15334,23 @@ async function updateMarketCloses() {
   }
 }
 
-async function refreshAllPrices() {
+// Refresh prices for ONLY the given tickers (e.g. the stale ones flagged in the trust banner),
+// instead of re-pulling the whole book + all benchmarks. Reuses the main fetch engine.
+async function refreshStalePrices(tickersCsv) {
+  const list = String(tickersCsv || '').split(',').map(t => t.trim()).filter(Boolean);
+  if (!list.length) return;
+  const btn = document.getElementById('stale-refresh-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '\u27f3 Fetching ' + list.length + '\u2026'; }
+  try {
+    await refreshAllPrices(list);
+    // refreshAllPrices calls renderAll() on success, which re-renders the banner and clears it
+    // for any ticker that's now fresh. Nothing else to do here.
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '\u27f3 Retry ' + list.length + ' stale'; }
+  }
+}
+
+async function refreshAllPrices(onlyTickers) {
   const keyInput = document.getElementById('polygon-key-input');
   if (keyInput && keyInput.value.trim()) polygonKey = keyInput.value.trim();
   if (!polygonKey) loadPolygonKey();
@@ -15351,6 +15370,14 @@ async function refreshAllPrices() {
   const openPositions = positions.filter(p => !p.closed && p.ticker);
   const tickers = [...new Set(openPositions.map(p => p.ticker))];
   if (spLots.length > 0 && !tickers.includes('VOO')) tickers.push('VOO');
+  // Targeted refresh: when a subset is passed (e.g. the stale tickers from the trust banner),
+  // fetch ONLY those — don't drag in the rest of the book or VOO unless explicitly listed.
+  if (Array.isArray(onlyTickers) && onlyTickers.length) {
+    const _only = new Set(onlyTickers.map(t => String(t).toUpperCase()));
+    for (let i = tickers.length - 1; i >= 0; i--) {
+      if (!_only.has(tickers[i].toUpperCase())) tickers.splice(i, 1);
+    }
+  }
 
   async function fetchWithTimeout(url, ms) {
     const controller = new AbortController();
@@ -32800,6 +32827,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ct</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cu</div>
 </body>
 </html>
