@@ -4107,6 +4107,10 @@ function togglePeValueAtCost() {
   try { localStorage.setItem('portfolio-pe-at-cost-v1', peValueAtCostMode ? '1' : '0'); } catch (e) {}
   updatePeAtCostUI();
   if (typeof renderAll === 'function') renderAll();
+  // renderAll() does NOT rebuild the Theme Universe table (that view only re-renders on tab-switch),
+  // so its look-through exposure column would otherwise show a stale value from the prior mute state.
+  // Refresh it explicitly here so muting/unmuting updates it in lockstep with everything else.
+  if (typeof renderThemeUniverse === 'function') renderThemeUniverse();
 }
 function updatePeAtCostUI() {
   const btn = document.getElementById('pe-at-cost-btn');
@@ -32830,6 +32834,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cv</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cw</div>
 </body>
 </html>
