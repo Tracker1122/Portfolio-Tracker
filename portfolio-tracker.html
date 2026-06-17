@@ -1040,6 +1040,10 @@
   <span style="font-size:10px;color:var(--color-text-tertiary)">Bars Worker URL (Tiingo)</span>
   <input id="bars-worker-input" class="modal-input" type="text" placeholder="https://your-worker.workers.dev" style="width:280px;font-size:11px;padding:4px 8px" oninput="saveBarsWorkerUrl(this.value)" onchange="saveBarsWorkerUrl(this.value)" onblur="saveBarsWorkerUrl(this.value)">
   <span style="font-size:10px;color:var(--color-text-tertiary)">Cloudflare worker · deep history for stress replays</span>
+  <span style="flex-basis:100%;height:0"></span>
+  <span style="font-size:10px;color:var(--color-text-tertiary)">S&amp;P Proxy URL (Yahoo)</span>
+  <input id="yahoo-proxy-input" class="modal-input" type="text" placeholder="https://your-worker.workers.dev" style="width:280px;font-size:11px;padding:4px 8px" oninput="saveYahooProxyUrl(this.value)" onchange="saveYahooProxyUrl(this.value)" onblur="saveYahooProxyUrl(this.value)">
+  <span style="font-size:10px;color:var(--color-text-tertiary)">Cloudflare worker · live S&amp;P 500 index level (^GSPC) — true index, not a scaled ETF</span>
 </div>
 
 <!-- Update Instructions -->
@@ -2617,6 +2621,7 @@ let tickerInfo = {};
 let avWorkerUrl = ''; // Cloudflare worker base URL that proxies Alpha Vantage ETF_PROFILE (key stays server-side)
 let barsWorkerUrl = ''; // Cloudflare worker base URL that proxies Tiingo daily bars (deep free history + CORS) for the risk lens
 let aiWorkerUrl = ''; // Cloudflare worker base URL that proxies the Anthropic Messages API (key stays server-side; CORS fix)
+let yahooProxyUrl = ''; // Cloudflare worker base URL that proxies Yahoo /v8/finance/chart (CORS fix) for the live S&P 500 index level
 let saveTimeout = null;
 let cashBuckets = { Taxable: 0, IRA: 0 };
 let cashLedger = [];
@@ -3046,8 +3051,17 @@ async function yahooFetch(url) {
   return resp.json();
 }
 
+// Base for Yahoo /v8/finance/chart calls. Yahoo itself sends no CORS headers, so a direct browser
+// fetch is blocked; when a proxy worker URL is configured we route through it (it adds CORS and
+// returns the SAME payload), otherwise we fall back to hitting Yahoo directly (which will CORS-fail
+// in the browser, same as before — so the proxy is what makes live S&P work).
+function _yahooBase() {
+  if (!yahooProxyUrl && typeof loadYahooProxyUrl === 'function') loadYahooProxyUrl();
+  return yahooProxyUrl ? yahooProxyUrl.replace(/\/+$/, '') : PROXY_BASES[0];
+}
+
 async function fetchSpxLive() {
-  const url = `${PROXY_BASES[0]}/v8/finance/chart/%5EGSPC?interval=1d&range=1d`;
+  const url = `${_yahooBase()}/v8/finance/chart/%5EGSPC?interval=1d&range=1d`;
   const data = await yahooFetch(url);
   const meta = data.chart.result[0].meta;
   return { price: meta.regularMarketPrice, time: meta.regularMarketTime };
@@ -3058,7 +3072,7 @@ async function fetchSpxHistorical(dateStr) {
   const d = new Date(dateStr + 'T12:00:00Z');
   const period1 = Math.floor(d.getTime() / 1000);
   const period2 = period1 + 7 * 86400;
-  const url = `${PROXY_BASES[0]}/v8/finance/chart/%5EGSPC?interval=1d&period1=${period1}&period2=${period2}`;
+  const url = `${_yahooBase()}/v8/finance/chart/%5EGSPC?interval=1d&period1=${period1}&period2=${period2}`;
   const data = await yahooFetch(url);
   const closes = data.chart.result[0].indicators.quote[0].close;
   const first = closes.find(c => c !== null && c !== undefined);
@@ -3067,7 +3081,7 @@ async function fetchSpxHistorical(dateStr) {
 }
 
 async function fetchStockPrice(ticker) {
-  const url = `${PROXY_BASES[0]}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`;
+  const url = `${_yahooBase()}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`;
   const data = await yahooFetch(url);
   return data.chart.result[0].meta.regularMarketPrice;
 }
@@ -10350,6 +10364,13 @@ function loadBarsWorkerUrl() {
 function saveBarsWorkerUrl(u) {
   barsWorkerUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
   try { localStorage.setItem('bars_worker_url', barsWorkerUrl); } catch(e) {}
+}
+function loadYahooProxyUrl() {
+  try { const u = localStorage.getItem('yahoo_proxy_url'); if (u) yahooProxyUrl = u; } catch(e) {}
+}
+function saveYahooProxyUrl(u) {
+  yahooProxyUrl = (u || '').trim().replace(/\/+$/, ''); // strip trailing slash
+  try { localStorage.setItem('yahoo_proxy_url', yahooProxyUrl); } catch(e) {}
 }
 function loadAiWorkerUrl() {
   try { const u = localStorage.getItem('ai_worker_url'); if (u) aiWorkerUrl = u; } catch(e) {}
@@ -32945,6 +32966,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09cz</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09da</div>
 </body>
 </html>
