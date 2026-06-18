@@ -5221,6 +5221,11 @@ function computeNothingBurgers() {
 function renderNbCard() {
   const el = document.getElementById('nb-card-wrap');
   if (!el) return;
+  // Decision surface: always value PE at its real mark, ignoring the global "Mute PE gains" toggle —
+  // these gains (e.g. the SpaceX play) are real capital you're solving around. Restore the mode after.
+  const __peMuteSaved = peValueAtCostMode;
+  peValueAtCostMode = false;
+  try {
   const nb = computeNothingBurgers();
   nb.rows = nbSortRows(nb.rows);
   const totalPortfolioValue = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
@@ -5298,6 +5303,7 @@ function renderNbCard() {
     + '</tr></thead><tbody>' + tableRows + '</tbody></table></div>';
   html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic;line-height:1.5">\u201cFlat\u201d = within \u00b1' + nb.threshold + '% gross gain/loss over the hold. Trim-to-redeploy candidates, not sell signals \u2014 a flat lot may still be early. \u03b1 columns are the lot\u2019s return vs its theme benchmark and vs the S&amp;P over the hold (percentage points); a lot flat <em>and</em> negative on both is the purest dead money. Lots under ' + fmtDollarWhole(NB_MIN_VALUE) + ' and PE-locked lots are excluded.</div>';
   el.innerHTML = html;
+  } finally { peValueAtCostMode = __peMuteSaved; }
 }
 
 function renderTrimWatch() {
@@ -5595,6 +5601,10 @@ function renderAddCandidatesTable() {
   const tier1Wrap = document.getElementById('add-candidates-tier1-wrap');
   const tier2Wrap = document.getElementById('add-candidates-tier2-wrap');
   if (!tier1Wrap || !tier2Wrap) return;
+  // Decision surface: always value PE at real marks, ignoring the global "Mute PE gains" toggle.
+  const __peMuteSaved = peValueAtCostMode;
+  peValueAtCostMode = false;
+  try {
 
   const { tier1, tier2 } = computeAddCandidates();
   const totalPortfolioValue = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
@@ -5684,6 +5694,7 @@ function renderAddCandidatesTable() {
 
   tier1Wrap.innerHTML = `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-success);margin-bottom:4px">Tier 1 — Action-Eligible (${tier1.length})</div>` + buildTable(tier1, false);
   tier2Wrap.innerHTML = `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-text-tertiary);margin-bottom:4px">Tier 2 — Early Strength, Tracking Only (${tier2.length})</div>` + buildTable(tier2, true);
+  } finally { peValueAtCostMode = __peMuteSaved; }
 }
 
 function toggleThemeDrill(themeKey) {
@@ -33210,6 +33221,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dm</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09do</div>
 </body>
 </html>
