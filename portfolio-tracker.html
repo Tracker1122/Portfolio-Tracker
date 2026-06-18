@@ -21854,6 +21854,7 @@ function computeThemeClusters(hypo) {
 
   const clusters = {};
   const byTheme = {}; // per-INDIVIDUAL-theme look-through $; via-fund names under a shared benchmark split equally across the merged themes (direct-tagged names go wholly to their one theme)
+  const themeNames = {}; // theme -> contributing names, split the SAME way as byTheme, so a drill-down reconciles to byTheme exactly
   let base = { total: 0, names: [] };
   rows.forEach(r => {
     const a = assign(r);
@@ -21861,7 +21862,13 @@ function computeThemeClusters(hypo) {
     if (!clusters[a.label]) clusters[a.label] = { label: a.label, total: 0, names: [] };
     clusters[a.label].total += r.total;
     clusters[a.label].names.push({ display: r.display, total: r.total, why: a.why, key: a.key, direct: r.direct, viaFunds: r.viaFunds, aiGuess: a.aiGuess });
-    if (a.themes && a.themes.length) { const share = r.total / a.themes.length; a.themes.forEach(thm => { byTheme[thm] = (byTheme[thm] || 0) + share; }); }
+    if (a.themes && a.themes.length) {
+      const _n = a.themes.length, share = r.total / _n, dShare = (r.direct || 0) / _n, vShare = (r.viaFunds || 0) / _n;
+      a.themes.forEach(thm => {
+        byTheme[thm] = (byTheme[thm] || 0) + share;
+        (themeNames[thm] = themeNames[thm] || []).push({ display: r.display, key: a.key, value: share, direct: dShare, viaFunds: vShare });
+      });
+    }
   });
 
   const ranked = Object.values(clusters).map(c => ({
@@ -21911,6 +21918,7 @@ function computeThemeClusters(hypo) {
     biggest: ranked[0] || null,
     effectiveBets,
     byTheme,                   // per-individual-theme look-through $, reconciled to fullBook (the same denom that yields the diversified-base %)
+    themeNames,                // theme -> [{display,key,value,direct,viaFunds}] contributing names (split to match byTheme); for drill-downs
     allThemes: Object.keys(themeBench).sort() // for the override UI in stage 2
   };
 }
@@ -22475,6 +22483,31 @@ function clusterConfidenceFlag(nameRow, ctx) {
 // same cluster of names can drive several factors at once. This regroups the SAME assigned theme→factor
 // map (inverted from the live profile) by signature, so themes that load identical factors collapse into
 // one "behavioral bet". Reuses the risk engine's numbers exactly — no new factor data, no ES5 edits.
+var factorUnityOpenSig = null; // which signature row's ticker drill-down is expanded (null = none)
+function toggleFactorUnitySig(sig) {
+  factorUnityOpenSig = (factorUnityOpenSig === sig) ? null : sig;
+  if (typeof renderFactorUnity === 'function') renderFactorUnity();
+}
+function factorUnityDetailHtml(g) {
+  if (!g.tickers || !g.tickers.length) return '<div style="font-size:10px;color:var(--color-text-tertiary)">No decomposed names for this signature (it\u2019s sitting in the broad-index tail until look-through tables are refreshed).</div>';
+  const f$ = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : (function (v) { return '$' + Math.round(v).toLocaleString(); });
+  let h = '<div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:5px">Tickers behind ' + esc(g.factors.join(' + ')) + ' \u2014 ' + f$(g.weight) + ' (' + g.pct.toFixed(1) + '% of book)</div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="color:var(--color-text-tertiary)">'
+    + '<th style="text-align:left;padding:2px 6px">Ticker</th>'
+    + '<th style="text-align:right;padding:2px 6px">Direct</th>'
+    + '<th style="text-align:right;padding:2px 6px">Look-through</th>'
+    + '<th style="text-align:right;padding:2px 6px">In this bet</th></tr></thead><tbody>';
+  g.tickers.forEach(function (t) {
+    h += '<tr style="border-top:1px solid var(--color-border)">'
+      + '<td style="text-align:left;padding:2px 6px;color:var(--color-text-primary)">' + esc(t.display) + '</td>'
+      + '<td style="text-align:right;padding:2px 6px;color:var(--color-text-secondary)">' + (t.direct > 0.5 ? f$(t.direct) : '\u2014') + '</td>'
+      + '<td style="text-align:right;padding:2px 6px;color:var(--color-text-secondary)">' + (t.viaFunds > 0.5 ? f$(t.viaFunds) : '\u2014') + '</td>'
+      + '<td style="text-align:right;padding:2px 6px;color:var(--color-text-primary);font-weight:600">' + f$(t.value) + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  h += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px;line-height:1.5">Direct = you hold the ticker outright. Look-through = held inside your index funds. A name spanning two themes of this signature is listed once, summed. The &ldquo;in this bet&rdquo; column totals to the % above.</div>';
+  return h;
+}
 function computeFactorUnity() {
   const rr = (typeof window !== 'undefined' && window._riskReplay) ? window._riskReplay : null;
   const prof = (rr && typeof rr.riskFactorProfileStanding === 'function') ? rr.riskFactorProfileStanding() : null;
@@ -22499,7 +22532,22 @@ function computeFactorUnity() {
     groups[sig].weight += w;
   });
   const arr = Object.keys(groups).map(k => groups[k]);
-  arr.forEach(g => { g.pct = fullBook > 0 ? (g.weight / fullBook) * 100 : 0; g.factorCount = g.factors.length; g.themes.sort((a, b) => b.weight - a.weight); });
+  const themeNames = cl.themeNames || {};
+  arr.forEach(g => {
+    g.pct = fullBook > 0 ? (g.weight / fullBook) * 100 : 0;
+    g.factorCount = g.factors.length;
+    g.sig = g.factors.join(' + ');
+    g.themes.sort((a, b) => b.weight - a.weight);
+    // Drill-down: every ticker behind this signature, summed across its themes, direct vs look-through.
+    const byTk = {};
+    g.themes.forEach(t => {
+      (themeNames[t.theme] || []).forEach(nm => {
+        const e = byTk[nm.key] || (byTk[nm.key] = { display: nm.display, key: nm.key, value: 0, direct: 0, viaFunds: 0 });
+        e.value += (nm.value || 0); e.direct += (nm.direct || 0); e.viaFunds += (nm.viaFunds || 0);
+      });
+    });
+    g.tickers = Object.keys(byTk).map(k => byTk[k]).filter(t => t.value > 0.5).sort((a, b) => b.value - a.value);
+  });
   arr.sort((a, b) => b.weight - a.weight);
   // Headline the clearest hidden unity: prefer a group spanning multiple THEMES and multiple FACTORS
   // (different-looking themes that move as one), then fall back gracefully. arr is weight-sorted.
@@ -22541,10 +22589,15 @@ function renderFactorUnity() {
 
   html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Factor signature</th><th>Themes that move together</th><th class="r"># factors</th><th class="r">% of book</th></tr></thead><tbody>';
   u.groups.forEach(g => {
+    const sev = sevColor(g.pct);
+    const open = (factorUnityOpenSig === g.sig);
     html += '<tr><td><strong>' + esc(g.factors.join(' + ')) + '</strong></td>'
       + '<td><span style="font-size:10px;color:var(--color-text-secondary)">' + esc(g.themes.map(t => t.theme).join(', ')) + '</span></td>'
       + '<td class="r">' + g.factorCount + '</td>'
-      + '<td class="r"><span style="color:' + sevColor(g.pct) + ';font-weight:600">' + g.pct.toFixed(1) + '%</span></td></tr>';
+      + '<td class="r"><span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" title="See the tickers (direct + look-through) behind this exposure" style="cursor:pointer;color:' + sev + ';font-weight:600;border-bottom:1px dotted ' + sev + '">' + g.pct.toFixed(1) + '%' + (open ? ' \u25be' : ' \u203a') + '</span></td></tr>';
+    if (open) {
+      html += '<tr><td colspan="4" style="padding:4px 0 12px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px">' + factorUnityDetailHtml(g) + '</div></td></tr>';
+    }
   });
   html += '</tbody></table></div>';
   html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Signatures use the same assigned theme\u2192factor map the Risk Review grid uses (structural classification, not measured correlation \u2014 a name can buck its signature). Percentages are share of the full book; the undecomposed index/cash tail carries no signature and isn\u2019t shown.</div>';
@@ -33468,6 +33521,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dx</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dy</div>
 </body>
 </html>
