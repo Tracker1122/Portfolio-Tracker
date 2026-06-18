@@ -22494,12 +22494,11 @@ function toggleFactorUnityExpl(sig) {
   if (typeof renderFactorUnity === 'function') renderFactorUnity();
 }
 function factorUnityCalloutHtml(g, u) {
-  var label = '';
-  if (g.overlapTopPct != null) label = g.overlapTopPct.toFixed(0) + '% \u00b7 ' + esc((g.overlapTopFactors || []).join(', '));
-  else if (g === u.dominant) label = 'anchor';
-  if (!label) return '';
-  var mark = (factorUnityOpenExpl === g.sig) ? ' \u25be' : ' \u24d8';
-  return '<div onclick="toggleFactorUnityExpl(\'' + g.sig.replace(/'/g, "\\'") + '\')" style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:2px;white-space:nowrap;cursor:pointer;border-bottom:1px dotted var(--color-text-tertiary);display:inline-block">' + label + mark + '</div>';
+  var hasOv = (g.overlapTopPct != null);
+  if (!hasOv && g !== u.dominant) return '';
+  var num = hasOv ? (g.overlapTopPct.toFixed(0) + '% ') : '';
+  var star = (factorUnityOpenExpl === g.sig) ? '\u2715' : '*';
+  return '<div onclick="toggleFactorUnityExpl(\'' + g.sig.replace(/'/g, "\\'") + '\')" style="font-size:9px;color:var(--color-text-tertiary);margin-top:2px;white-space:nowrap;cursor:pointer">' + num + '<span style="color:var(--color-text-info,#60a5fa);font-weight:700;font-size:11px">' + star + '</span></div>';
 }
 function factorUnityExplHtml(g, u) {
   var anchor = u.dominant;
@@ -22638,24 +22637,32 @@ function renderFactorUnity() {
     html += '<div style="font-size:11px;color:var(--color-text-secondary);line-height:1.5;margin-bottom:10px">Your ' + u.themeCount + ' themes form ' + u.signatureCount + ' exact signatures \u2014 but they are not ' + u.signatureCount + ' independent bets. Your most factor-stacked bet (the <em>anchor</em> below), <strong>' + d.pct.toFixed(0) + '%</strong>, loads <strong>' + esc(d.factors.join(' + ')) + '</strong> at once (' + esc(d.themes.map(t => t.theme).join(', ')) + '); the <strong>overlap w/ anchor</strong> figure on each row below is how much of that bet\u2019s risk is the <em>same</em> risk as this one \u2014 shared factors, weighted by size. The anchor is the most factor-stacked bet, not necessarily your largest single slice \u2014 Space &amp; Defense is bigger by book %, but it is one theme, so it is a concentration rather than a hidden multi-theme bet.</div>';
   }
 
-  html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Factor signature</th><th>Themes that move together</th><th class="r"># factors</th><th class="r">% of book<br><span style="font-weight:400;font-size:8px;color:var(--color-text-tertiary)">overlap w/ anchor</span></th></tr></thead><tbody>';
+  html += '<div style="display:flex;justify-content:space-between;font-size:8.5px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em;padding:0 2px 6px;border-bottom:1px solid var(--color-border)"><span>Signature &amp; themes</span><span>% of book \u00b7 overlap</span></div>';
   u.groups.forEach(g => {
     const sev = sevColor(g.pct);
     const open = (factorUnityOpenSig === g.sig);
     const explOpen = (factorUnityOpenExpl === g.sig);
-    html += '<tr><td><strong>' + esc(g.factors.join(' + ')) + '</strong></td>'
-      + '<td><span style="font-size:10px;color:var(--color-text-secondary)">' + esc(g.themes.map(t => t.theme).join(', ')) + '</span></td>'
-      + '<td class="r">' + g.factorCount + '</td>'
-      + '<td class="r" style="vertical-align:top"><span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" style="cursor:pointer;color:' + sev + ';font-weight:600;border-bottom:1px dotted ' + sev + '">' + g.pct.toFixed(1) + '%' + (open ? ' \u25be' : ' \u203a') + '</span>' + factorUnityCalloutHtml(g, u) + '</td></tr>';
-    if (explOpen) {
-      html += '<tr><td colspan="4" style="padding:2px 0 10px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary);line-height:1.55">' + factorUnityExplHtml(g, u) + '</div></td></tr>';
-    }
-    if (open) {
-      html += '<tr><td colspan="4" style="padding:4px 0 12px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px">' + factorUnityDetailHtml(g) + '</div></td></tr>';
-    }
+    const isAnchor = (g === u.dominant);
+    let pill = '';
+    if (g.overlapTopPct != null) pill = g.overlapTopPct.toFixed(0) + '% w/ anchor';
+    else if (isAnchor) pill = 'anchor';
+    const pillHtml = pill
+      ? '<span onclick="toggleFactorUnityExpl(\'' + g.sig.replace(/'/g, "\\'") + '\')" style="display:inline-block;font-size:9px;' + (isAnchor ? 'color:var(--color-text-info,#60a5fa);' : 'color:var(--color-text-tertiary);') + 'background:var(--color-background-tertiary,rgba(255,255,255,0.05));border:1px solid var(--color-border);border-radius:10px;padding:1px 8px;cursor:pointer;white-space:nowrap;margin-top:4px">' + (explOpen ? '\u2715 ' : '') + esc(pill) + '</span>'
+      : '';
+    html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:9px 2px;border-bottom:1px solid var(--color-border)' + (isAnchor ? ';background:rgba(96,165,250,0.05)' : '') + '">'
+      + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:12px;font-weight:700;color:var(--color-text-primary)">' + esc(g.factors.join(' + ')) + (isAnchor ? ' <span style="font-size:8.5px;font-weight:600;color:var(--color-text-info,#60a5fa);letter-spacing:0.04em">ANCHOR</span>' : '') + '</div>'
+        + '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:2px;line-height:1.4">' + esc(g.themes.map(t => t.theme).join(', ')) + ' <span style="color:var(--color-text-tertiary)">\u00b7 ' + g.factorCount + ' factor' + (g.factorCount === 1 ? '' : 's') + '</span></div>'
+      + '</div>'
+      + '<div style="flex:none;text-align:right;white-space:nowrap">'
+        + '<div onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" style="font-size:14px;font-weight:700;color:' + sev + ';cursor:pointer">' + g.pct.toFixed(1) + '%<span style="font-size:10px;color:var(--color-text-tertiary);font-weight:400"> ' + (open ? '\u25be' : '\u203a') + '</span></div>'
+        + pillHtml
+      + '</div>'
+    + '</div>';
+    if (explOpen) html += '<div style="padding:3px 2px 12px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary);line-height:1.55">' + factorUnityExplHtml(g, u) + '</div></div>';
+    if (open) html += '<div style="padding:3px 2px 12px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px">' + factorUnityDetailHtml(g) + '</div></div>';
   });
-  html += '</tbody></table></div>';
-  html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Signatures use the same assigned theme\u2192factor map the Risk Review grid uses (structural classification, not measured correlation). \u201cOverlap w/ anchor\u201d weights each shared factor by its book-level loading, so a shared Rate counts more than a shared niche factor \u2014 it is the fraction of a bet\u2019s factor risk that overlaps the anchor. Percentages are share of the full book; the undecomposed index/cash tail carries no signature.</div>';
+  html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Tap a row\u2019s % for its tickers; tap the overlap pill for how that bet overlaps the anchor. Signatures use the same assigned theme\u2192factor map the Risk Review grid uses (structural classification, not measured correlation). \u201cOverlap w/ anchor\u201d weights each shared factor by its book-level loading, so a shared Rate counts more than a shared niche factor \u2014 it is the fraction of a bet\u2019s factor risk that overlaps the anchor. Percentages are share of the full book; the undecomposed index/cash tail carries no signature.</div>';
   el.innerHTML = html;
 }
 
@@ -33576,6 +33583,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ec</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ee</div>
 </body>
 </html>
