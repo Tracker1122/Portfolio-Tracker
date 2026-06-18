@@ -5227,6 +5227,26 @@ function computeNothingBurgers() {
   const totalDead = rows.reduce((s, r) => s + r.value, 0);
   return { rows: rows, totalDead: totalDead, lockedExcluded: lockedExcluded, smallExcluded: smallExcluded, threshold: thr };
 }
+function soakCellInfo(sleeve, daysHeld) {
+  var thr = (typeof SLEEVE_SOAK !== 'undefined') ? SLEEVE_SOAK[sleeve] : undefined;
+  if (thr === undefined || daysHeld == null) return { text: '\u2014', color: 'var(--color-text-tertiary)', title: 'No soak threshold for this sleeve.' };
+  if (daysHeld < thr) {
+    var left = thr - daysHeld;
+    return { text: left + 'd left', color: '#fbbf24', title: 'In soak: ' + left + ' of ' + thr + 'd ' + sleeve + ' threshold remaining; the alpha signal is not yet reliable.' };
+  }
+  return { text: 'soaked', color: 'var(--color-text-success)', title: 'Held ' + (daysHeld - thr) + 'd past the ' + thr + 'd ' + sleeve + ' soak threshold; the alpha signal is meaningful.' };
+}
+function taxToSellInfo(gainLoss, daysHeld, account) {
+  var isIRA = (account || '').toUpperCase().indexOf('IRA') >= 0;
+  if (isIRA) return { amount: 0, text: 'tax-free', color: 'var(--color-text-tertiary)', title: 'IRA account: selling triggers no tax.' };
+  var isLT = daysHeld != null && daysHeld > 365;
+  var rate = isLT ? TAX_RATE_LT : TAX_RATE_ST;
+  var tax = (gainLoss || 0) * rate;
+  var rl = (isLT ? 'long' : 'short') + '-term';
+  if (Math.abs(tax) < 1) return { amount: 0, text: '~$0', color: 'var(--color-text-tertiary)', title: 'Negligible tax to sell now (' + rl + ').' };
+  if (tax > 0) return { amount: tax, text: '\u2212' + fmtDollarWhole(tax), color: 'var(--color-text-danger)', title: 'Selling realizes a ' + rl + ' gain \u2014 est. tax cost ' + fmtDollarWhole(tax) + ' at ' + (rate * 100).toFixed(0) + '%.' };
+  return { amount: tax, text: '+' + fmtDollarWhole(Math.abs(tax)), color: 'var(--color-text-success)', title: 'Selling harvests a ' + rl + ' loss \u2014 est. tax benefit ' + fmtDollarWhole(Math.abs(tax)) + ' at ' + (rate * 100).toFixed(0) + '%.' };
+}
 function renderNbCard() {
   const el = document.getElementById('nb-card-wrap');
   if (!el) return;
@@ -5260,6 +5280,8 @@ function renderNbCard() {
   const tableRows = nb.rows.map(r => {
     const glColor = Math.abs(r.glPct) < 0.0001 ? 'var(--color-text-tertiary)' : (r.glPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
     const hb = heldBucketDisplay(r.days);
+    const sk = soakCellInfo(r.sleeve, r.days);
+    const tx = taxToSellInfo(r.glDollar, r.days, r.account);
     const sleeveColor = SLEEVE_COLORS[r.sleeve] || 'var(--color-text-tertiary)';
     // Pass-through exposure callout (mirrors Add Candidates): what you ALSO hold of this name embedded
     // in funds you own (VOO/ETFs). True exposure is a per-TICKER fact — ALL your direct lots of the name
@@ -5280,7 +5302,7 @@ function renderNbCard() {
       })();
       const truePct = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
       const via = lts.map(l => esc(l.fund) + ' ' + fmtDollarWhole(l.indirectValue)).join(' + ');
-      passRow = '<tr><td colspan="10" style="padding:2px 10px 8px;border-top:none">'
+      passRow = '<tr><td colspan="12" style="padding:2px 10px 8px;border-top:none">'
         + '<div style="font-size:9px;color:#fbbf24;line-height:1.5;padding-left:4px;border-left:2px solid rgba(251,191,36,0.4)">'
         + '<strong>True ' + esc(r.ticker) + ' exposure: ~' + fmtDollarWhole(trueTotal) + '</strong> \u2014 all direct lots ' + fmtDollarWhole(direct) + ' + ' + fmtDollarWhole(embedded) + ' via funds (' + via + ') = <strong>' + truePct.toFixed(1) + '% of your portfolio</strong>. Trimming this lot only reduces part of it \u2014 you keep the embedded slice (and any other direct lots). <span style="color:var(--color-text-tertiary)">(Embedded approximate \u2014 fund weights drift.)</span>'
         + '</div></td></tr>';
@@ -5296,6 +5318,8 @@ function renderNbCard() {
       + ppCell(r.vsSpx, 'Return vs the S&P 500 over the hold')
       + '<td class="r">' + fmtDollarWhole(r.value) + '</td>'
       + '<td class="r"><span style="color:' + hb.color + ';font-weight:600">' + hb.label + '</span></td>'
+      + '<td class="r"><span style="color:' + sk.color + '" title="' + sk.title + '">' + sk.text + '</span></td>'
+      + '<td class="r"><span style="color:' + tx.color + '" title="' + tx.title + '">' + tx.text + '</span></td>'
       + '</tr>' + passRow;
   }).join('');
   let html = control;
@@ -5309,6 +5333,7 @@ function renderNbCard() {
     + nbHdr('ticker', 'Position', false) + nbHdr('sleeve', 'Strategy', false) + nbHdr('theme', 'Industry', false) + nbHdr('account', 'Account', false)
     + nbHdr('glPct', 'G/L%', true) + nbHdr('glDollar', 'G/L $', true) + nbHdr('themeAlphaPct', 'Theme \u03b1', true) + nbHdr('vsSpx', 'SPX \u03b1', true)
     + nbHdr('value', 'Value', true) + nbHdr('days', 'Held', true)
+    + '<th class="r" title="Held long enough that its alpha is signal not noise? Per-sleeve soak threshold.">Soak</th><th class="r" title="Est. tax to sell this lot now: a cost on a gain, a harvest benefit on a loss; IRA = none.">Tax</th>'
     + '</tr></thead><tbody>' + tableRows + '</tbody></table></div>';
   html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic;line-height:1.5">\u201cFlat\u201d = within \u00b1' + nb.threshold + '% gross gain/loss over the hold. Trim-to-redeploy candidates, not sell signals \u2014 a flat lot may still be early. \u03b1 columns are the lot\u2019s return vs its theme benchmark and vs the S&amp;P over the hold (percentage points); a lot flat <em>and</em> negative on both is the purest dead money. Lots under ' + fmtDollarWhole(NB_MIN_VALUE) + ' and PE-locked lots are excluded.</div>';
   el.innerHTML = html;
@@ -5397,6 +5422,8 @@ function renderTrimWatch() {
       <span style="font-size:9px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">Held</span>
       <span style="font-size:9px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">Mgd%</span>
       <span style="font-size:9px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">Ind%</span>
+      <span style="font-size:9px;color:var(--color-text-tertiary);width:58px;text-align:right;flex-shrink:0">Soak</span>
+      <span style="font-size:9px;color:var(--color-text-tertiary);width:64px;text-align:right;flex-shrink:0">Tax</span>
     </div>`;
 
   const totalPortfolioValue = positions
@@ -5420,6 +5447,8 @@ function renderTrimWatch() {
     const industryPct = industryTotal > 0 ? ((r.totalExit / industryTotal) * 100).toFixed(1) + '%' : '—';
     const strategyPct = strategyTotal > 0 ? ((r.totalExit / strategyTotal) * 100).toFixed(1) + '%' : '—';
     const strategyColor = SLEEVE_COLORS[strategyName] || 'var(--color-text-tertiary)';
+    const sk = soakCellInfo(strategyName, r.daysHeldMax);
+    const tx = taxToSellInfo(r.totalGl, r.daysHeldMax, r.account);
 
     return `<div class="bw-row" style="justify-content:space-between;align-items:center">
       <span class="bw-ticker" style="color:var(--color-text-primary);width:52px;flex-shrink:0">${esc(r.ticker)}</span>
@@ -5430,6 +5459,8 @@ function renderTrimWatch() {
       <span style="font-size:11px;color:${heldColor};width:44px;text-align:right;font-weight:600;flex-shrink:0">${heldLabel}</span>
       <span style="font-size:10px;color:var(--color-text-secondary);width:44px;text-align:right;flex-shrink:0">${portPct}</span>
       <span style="font-size:10px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">${industryPct}</span>
+      <span title="${sk.title}" style="font-size:10px;color:${sk.color};width:58px;text-align:right;flex-shrink:0">${sk.text}</span>
+      <span title="${tx.title}" style="font-size:11px;color:${tx.color};width:64px;text-align:right;flex-shrink:0">${tx.text}</span>
     </div>`;
   }).join('');
 
@@ -5656,13 +5687,15 @@ function renderAddCandidatesTable() {
         const truePct = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
         const via = lts.map(l => `${esc(l.fund)} ${fmtDollarWhole(l.indirectValue)}`).join(' + ');
         passRow = `<tr style="${opacityWrap}">
-          <td colspan="9" style="padding:2px 8px 8px;border-top:none">
+          <td colspan="11" style="padding:2px 8px 8px;border-top:none">
             <div style="font-size:9px;color:#fbbf24;line-height:1.5;padding-left:4px;border-left:2px solid rgba(251,191,36,0.4)">
               <strong>Total ${esc(r.ticker)} you already hold: ~${fmtDollarWhole(trueTotal)}</strong> — all direct lots ${fmtDollarWhole(direct)} + ${fmtDollarWhole(embedded)} via funds (${via}) = <strong>${truePct.toFixed(1)}% of your portfolio</strong>. Adding direct deepens a position that's already this large on a true-exposure basis. <span style="color:var(--color-text-tertiary)">(Embedded approximate — fund weights drift.)</span>
             </div>
           </td>
         </tr>`;
       }
+      const sk = soakCellInfo(r.sleeve, r.oldestDays);
+      const tx = taxToSellInfo((r.totalExit || 0) - (r.totalInvested || 0), r.oldestDays, r.account);
       return `<tr style="${opacityWrap}">
         <td><strong>${esc(r.ticker)}</strong>${r.isETF ? ' <span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px;font-weight:700">ETF</span>' : ''}</td>
         <td><span style="font-size:9px;color:${sleeveColor};background:${sleeveColor}22;padding:1px 5px;border-radius:3px;font-weight:700">${esc(r.sleeve || '—')}</span></td>
@@ -5672,6 +5705,8 @@ function renderAddCandidatesTable() {
         <td class="r">${portPct}</td>
         <td class="r"><span style="color:var(--color-text-success)">+${fmtDollarWhole(r.totalSpxAlpha)}</span></td>
         <td class="r"><span style="color:var(--color-text-success)">+${fmtDollarWhole(r.totalThemeDollar)}</span> <span style="font-size:9px;color:var(--color-text-success);opacity:0.7">(${ppStr})</span></td>
+        <td class="r"><span style="color:${sk.color}" title="${sk.title}">${sk.text}</span></td>
+        <td class="r"><span style="color:${tx.color}" title="${tx.title}">${tx.text}</span></td>
         <td>${reason}</td>
       </tr>${passRow}`;
     }).join('');
@@ -5693,6 +5728,8 @@ function renderAddCandidatesTable() {
             ${acHdr('managed', 'Managed %', true)}
             ${acHdr('spxAlpha', 'SPX α', true)}
             ${acHdr('themeAlpha', 'Theme α', true)}
+            <th class="r">Soak</th>
+            <th class="r">Tax</th>
             <th>Notes</th>
           </tr>
         </thead>
@@ -33656,6 +33693,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09eh</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ei</div>
 </body>
 </html>
