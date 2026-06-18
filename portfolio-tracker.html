@@ -5147,6 +5147,7 @@ function handleDateBlur(id, field, el) {
 // you can trim dead money with minimal tax drag to fund higher-conviction moves. Excludes fully
 // PE-locked lots (can't trim what's locked). Threshold is adjustable + persisted. Per-lot (not
 // ticker-aggregated) because trimming happens at the tax-lot level. Modeled on the Trim/Add watch cards.
+const NB_MIN_VALUE = 1500; // a flat lot worth less than this frees too little capital to bother trimming
 let nbThreshold = (function () { try { var v = parseFloat(localStorage.getItem('portfolio-nb-threshold-v1')); return (isFinite(v) && v > 0) ? v : 5; } catch (e) { return 5; } })();
 function setNbThreshold(v) {
   var n = parseFloat(v);
@@ -5159,6 +5160,7 @@ function computeNothingBurgers() {
   const today = new Date();
   const thr = nbThreshold;
   let lockedExcluded = 0;
+  let smallExcluded = 0;
   const rows = [];
   positions.filter(p => !p.closed && p.ticker).forEach(p => {
     const c = calcPos(p);
@@ -5169,6 +5171,8 @@ function computeNothingBurgers() {
       const s = peLockupStatus(p);
       if (s && s.state === 'locked') { lockedExcluded++; return; } // can't trim a fully-locked lot
     }
+    // Floor: a flat lot worth less than this frees too little capital to be a useful trim source.
+    if ((c.exitValue || 0) < NB_MIN_VALUE) { smallExcluded++; return; }
     const buyDate = p.dateBought ? new Date(p.dateBought) : null;
     const days = (buyDate && !isNaN(buyDate)) ? Math.floor((today - buyDate) / 86400000) : null;
     rows.push({
@@ -5180,7 +5184,7 @@ function computeNothingBurgers() {
   });
   rows.sort((a, b) => b.value - a.value); // most idle capital first
   const totalDead = rows.reduce((s, r) => s + r.value, 0);
-  return { rows: rows, totalDead: totalDead, lockedExcluded: lockedExcluded, threshold: thr };
+  return { rows: rows, totalDead: totalDead, lockedExcluded: lockedExcluded, smallExcluded: smallExcluded, threshold: thr };
 }
 function renderNbCard() {
   const el = document.getElementById('nb-card-wrap');
@@ -5191,7 +5195,8 @@ function renderNbCard() {
   const control = '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'
     + '<div style="font-size:12px;color:var(--color-text-secondary)">'
     + (nb.rows.length === 0 ? 'No flat lots in this band.' : '\u2248<strong style="color:var(--color-text-primary)">' + fmtDollarWhole(nb.totalDead) + '</strong> idle in ' + nb.rows.length + ' flat lot' + (nb.rows.length > 1 ? 's' : '') + (totalPortfolioValue > 0 ? ' \u00b7 ' + ((nb.totalDead / totalPortfolioValue) * 100).toFixed(1) + '% of the book' : ''))
-    + (nb.lockedExcluded ? ' <span style="color:var(--color-text-tertiary)">\u00b7 ' + nb.lockedExcluded + ' PE-locked lot' + (nb.lockedExcluded > 1 ? 's' : '') + ' excluded</span>' : '') + '</div>'
+    + (nb.lockedExcluded ? ' <span style="color:var(--color-text-tertiary)">\u00b7 ' + nb.lockedExcluded + ' PE-locked lot' + (nb.lockedExcluded > 1 ? 's' : '') + ' excluded</span>' : '')
+    + (nb.smallExcluded ? ' <span style="color:var(--color-text-tertiary)">\u00b7 ' + nb.smallExcluded + ' lot' + (nb.smallExcluded > 1 ? 's' : '') + ' under ' + fmtDollarWhole(NB_MIN_VALUE) + ' excluded</span>' : '') + '</div>'
     + '<label style="font-size:11px;color:var(--color-text-secondary);display:flex;align-items:center;gap:6px">\u00b1 <input type="number" min="0.5" max="50" step="0.5" value="' + nb.threshold + '" onchange="setNbThreshold(this.value)" style="width:62px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:4px;color:var(--color-text-primary);font-size:11px;padding:3px 6px"> % G/L band</label></div>';
 
   if (nb.rows.length === 0) {
@@ -33096,6 +33101,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09de</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09df</div>
 </body>
 </html>
