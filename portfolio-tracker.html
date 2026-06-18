@@ -6467,6 +6467,10 @@ function buildAskSnapshot() {
     }
   } catch (e) {}
   try {
+    var fu = (typeof factorUnityForPrompt === 'function') ? factorUnityForPrompt() : '';
+    if (fu) { lines.push(''); lines.push(fu); }
+  } catch (e) {}
+  try {
     var rfacts = (typeof riskReviewAiFacts === 'function') ? riskReviewAiFacts() : '';
     if (rfacts) { lines.push(''); lines.push(rfacts); }
   } catch (e) {}
@@ -6527,6 +6531,7 @@ function buildAskSystem() {
   p.push('- FUND LOOK-THROUGH (if present) shows the top holdings INSIDE funds you own, from saved tables \u2014 answer "what is inside my <fund>" and fund-overlap questions from it. It lists only funds you actually hold and only their top names (not exhaustive). The clusters above already fold these into your named exposure.');
   p.push('- CANDIDATE PIPELINE lists ideas you are EVALUATING (saved quality reviews), not holdings. SLEEVE OBJECTIVES define what each strategy bucket is for; judge a position or candidate against its own sleeve\'s purpose.');
   p.push('- RISK FACTOR PROFILE percentages are two-sided sensitivities (share of book materially exposed to a factor), NOT directional forecasts. Any RISK REVIEW block is a replay of a PAST stress window, never a prediction or a buy/sell signal.');
+  p.push('- FACTOR UNITY groups themes by shared factor signature to expose hidden co-movement the per-factor profile hides. \u201cOverlap with anchor\u201d is the share of a bet\u2019s factor risk that coincides with the most factor-stacked bet, weighting each factor by its book-level loading \u2014 it is STRUCTURAL (assigned theme\u2192factor map), not measured correlation, so read it as \u201cthese move on the same triggers\u201d, not a covariance number. Use it to flag when nominally separate themes are really one bet; never present it as measured.');
   p.push('- For any "top holdings" or ranking question, use the PRE-SORTED order in TOP NAMES BY EFFECTIVE EXPOSURE exactly as given; do not re-sort, reorder, or recompute the ranking yourself.');
   p.push('- VOO is the PASSIVE INDEX CORE, not a position: never list, rank, or compare it as a holding, and do not volunteer VOO commentary on sizing/positions/concentration questions. Its constituents are already folded into your named exposures via look-through, and it stays in the book denominator. You may mention the passive core exists as brief context only when directly relevant.');
   p.push('- You cannot place trades or change anything in the tracker; you only read and reason.');
@@ -22538,6 +22543,32 @@ function factorUnityDetailHtml(g) {
   h += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px;line-height:1.5">Direct = you hold the ticker outright. Look-through = held inside your index funds. A name spanning two themes of this signature is listed once, summed. The &ldquo;in this bet&rdquo; column totals to the % above.</div>';
   return h;
 }
+function factorUnityForPrompt() {
+  try {
+    if (typeof computeFactorUnity !== 'function') return '';
+    var u = computeFactorUnity();
+    if (!u || !u.groups || !u.groups.length) return '';
+    var themeOf = function (t) { return t.theme; };
+    var L = [];
+    L.push('FACTOR UNITY (your themes regrouped by shared FACTOR SIGNATURE \u2014 exposes hidden co-movement the per-factor profile above hides; STRUCTURAL, from the assigned theme\u2192factor map, NOT measured correlation):');
+    if (u.domFactor && u.domFactor.pct > 0) {
+      L.push('- Dominant shared factor: ' + u.domFactor.col + ' drives ~' + u.domFactor.pct.toFixed(0) + '% of the book, spanning ' + u.betsLoadingDom + ' of ' + u.signatureCount + ' signature bets [' + (u.domFactor.themes || []).join(', ') + '].');
+    }
+    if (u.dominant) {
+      L.push('- Anchor bet (most factor-stacked \u2014 the reference every overlap is measured against; NOT necessarily the largest slice): ' + u.dominant.factors.join(' + ') + ' = ' + u.dominant.pct.toFixed(1) + '% of book [' + u.dominant.themes.map(themeOf).join(', ') + '].');
+    }
+    L.push('- ' + u.themeCount + ' themes collapse into ' + u.signatureCount + ' exact signatures; ' + u.stacked3Pct.toFixed(0) + '% of book sits in themes loading 3+ factors at once.');
+    L.push('- Signature bets [factors | themes | % of book | overlap with anchor]:');
+    u.groups.forEach(function (g) {
+      var ov = (g === u.dominant)
+        ? 'ANCHOR'
+        : (g.overlapTopPct != null ? (g.overlapTopPct.toFixed(0) + '% (shared factor(s): ' + ((g.overlapTopFactors && g.overlapTopFactors.length) ? g.overlapTopFactors.join(', ') : 'none') + ')') : 'n/a');
+      L.push('  - ' + g.factors.join(' + ') + ' | ' + g.themes.map(themeOf).join(', ') + ' | ' + g.pct.toFixed(1) + '% | ' + ov);
+    });
+    L.push('Overlap-with-anchor = fraction of a bet\u2019s factor risk that coincides with the anchor through shared factors, each factor weighted by its book-level loading (a shared Rate counts more than a shared niche factor). Read it as \u201cthese move on the same triggers\u201d, NOT as a measured covariance. A name can buck its signature.');
+    return L.join('\n');
+  } catch (e) { return ''; }
+}
 function computeFactorUnity() {
   const rr = (typeof window !== 'undefined' && window._riskReplay) ? window._riskReplay : null;
   const prof = (rr && typeof rr.riskFactorProfileStanding === 'function') ? rr.riskFactorProfileStanding() : null;
@@ -33583,6 +33614,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ee</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ef</div>
 </body>
 </html>
