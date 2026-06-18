@@ -5217,6 +5217,28 @@ function renderNbCard() {
     const glColor = Math.abs(r.glPct) < 0.0001 ? 'var(--color-text-tertiary)' : (r.glPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
     const hb = heldBucketDisplay(r.days);
     const sleeveColor = SLEEVE_COLORS[r.sleeve] || 'var(--color-text-tertiary)';
+    // Pass-through exposure callout (mirrors Add Candidates): what you ALSO hold of this name embedded
+    // in funds you own (VOO/ETFs). For a trim, this matters — trimming the direct lot doesn't touch the
+    // embedded slice, so your true exposure barely moves. Same identification logic as Add Candidates.
+    let passRow = '';
+    const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(r.ticker) : [];
+    const embedded = lts.reduce((s, l) => s + (l.indirectValue || 0), 0);
+    if (embedded > 100) {
+      const direct = r.value || 0;
+      const trueTotal = direct + embedded;
+      const grandTotal = (function () {
+        const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+        const spVal = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
+        let cash = 0; try { if (typeof cashBuckets !== 'undefined' && cashBuckets) cash = Object.values(cashBuckets).reduce((s, v) => s + (parseFloat(v) || 0), 0); } catch (e) {}
+        return totalPortfolioValue + spVal + cash;
+      })();
+      const truePct = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
+      const via = lts.map(l => esc(l.fund) + ' ' + fmtDollarWhole(l.indirectValue)).join(' + ');
+      passRow = '<tr><td colspan="10" style="padding:2px 10px 8px;border-top:none">'
+        + '<div style="font-size:9px;color:#fbbf24;line-height:1.5;padding-left:4px;border-left:2px solid rgba(251,191,36,0.4)">'
+        + '<strong>True ' + esc(r.ticker) + ' exposure: ~' + fmtDollarWhole(trueTotal) + '</strong> \u2014 direct ' + fmtDollarWhole(direct) + ' + ' + fmtDollarWhole(embedded) + ' via funds (' + via + ') = <strong>' + truePct.toFixed(1) + '% of your portfolio</strong>. Trimming the direct lot only reduces part of this \u2014 you keep the embedded slice. <span style="color:var(--color-text-tertiary)">(Embedded approximate \u2014 fund weights drift.)</span>'
+        + '</div></td></tr>';
+    }
     return '<tr>'
       + '<td><strong>' + esc(r.ticker) + '</strong>' + (r.isETF ? ' <span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px;font-weight:700">ETF</span>' : '') + '</td>'
       + '<td><span style="font-size:9px;color:' + sleeveColor + ';background:' + sleeveColor + '22;padding:1px 5px;border-radius:3px;font-weight:700">' + esc(r.sleeve || '\u2014') + '</span></td>'
@@ -5228,7 +5250,7 @@ function renderNbCard() {
       + ppCell(r.vsSpx, 'Return vs the S&P 500 over the hold')
       + '<td class="r">' + fmtDollarWhole(r.value) + '</td>'
       + '<td class="r"><span style="color:' + hb.color + ';font-weight:600">' + hb.label + '</span></td>'
-      + '</tr>';
+      + '</tr>' + passRow;
   }).join('');
   let html = control;
   html += '<div class="rebal-table-wrap">'
@@ -33116,6 +33138,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dh</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09di</div>
 </body>
 </html>
