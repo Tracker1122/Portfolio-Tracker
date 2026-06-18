@@ -32224,7 +32224,22 @@ init();
       var basis = (typeof peModeBasis === 'function') ? peModeBasis() : 'cost';
       var pe = (typeof peThemeExposure === 'function') ? peThemeExposure(basis) : null;
       var priv = pe ? (pe.total || 0) : 0, pub = _publicBookValue(), denom = pub + priv;
-      return denom > 0 ? priv / denom : 0;
+      // Also frozen: public positions still inside a share-release lockup (e.g. a converted PE name
+      // post-IPO but pre-cliff). Converted deals are spliced out of peDeals on conversion, so this can
+      // never double-count `priv`. Resolved as-of-today, so a lot auto-leaves once its cliff passes.
+      var lockedPub = 0;
+      if (typeof positions !== 'undefined' && typeof peLockupStatus === 'function' && typeof calcPos === 'function') {
+        positions.filter(function (p) { return !p.closed && p.ticker; }).forEach(function (p) {
+          var s = null; try { s = peLockupStatus(p); } catch (e2) {}
+          if (!s) return;
+          if (s.state === 'locked') {
+            lockedPub += (typeof s.lockedValue === 'number' && s.lockedValue > 0) ? s.lockedValue : (calcPos(p).exitValue || 0);
+          } else if (s.state === 'partial' && typeof s.lockedValue === 'number' && s.lockedValue > 0) {
+            lockedPub += s.lockedValue; // staggered: only the still-locked tranche is frozen
+          }
+        });
+      }
+      return denom > 0 ? (priv + lockedPub) / denom : 0;
     } catch (e) { return 0; }
   }
   function _basisLabel() {
@@ -33444,6 +33459,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09du</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dv</div>
 </body>
 </html>
