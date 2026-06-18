@@ -9998,11 +9998,22 @@ function runTickerLookup() {
   else if (directLots.length) verdict = 'You hold ' + esc(disp) + ' directly.';
   else verdict = 'You hold ' + esc(disp) + ' \u2014 only inside your funds (no direct position).';
 
+  // Theme classification — same resolver the rest of the app uses (override → direct tag → benchmark → AI)
+  let themeLine = '';
+  try {
+    const _resolve = (typeof makeThemeResolver === 'function') ? makeThemeResolver() : null;
+    const _key = (typeof qrCanonical === 'function') ? qrCanonical(disp).key : t;
+    const ti = _resolve ? _resolve(_key, disp) : null;
+    if (ti && ti.theme) themeLine = '<div style="font-size:11px;color:var(--color-text-secondary);margin-top:3px">Theme: <strong style="color:var(--color-text-primary)">' + esc(ti.theme) + '</strong>' + (ti.src ? ' <span style="color:var(--color-text-tertiary);font-size:9px">(' + esc(ti.src) + ')</span>' : '') + '</div>';
+    else themeLine = '<div style="font-size:11px;color:var(--color-text-tertiary);margin-top:3px">Theme: untagged \u2014 no theme signal for this name yet.</div>';
+  } catch (e) {}
+
   let html = '<div style="background:var(--color-background-secondary);border-left:3px solid var(--color-text-success);border-radius:var(--border-radius-md);padding:10px 12px;margin-bottom:10px">'
     + '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:2px">\u2713 ' + verdict + '</div>'
     + '<div style="font-size:12px;color:var(--color-text-secondary)">True exposure <strong style="color:var(--color-text-primary)">' + fmtDollarWhole(trueTotal) + '</strong>'
     + (grandTotal > 0 ? ' \u00b7 ' + truePct.toFixed(2) + '% of your book' : '')
-    + ' \u2014 ' + fmtDollarWhole(directTotal) + ' direct + ' + fmtDollarWhole(embTotal) + ' via funds.</div></div>';
+    + ' \u2014 ' + fmtDollarWhole(directTotal) + ' direct + ' + fmtDollarWhole(embTotal) + ' via funds.</div>'
+    + themeLine + '</div>';
 
   if (directLots.length) {
     html += '<div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin:8px 0 4px">Direct \u2014 ' + fmtDollarWhole(directTotal) + ' (' + directShares.toFixed(2) + ' sh)</div>';
@@ -33359,6 +33370,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ds</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dt</div>
 </body>
 </html>
