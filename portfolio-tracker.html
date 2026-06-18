@@ -22488,6 +22488,34 @@ function toggleFactorUnitySig(sig) {
   factorUnityOpenSig = (factorUnityOpenSig === sig) ? null : sig;
   if (typeof renderFactorUnity === 'function') renderFactorUnity();
 }
+var factorUnityOpenExpl = null; // which row's overlap/anchor explanation is open (null = none)
+function toggleFactorUnityExpl(sig) {
+  factorUnityOpenExpl = (factorUnityOpenExpl === sig) ? null : sig;
+  if (typeof renderFactorUnity === 'function') renderFactorUnity();
+}
+function factorUnityCalloutHtml(g, u) {
+  var label = '';
+  if (g.overlapTopPct != null) label = g.overlapTopPct.toFixed(0) + '% \u00b7 ' + esc((g.overlapTopFactors || []).join(', '));
+  else if (g === u.dominant) label = 'anchor';
+  if (!label) return '';
+  var mark = (factorUnityOpenExpl === g.sig) ? ' \u25be' : ' \u24d8';
+  return '<div onclick="toggleFactorUnityExpl(\'' + g.sig.replace(/'/g, "\\'") + '\')" style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:2px;white-space:nowrap;cursor:pointer;border-bottom:1px dotted var(--color-text-tertiary);display:inline-block">' + label + mark + '</div>';
+}
+function factorUnityExplHtml(g, u) {
+  var anchor = u.dominant;
+  if (g === anchor) {
+    return 'This row is the <strong>anchor</strong> \u2014 the bet every other row\u2019s overlap is measured against. It is your most factor-stacked cluster (' + g.factorCount + ' factors at once across ' + g.themes.length + ' themes), the tightest hidden bet in the book. It is NOT necessarily your largest slice: a single-theme position can be bigger by book % yet isn\u2019t a hidden multi-theme bet.';
+  }
+  var fp = u.factorPct || {};
+  var shared = g.overlapTopFactors || [];
+  var sharedMass = shared.reduce(function (s, f) { return s + (fp[f] || 0); }, 0);
+  var mine = g.factors.map(function (f) { return esc(f) + ' ' + Math.round(fp[f] || 0); }).join(' + ');
+  var sharedStr = shared.length ? shared.map(function (f) { return esc(f) + ' ' + Math.round(fp[f] || 0); }).join(' + ') : 'nothing';
+  var anchorThemes = anchor ? esc(anchor.themes.map(function (t) { return t.theme; }).join(', ')) : 'the anchor';
+  return '<strong>' + g.overlapTopPct.toFixed(0) + '% of this bet\u2019s risk is the same risk as the anchor</strong> (' + anchorThemes + '). Shared factor' + (shared.length === 1 ? '' : 's') + ': <strong>' + (shared.length ? esc(shared.join(', ')) : 'none') + '</strong>.<br>'
+    + 'How it is figured: each factor is weighted by how much of your whole book loads it, so a shared Rate counts more than a shared niche factor. This bet\u2019s factor weight = ' + mine + ' = ' + Math.round(g.factorMass) + '. The part shared with the anchor = ' + sharedStr + ' = ' + Math.round(sharedMass) + '. So ' + Math.round(sharedMass) + ' \u00f7 ' + Math.round(g.factorMass) + ' = ' + g.overlapTopPct.toFixed(0) + '%.<br>'
+    + 'Plain version: when ' + (shared.length ? esc(shared.join(' or ')) : 'a shared factor') + ' moves, this bet and the anchor move together \u2014 not the independent bets the signature split makes them look.';
+}
 function factorUnityDetailHtml(g) {
   if (!g.tickers || !g.tickers.length) return '<div style="font-size:10px;color:var(--color-text-tertiary)">No decomposed names for this signature (it\u2019s sitting in the broad-index tail until look-through tables are refreshed).</div>';
   const f$ = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : (function (v) { return '$' + Math.round(v).toLocaleString(); });
@@ -22579,7 +22607,7 @@ function computeFactorUnity() {
   return {
     groups: arr, dominant: dominant, fullBook: fullBook, namedTotal: namedTotal,
     themeCount: themeKeys.length, signatureCount: arr.length,
-    domFactor: domFactor, betsLoadingDom: betsLoadingDom,
+    domFactor: domFactor, betsLoadingDom: betsLoadingDom, factorPct: factorPct,
     stacked3Pct: fullBook > 0 ? stacked3 / fullBook * 100 : 0,
     stacked2Pct: fullBook > 0 ? stacked2 / fullBook * 100 : 0,
     singlePct: fullBook > 0 ? single / fullBook * 100 : 0
@@ -22614,16 +22642,20 @@ function renderFactorUnity() {
   u.groups.forEach(g => {
     const sev = sevColor(g.pct);
     const open = (factorUnityOpenSig === g.sig);
+    const explOpen = (factorUnityOpenExpl === g.sig);
     html += '<tr><td><strong>' + esc(g.factors.join(' + ')) + '</strong></td>'
       + '<td><span style="font-size:10px;color:var(--color-text-secondary)">' + esc(g.themes.map(t => t.theme).join(', ')) + '</span></td>'
       + '<td class="r">' + g.factorCount + '</td>'
-      + '<td class="r" style="vertical-align:top"><span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" title="See the tickers (direct + look-through) behind this exposure" style="cursor:pointer;color:' + sev + ';font-weight:600;border-bottom:1px dotted ' + sev + '">' + g.pct.toFixed(1) + '%' + (open ? ' \u25be' : ' \u203a') + '</span>' + (g.overlapTopPct != null ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:1px;white-space:nowrap">' + g.overlapTopPct.toFixed(0) + '% \u00b7 ' + esc((g.overlapTopFactors||[]).join(', ')) + '</div>' : (g === u.dominant ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:1px" title="The bet the other rows are compared against: your most factor-stacked cluster (most factors loaded at once) \u2014 not necessarily your largest single theme.">anchor</div>' : '')) + '</td></tr>';
+      + '<td class="r" style="vertical-align:top"><span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" style="cursor:pointer;color:' + sev + ';font-weight:600;border-bottom:1px dotted ' + sev + '">' + g.pct.toFixed(1) + '%' + (open ? ' \u25be' : ' \u203a') + '</span>' + factorUnityCalloutHtml(g, u) + '</td></tr>';
+    if (explOpen) {
+      html += '<tr><td colspan="4" style="padding:2px 0 10px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px;font-size:10px;color:var(--color-text-secondary);line-height:1.55">' + factorUnityExplHtml(g, u) + '</div></td></tr>';
+    }
     if (open) {
       html += '<tr><td colspan="4" style="padding:4px 0 12px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px">' + factorUnityDetailHtml(g) + '</div></td></tr>';
     }
   });
   html += '</tbody></table></div>';
-  html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Signatures use the same assigned theme\u2192factor map the Risk Review grid uses (structural classification, not measured correlation). \u201cShared w/ top\u201d weights each shared factor by its book-level loading, so a shared Rate counts more than a shared niche factor \u2014 it is the fraction of a bet\u2019s factor risk that overlaps your top bet. Percentages are share of the full book; the undecomposed index/cash tail carries no signature.</div>';
+  html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Signatures use the same assigned theme\u2192factor map the Risk Review grid uses (structural classification, not measured correlation). \u201cOverlap w/ anchor\u201d weights each shared factor by its book-level loading, so a shared Rate counts more than a shared niche factor \u2014 it is the fraction of a bet\u2019s factor risk that overlaps the anchor. Percentages are share of the full book; the undecomposed index/cash tail carries no signature.</div>';
   el.innerHTML = html;
 }
 
@@ -33544,6 +33576,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09eb</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ec</div>
 </body>
 </html>
