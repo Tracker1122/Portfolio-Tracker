@@ -21863,7 +21863,7 @@ function computeThemeClusters(hypo) {
     clusters[a.label].total += r.total;
     clusters[a.label].names.push({ display: r.display, total: r.total, why: a.why, key: a.key, direct: r.direct, viaFunds: r.viaFunds, aiGuess: a.aiGuess });
     if (a.themes && a.themes.length) {
-      const _n = a.themes.length, share = r.total / _n, dShare = (r.direct || 0) / _n, vShare = (r.viaFunds || 0) / _n;
+      const _n = a.themes.length, share = r.total / _n, dShare = (r.direct || 0) / _n, vShare = (r.embedded || 0) / _n;
       a.themes.forEach(thm => {
         byTheme[thm] = (byTheme[thm] || 0) + share;
         (themeNames[thm] = themeNames[thm] || []).push({ display: r.display, key: a.key, value: share, direct: dShare, viaFunds: vShare });
@@ -22491,7 +22491,10 @@ function toggleFactorUnitySig(sig) {
 function factorUnityDetailHtml(g) {
   if (!g.tickers || !g.tickers.length) return '<div style="font-size:10px;color:var(--color-text-tertiary)">No decomposed names for this signature (it\u2019s sitting in the broad-index tail until look-through tables are refreshed).</div>';
   const f$ = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : (function (v) { return '$' + Math.round(v).toLocaleString(); });
-  let h = '<div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:5px">Tickers behind ' + esc(g.factors.join(' + ')) + ' \u2014 ' + f$(g.weight) + ' (' + g.pct.toFixed(1) + '% of book)</div>';
+  let h = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:5px">'
+    + '<span style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em">Tickers behind ' + esc(g.factors.join(' + ')) + ' \u2014 ' + f$(g.weight) + ' (' + g.pct.toFixed(1) + '% of book)</span>'
+    + '<span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" title="Collapse" style="cursor:pointer;font-size:9px;color:var(--color-text-tertiary);border:1px solid var(--color-border);border-radius:4px;padding:1px 7px;white-space:nowrap;flex:none">\u2715 hide</span>'
+    + '</div>';
   h += '<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="color:var(--color-text-tertiary)">'
     + '<th style="text-align:left;padding:2px 6px">Ticker</th>'
     + '<th style="text-align:right;padding:2px 6px">Direct</th>'
@@ -33521,6 +33524,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dy</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dz</div>
 </body>
 </html>
