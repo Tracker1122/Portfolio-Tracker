@@ -5157,6 +5157,33 @@ function setNbThreshold(v) {
   try { localStorage.setItem('portfolio-nb-threshold-v1', String(nbThreshold)); } catch (e) {}
   if (typeof renderNbCard === 'function') renderNbCard();
 }
+let nbSortKey = 'value';  // default: most idle capital first (matches the computed order)
+let nbSortDir = 'desc';
+function setNbSort(key) {
+  if (nbSortKey === key) { nbSortDir = nbSortDir === 'desc' ? 'asc' : 'desc'; }
+  else { nbSortKey = key; nbSortDir = (key === 'ticker' || key === 'sleeve' || key === 'theme' || key === 'account') ? 'asc' : 'desc'; }
+  if (typeof renderNbCard === 'function') renderNbCard();
+}
+function nbSortRows(rowsIn) {
+  const k = nbSortKey, dir = nbSortDir;
+  const strKey = { ticker: 'ticker', sleeve: 'sleeve', theme: 'theme', account: 'account' }[k];
+  const out = rowsIn.slice();
+  out.sort((a, b) => {
+    if (strKey) {
+      const av = (a[strKey] || '').toString(), bv = (b[strKey] || '').toString();
+      return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    }
+    let av, bv;
+    if (k === 'glPct') { av = a.glPct; bv = b.glPct; }
+    else if (k === 'glDollar') { av = a.glDollar; bv = b.glDollar; }
+    else if (k === 'themeAlphaPct') { av = a.themeAlphaPct == null ? -Infinity : a.themeAlphaPct; bv = b.themeAlphaPct == null ? -Infinity : b.themeAlphaPct; }
+    else if (k === 'vsSpx') { av = a.vsSpx == null ? -Infinity : a.vsSpx; bv = b.vsSpx == null ? -Infinity : b.vsSpx; }
+    else if (k === 'days') { av = a.days == null ? -Infinity : a.days; bv = b.days == null ? -Infinity : b.days; }
+    else { av = a.value; bv = b.value; }
+    return dir === 'asc' ? av - bv : bv - av;
+  });
+  return out;
+}
 function computeNothingBurgers() {
   const today = new Date();
   const thr = nbThreshold;
@@ -5195,6 +5222,7 @@ function renderNbCard() {
   const el = document.getElementById('nb-card-wrap');
   if (!el) return;
   const nb = computeNothingBurgers();
+  nb.rows = nbSortRows(nb.rows);
   const totalPortfolioValue = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
 
   const control = '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'
@@ -5257,11 +5285,16 @@ function renderNbCard() {
       + '</tr>' + passRow;
   }).join('');
   let html = control;
+  const nbHdr = function (key, label, r) {
+    const active = nbSortKey === key;
+    const arrow = active ? (nbSortDir === 'asc' ? ' \u2191' : ' \u2193') : '';
+    return '<th class="' + (r ? 'r ' : '') + 'sortable' + (active ? ' sort-active' : '') + '" onclick="setNbSort(\'' + key + '\')">' + label + arrow + '</th>';
+  };
   html += '<div class="rebal-table-wrap">'
     + '<table class="rebal-table"><thead><tr>'
-    + '<th>Position</th><th>Strategy</th><th>Industry</th><th>Account</th>'
-    + '<th class="r">G/L%</th><th class="r">G/L $</th><th class="r">Theme \u03b1</th><th class="r">SPX \u03b1</th>'
-    + '<th class="r">Value</th><th class="r">Held</th>'
+    + nbHdr('ticker', 'Position', false) + nbHdr('sleeve', 'Strategy', false) + nbHdr('theme', 'Industry', false) + nbHdr('account', 'Account', false)
+    + nbHdr('glPct', 'G/L%', true) + nbHdr('glDollar', 'G/L $', true) + nbHdr('themeAlphaPct', 'Theme \u03b1', true) + nbHdr('vsSpx', 'SPX \u03b1', true)
+    + nbHdr('value', 'Value', true) + nbHdr('days', 'Held', true)
     + '</tr></thead><tbody>' + tableRows + '</tbody></table></div>';
   html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic;line-height:1.5">\u201cFlat\u201d = within \u00b1' + nb.threshold + '% gross gain/loss over the hold. Trim-to-redeploy candidates, not sell signals \u2014 a flat lot may still be early. \u03b1 columns are the lot\u2019s return vs its theme benchmark and vs the S&amp;P over the hold (percentage points); a lot flat <em>and</em> negative on both is the purest dead money. Lots under ' + fmtDollarWhole(NB_MIN_VALUE) + ' and PE-locked lots are excluded.</div>';
   el.innerHTML = html;
@@ -5531,6 +5564,32 @@ function renderAddWatch() {
   el.innerHTML = header + rows;
 }
 
+let acSortKey = '';  // empty = preserve the computed score order; set when a column is clicked
+let acSortDir = 'desc';
+function setAcSort(key) {
+  if (acSortKey === key) { acSortDir = acSortDir === 'desc' ? 'asc' : 'desc'; }
+  else { acSortKey = key; acSortDir = (key === 'ticker' || key === 'sleeve' || key === 'theme') ? 'asc' : 'desc'; }
+  if (typeof renderAddCandidatesTable === 'function') renderAddCandidatesTable();
+}
+function acSortRows(rowsIn) {
+  if (!acSortKey) return rowsIn;
+  const k = acSortKey, dir = acSortDir;
+  const strKey = { ticker: 'ticker', sleeve: 'sleeve', theme: 'theme' }[k];
+  const out = rowsIn.slice();
+  out.sort((a, b) => {
+    if (strKey) {
+      const av = (a[strKey] || '').toString(), bv = (b[strKey] || '').toString();
+      return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    }
+    let av, bv;
+    if (k === 'held') { av = a.oldestDays; bv = b.oldestDays; }
+    else if (k === 'spxAlpha') { av = a.totalSpxAlpha; bv = b.totalSpxAlpha; }
+    else if (k === 'themeAlpha') { av = a.totalThemeDollar; bv = b.totalThemeDollar; }
+    else { av = a.totalExit; bv = b.totalExit; } // value + managed%
+    return dir === 'asc' ? av - bv : bv - av;
+  });
+  return out;
+}
 // Rebalance & Tax tab — full table for both tiers
 function renderAddCandidatesTable() {
   const tier1Wrap = document.getElementById('add-candidates-tier1-wrap');
@@ -5549,7 +5608,7 @@ function renderAddCandidatesTable() {
 
     const opacityWrap = isTier2 ? 'opacity:0.7;' : '';
     const acPassSeen = {}; // true-exposure callout once per ticker, not once per ticker+account group
-    const tableRows = rows.map(r => {
+    const tableRows = acSortRows(rows).map(r => {
       const held = heldBucketDisplay(r.oldestDays);
       const portPct = totalPortfolioValue > 0 ? ((r.totalExit / totalPortfolioValue) * 100).toFixed(1) + '%' : '—';
       const sleeveColor = SLEEVE_COLORS[r.sleeve] || 'var(--color-text-tertiary)';
@@ -5598,18 +5657,23 @@ function renderAddCandidatesTable() {
       </tr>${passRow}`;
     }).join('');
 
+    const acHdr = function (key, label, r) {
+      const active = acSortKey === key;
+      const arrow = active ? (acSortDir === 'asc' ? ' \u2191' : ' \u2193') : '';
+      return '<th class="' + (r ? 'r ' : '') + 'sortable' + (active ? ' sort-active' : '') + '" onclick="setAcSort(\'' + key + '\')">' + label + arrow + '</th>';
+    };
     return `<div class="rebal-table-wrap">
       <table class="rebal-table">
         <thead>
           <tr>
-            <th>Position</th>
-            <th>Strategy</th>
-            <th>Industry</th>
-            <th class="r">Held</th>
-            <th class="r">Value</th>
-            <th class="r">Managed %</th>
-            <th class="r">SPX α</th>
-            <th class="r">Theme α</th>
+            ${acHdr('ticker', 'Position', false)}
+            ${acHdr('sleeve', 'Strategy', false)}
+            ${acHdr('theme', 'Industry', false)}
+            ${acHdr('held', 'Held', true)}
+            ${acHdr('value', 'Value', true)}
+            ${acHdr('managed', 'Managed %', true)}
+            ${acHdr('spxAlpha', 'SPX α', true)}
+            ${acHdr('themeAlpha', 'Theme α', true)}
             <th>Notes</th>
           </tr>
         </thead>
@@ -33146,6 +33210,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dl</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dm</div>
 </body>
 </html>
