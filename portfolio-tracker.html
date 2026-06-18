@@ -5213,18 +5213,21 @@ function renderNbCard() {
     const col = v >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
     return '<td class="r"' + (label ? ' title="' + label + '"' : '') + '><span style="color:' + col + '">' + (v >= 0 ? '+' : '') + v.toFixed(1) + 'pp</span></td>';
   };
+  const nbPassSeen = {}; // show the per-ticker true-exposure callout once, not once per lot
   const tableRows = nb.rows.map(r => {
     const glColor = Math.abs(r.glPct) < 0.0001 ? 'var(--color-text-tertiary)' : (r.glPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
     const hb = heldBucketDisplay(r.days);
     const sleeveColor = SLEEVE_COLORS[r.sleeve] || 'var(--color-text-tertiary)';
     // Pass-through exposure callout (mirrors Add Candidates): what you ALSO hold of this name embedded
-    // in funds you own (VOO/ETFs). For a trim, this matters — trimming the direct lot doesn't touch the
-    // embedded slice, so your true exposure barely moves. Same identification logic as Add Candidates.
+    // in funds you own (VOO/ETFs). True exposure is a per-TICKER fact — ALL your direct lots of the name
+    // (across accounts, flat or not) PLUS the embedded slice, counted ONCE. Showing it per-lot would
+    // double-count the embedded amount, so we render it on the first row of each ticker only.
     let passRow = '';
     const lts = (typeof qrIndexLookthrough === 'function') ? qrIndexLookthrough(r.ticker) : [];
     const embedded = lts.reduce((s, l) => s + (l.indirectValue || 0), 0);
-    if (embedded > 100) {
-      const direct = r.value || 0;
+    if (embedded > 100 && !nbPassSeen[r.ticker]) {
+      nbPassSeen[r.ticker] = true;
+      const direct = positions.filter(p => !p.closed && p.ticker === r.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
       const trueTotal = direct + embedded;
       const grandTotal = (function () {
         const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
@@ -5236,7 +5239,7 @@ function renderNbCard() {
       const via = lts.map(l => esc(l.fund) + ' ' + fmtDollarWhole(l.indirectValue)).join(' + ');
       passRow = '<tr><td colspan="10" style="padding:2px 10px 8px;border-top:none">'
         + '<div style="font-size:9px;color:#fbbf24;line-height:1.5;padding-left:4px;border-left:2px solid rgba(251,191,36,0.4)">'
-        + '<strong>True ' + esc(r.ticker) + ' exposure: ~' + fmtDollarWhole(trueTotal) + '</strong> \u2014 direct ' + fmtDollarWhole(direct) + ' + ' + fmtDollarWhole(embedded) + ' via funds (' + via + ') = <strong>' + truePct.toFixed(1) + '% of your portfolio</strong>. Trimming the direct lot only reduces part of this \u2014 you keep the embedded slice. <span style="color:var(--color-text-tertiary)">(Embedded approximate \u2014 fund weights drift.)</span>'
+        + '<strong>True ' + esc(r.ticker) + ' exposure: ~' + fmtDollarWhole(trueTotal) + '</strong> \u2014 all direct lots ' + fmtDollarWhole(direct) + ' + ' + fmtDollarWhole(embedded) + ' via funds (' + via + ') = <strong>' + truePct.toFixed(1) + '% of your portfolio</strong>. Trimming this lot only reduces part of it \u2014 you keep the embedded slice (and any other direct lots). <span style="color:var(--color-text-tertiary)">(Embedded approximate \u2014 fund weights drift.)</span>'
         + '</div></td></tr>';
     }
     return '<tr>'
@@ -33138,6 +33141,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09di</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dj</div>
 </body>
 </html>
