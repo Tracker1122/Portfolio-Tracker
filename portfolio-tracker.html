@@ -1518,6 +1518,7 @@
   <div class="tab-panel" id="tab-risk">
     <div class="section-heading">Risk Review</div>
     <div id="risk-review-mount"></div>
+    <div id="factor-unity-mount" style="margin-top:28px"></div>
   </div><!-- end tab-risk -->
 
   <!-- Quality Review Tab -->
@@ -7969,6 +7970,7 @@ function switchTab(name) {
   // Risk & Stress Lens (injected block) hook: refresh staged-scenario status on entering
   // Risk Review, and (re)mount the "stress-test in Risk Review" buttons on Themes / Quality.
   if (window._riskReplay && typeof window._riskReplay.onShow === 'function') { try { window._riskReplay.onShow(name); } catch (e) {} }
+  if (name === 'risk' && typeof renderFactorUnity === 'function') { try { renderFactorUnity(); } catch (e) {} }
 }
 
 function setPriceToday(id, value) {
@@ -22468,6 +22470,78 @@ function clusterConfidenceFlag(nameRow, ctx) {
   return null;
 }
 
+// ── Factor Unity — groups themes by their factor SIGNATURE to reveal hidden co-movement ───────────
+// The Risk Review grid shows each factor in isolation (Rate 61%, Crowding 29%…), which hides that the
+// same cluster of names can drive several factors at once. This regroups the SAME assigned theme→factor
+// map (inverted from the live profile) by signature, so themes that load identical factors collapse into
+// one "behavioral bet". Reuses the risk engine's numbers exactly — no new factor data, no ES5 edits.
+function computeFactorUnity() {
+  const rr = (typeof window !== 'undefined' && window._riskReplay) ? window._riskReplay : null;
+  const prof = (rr && typeof rr.riskFactorProfileStanding === 'function') ? rr.riskFactorProfileStanding() : null;
+  const cl = (typeof computeThemeClusters === 'function') ? computeThemeClusters() : null;
+  if (!prof || !cl || !cl.byTheme || !(cl.fullBook > 0)) return null;
+  const byTheme = cl.byTheme, fullBook = cl.fullBook;
+  const themeFactors = {}; // theme -> [factor cols]
+  prof.forEach(f => (f.themes || []).forEach(thm => { (themeFactors[thm] = themeFactors[thm] || []).push(f.col); }));
+  const themeKeys = Object.keys(themeFactors);
+  if (!themeKeys.length) return null;
+  const groups = {};
+  let namedTotal = 0, stacked3 = 0, stacked2 = 0, single = 0;
+  themeKeys.forEach(thm => {
+    const w = byTheme[thm] || 0; if (w <= 0) return;
+    namedTotal += w;
+    const facs = themeFactors[thm].slice().sort();
+    const n = facs.length;
+    if (n >= 3) stacked3 += w; else if (n === 2) stacked2 += w; else single += w;
+    const sig = facs.join(' + ');
+    if (!groups[sig]) groups[sig] = { factors: facs, themes: [], weight: 0 };
+    groups[sig].themes.push({ theme: thm, weight: w });
+    groups[sig].weight += w;
+  });
+  const arr = Object.keys(groups).map(k => groups[k]);
+  arr.forEach(g => { g.pct = fullBook > 0 ? (g.weight / fullBook) * 100 : 0; g.factorCount = g.factors.length; g.themes.sort((a, b) => b.weight - a.weight); });
+  arr.sort((a, b) => b.weight - a.weight);
+  const multi = arr.filter(g => g.factorCount >= 2);
+  const dominant = multi.length ? multi[0] : (arr.length ? arr[0] : null);
+  return {
+    groups: arr, dominant: dominant, fullBook: fullBook, namedTotal: namedTotal,
+    themeCount: themeKeys.length, signatureCount: arr.length,
+    stacked3Pct: fullBook > 0 ? stacked3 / fullBook * 100 : 0,
+    stacked2Pct: fullBook > 0 ? stacked2 / fullBook * 100 : 0,
+    singlePct: fullBook > 0 ? single / fullBook * 100 : 0
+  };
+}
+function renderFactorUnity() {
+  const el = document.getElementById('factor-unity-mount');
+  if (!el) return;
+  const u = computeFactorUnity();
+  if (!u) { el.innerHTML = '<div style="font-size:10px;color:var(--color-text-tertiary)">Factor unity needs the live factor profile and theme look-through \u2014 open Risk Review with your themes tagged and fund weights pasted.</div>'; return; }
+  const sevColor = (pct) => pct >= 35 ? 'var(--color-text-danger)' : pct >= 20 ? '#fb923c' : pct >= 10 ? '#fbbf24' : 'var(--color-text-success)';
+  let html = '<div class="section-heading">Factor Unity — Is Your Diversification Real?</div>';
+  html += '<div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin:2px 0 12px;max-width:840px">The grid above shows each factor alone. This groups your themes by their <strong>factor signature</strong> \u2014 the set of factors each one loads. Themes that share a signature move on the same triggers, so they\u2019re one behavioral bet, not several. Where one signature dominates, themes that look diversified are correlated by construction.</div>';
+
+  if (u.dominant && u.dominant.factorCount >= 2) {
+    const d = u.dominant;
+    html += '<div style="background:var(--color-background-secondary);border-left:3px solid ' + sevColor(d.pct) + ';border-radius:var(--border-radius-md);padding:10px 12px;margin-bottom:12px">'
+      + '<div style="font-size:12px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px">Your largest single behavioral bet: <span style="color:' + sevColor(d.pct) + '">' + d.pct.toFixed(1) + '% of your book</span> loads ' + esc(d.factors.join(' + ')) + ' together.</div>'
+      + '<div style="font-size:11px;color:var(--color-text-secondary);line-height:1.5">' + esc(d.themes.map(t => t.theme).join(', ')) + ' \u2014 each carries all ' + d.factorCount + ' of those factors at once. The grid reports them as ' + d.factorCount + ' separate readings, but they\u2019re the same cluster of names: one rate / risk-off / growth-scare move hits them together.</div></div>';
+  }
+
+  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">Your <strong>' + u.themeCount + ' themes</strong> collapse into <strong>' + u.signatureCount + ' distinct factor signatures</strong>. '
+    + '<span style="color:var(--color-text-tertiary)">Stacked exposure: ' + u.stacked3Pct.toFixed(0) + '% in themes loading 3+ factors \u00b7 ' + u.stacked2Pct.toFixed(0) + '% in 2-factor \u00b7 ' + u.singlePct.toFixed(0) + '% single-factor.</span></div>';
+
+  html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Factor signature</th><th>Themes (one behavioral bet)</th><th class="r"># factors</th><th class="r">% of book</th></tr></thead><tbody>';
+  u.groups.forEach(g => {
+    html += '<tr><td><strong>' + esc(g.factors.join(' + ')) + '</strong></td>'
+      + '<td><span style="font-size:10px;color:var(--color-text-secondary)">' + esc(g.themes.map(t => t.theme).join(', ')) + '</span></td>'
+      + '<td class="r">' + g.factorCount + '</td>'
+      + '<td class="r"><span style="color:' + sevColor(g.pct) + ';font-weight:600">' + g.pct.toFixed(1) + '%</span></td></tr>';
+  });
+  html += '</tbody></table></div>';
+  html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Signatures use the same assigned theme\u2192factor map the Risk Review grid uses (structural classification, not measured correlation \u2014 a name can buck its signature). Percentages are share of the full book; the undecomposed index/cash tail carries no signature and isn\u2019t shown.</div>';
+  el.innerHTML = html;
+}
+
 function renderThemeClusters() {
   const host = document.getElementById('theme-diversification-analysis');
   if (!host) return;
@@ -33370,6 +33444,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dt</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09du</div>
 </body>
 </html>
