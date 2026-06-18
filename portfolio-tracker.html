@@ -22311,6 +22311,8 @@ let clusterEditExpanded = false;
 function toggleClusterEdit() { clusterEditExpanded = !clusterEditExpanded; renderThemeClusters(); }
 let clusterExpandedIdx = -1; // which cluster's names are expanded under the bar (one at a time); -1 = none open
 function toggleClusterExpand(i) { clusterExpandedIdx = (clusterExpandedIdx === i) ? -1 : i; renderThemeClusters(); }
+let lowConfExpanded = false; // whether the inline list of low-confidence calls (name · theme · reason) is open
+function toggleLowConfList() { lowConfExpanded = !lowConfExpanded; renderThemeClusters(); }
 function reassignCluster(key, theme) {
   const o = loadClusterOverrides();
   if (theme === '__auto__') delete o[key]; else o[key] = theme;
@@ -22389,7 +22391,8 @@ function renderThemeClusters() {
 
   // Count total flags across clusters for the headline nudge.
   let flagCount = 0;
-  data.clusters.forEach(c => c.names.forEach(n => { if (clusterConfidenceFlag(n, ctx)) flagCount++; }));
+  const flaggedList = [];
+  data.clusters.forEach(c => c.names.forEach(n => { const fl = clusterConfidenceFlag(n, ctx); if (fl) { flagCount++; flaggedList.push({ display: n.display, theme: c.label, reason: fl }); } }));
 
   const fmtD = (n) => fmtDollarWhole(n);
   const biggest = data.biggest;
@@ -22456,8 +22459,20 @@ function renderThemeClusters() {
       </div>
 
       <div style="font-size:9px;color:var(--color-text-tertiary);line-height:1.5;margin-bottom:8px">
-        Grouped by theme using <strong>true exposure</strong> (direct + look-through inside your funds, so a mega-cap you hold only via VOO still counts). Each name's <em>why</em> is either your own tag or — if untagged — its weight inside the theme's benchmark ETF (a classification signal, not a holding). ${flagCount ? `<span style="color:#fbbf24">⚠ ${flagCount} low-confidence call${flagCount > 1 ? 's' : ''}</span> — span clusters or rest on a thin weight; use "Reassign names" to fix. ` : ''}Structural co-movement (shared theme/funds), <strong>not</strong> measured correlation — a name can buck its block.
+        Grouped by theme using <strong>true exposure</strong> (direct + look-through inside your funds, so a mega-cap you hold only via VOO still counts). Each name's <em>why</em> is either your own tag or — if untagged — its weight inside the theme's benchmark ETF (a classification signal, not a holding). ${flagCount ? `<span onclick="toggleLowConfList()" style="color:#fbbf24;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px" title="Click to see which names and themes">⚠ ${flagCount} low-confidence call${flagCount > 1 ? 's' : ''} ${lowConfExpanded ? '▾' : '▸'}</span> — span clusters or rest on a thin weight; click to see them, or use "Reassign names" to fix. ` : ''}Structural co-movement (shared theme/funds), <strong>not</strong> measured correlation — a name can buck its block.
       </div>
+
+      ${(flagCount && lowConfExpanded) ? `<div style="background:var(--color-background-secondary);border:1px solid rgba(251,191,36,0.3);border-radius:var(--border-radius-md);padding:8px 10px;margin:-2px 0 10px;font-size:10px;line-height:1.5">
+        <div style="display:flex;align-items:baseline;gap:8px;padding:0 0 5px;font-size:8px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;border-bottom:0.5px solid var(--color-border-tertiary);margin-bottom:3px">
+          <span style="width:64px;flex-shrink:0">Name</span><span style="width:140px;flex-shrink:0">Placed in theme</span><span style="flex:1">Why it's low-confidence</span>
+        </div>
+        ${flaggedList.map(fc => `<div style="display:flex;gap:8px;padding:3px 0;border-top:0.5px solid var(--color-border-tertiary)">
+          <span style="color:var(--color-text-primary);font-weight:700;width:64px;flex-shrink:0">${esc(fc.display)}</span>
+          <span style="color:var(--color-text-secondary);width:140px;flex-shrink:0">${esc(fc.theme)}</span>
+          <span style="color:var(--color-text-tertiary);flex:1">${esc(fc.reason)}</span>
+        </div>`).join('')}
+        <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">Use "Reassign names" above to move any of these to the theme you think fits.</div>
+      </div>` : ''}
 
       ${(() => {
         // Concentration is a PROPORTION — so the primary visual is ONE stacked horizontal bar, not a
@@ -33221,6 +33236,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09do</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dp</div>
 </body>
 </html>
