@@ -1220,10 +1220,6 @@
         <div class="analytics-card-title">Top 3 Add Candidates — Beating Both Lenses, Past Soak</div>
         <div id="add-watch-content"></div>
       </div>
-      <div class="analytics-card" id="nb-watch-card" onclick="showCardOverlay('nb')" style="cursor:pointer">
-        <div class="analytics-card-title">Nothing Burgers — Flat Lots (Trim to Redeploy)</div>
-        <div id="nb-watch-content"></div>
-      </div>
       <div class="analytics-card" id="theme-universe-dash-card" onclick="switchTab('themes')" style="cursor:pointer;grid-column:1 / -1">
         <div class="analytics-card-title">Theme Universe — Zero-Exposure Themes by 1Y</div>
         <div id="theme-universe-dash-content"></div>
@@ -1377,6 +1373,12 @@
 
   <!-- Trade Ideas Tab -->
   <div class="tab-panel" id="tab-tradeideas">
+
+    <div class="section-heading">Nothing Burgers</div>
+    <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
+      Open lots that have barely moved (within the ± band) — idle capital you can trim with minimal tax drag to fund higher-conviction moves. Sorted by market value, most idle first. PE-locked lots are excluded (can’t be sold).
+    </div>
+    <div id="nb-card-wrap" style="margin-bottom:28px"></div>
 
     <div class="section-heading">Add Candidates</div>
     <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
@@ -5151,7 +5153,7 @@ function setNbThreshold(v) {
   if (!isFinite(n) || n <= 0) return;
   nbThreshold = Math.min(50, Math.max(0.5, Math.round(n * 10) / 10));
   try { localStorage.setItem('portfolio-nb-threshold-v1', String(nbThreshold)); } catch (e) {}
-  if (typeof renderNbWatch === 'function') renderNbWatch();
+  if (typeof renderNbCard === 'function') renderNbCard();
 }
 function computeNothingBurgers() {
   const today = new Date();
@@ -5180,40 +5182,43 @@ function computeNothingBurgers() {
   const totalDead = rows.reduce((s, r) => s + r.value, 0);
   return { rows: rows, totalDead: totalDead, lockedExcluded: lockedExcluded, threshold: thr };
 }
-function renderNbWatch() {
-  const el = document.getElementById('nb-watch-content');
+function renderNbCard() {
+  const el = document.getElementById('nb-card-wrap');
   if (!el) return;
   const nb = computeNothingBurgers();
+  const totalPortfolioValue = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+
+  const control = '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'
+    + '<div style="font-size:12px;color:var(--color-text-secondary)">'
+    + (nb.rows.length === 0 ? 'No flat lots in this band.' : '\u2248<strong style="color:var(--color-text-primary)">' + fmtDollarWhole(nb.totalDead) + '</strong> idle in ' + nb.rows.length + ' flat lot' + (nb.rows.length > 1 ? 's' : '') + (totalPortfolioValue > 0 ? ' \u00b7 ' + ((nb.totalDead / totalPortfolioValue) * 100).toFixed(1) + '% of the book' : ''))
+    + (nb.lockedExcluded ? ' <span style="color:var(--color-text-tertiary)">\u00b7 ' + nb.lockedExcluded + ' PE-locked lot' + (nb.lockedExcluded > 1 ? 's' : '') + ' excluded</span>' : '') + '</div>'
+    + '<label style="font-size:11px;color:var(--color-text-secondary);display:flex;align-items:center;gap:6px">\u00b1 <input type="number" min="0.5" max="50" step="0.5" value="' + nb.threshold + '" onchange="setNbThreshold(this.value)" style="width:62px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:4px;color:var(--color-text-primary);font-size:11px;padding:3px 6px"> % G/L band</label></div>';
+
   if (nb.rows.length === 0) {
-    el.innerHTML = '<div style="color:var(--color-text-tertiary);font-size:11px;padding:8px 0">No flat lots within \u00b1' + nb.threshold + '% right now \u2014 everything has moved.'
-      + (nb.lockedExcluded ? ' (' + nb.lockedExcluded + ' locked lot' + (nb.lockedExcluded > 1 ? 's' : '') + ' not counted.)' : '') + '</div>';
+    el.innerHTML = control + '<div style="color:var(--color-text-tertiary);font-size:12px;font-style:italic;padding:10px 0">No open lot is within \u00b1' + nb.threshold + '% \u2014 everything has moved more than that. Widen the band to surface more.</div>';
     return;
   }
-  const totalPortfolioValue = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
-  const summary = '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:0 0 6px">'
-    + '<span style="font-size:10px;color:var(--color-text-secondary)">' + nb.rows.length + ' flat lot' + (nb.rows.length > 1 ? 's' : '') + ' \u00b7 \u2248' + fmtDollarWhole(nb.totalDead) + ' idle'
-    + (totalPortfolioValue > 0 ? ' (' + ((nb.totalDead / totalPortfolioValue) * 100).toFixed(0) + '% of book)' : '') + '</span>'
-    + '<span style="font-size:9px;color:var(--color-text-tertiary)">within \u00b1' + nb.threshold + '%</span></div>';
-  const header = '<div style="display:flex;justify-content:space-between;align-items:center;padding:0 0 6px;border-bottom:1px solid var(--color-border-tertiary);margin-bottom:4px">'
-    + '<span style="font-size:9px;color:var(--color-text-tertiary);width:52px;flex-shrink:0">Ticker</span>'
-    + '<span style="font-size:9px;color:var(--color-text-tertiary);width:48px;flex-shrink:0">Acct</span>'
-    + '<span style="font-size:9px;color:var(--color-text-tertiary);width:84px;text-align:right;flex-shrink:0">Value</span>'
-    + '<span style="font-size:9px;color:var(--color-text-tertiary);width:56px;text-align:right;flex-shrink:0">G/L%</span>'
-    + '<span style="font-size:9px;color:var(--color-text-tertiary);width:76px;text-align:right;flex-shrink:0">G/L $</span>'
-    + '<span style="font-size:9px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">Held</span></div>';
-  const body = nb.rows.slice(0, 5).map(r => {
+
+  const grid = 'display:grid;grid-template-columns:1.2fr 0.8fr 1.4fr 0.7fr 0.9fr 0.9fr 0.7fr;gap:8px;';
+  let html = control;
+  html += '<div style="' + grid + 'font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em;padding:0 0 6px;border-bottom:1px solid var(--color-border-tertiary)">'
+    + '<span>Ticker</span><span>Acct</span><span>Theme</span><span style="text-align:right">G/L%</span><span style="text-align:right">G/L $</span><span style="text-align:right">Value</span><span style="text-align:right">Held</span></div>';
+  nb.rows.forEach(r => {
     const glColor = Math.abs(r.glPct) < 0.0001 ? 'var(--color-text-tertiary)' : (r.glPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
     const held = r.days === null ? '\u2014' : heldBucketDisplay(r.days);
-    return '<div class="bw-row" style="justify-content:space-between;align-items:center">'
-      + '<span class="bw-ticker" style="color:var(--color-text-primary);width:52px;flex-shrink:0">' + esc(r.ticker) + '</span>'
-      + '<span style="font-size:9px;color:var(--color-text-tertiary);width:48px;flex-shrink:0">' + esc(r.account) + '</span>'
-      + '<span style="font-size:11px;color:var(--color-text-secondary);width:84px;text-align:right;flex-shrink:0">' + fmtDollarWhole(r.value) + '</span>'
-      + '<span style="font-size:11px;color:' + glColor + ';width:56px;text-align:right;flex-shrink:0">' + (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%</span>'
-      + '<span style="font-size:11px;color:' + glColor + ';width:76px;text-align:right;flex-shrink:0">' + fmtDollar(r.glDollar) + '</span>'
-      + '<span style="font-size:11px;color:var(--color-text-secondary);width:44px;text-align:right;flex-shrink:0">' + held + '</span></div>';
-  }).join('');
-  const more = nb.rows.length > 5 ? '<div style="font-size:9px;color:var(--color-text-tertiary);text-align:center;padding:4px 0 0">+' + (nb.rows.length - 5) + ' more \u2014 click to see all</div>' : '';
-  el.innerHTML = summary + header + body + more;
+    const sleeveColor = SLEEVE_COLORS[r.sleeve] || 'var(--color-text-tertiary)';
+    const vsTxt = r.vsSpx === null ? '' : '<span title="Return vs the S&amp;P over the hold period" style="font-size:9px;color:' + (r.vsSpx >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)') + ';margin-left:6px">' + (r.vsSpx >= 0 ? '+' : '') + r.vsSpx.toFixed(1) + 'pp</span>';
+    html += '<div style="' + grid + 'align-items:center;padding:7px 0;border-bottom:1px solid var(--color-border-tertiary);font-size:12px">'
+      + '<span style="font-weight:700;color:var(--color-text-primary)">' + esc(r.ticker) + vsTxt + '</span>'
+      + '<span style="font-size:10px;color:var(--color-text-tertiary)">' + esc(r.account) + '</span>'
+      + '<span style="font-size:10px;color:' + sleeveColor + '">' + esc(r.theme || '\u2014') + '</span>'
+      + '<span style="text-align:right;color:' + glColor + '">' + (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%</span>'
+      + '<span style="text-align:right;color:' + glColor + '">' + fmtDollar(r.glDollar) + '</span>'
+      + '<span style="text-align:right;color:var(--color-text-primary);font-weight:600">' + fmtDollarWhole(r.value) + '</span>'
+      + '<span style="text-align:right;color:var(--color-text-secondary)">' + held + '</span></div>';
+  });
+  html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic;line-height:1.5">\u201cFlat\u201d = within \u00b1' + nb.threshold + '% gross gain/loss over the hold. Trim-to-redeploy candidates, not sell signals \u2014 a flat lot may still be early. The pp chip is the lot\u2019s return vs the S&amp;P; a negative one flags a lot also lagging the index (the purest dead money). PE-locked lots are excluded since they can\u2019t be sold.</div>';
+  el.innerHTML = html;
 }
 
 function renderTrimWatch() {
@@ -7818,7 +7823,7 @@ function switchTab(name) {
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderPriceMoves', renderPriceMoves); }
-  if (name === 'tradeideas') { safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
+  if (name === 'tradeideas') { safeRender('renderNbCard', renderNbCard); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
   if (name === 'pricetheme') { safeRender('renderEtfCompare', renderEtfCompare); safeRender('renderManualAnalyze', renderManualAnalyze); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
@@ -20064,39 +20069,6 @@ function _renderCardOverlay(type) {
     }
   }
 
-  if (type === 'nb') {
-    const nb = computeNothingBurgers();
-    html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:12px;flex-wrap:wrap">'
-      + '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary)">Nothing Burgers \u2014 Flat Lots (Trim to Redeploy)</div>'
-      + '<label style="font-size:11px;color:var(--color-text-secondary);display:flex;align-items:center;gap:6px">\u00b1 <input type="number" min="0.5" max="50" step="0.5" value="' + nb.threshold + '" onchange="setNbThreshold(this.value); _renderCardOverlay(\'nb\')" style="width:62px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:4px;color:var(--color-text-primary);font-size:11px;padding:3px 6px"> % G/L band</label></div>';
-    html += '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:14px;line-height:1.5">Open lots that have barely moved (within \u00b1' + nb.threshold + '% gain/loss) \u2014 idle capital you can trim with minimal tax drag to fund higher-conviction moves. Sorted by market value (most idle first).'
-      + (nb.lockedExcluded ? ' <span style="color:var(--color-text-tertiary)">' + nb.lockedExcluded + ' PE-locked lot' + (nb.lockedExcluded > 1 ? 's' : '') + ' excluded (can\u2019t be trimmed).</span>' : '') + '</div>';
-    if (nb.rows.length === 0) {
-      html += '<div style="color:var(--color-text-tertiary);font-size:12px;font-style:italic;padding:12px 0">No flat lots in this band \u2014 every open lot has moved more than \u00b1' + nb.threshold + '%.</div>';
-    } else {
-      html += '<div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:10px">\u2248<strong style="color:var(--color-text-primary)">' + fmtDollarWhole(nb.totalDead) + '</strong> sitting in ' + nb.rows.length + ' flat lot' + (nb.rows.length > 1 ? 's' : '')
-        + (totalManaged > 0 ? ' \u00b7 ' + ((nb.totalDead / totalManaged) * 100).toFixed(1) + '% of the book' : '') + '.</div>';
-      const grid = 'display:grid;grid-template-columns:1.2fr 0.8fr 1.4fr 0.7fr 0.9fr 0.9fr 0.7fr;gap:8px;';
-      html += '<div style="' + grid + 'font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.06em;padding:0 0 6px;border-bottom:1px solid var(--color-border-tertiary)">'
-        + '<span>Ticker</span><span>Acct</span><span>Theme</span><span style="text-align:right">G/L%</span><span style="text-align:right">G/L $</span><span style="text-align:right">Value</span><span style="text-align:right">Held</span></div>';
-      nb.rows.forEach(r => {
-        const glColor = Math.abs(r.glPct) < 0.0001 ? 'var(--color-text-tertiary)' : (r.glPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
-        const held = r.days === null ? '\u2014' : heldBucketDisplay(r.days);
-        const sleeveColor = SLEEVE_COLORS[r.sleeve] || 'var(--color-text-tertiary)';
-        const vsTxt = r.vsSpx === null ? '' : '<span title="vs S&amp;P over the hold period" style="font-size:9px;color:' + (r.vsSpx >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)') + ';margin-left:6px">' + (r.vsSpx >= 0 ? '+' : '') + r.vsSpx.toFixed(1) + 'pp</span>';
-        html += '<div style="' + grid + 'align-items:center;padding:7px 0;border-bottom:1px solid var(--color-border-tertiary);font-size:12px">'
-          + '<span style="font-weight:700;color:var(--color-text-primary)">' + esc(r.ticker) + vsTxt + '</span>'
-          + '<span style="font-size:10px;color:var(--color-text-tertiary)">' + esc(r.account) + '</span>'
-          + '<span style="font-size:10px;color:' + sleeveColor + '">' + esc(r.theme || '\u2014') + '</span>'
-          + '<span style="text-align:right;color:' + glColor + '">' + (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%</span>'
-          + '<span style="text-align:right;color:' + glColor + '">' + fmtDollar(r.glDollar) + '</span>'
-          + '<span style="text-align:right;color:var(--color-text-primary);font-weight:600">' + fmtDollarWhole(r.value) + '</span>'
-          + '<span style="text-align:right;color:var(--color-text-secondary)">' + held + '</span></div>';
-      });
-      html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic;line-height:1.5">\u201cFlat\u201d = within \u00b1' + nb.threshold + '% gross gain/loss over the hold. Trim-to-redeploy candidates, not sell signals \u2014 a flat lot may still be early. The pp chip next to a ticker is its return vs the S&amp;P over the hold; a negative one flags a lot that\u2019s also lagging the index (the purest dead money). PE-locked lots are excluded since they can\u2019t be sold.</div>';
-    }
-  }
-
   content.innerHTML = html;
   cardOverlayActive = true;
   ov.style.display = 'flex';
@@ -28449,7 +28421,6 @@ function renderAll() {
   safeRender('renderBookExcludePanel', () => renderBookExcludePanel(open));
   safeRender('renderTrimWatch', renderTrimWatch);
   safeRender('renderAddWatch', renderAddWatch);
-  safeRender('renderNbWatch', renderNbWatch);
   safeRender('renderThemeUniverseDashTile', renderThemeUniverseDashTile);
   safeRender('renderAccountBreakdown', renderAccountBreakdown);
   safeRender('renderDashboardThemeSpotlight', renderDashboardThemeSpotlight);
@@ -33125,6 +33096,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dc</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dd</div>
 </body>
 </html>
