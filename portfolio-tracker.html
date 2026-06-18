@@ -22607,17 +22607,17 @@ function renderFactorUnity() {
 
   if (u.dominant && u.dominant.factorCount >= 2) {
     const d = u.dominant;
-    html += '<div style="font-size:11px;color:var(--color-text-secondary);line-height:1.5;margin-bottom:10px">Your ' + u.themeCount + ' themes form ' + u.signatureCount + ' exact signatures \u2014 but they are not ' + u.signatureCount + ' independent bets. Your most stacked one, <strong>' + d.pct.toFixed(0) + '%</strong>, loads <strong>' + esc(d.factors.join(' + ')) + '</strong> at once (' + esc(d.themes.map(t => t.theme).join(', ')) + '); the <strong>shared-w/-top</strong> figure on each row below is how much of that bet\u2019s risk is the <em>same</em> risk as this one \u2014 shared factors, weighted by size.</div>';
+    html += '<div style="font-size:11px;color:var(--color-text-secondary);line-height:1.5;margin-bottom:10px">Your ' + u.themeCount + ' themes form ' + u.signatureCount + ' exact signatures \u2014 but they are not ' + u.signatureCount + ' independent bets. Your most factor-stacked bet (the <em>anchor</em> below), <strong>' + d.pct.toFixed(0) + '%</strong>, loads <strong>' + esc(d.factors.join(' + ')) + '</strong> at once (' + esc(d.themes.map(t => t.theme).join(', ')) + '); the <strong>overlap w/ anchor</strong> figure on each row below is how much of that bet\u2019s risk is the <em>same</em> risk as this one \u2014 shared factors, weighted by size. The anchor is the most factor-stacked bet, not necessarily your largest single slice \u2014 Space &amp; Defense is bigger by book %, but it is one theme, so it is a concentration rather than a hidden multi-theme bet.</div>';
   }
 
-  html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Factor signature</th><th>Themes that move together</th><th class="r"># factors</th><th class="r">% of book<br><span style="font-weight:400;font-size:8px;color:var(--color-text-tertiary)">shared w/ top</span></th></tr></thead><tbody>';
+  html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Factor signature</th><th>Themes that move together</th><th class="r"># factors</th><th class="r">% of book<br><span style="font-weight:400;font-size:8px;color:var(--color-text-tertiary)">overlap w/ anchor</span></th></tr></thead><tbody>';
   u.groups.forEach(g => {
     const sev = sevColor(g.pct);
     const open = (factorUnityOpenSig === g.sig);
     html += '<tr><td><strong>' + esc(g.factors.join(' + ')) + '</strong></td>'
       + '<td><span style="font-size:10px;color:var(--color-text-secondary)">' + esc(g.themes.map(t => t.theme).join(', ')) + '</span></td>'
       + '<td class="r">' + g.factorCount + '</td>'
-      + '<td class="r" style="vertical-align:top"><span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" title="See the tickers (direct + look-through) behind this exposure" style="cursor:pointer;color:' + sev + ';font-weight:600;border-bottom:1px dotted ' + sev + '">' + g.pct.toFixed(1) + '%' + (open ? ' \u25be' : ' \u203a') + '</span>' + (g.overlapTopPct != null ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:1px;white-space:nowrap">' + g.overlapTopPct.toFixed(0) + '% \u00b7 ' + esc((g.overlapTopFactors||[]).join(', ')) + '</div>' : (g === u.dominant ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:1px">top bet</div>' : '')) + '</td></tr>';
+      + '<td class="r" style="vertical-align:top"><span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" title="See the tickers (direct + look-through) behind this exposure" style="cursor:pointer;color:' + sev + ';font-weight:600;border-bottom:1px dotted ' + sev + '">' + g.pct.toFixed(1) + '%' + (open ? ' \u25be' : ' \u203a') + '</span>' + (g.overlapTopPct != null ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:1px;white-space:nowrap">' + g.overlapTopPct.toFixed(0) + '% \u00b7 ' + esc((g.overlapTopFactors||[]).join(', ')) + '</div>' : (g === u.dominant ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:1px" title="The bet the other rows are compared against: your most factor-stacked cluster (most factors loaded at once) \u2014 not necessarily your largest single theme.">anchor</div>' : '')) + '</td></tr>';
     if (open) {
       html += '<tr><td colspan="4" style="padding:4px 0 12px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px">' + factorUnityDetailHtml(g) + '</div></td></tr>';
     }
@@ -33544,6 +33544,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ea</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09eb</div>
 </body>
 </html>
