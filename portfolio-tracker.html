@@ -22558,9 +22558,28 @@ function computeFactorUnity() {
     || arr.filter(g => g.themes.length >= 2)[0]
     || arr.filter(g => g.factorCount >= 2)[0]
     || (arr.length ? arr[0] : null);
+
+  // Partial overlap: exact-signature groups still SHARE factors, so "separate" bets co-move. Weight each
+  // factor by its book-level loading (share of book exposed to it) so a shared Rate counts more than a
+  // shared niche factor. overlapTopPct = (shared factor mass with the top bet) / (this bet's factor mass).
+  const factorPct = {};
+  prof.forEach(f => { factorPct[f.col] = f.pct || 0; });
+  let domFactor = null;
+  prof.forEach(f => { if ((f.pct || 0) > 0 && (!domFactor || (f.pct || 0) > domFactor.pct)) domFactor = { col: f.col, label: f.label, pct: f.pct || 0, themes: (f.themes || []).slice() }; });
+  const betsLoadingDom = domFactor ? arr.filter(g => g.factors.indexOf(domFactor.col) >= 0).length : 0;
+  arr.forEach(g => { g.factorMass = g.factors.reduce((s, f) => s + (factorPct[f] || 0), 0); });
+  arr.forEach(g => {
+    if (!dominant || g === dominant) { g.overlapTopPct = null; g.overlapTopFactors = []; return; }
+    const shared = g.factors.filter(f => dominant.factors.indexOf(f) >= 0);
+    const sharedMass = shared.reduce((s, f) => s + (factorPct[f] || 0), 0);
+    g.overlapTopPct = g.factorMass > 0 ? (sharedMass / g.factorMass) * 100 : 0;
+    g.overlapTopFactors = shared;
+  });
+
   return {
     groups: arr, dominant: dominant, fullBook: fullBook, namedTotal: namedTotal,
     themeCount: themeKeys.length, signatureCount: arr.length,
+    domFactor: domFactor, betsLoadingDom: betsLoadingDom,
     stacked3Pct: fullBook > 0 ? stacked3 / fullBook * 100 : 0,
     stacked2Pct: fullBook > 0 ? stacked2 / fullBook * 100 : 0,
     singlePct: fullBook > 0 ? single / fullBook * 100 : 0
@@ -22575,35 +22594,36 @@ function renderFactorUnity() {
   let html = '<div class="section-heading">Factor Unity — Is Your Diversification Real?</div>';
   html += '<div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin:2px 0 12px;max-width:840px">Your risk factors, regrouped by overlap. Themes that load the same factors move on the same triggers \u2014 so several \u201cdifferent\u201d themes can be one bet in disguise. The bigger a single signature in the table below, the less real your diversification.</div>';
 
-  if (u.dominant) {
-    const d = u.dominant;
-    const sev = sevColor(d.pct);
-    const themeNames = esc(d.themes.map(t => t.theme).join(', '));
-    const factors = esc(d.factors.join(' + '));
-    const body = (d.themes.length >= 2)
-      ? '<strong>' + themeNames + '</strong> look like ' + d.themes.length + ' separate themes but move as one \u2014 each loads <strong>' + factors + '</strong>, so a single shock to those factors hits all of them together.'
-      : '<strong>' + themeNames + '</strong> is your biggest single bet, loading <strong>' + factors + '</strong>.';
-    html += '<div style="background:var(--color-background-secondary);border-left:3px solid ' + sev + ';border-radius:var(--border-radius-md);padding:10px 12px;margin-bottom:12px">'
-      + '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px"><span style="color:' + sev + '">' + d.pct.toFixed(0) + '% of your book</span> is really one bet.</div>'
-      + '<div style="font-size:11px;color:var(--color-text-secondary);line-height:1.5">' + body + '</div></div>';
+  // Broadest shared driver: the single dominant factor and how far it reaches across "separate" bets.
+  if (u.domFactor && u.domFactor.pct > 0) {
+    const df = u.domFactor;
+    const sev = sevColor(df.pct);
+    const more = df.themes.length > 6 ? ', \u2026' : '';
+    const themeList = df.themes.length ? ' (' + esc(df.themes.slice(0, 6).join(', ')) + more + ')' : '';
+    html += '<div style="background:var(--color-background-secondary);border-left:3px solid ' + sev + ';border-radius:var(--border-radius-md);padding:10px 12px;margin-bottom:10px">'
+      + '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:3px"><span style="color:' + sev + '">' + df.pct.toFixed(0) + '% of your book moves on one factor</span> \u2014 ' + esc(df.col) + '.</div>'
+      + '<div style="font-size:11px;color:var(--color-text-secondary);line-height:1.5">It runs through ' + df.themes.length + ' themes across ' + u.betsLoadingDom + ' of your ' + u.signatureCount + ' \u201cseparate\u201d bets' + themeList + '. They look diversified, but one ' + esc((df.col || '').toLowerCase()) + ' move hits all of them \u2014 your diversification is mostly one trigger deep.</div></div>';
   }
 
-  html += '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:10px">Your <strong>' + u.themeCount + ' themes</strong> are really <strong>' + u.signatureCount + ' distinct bets</strong> once grouped by factor behavior \u2014 and <strong>' + u.stacked3Pct.toFixed(0) + '%</strong> of the book sits in themes loading 3+ factors at once (the most tightly linked).</div>';
+  if (u.dominant && u.dominant.factorCount >= 2) {
+    const d = u.dominant;
+    html += '<div style="font-size:11px;color:var(--color-text-secondary);line-height:1.5;margin-bottom:10px">Your ' + u.themeCount + ' themes form ' + u.signatureCount + ' exact signatures \u2014 but they are not ' + u.signatureCount + ' independent bets. Your most stacked one, <strong>' + d.pct.toFixed(0) + '%</strong>, loads <strong>' + esc(d.factors.join(' + ')) + '</strong> at once (' + esc(d.themes.map(t => t.theme).join(', ')) + '); the <strong>shared-w/-top</strong> figure on each row below is how much of that bet\u2019s risk is the <em>same</em> risk as this one \u2014 shared factors, weighted by size.</div>';
+  }
 
-  html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Factor signature</th><th>Themes that move together</th><th class="r"># factors</th><th class="r">% of book</th></tr></thead><tbody>';
+  html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Factor signature</th><th>Themes that move together</th><th class="r"># factors</th><th class="r">% of book<br><span style="font-weight:400;font-size:8px;color:var(--color-text-tertiary)">shared w/ top</span></th></tr></thead><tbody>';
   u.groups.forEach(g => {
     const sev = sevColor(g.pct);
     const open = (factorUnityOpenSig === g.sig);
     html += '<tr><td><strong>' + esc(g.factors.join(' + ')) + '</strong></td>'
       + '<td><span style="font-size:10px;color:var(--color-text-secondary)">' + esc(g.themes.map(t => t.theme).join(', ')) + '</span></td>'
       + '<td class="r">' + g.factorCount + '</td>'
-      + '<td class="r"><span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" title="See the tickers (direct + look-through) behind this exposure" style="cursor:pointer;color:' + sev + ';font-weight:600;border-bottom:1px dotted ' + sev + '">' + g.pct.toFixed(1) + '%' + (open ? ' \u25be' : ' \u203a') + '</span></td></tr>';
+      + '<td class="r" style="vertical-align:top"><span onclick="toggleFactorUnitySig(\'' + g.sig.replace(/'/g, "\\'") + '\')" title="See the tickers (direct + look-through) behind this exposure" style="cursor:pointer;color:' + sev + ';font-weight:600;border-bottom:1px dotted ' + sev + '">' + g.pct.toFixed(1) + '%' + (open ? ' \u25be' : ' \u203a') + '</span>' + (g.overlapTopPct != null ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:1px;white-space:nowrap">' + g.overlapTopPct.toFixed(0) + '% \u00b7 ' + esc((g.overlapTopFactors||[]).join(', ')) + '</div>' : (g === u.dominant ? '<div style="font-size:8.5px;color:var(--color-text-tertiary);margin-top:1px">top bet</div>' : '')) + '</td></tr>';
     if (open) {
       html += '<tr><td colspan="4" style="padding:4px 0 12px"><div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px">' + factorUnityDetailHtml(g) + '</div></td></tr>';
     }
   });
   html += '</tbody></table></div>';
-  html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Signatures use the same assigned theme\u2192factor map the Risk Review grid uses (structural classification, not measured correlation \u2014 a name can buck its signature). Percentages are share of the full book; the undecomposed index/cash tail carries no signature and isn\u2019t shown.</div>';
+  html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:8px;line-height:1.5">Signatures use the same assigned theme\u2192factor map the Risk Review grid uses (structural classification, not measured correlation). \u201cShared w/ top\u201d weights each shared factor by its book-level loading, so a shared Rate counts more than a shared niche factor \u2014 it is the fraction of a bet\u2019s factor risk that overlaps your top bet. Percentages are share of the full book; the undecomposed index/cash tail carries no signature.</div>';
   el.innerHTML = html;
 }
 
@@ -33524,6 +33544,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dz</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ea</div>
 </body>
 </html>
