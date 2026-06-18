@@ -5205,7 +5205,7 @@ function renderNbCard() {
     + '<span>Ticker</span><span>Acct</span><span>Theme</span><span style="text-align:right">G/L%</span><span style="text-align:right">G/L $</span><span style="text-align:right">Value</span><span style="text-align:right">Held</span></div>';
   nb.rows.forEach(r => {
     const glColor = Math.abs(r.glPct) < 0.0001 ? 'var(--color-text-tertiary)' : (r.glPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
-    const held = r.days === null ? '\u2014' : heldBucketDisplay(r.days);
+    const hb = heldBucketDisplay(r.days);
     const sleeveColor = SLEEVE_COLORS[r.sleeve] || 'var(--color-text-tertiary)';
     const vsTxt = r.vsSpx === null ? '' : '<span title="Return vs the S&amp;P over the hold period" style="font-size:9px;color:' + (r.vsSpx >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)') + ';margin-left:6px">' + (r.vsSpx >= 0 ? '+' : '') + r.vsSpx.toFixed(1) + 'pp</span>';
     html += '<div style="' + grid + 'align-items:center;padding:7px 0;border-bottom:1px solid var(--color-border-tertiary);font-size:12px">'
@@ -5215,7 +5215,7 @@ function renderNbCard() {
       + '<span style="text-align:right;color:' + glColor + '">' + (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%</span>'
       + '<span style="text-align:right;color:' + glColor + '">' + fmtDollar(r.glDollar) + '</span>'
       + '<span style="text-align:right;color:var(--color-text-primary);font-weight:600">' + fmtDollarWhole(r.value) + '</span>'
-      + '<span style="text-align:right;color:var(--color-text-secondary)">' + held + '</span></div>';
+      + '<span style="text-align:right;color:' + hb.color + '">' + hb.label + '</span></div>';
   });
   html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic;line-height:1.5">\u201cFlat\u201d = within \u00b1' + nb.threshold + '% gross gain/loss over the hold. Trim-to-redeploy candidates, not sell signals \u2014 a flat lot may still be early. The pp chip is the lot\u2019s return vs the S&amp;P; a negative one flags a lot also lagging the index (the purest dead money). PE-locked lots are excluded since they can\u2019t be sold.</div>';
   el.innerHTML = html;
@@ -33096,6 +33096,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dd</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09de</div>
 </body>
 </html>
