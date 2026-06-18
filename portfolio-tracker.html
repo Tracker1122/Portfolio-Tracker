@@ -22313,6 +22313,16 @@ let clusterExpandedIdx = -1; // which cluster's names are expanded under the bar
 function toggleClusterExpand(i) { clusterExpandedIdx = (clusterExpandedIdx === i) ? -1 : i; renderThemeClusters(); }
 let lowConfExpanded = false; // whether the inline list of low-confidence calls (name · theme · reason) is open
 function toggleLowConfList() { lowConfExpanded = !lowConfExpanded; renderThemeClusters(); }
+let clusterFlaggedSnapshot = []; // [{key, theme}] of currently-flagged names — backs the one-click confirm
+function confirmAllClusterPlacements() {
+  // Records each flagged name's CURRENT (auto) theme as an explicit user assignment, which clears its
+  // low-confidence flag. Use when the auto-placements are right and you just want to confirm them in bulk;
+  // any individual name can still be reassigned afterward via "Reassign names".
+  const o = loadClusterOverrides();
+  clusterFlaggedSnapshot.forEach(f => { if (f.key) o[f.key] = f.theme; });
+  saveClusterOverrides(o);
+  renderThemeClusters();
+}
 function reassignCluster(key, theme) {
   const o = loadClusterOverrides();
   if (theme === '__auto__') delete o[key]; else o[key] = theme;
@@ -22392,7 +22402,8 @@ function renderThemeClusters() {
   // Count total flags across clusters for the headline nudge.
   let flagCount = 0;
   const flaggedList = [];
-  data.clusters.forEach(c => c.names.forEach(n => { const fl = clusterConfidenceFlag(n, ctx); if (fl) { flagCount++; flaggedList.push({ display: n.display, theme: c.label, reason: fl }); } }));
+  data.clusters.forEach(c => c.names.forEach(n => { const fl = clusterConfidenceFlag(n, ctx); if (fl) { flagCount++; flaggedList.push({ key: n.key, display: n.display, theme: c.label, reason: fl }); } }));
+  clusterFlaggedSnapshot = flaggedList.map(f => ({ key: f.key, theme: f.theme }));
 
   const fmtD = (n) => fmtDollarWhole(n);
   const biggest = data.biggest;
@@ -22471,7 +22482,10 @@ function renderThemeClusters() {
           <span style="color:var(--color-text-secondary);width:140px;flex-shrink:0">${esc(fc.theme)}</span>
           <span style="color:var(--color-text-tertiary);flex:1">${esc(fc.reason)}</span>
         </div>`).join('')}
-        <div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px">Use "Reassign names" above to move any of these to the theme you think fits.</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="confirmAllClusterPlacements()" style="font-size:9px">✓ Confirm all ${flagCount} as-is</button>
+          <span style="font-size:8px;color:var(--color-text-tertiary);font-style:italic">Records each name's current theme as your call (clears the flag). Reassign any individually with "Reassign names" above.</span>
+        </div>
       </div>` : ''}
 
       ${(() => {
@@ -33236,6 +33250,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dp</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dq</div>
 </body>
 </html>
