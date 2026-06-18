@@ -22520,6 +22520,37 @@ function factorUnityExplHtml(g, u) {
     + 'How it is figured: each factor is weighted by how much of your whole book loads it, so a shared Rate counts more than a shared niche factor. This bet\u2019s factor weight = ' + mine + ' = ' + Math.round(g.factorMass) + '. The part shared with the anchor = ' + sharedStr + ' = ' + Math.round(sharedMass) + '. So ' + Math.round(sharedMass) + ' \u00f7 ' + Math.round(g.factorMass) + ' = ' + g.overlapTopPct.toFixed(0) + '%.<br>'
     + 'Plain version: when ' + (shared.length ? esc(shared.join(' or ')) : 'a shared factor') + ' moves, this bet and the anchor move together \u2014 not the independent bets the signature split makes them look.';
 }
+function themeMapDrillHtml(theme) {
+  try {
+    var cl = (typeof computeThemeClusters === 'function') ? computeThemeClusters() : null;
+    if (!cl || !cl.themeNames) return '<div style="font-size:10px;color:var(--color-text-tertiary)">No look-through detail available.</div>';
+    var names = cl.themeNames[theme] || [];
+    var byTk = {};
+    names.forEach(function (nm) {
+      var e = byTk[nm.key] || (byTk[nm.key] = { display: nm.display, value: 0, direct: 0, viaFunds: 0 });
+      e.value += (nm.value || 0); e.direct += (nm.direct || 0); e.viaFunds += (nm.viaFunds || 0);
+    });
+    var arr = Object.keys(byTk).map(function (k) { return byTk[k]; }).filter(function (t) { return t.value > 0.5; }).sort(function (a, b) { return b.value - a.value; });
+    if (!arr.length) return '<div style="font-size:10px;color:var(--color-text-tertiary)">No decomposed names for this theme (sitting in the broad-index tail until look-through tables are refreshed).</div>';
+    var f$ = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (v) { return '$' + Math.round(v).toLocaleString(); };
+    var tot = arr.reduce(function (s, t) { return s + t.value; }, 0);
+    var h = '<div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:5px">Inside ' + esc(theme) + ' \u2014 ' + f$(tot) + ' look-through</div>';
+    h += '<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="color:var(--color-text-tertiary)"><th style="text-align:left;padding:2px 6px">Ticker</th><th style="text-align:right;padding:2px 6px">Direct</th><th style="text-align:right;padding:2px 6px">Look-through</th><th style="text-align:right;padding:2px 6px">Total</th></tr></thead><tbody>';
+    arr.forEach(function (t) {
+      h += '<tr style="border-top:1px solid var(--color-border)"><td style="text-align:left;padding:2px 6px;color:var(--color-text-primary)">' + esc(t.display) + '</td>'
+        + '<td style="text-align:right;padding:2px 6px;color:var(--color-text-secondary)">' + (t.direct > 0.5 ? f$(t.direct) : '\u2014') + '</td>'
+        + '<td style="text-align:right;padding:2px 6px;color:var(--color-text-secondary)">' + (t.viaFunds > 0.5 ? f$(t.viaFunds) : '\u2014') + '</td>'
+        + '<td style="text-align:right;padding:2px 6px;color:var(--color-text-primary);font-weight:600">' + f$(t.value) + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    h += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:5px;line-height:1.5">Direct = held outright. Look-through = held inside your index funds. A name spanning several themes is split across them, so its figure here is the portion attributed to this theme; the total matches this theme\u2019s weight above.</div>';
+    return h;
+  } catch (e) { return ''; }
+}
+function toggleThemeMapDrill(theme) {
+  window._themeMapDrill = (window._themeMapDrill === theme) ? null : theme;
+  try { if (window._riskReplay && typeof window._riskReplay.paintThemeMap === 'function') window._riskReplay.paintThemeMap(); } catch (e) {}
+}
 function factorUnityDetailHtml(g) {
   if (!g.tickers || !g.tickers.length) return '<div style="font-size:10px;color:var(--color-text-tertiary)">No decomposed names for this signature (it\u2019s sitting in the broad-index tail until look-through tables are refreshed).</div>';
   const f$ = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : (function (v) { return '$' + Math.round(v).toLocaleString(); });
@@ -31977,10 +32008,21 @@ init();
       if (haveW) {
         var wCol = held ? severityColor(wpct) : 'var(--color-text-tertiary)';
         var wTxt = held ? (wpct >= 0.5 ? wpct.toFixed(0) + '%' : '&lt;1%') : '\u2014';
-        rows += '<td style="font-size:9px;font-weight:600;color:' + wCol + ';text-align:right;padding:3px 8px">' + wTxt + '</td>';
+        if (held) {
+          var thmAttr = thm.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+          var dOpen = (typeof window !== 'undefined' && window._themeMapDrill === thm);
+          rows += '<td style="font-size:9px;font-weight:600;text-align:right;padding:3px 8px"><span onclick="toggleThemeMapDrill(\'' + thmAttr + '\')" style="cursor:pointer;color:' + wCol + ';border-bottom:1px dotted ' + wCol + '">' + wTxt + (dOpen ? ' \u25be' : ' \u203a') + '</span></td>';
+        } else {
+          rows += '<td style="font-size:9px;font-weight:600;color:' + wCol + ';text-align:right;padding:3px 8px">' + wTxt + '</td>';
+        }
       }
       RISK_FACTORS.forEach(function (f) { rows += '<td style="text-align:center;padding:3px 5px">' + (tags.indexOf(f.id) >= 0 ? dotOn : '') + '</td>'; });
       rows += '</tr>';
+      if (typeof window !== 'undefined' && window._themeMapDrill === thm) {
+        var _dcols = 1 + (haveW ? 1 : 0) + RISK_FACTORS.length;
+        var _dhtml = (typeof window.themeMapDrillHtml === 'function') ? window.themeMapDrillHtml(thm) : '';
+        rows += '<tr><td colspan="' + _dcols + '" style="padding:2px 4px 10px"><div style="background:var(--color-background-secondary);border-radius:6px;padding:8px 10px">' + _dhtml + '</div></td></tr>';
+      }
     }
     var caption = '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:5px;line-height:1.45">How each theme in your book maps to the six risks \u2014 the rows behind the \u201cYOUR BOOK\u201d line inside each event\u2019s grid. A dot means the theme is materially sensitive to that force (not a direction), so the same dot is your drawdown risk in a stress and your run-up in the rebound. ' + (haveW ? '\u201cYour weight\u201d is live look-through weight; \u201c\u2014\u201d means not currently held.' : 'Connect live prices to fill in your per-theme weight.') + '</div>';
     return '<details open style="margin:2px 0 6px"><summary style="font-size:11px;font-weight:600;color:var(--color-text-info,#60a5fa);cursor:pointer">How your themes map to the six risks</summary>' +
@@ -33609,11 +33651,11 @@ init();
     } catch (e) { return { active: false }; }
   }
 
-  W._riskReplay = { runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext, riskReviewReportHtml: riskReviewReportHtml, riskFactorProfileStanding: riskFactorProfileStanding, riskFactorProfileHypothetical: riskFactorProfileHypothetical };
+  W._riskReplay = { paintThemeMap: _paintThemeMap, runReplayForWindow: runReplayForWindow, riskLiquidWeights: riskLiquidWeights, riskHypotheticalWeights: riskHypotheticalWeights, riskFrozenPct: riskFrozenPct, stressScenario: stressScenario, onShow: onShow, riskReviewContext: riskReviewContext, riskReviewReportHtml: riskReviewReportHtml, riskFactorProfileStanding: riskFactorProfileStanding, riskFactorProfileHypothetical: riskFactorProfileHypothetical };
 })(window);
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ef</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09eg</div>
 </body>
 </html>
