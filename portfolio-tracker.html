@@ -1427,6 +1427,14 @@
 
   <!-- Theme Dissection Tab -->
   <div class="tab-panel" id="tab-pricetheme">
+    <div class="section-heading">Do I Own It? — Ticker Look-Up</div>
+    <div style="font-size:10px;color:var(--color-text-tertiary);font-style:italic;margin:2px 0 8px;padding:0 2px">
+      Search any ticker to see whether it’s in your book — held directly, embedded inside your funds (look-through), or both. Useful when you’re not sure you already own something.
+    </div>
+    <input id="ticker-lookup-input" type="text" oninput="runTickerLookup()" placeholder="Type a ticker — e.g. NVDA" autocomplete="off" spellcheck="false"
+      style="width:100%;max-width:320px;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-size:13px;padding:8px 10px;margin-bottom:10px;text-transform:uppercase">
+    <div id="ticker-lookup-results" style="margin-bottom:28px"></div>
+
     <div id="etf-compare-card" style="margin-top:6px">
       <div class="section-heading">ETF &amp; Stock Dissection — holdings overlap</div>
       <div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin:2px 0 14px;max-width:840px">
@@ -7949,7 +7957,7 @@ function switchTab(name) {
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); safeRender('renderPriceMoves', renderPriceMoves); }
   if (name === 'tradeideas') { safeRender('renderNbCard', renderNbCard); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
-  if (name === 'pricetheme') { safeRender('renderEtfCompare', renderEtfCompare); safeRender('renderManualAnalyze', renderManualAnalyze); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
+  if (name === 'pricetheme') { if (typeof runTickerLookup === 'function') runTickerLookup(); safeRender('renderEtfCompare', renderEtfCompare); safeRender('renderManualAnalyze', renderManualAnalyze); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
   if (name === 'distribution') safeRender('renderDistributionTab', renderDistributionTab);
@@ -9917,6 +9925,107 @@ function qrIndexLookthrough(ticker) {
     out.push({ fund, ticker: matchKey, weightPct, fundValue: held, indirectValue: held * (weightPct / 100), asOf: tbl.asOf });
   }
   return out;
+}
+
+// ── "Do I own it?" ticker look-up — direct lots + look-through inside funds you hold ──────────────
+// Answers "is this name anywhere in my book?" Builds the searchable universe from direct tickers plus
+// every tracked constituent of the index funds you actually hold, so embedded-only names surface too.
+function buildExposureUniverse() {
+  const set = {}; // normalizedTicker -> displayTicker
+  positions.filter(p => !p.closed && p.ticker).forEach(p => { set[qrNormTicker(p.ticker)] = (p.ticker || '').toUpperCase(); });
+  const tables = (typeof getIndexLookthrough === 'function') ? getIndexLookthrough() : {};
+  for (const fund in tables) {
+    if (typeof indexFundHeldValue === 'function' && indexFundHeldValue(fund) <= 0) continue; // only funds you hold
+    const w = (tables[fund] && tables[fund].weights) || {};
+    for (const k in w) { const nk = qrNormTicker(k); if (!set[nk]) set[nk] = (k || '').toUpperCase(); }
+  }
+  return set;
+}
+function lookupTicker(tk) {
+  const inp = document.getElementById('ticker-lookup-input');
+  if (inp) inp.value = tk;
+  runTickerLookup();
+}
+function runTickerLookup() {
+  const out = document.getElementById('ticker-lookup-results');
+  if (!out) return;
+  const inp = document.getElementById('ticker-lookup-input');
+  const raw = inp ? inp.value.trim() : '';
+  if (!raw) { out.innerHTML = '<div style="font-size:10px;color:var(--color-text-tertiary)">Type a ticker above to check whether it\u2019s in your book \u2014 directly, inside your funds, or both.</div>'; return; }
+  const t = qrNormTicker(raw);
+  const disp = raw.toUpperCase();
+
+  // Direct holdings (open lots), grouped by account
+  const directLots = positions.filter(p => !p.closed && p.ticker && qrNormTicker(p.ticker) === t);
+  const byAccount = {};
+  let directTotal = 0, directShares = 0;
+  directLots.forEach(p => {
+    const c = calcPos(p);
+    const acct = p.account || '\u2014';
+    if (!byAccount[acct]) byAccount[acct] = { shares: 0, value: 0, gain: 0 };
+    const sh = parseFloat(p.shares) || 0;
+    byAccount[acct].shares += sh; byAccount[acct].value += (c.exitValue || 0); byAccount[acct].gain += (c.gainLoss || 0);
+    directTotal += (c.exitValue || 0); directShares += sh;
+  });
+
+  // Embedded (look-through inside funds you hold)
+  const emb = qrIndexLookthrough(t);
+  const embTotal = emb.reduce((s, l) => s + (l.indirectValue || 0), 0);
+
+  if (directLots.length === 0 && emb.length === 0) {
+    const uni = buildExposureUniverse();
+    const matches = Object.keys(uni).filter(nk => nk.indexOf(t) !== -1).map(nk => uni[nk]).sort().slice(0, 18);
+    if (matches.length) {
+      out.innerHTML = '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:6px">No exact match for <strong>' + esc(disp) + '</strong>. Names in your book containing \u201c' + esc(disp) + '\u201d:</div>'
+        + '<div style="display:flex;flex-wrap:wrap;gap:5px">' + matches.map(m => '<button onclick="lookupTicker(\'' + escq(m) + '\')" style="font-size:10px;font-weight:700;background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:4px;color:var(--color-text-primary);padding:3px 8px;cursor:pointer">' + esc(m) + '</button>').join('') + '</div>';
+    } else {
+      out.innerHTML = '<div style="background:var(--color-background-secondary);border-left:3px solid var(--color-text-tertiary);border-radius:var(--border-radius-md);padding:9px 11px;font-size:11px;color:var(--color-text-secondary)">You don\u2019t hold <strong>' + esc(disp) + '</strong> \u2014 not directly, and not inside any fund you own (per your look-through tables). <span style="color:var(--color-text-tertiary);font-size:9px">Look-through only sees each fund\u2019s tracked top holdings, so a tiny tail position inside an index might not surface here.</span></div>';
+    }
+    return;
+  }
+
+  // Grand total for % of book (mirrors the pass-through callouts: book + S&P + cash)
+  const totalPortfolioValue = positions.filter(p => !p.closed && p.ticker).reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
+  const sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+  const spVal = sp ? (sp.price > 0 ? sp.currentValue : sp.totalInvested) : 0;
+  let cash = 0; try { if (typeof cashBuckets !== 'undefined' && cashBuckets) cash = Object.values(cashBuckets).reduce((s, v) => s + (parseFloat(v) || 0), 0); } catch (e) {}
+  const grandTotal = totalPortfolioValue + spVal + cash;
+  const trueTotal = directTotal + embTotal;
+  const truePct = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
+
+  let verdict;
+  if (directLots.length && emb.length) verdict = 'You hold ' + esc(disp) + ' both directly and via funds.';
+  else if (directLots.length) verdict = 'You hold ' + esc(disp) + ' directly.';
+  else verdict = 'You hold ' + esc(disp) + ' \u2014 only inside your funds (no direct position).';
+
+  let html = '<div style="background:var(--color-background-secondary);border-left:3px solid var(--color-text-success);border-radius:var(--border-radius-md);padding:10px 12px;margin-bottom:10px">'
+    + '<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin-bottom:2px">\u2713 ' + verdict + '</div>'
+    + '<div style="font-size:12px;color:var(--color-text-secondary)">True exposure <strong style="color:var(--color-text-primary)">' + fmtDollarWhole(trueTotal) + '</strong>'
+    + (grandTotal > 0 ? ' \u00b7 ' + truePct.toFixed(2) + '% of your book' : '')
+    + ' \u2014 ' + fmtDollarWhole(directTotal) + ' direct + ' + fmtDollarWhole(embTotal) + ' via funds.</div></div>';
+
+  if (directLots.length) {
+    html += '<div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin:8px 0 4px">Direct \u2014 ' + fmtDollarWhole(directTotal) + ' (' + directShares.toFixed(2) + ' sh)</div>';
+    html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Account</th><th class="r">Shares</th><th class="r">Value</th><th class="r">G/L $</th></tr></thead><tbody>';
+    Object.keys(byAccount).sort().forEach(acct => {
+      const a = byAccount[acct];
+      const gc = a.gain >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)';
+      html += '<tr><td>' + esc(acct) + '</td><td class="r">' + a.shares.toFixed(2) + '</td><td class="r">' + fmtDollarWhole(a.value) + '</td><td class="r"><span style="color:' + gc + '">' + fmtDollar(a.gain) + '</span></td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  if (emb.length) {
+    html += '<div style="font-size:9px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.05em;margin:10px 0 4px">Inside your funds (look-through) \u2014 ' + fmtDollarWhole(embTotal) + '</div>';
+    html += '<div class="rebal-table-wrap"><table class="rebal-table"><thead><tr><th>Fund</th><th class="r">Weight</th><th class="r">Your exposure</th></tr></thead><tbody>';
+    emb.slice().sort((a, b) => (b.indirectValue || 0) - (a.indirectValue || 0)).forEach(l => {
+      html += '<tr><td><strong>' + esc(l.fund) + '</strong></td><td class="r">' + (l.weightPct != null ? l.weightPct.toFixed(2) + '%' : '\u2014') + '</td><td class="r">' + fmtDollarWhole(l.indirectValue || 0) + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    html += '<div style="font-size:8px;color:var(--color-text-tertiary);font-style:italic;margin-top:4px">Look-through uses your pasted fund weights (approximate; refresh when they drift).</div>';
+  }
+
+  out.innerHTML = html;
 }
 
 // ETF-vs-index overlap: given an ETF candidate's parsed holdings (ticker+weight) and a planned
@@ -33250,6 +33359,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dq</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ds</div>
 </body>
 </html>
