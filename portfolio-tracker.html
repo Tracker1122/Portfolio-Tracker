@@ -1517,8 +1517,8 @@
   <!-- Risk Review Tab -->
   <div class="tab-panel" id="tab-risk">
     <div class="section-heading">Risk Review</div>
+    <div id="factor-unity-mount" style="margin-bottom:28px"></div>
     <div id="risk-review-mount"></div>
-    <div id="factor-unity-mount" style="margin-top:28px"></div>
   </div><!-- end tab-risk -->
 
   <!-- Quality Review Tab -->
@@ -22518,7 +22518,7 @@ function renderFactorUnity() {
   if (!u) { el.innerHTML = '<div style="font-size:10px;color:var(--color-text-tertiary)">Factor unity needs the live factor profile and theme look-through \u2014 open Risk Review with your themes tagged and fund weights pasted.</div>'; return; }
   const sevColor = (pct) => pct >= 35 ? 'var(--color-text-danger)' : pct >= 20 ? '#fb923c' : pct >= 10 ? '#fbbf24' : 'var(--color-text-success)';
   let html = '<div class="section-heading">Factor Unity — Is Your Diversification Real?</div>';
-  html += '<div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin:2px 0 12px;max-width:840px">The grid above shows each factor alone. This groups your themes by their <strong>factor signature</strong> \u2014 the set of factors each one loads. Themes that share a signature move on the same triggers, so they\u2019re one behavioral bet, not several. Where one signature dominates, themes that look diversified are correlated by construction.</div>';
+  html += '<div style="font-size:10px;color:var(--color-text-tertiary);line-height:1.5;margin:2px 0 12px;max-width:840px">The Risk Review grid below shows each factor alone. This groups your themes by their <strong>factor signature</strong> \u2014 the set of factors each one loads. Themes that share a signature move on the same triggers, so they\u2019re one behavioral bet, not several. Where one signature dominates, themes that look diversified are correlated by construction.</div>';
 
   if (u.dominant && u.dominant.factorCount >= 2) {
     const d = u.dominant;
@@ -33459,6 +33459,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dv</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09dw</div>
 </body>
 </html>
