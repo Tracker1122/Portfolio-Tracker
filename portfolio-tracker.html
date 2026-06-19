@@ -5280,7 +5280,6 @@ function renderNbCard() {
   const tableRows = nb.rows.map(r => {
     const glColor = Math.abs(r.glPct) < 0.0001 ? 'var(--color-text-tertiary)' : (r.glPct >= 0 ? 'var(--color-text-success)' : 'var(--color-text-danger)');
     const hb = heldBucketDisplay(r.days);
-    const sk = soakCellInfo(r.sleeve, r.days);
     const tx = taxToSellInfo(r.glDollar, r.days, r.account);
     const sleeveColor = SLEEVE_COLORS[r.sleeve] || 'var(--color-text-tertiary)';
     // Pass-through exposure callout (mirrors Add Candidates): what you ALSO hold of this name embedded
@@ -5302,7 +5301,7 @@ function renderNbCard() {
       })();
       const truePct = grandTotal > 0 ? (trueTotal / grandTotal) * 100 : 0;
       const via = lts.map(l => esc(l.fund) + ' ' + fmtDollarWhole(l.indirectValue)).join(' + ');
-      passRow = '<tr><td colspan="12" style="padding:2px 10px 8px;border-top:none">'
+      passRow = '<tr><td colspan="11" style="padding:2px 10px 8px;border-top:none">'
         + '<div style="font-size:9px;color:#fbbf24;line-height:1.5;padding-left:4px;border-left:2px solid rgba(251,191,36,0.4)">'
         + '<strong>True ' + esc(r.ticker) + ' exposure: ~' + fmtDollarWhole(trueTotal) + '</strong> \u2014 all direct lots ' + fmtDollarWhole(direct) + ' + ' + fmtDollarWhole(embedded) + ' via funds (' + via + ') = <strong>' + truePct.toFixed(1) + '% of your portfolio</strong>. Trimming this lot only reduces part of it \u2014 you keep the embedded slice (and any other direct lots). <span style="color:var(--color-text-tertiary)">(Embedded approximate \u2014 fund weights drift.)</span>'
         + '</div></td></tr>';
@@ -5311,14 +5310,13 @@ function renderNbCard() {
       + '<td><strong>' + esc(r.ticker) + '</strong>' + (r.isETF ? ' <span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px;font-weight:700">ETF</span>' : '') + '</td>'
       + '<td><span style="font-size:9px;color:' + sleeveColor + ';background:' + sleeveColor + '22;padding:1px 5px;border-radius:3px;font-weight:700">' + esc(r.sleeve || '\u2014') + '</span></td>'
       + '<td><span style="font-size:10px;color:var(--color-text-tertiary)">' + esc(r.theme || '\u2014') + '</span></td>'
+      + '<td class="r">' + fmtDollarWhole(r.value) + '</td>'
       + '<td><span style="font-size:10px;color:var(--color-text-secondary)">' + esc(r.account || '\u2014') + '</span></td>'
       + '<td class="r"><span style="color:' + glColor + '">' + (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%</span></td>'
       + '<td class="r"><span style="color:' + glColor + '">' + fmtDollar(r.glDollar) + '</span></td>'
       + ppCell(r.themeAlphaPct, r.benchTicker ? ('Return vs ' + r.benchTicker + ' (theme benchmark) over the hold') : 'Return vs the theme benchmark over the hold')
       + ppCell(r.vsSpx, 'Return vs the S&P 500 over the hold')
-      + '<td class="r">' + fmtDollarWhole(r.value) + '</td>'
       + '<td class="r"><span style="color:' + hb.color + ';font-weight:600">' + hb.label + '</span></td>'
-      + '<td class="r"><span style="color:' + sk.color + '" title="' + sk.title + '">' + sk.text + '</span></td>'
       + '<td class="r"><span style="color:' + tx.color + '" title="' + tx.title + '">' + tx.text + '</span></td>'
       + '</tr>' + passRow;
   }).join('');
@@ -5330,10 +5328,10 @@ function renderNbCard() {
   };
   html += '<div class="rebal-table-wrap">'
     + '<table class="rebal-table"><thead><tr>'
-    + nbHdr('ticker', 'Position', false) + nbHdr('sleeve', 'Strategy', false) + nbHdr('theme', 'Industry', false) + nbHdr('account', 'Account', false)
+    + nbHdr('ticker', 'Position', false) + nbHdr('sleeve', 'Strategy', false) + nbHdr('theme', 'Industry', false) + nbHdr('value', 'Value', true) + nbHdr('account', 'Account', false)
     + nbHdr('glPct', 'G/L%', true) + nbHdr('glDollar', 'G/L $', true) + nbHdr('themeAlphaPct', 'Theme \u03b1', true) + nbHdr('vsSpx', 'SPX \u03b1', true)
-    + nbHdr('value', 'Value', true) + nbHdr('days', 'Held', true)
-    + '<th class="r" title="Held long enough that its alpha is signal not noise? Per-sleeve soak threshold.">Soak</th><th class="r" title="Est. tax to sell this lot now: a cost on a gain, a harvest benefit on a loss; IRA = none.">Tax</th>'
+    + nbHdr('days', 'Held', true)
+    + '<th class="r" title="Est. tax to sell this lot now: a cost on a gain, a harvest benefit on a loss; IRA = none.">Tax</th>'
     + '</tr></thead><tbody>' + tableRows + '</tbody></table></div>';
   html += '<div style="font-size:9px;color:var(--color-text-tertiary);margin-top:10px;font-style:italic;line-height:1.5">\u201cFlat\u201d = within \u00b1' + nb.threshold + '% gross gain/loss over the hold. Trim-to-redeploy candidates, not sell signals \u2014 a flat lot may still be early. \u03b1 columns are the lot\u2019s return vs its theme benchmark and vs the S&amp;P over the hold (percentage points); a lot flat <em>and</em> negative on both is the purest dead money. Lots under ' + fmtDollarWhole(NB_MIN_VALUE) + ' and PE-locked lots are excluded.</div>';
   el.innerHTML = html;
@@ -33693,6 +33691,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ei</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ej</div>
 </body>
 </html>
