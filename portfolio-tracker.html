@@ -14917,7 +14917,7 @@ function _pmComputeFromCache(bookTk, base, end) {
   if (!_calBars) { for (const _ct of Object.keys(bookTk)) { if (_pmHist[_ct]) { _calBars = _pmHist[_ct]; break; } } }
   const endBarMs = _calBars ? _pmBarMsAtOrBefore(_calBars, end) : null;
   const baseBarMs = _calBars ? _pmBarMsAtOrBefore(_calBars, base) : null;
-  _pmRangeData = { base, end, rows, excluded, bookMove, bookPct, vooPct, vsVoo, endBarMs, baseBarMs, anyRate: fl.anyRate, anyNet: fl.anyNet, at: Date.now() };
+  _pmRangeData = { base, end, rows, excluded, bookValA, bookMove, bookPct, vooPct, vsVoo, endBarMs, baseBarMs, anyRate: fl.anyRate, anyNet: fl.anyNet, at: Date.now() };
   if (_pmLookupResult && (_pmLookupResult.base !== base || _pmLookupResult.end !== end)) _pmLookupResult = null;
 }
 
@@ -14982,21 +14982,28 @@ function renderPriceMoves() {
       const exYoung = D.excluded.filter(x => x.reason === 'young');
       const exNo = D.excluded.filter(x => x.reason === 'nodata');
       const exOther = D.excluded.filter(x => x.reason !== 'young' && x.reason !== 'nodata');
-      exYoung.forEach(x => notes.push(esc(x.ticker) + ' has no price history as far back as ' + esc(D.base) + (x.firstDate ? ' \u2014 it first traded ' + esc(x.firstDate) : ' (it started trading after your baseline)') + ', so it is excluded from the book figure.'));
-      if (exNo.length) notes.push('No data returned this pull for ' + exNo.map(x => esc(x.ticker)).join(', ') + ' \u2014 hit Go again to retry just those.');
-      exOther.forEach(x => notes.push(esc(x.ticker) + ' is missing a usable close across this window, excluded from the book figure.'));
+      exYoung.forEach(x => notes.push('<b style="color:var(--color-text-secondary)">' + esc(x.ticker) + '</b> has no price history as far back as ' + esc(D.base) + (x.firstDate ? ' \u2014 it first traded ' + esc(x.firstDate) : ' (it started trading after your baseline)') + ', so it is excluded from the book figure.'));
+      if (exNo.length) notes.push('No data returned this pull for ' + exNo.map(x => '<b style="color:var(--color-text-secondary)">' + esc(x.ticker) + '</b>').join(', ') + ' \u2014 hit Go again to retry just those.');
+      exOther.forEach(x => notes.push('<b style="color:var(--color-text-secondary)">' + esc(x.ticker) + '</b> is missing a usable close across this window, excluded from the book figure.'));
     }
     if (D.anyRate) notes.push('Some names hit the worker rate limit (free tier ~50/hr); click Go again to backfill just the missing ones.');
     if (D.anyNet) notes.push('A network/worker error skipped some names.');
-    const noteHtml = notes.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">' + notes.map(esc).join(' · ') + '</div>' : '';
+    const noteHtml = notes.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">' + notes.join(' · ') + '</div>' : '';
     const mkRow = (r) =>
-      '<tr><td style="padding:2px 8px 2px 0;font-weight:600">' + esc(r.ticker) + '</td>' +
-      '<td style="padding:2px 8px;text-align:right">' + _pmPct(r.pct) + '</td>' +
-      '<td style="padding:2px 8px;text-align:right">' + _pmUsd(r.moveOnPos) + '</td>' +
-      '<td style="padding:2px 0 2px 8px;text-align:right;color:var(--color-text-tertiary)">$' + r.cA.toFixed(2) + ' → $' + r.cB.toFixed(2) + '</td></tr>';
+      '<tr><td style="padding:2px 8px 2px 0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(r.ticker) + '</td>' +
+      '<td style="padding:2px 8px;text-align:right;white-space:nowrap;color:var(--color-text-secondary)">' + fmtDollarWhole(r.valB) + '</td>' +
+      '<td style="padding:2px 8px;text-align:right;white-space:nowrap">' + _pmPct(r.pct) + '</td>' +
+      '<td style="padding:2px 8px;text-align:right;white-space:nowrap">' + _pmUsd(r.moveOnPos) + '</td>' +
+      '<td style="padding:2px 8px;text-align:right;white-space:nowrap">' + _pmPct(D.bookValA > 0 ? r.moveOnPos / D.bookValA * 100 : null) + '</td>' +
+      '<td style="padding:2px 0 2px 8px;text-align:right;color:var(--color-text-tertiary);white-space:nowrap">$' + r.cA.toFixed(2) + ' \u2192 $' + r.cB.toFixed(2) + '</td></tr>';
     const thead = '<thead><tr style="color:var(--color-text-tertiary);text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em">' +
-      '<th style="text-align:left;padding-bottom:3px">Name</th><th style="padding-bottom:3px">%</th><th style="padding-bottom:3px">$ impact</th><th style="padding-bottom:3px">close A → B</th></tr></thead>';
-    const tableOf = (list) => '<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:2px">' + thead + '<tbody>' + list.map(mkRow).join('') + '</tbody></table>';
+      '<th style="text-align:left;padding-bottom:3px">Ticker</th>' +
+      '<th style="padding-bottom:3px" title="Current market value of this position at the end-date close">Position $</th>' +
+      '<th style="padding-bottom:3px">Move %</th>' +
+      '<th style="padding-bottom:3px" title="Shares times price change \u2014 dollars gained/lost on your holding over this window">$ on position</th>' +
+      '<th style="padding-bottom:3px" title="This name\u2019s dollar move as a share of the measured book \u2014 how much it swung the whole book figure">% of book</th>' +
+      '<th style="padding-bottom:3px">Close: start \u2192 end</th></tr></thead>';
+    const tableOf = (list) => '<table style="border-collapse:collapse;font-size:10px;margin-top:2px;table-layout:fixed;width:100%;max-width:660px"><colgroup><col style="width:11%"><col style="width:14%"><col style="width:13%"><col style="width:16%"><col style="width:13%"><col style="width:33%"></colgroup>' + thead + '<tbody>' + list.map(mkRow).join('') + '</tbody></table>';
     const grpHdr = (label, color) => '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:' + color + ';margin:8px 0 1px">' + label + '</div>';
     let tableBlock, toggle = '';
     if (_pmShowAll) {
@@ -33748,6 +33755,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09et</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ev</div>
 </body>
 </html>
