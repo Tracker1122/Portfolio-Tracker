@@ -18318,17 +18318,30 @@ function candExportPdf() {
 function portfolioHoldingsTableHtml() {
   try {
     var open = positions.filter(function (p) { return !p.closed && p.ticker; });
-    if (!open.length) return '<p class="note">No open positions.</p>';
     var money = function (v) { return (v < 0 ? '\u2212$' : '$') + Math.round(Math.abs(v)).toLocaleString(); };
+    var pct = function (v) { return v == null ? '\u2014' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; };
     var rows = open.map(function (p) {
       var c = calcPos(p);
-      return { ticker: p.ticker, theme: p.theme || '', sleeve: p.sleeve || '', account: p.account || '', value: c.exitValue || 0, gl: c.gainLoss || 0, glPct: c.yourReturn };
-    }).sort(function (a, b) { return b.value - a.value; });
+      return { ticker: p.ticker, theme: p.theme || '', sleeve: p.sleeve || '', account: p.account || '', cost: c.invested || 0, value: c.exitValue || 0, gl: c.gainLoss || 0, glPct: c.yourReturn };
+    });
+    // VOO passive core lives outside `positions` (tracked as spLots) — fold it in so the report shows the
+    // whole liquid public book, not just the active sleeve.
+    var sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
+    var hasVoo = !!(sp && sp.totalShares > 0);
+    if (hasVoo) {
+      var acct = (sp.taxableShares > 0 && sp.iraShares > 0) ? 'Taxable + IRA' : (sp.iraShares > 0 ? 'IRA' : 'Taxable');
+      rows.push({ ticker: 'VOO', theme: 'Broad market (S&P 500)', sleeve: 'Passive core', account: acct, cost: sp.totalInvested || 0, value: (sp.price > 0 ? sp.currentValue : sp.totalInvested) || 0, gl: sp.gl || 0, glPct: (sp.totalInvested > 0 ? sp.gl / sp.totalInvested * 100 : null) });
+    }
+    if (!rows.length) return '<p class="note">No open positions.</p>';
+    rows.sort(function (a, b) { return b.value - a.value; });
+    var totalCost = rows.reduce(function (s, r) { return s + r.cost; }, 0);
     var totalVal = rows.reduce(function (s, r) { return s + r.value; }, 0);
     var totalGl = rows.reduce(function (s, r) { return s + r.gl; }, 0);
+    var totalPct = totalCost > 0 ? totalGl / totalCost * 100 : null;
+    var th = function (label, right) { return '<th style="padding:3px 6px' + (right ? ';text-align:right' : '') + '">' + label + '</th>'; };
     var h = '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="text-align:left;border-bottom:1px solid #ccc;color:#555">' +
-      '<th style="padding:3px 6px">Ticker</th><th style="padding:3px 6px">Theme</th><th style="padding:3px 6px">Sleeve</th><th style="padding:3px 6px">Account</th>' +
-      '<th style="padding:3px 6px;text-align:right">Value</th><th style="padding:3px 6px;text-align:right">G/L $</th><th style="padding:3px 6px;text-align:right">G/L %</th></tr></thead><tbody>';
+      th('Ticker') + th('Theme') + th('Sleeve') + th('Account') + th('Cost basis', true) + th('G/L %', true) + th('G/L $', true) + th('Value', true) +
+      '</tr></thead><tbody>';
     rows.forEach(function (r) {
       var glc = r.gl >= 0 ? '#15803d' : '#b91c1c';
       h += '<tr style="border-bottom:1px solid #eee">' +
@@ -18336,15 +18349,19 @@ function portfolioHoldingsTableHtml() {
         '<td style="padding:3px 6px">' + esc(r.theme) + '</td>' +
         '<td style="padding:3px 6px">' + esc(r.sleeve) + '</td>' +
         '<td style="padding:3px 6px">' + esc(r.account) + '</td>' +
-        '<td style="padding:3px 6px;text-align:right">' + money(r.value) + '</td>' +
+        '<td style="padding:3px 6px;text-align:right">' + money(r.cost) + '</td>' +
+        '<td style="padding:3px 6px;text-align:right;color:' + glc + '">' + pct(r.glPct) + '</td>' +
         '<td style="padding:3px 6px;text-align:right;color:' + glc + '">' + (r.gl >= 0 ? '+' : '') + money(r.gl) + '</td>' +
-        '<td style="padding:3px 6px;text-align:right;color:' + glc + '">' + (r.glPct != null ? (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%' : '\u2014') + '</td></tr>';
+        '<td style="padding:3px 6px;text-align:right">' + money(r.value) + '</td></tr>';
     });
     var glcT = totalGl >= 0 ? '#15803d' : '#b91c1c';
+    var label = 'Total \u2014 ' + rows.length + ' holdings' + (hasVoo ? ' (incl. VOO core)' : '');
     h += '</tbody><tfoot><tr style="border-top:2px solid #ccc;font-weight:700">' +
-      '<td style="padding:3px 6px" colspan="4">Total (' + rows.length + ' positions)</td>' +
-      '<td style="padding:3px 6px;text-align:right">' + money(totalVal) + '</td>' +
-      '<td style="padding:3px 6px;text-align:right;color:' + glcT + '">' + (totalGl >= 0 ? '+' : '') + money(totalGl) + '</td><td></td></tr></tfoot></table>';
+      '<td style="padding:3px 6px" colspan="4">' + label + '</td>' +
+      '<td style="padding:3px 6px;text-align:right">' + money(totalCost) + '</td>' +
+      '<td style="padding:3px 6px;text-align:right;color:' + glcT + '">' + pct(totalPct) + '</td>' +
+      '<td style="padding:3px 6px;text-align:right;color:' + glcT + '">' + (totalGl >= 0 ? '+' : '') + money(totalGl) + '</td>' +
+      '<td style="padding:3px 6px;text-align:right">' + money(totalVal) + '</td></tr></tfoot></table>';
     return h;
   } catch (e) { return '<p class="note">Holdings table could not be built.</p>'; }
 }
@@ -33887,6 +33904,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fb</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fc</div>
 </body>
 </html>
