@@ -1554,6 +1554,7 @@
       <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-industry" style="margin-top:2px"> <span><b>Industry intelligence</b></span></label>
       <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-risk" checked style="margin-top:2px"> <span><b>Risk review</b> — historical stress test (needs a window open in Risk Review)</span></label>
       <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-pricemoves" style="margin-top:2px"> <span><b>Price moves</b> — the last window you ran</span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-trade" checked style="margin-top:2px"> <span><b>Contemplated trade</b> — the staged what-if the AI analysis discusses</span></label>
       <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-ai" checked style="margin-top:2px"> <span><b>AI analysis</b> — if you’ve run it</span></label>
     </div>
     <button class="btn btn-primary" onclick="portfolioReportPdf()" style="font-size:12px;padding:8px 18px">⤓ Generate PDF</button>
@@ -18289,7 +18290,7 @@ function candExportPdf() {
     `:root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}` +
     `*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
     `.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}` +
-    `h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px}` +
+    `h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px;break-after:avoid;page-break-after:avoid}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:6px 0 16px}.summary-card{background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:6px;padding:10px 12px;break-inside:avoid}.summary-card-label{font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px}.summary-card-value{font-size:14px;font-weight:700;color:var(--color-text-primary)}.summary-card-value.success{color:var(--color-text-success)}.summary-card-value.danger{color:var(--color-text-danger)}.summary-card-value.info{color:var(--color-text-info)}` +
     `.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}` +
     `.ai{white-space:pre-wrap;font-size:12px;line-height:1.55;color:#111;margin:2px 0}.aiq{font-weight:600;font-size:12px;margin:14px 0 2px}` +
     `table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}` +
@@ -18353,8 +18354,12 @@ function portfolioReportPdf() {
   var cleanFrag = function (html) {
     var t = document.createElement('div');
     t.innerHTML = html || '';
-    t.querySelectorAll('[onclick]').forEach(function (el) { el.remove(); });
-    t.querySelectorAll('input,button,select').forEach(function (el) { el.remove(); });
+    t.querySelectorAll('button,input,select,textarea').forEach(function (el) { el.remove(); });
+    t.querySelectorAll('[onclick]').forEach(function (el) {
+      var txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (txt === '' || txt.length <= 1 || /^(edit|remove|delete|clear|reset|refresh|\u00d7|\u2715|\u2716|\u2717)$/i.test(txt)) { el.remove(); return; }
+      el.removeAttribute('onclick'); try { el.style.cursor = 'default'; } catch (e) {}
+    });
     t.querySelectorAll('details').forEach(function (d) { d.setAttribute('open', ''); });
     t.querySelectorAll('summary').forEach(function (s) { var hh = document.createElement('div'); hh.textContent = s.textContent; hh.style.cssText = 'font-weight:700;margin:4px 0 2px'; s.replaceWith(hh); });
     return t.innerHTML.replace(/#fbbf24/g, '#b45309').replace(/#34d399/g, '#15803d').replace(/#f87171/g, '#dc2626');
@@ -18370,12 +18375,23 @@ function portfolioReportPdf() {
   var sections = [];
   if (pick('prep-sec-holdings')) sections.push(['Holdings', portfolioHoldingsTableHtml()]);
   if (pick('prep-sec-summary')) sections.push(['Portfolio summary', grab('open-summary', null) || '<p class="note">No summary available.</p>']);
-  if (pick('prep-sec-exposure')) sections.push(['True exposure', grab('distribution-content', typeof renderDistribution === 'function' ? renderDistribution : null) || '<p class="note">Open the True Exposure tab once, then re-export.</p>']);
+  if (pick('prep-sec-exposure')) sections.push(['True exposure', grab('distribution-content', typeof renderDistributionTab === 'function' ? renderDistributionTab : null) || '<p class="note">Open the True Exposure tab once, then re-export.</p>']);
   if (pick('prep-sec-sleeve')) sections.push(['Sleeve performance & value-add', grab('sleeve-valueadd-wrap', typeof renderSleeveValueAdd === 'function' ? renderSleeveValueAdd : null) || '<p class="note">Not available.</p>']);
   if (pick('prep-sec-factor')) sections.push(['Factor unity', grab('factor-unity-mount', typeof renderFactorUnity === 'function' ? renderFactorUnity : null) || '<p class="note">Not available.</p>']);
   if (pick('prep-sec-industry')) sections.push(['Industry intelligence', grab('theme-intel-wrap', typeof renderThemeIntel === 'function' ? renderThemeIntel : null) || '<p class="note">Not available.</p>']);
   if (pick('prep-sec-risk')) { var hR = ''; try { hR = riskReviewPdfSection(cleanFrag, esc2); } catch (e) {} sections.push(['Risk review \u2014 historical stress test', hR || '<p class="note">No stress window was open in Risk Review. Open one there, then re-export.</p>']); }
   if (pick('prep-sec-pricemoves')) sections.push(['Price moves', grab('price-moves-wrap', null) || '<p class="note">Run a window on the Price Moves card first, then re-export.</p>']);
+  if (pick('prep-sec-trade')) {
+    var hasScenario = !!(typeof _candQueue !== 'undefined' && _candQueue && _candQueue.length && typeof _candScenario !== 'undefined' && _candScenario);
+    if (hasScenario) {
+      var qH = grab('cand-queue', null);
+      var oH = grab('cand-output', null);
+      var tradeHtml = (qH || '') + (oH ? ('<div style="margin-top:12px">' + oH + '</div>') : '');
+      sections.push(['Contemplated trade', tradeHtml || '<p class="note">A trade is staged but its detail could not be captured \u2014 open the Evaluate a Trade tab, then re-export.</p>']);
+    } else {
+      sections.push(['Contemplated trade', '<p class="note">No trade is staged right now. Stage one on the Evaluate a Trade tab and run it, then re-export \u2014 this is the same what-if the AI analysis references.</p>']);
+    }
+  }
   if (pick('prep-sec-ai')) {
     var aiHtml = '<p class="note">No AI analysis has been run yet.</p>';
     if (typeof bookAiReview !== 'undefined' && bookAiReview && bookAiReview.text) {
@@ -18400,7 +18416,7 @@ function portfolioReportPdf() {
     ':root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}' +
     '*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
     '.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}' +
-    'h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px}' +
+    'h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px;break-after:avoid;page-break-after:avoid}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:6px 0 16px}.summary-card{background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:6px;padding:10px 12px;break-inside:avoid}.summary-card-label{font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px}.summary-card-value{font-size:14px;font-weight:700;color:var(--color-text-primary)}.summary-card-value.success{color:var(--color-text-success)}.summary-card-value.danger{color:var(--color-text-danger)}.summary-card-value.info{color:var(--color-text-info)}' +
     '.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}' +
     '.ai{white-space:pre-wrap;font-size:12px;line-height:1.55;color:#111;margin:2px 0}.aiq{font-weight:600;font-size:12px;margin:14px 0 2px}' +
     'table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}' +
@@ -18515,7 +18531,7 @@ function qrExportPdf(id) {
     `*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
     `.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.tag{font-size:11px;border:1px solid #999;border-radius:8px;padding:1px 7px;text-transform:uppercase}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}` +
     `.sub{color:#555;font-size:12px;margin:0 0 2px}` +
-    `h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px}` +
+    `h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px;break-after:avoid;page-break-after:avoid}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:6px 0 16px}.summary-card{background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:6px;padding:10px 12px;break-inside:avoid}.summary-card-label{font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px}.summary-card-value{font-size:14px;font-weight:700;color:var(--color-text-primary)}.summary-card-value.success{color:var(--color-text-success)}.summary-card-value.danger{color:var(--color-text-danger)}.summary-card-value.info{color:var(--color-text-info)}` +
     `.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}` +
     `.kv{margin:0 0 8px}.k{font-size:9px;text-transform:uppercase;letter-spacing:0.04em;color:#6b7280;margin-bottom:1px}.v{font-size:12px;color:#111;white-space:pre-wrap;line-height:1.45}` +
     `.ai{white-space:pre-wrap;font-size:12px;line-height:1.55;color:#111;margin:2px 0}.aiq{font-weight:600;font-size:12px;margin:14px 0 2px}` +
@@ -24586,7 +24602,7 @@ function cmpExportPdf() {
     `:root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}` +
     `*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
     `.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}` +
-    `h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px}` +
+    `h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px;break-after:avoid;page-break-after:avoid}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:6px 0 16px}.summary-card{background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:6px;padding:10px 12px;break-inside:avoid}.summary-card-label{font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px}.summary-card-value{font-size:14px;font-weight:700;color:var(--color-text-primary)}.summary-card-value.success{color:var(--color-text-success)}.summary-card-value.danger{color:var(--color-text-danger)}.summary-card-value.info{color:var(--color-text-info)}` +
     `.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}` +
     `table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}` +
     `</style></head><body><div class="doc"><div class="letterhead"><img src="${HS_LOGO}" alt="Harlan Shelby"></div>` +
@@ -33871,6 +33887,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ez</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fb</div>
 </body>
 </html>
