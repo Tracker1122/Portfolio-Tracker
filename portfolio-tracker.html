@@ -14996,14 +14996,14 @@ function renderPriceMoves() {
       '<td style="padding:2px 8px;text-align:right;white-space:nowrap">' + _pmUsd(r.moveOnPos) + '</td>' +
       '<td style="padding:2px 8px;text-align:right;white-space:nowrap">' + _pmPct(D.bookValA > 0 ? r.moveOnPos / D.bookValA * 100 : null) + '</td>' +
       '<td style="padding:2px 0 2px 8px;text-align:right;color:var(--color-text-tertiary);white-space:nowrap">$' + r.cA.toFixed(2) + ' \u2192 $' + r.cB.toFixed(2) + '</td></tr>';
-    const thead = '<thead><tr style="color:var(--color-text-tertiary);text-align:right;font-size:9px;text-transform:uppercase;letter-spacing:0.04em">' +
-      '<th style="text-align:left;padding-bottom:3px">Ticker</th>' +
-      '<th style="padding-bottom:3px" title="Current market value of this position at the end-date close">Position $</th>' +
-      '<th style="padding-bottom:3px">Move %</th>' +
-      '<th style="padding-bottom:3px" title="Shares times price change \u2014 dollars gained/lost on your holding over this window">$ on position</th>' +
-      '<th style="padding-bottom:3px" title="This name\u2019s dollar move as a share of the measured book \u2014 how much it swung the whole book figure">% of book</th>' +
-      '<th style="padding-bottom:3px">Close: start \u2192 end</th></tr></thead>';
-    const tableOf = (list) => '<table style="border-collapse:collapse;font-size:10px;margin-top:2px;table-layout:fixed;width:100%;max-width:660px"><colgroup><col style="width:11%"><col style="width:14%"><col style="width:13%"><col style="width:16%"><col style="width:13%"><col style="width:33%"></colgroup>' + thead + '<tbody>' + list.map(mkRow).join('') + '</tbody></table>';
+    const thead = '<thead><tr style="color:var(--color-text-tertiary);font-size:9px;text-transform:uppercase;letter-spacing:0.04em">' +
+      '<th style="text-align:left;padding:2px 8px 3px 0">Ticker</th>' +
+      '<th style="text-align:right;padding:2px 8px 3px" title="Current market value of this position at the end-date close">Position $</th>' +
+      '<th style="text-align:right;padding:2px 8px 3px">Move %</th>' +
+      '<th style="text-align:right;padding:2px 8px 3px" title="Shares times price change \u2014 dollars gained/lost on your holding over this window">$ on position</th>' +
+      '<th style="text-align:right;padding:2px 8px 3px" title="This name\u2019s dollar move as a share of the measured book \u2014 how much it swung the whole book figure">% of book</th>' +
+      '<th style="text-align:right;padding:2px 0 3px 8px">Close: start \u2192 end</th></tr></thead>';
+    const tableOf = (list) => '<div style="max-width:680px"><table style="border-collapse:collapse;font-size:10px;margin-top:2px;table-layout:fixed;width:100%"><colgroup><col style="width:11%"><col style="width:14%"><col style="width:13%"><col style="width:16%"><col style="width:13%"><col style="width:33%"></colgroup>' + thead + '<tbody>' + list.map(mkRow).join('') + '</tbody></table></div>';
     const grpHdr = (label, color) => '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:' + color + ';margin:8px 0 1px">' + label + '</div>';
     let tableBlock, toggle = '';
     if (_pmShowAll) {
@@ -33755,6 +33755,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ev</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ew</div>
 </body>
 </html>
