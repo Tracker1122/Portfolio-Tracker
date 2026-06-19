@@ -894,6 +894,10 @@
   .rebal-table th.sortable { cursor: pointer; user-select: none; }
   .rebal-table th.sortable:hover { color: var(--color-text-info); }
   .rebal-table th.sort-active { color: var(--color-text-info); }
+  .nb-tight .rebal-table { font-size: 10px; }
+  .nb-tight .rebal-table th { padding: 5px 5px 4px; font-size: 8px; letter-spacing: 0.04em; }
+  .nb-tight .rebal-table td { padding: 3px 5px; }
+  .nb-tight .rebal-table-wrap, .nb-tight.rebal-table-wrap { scrollbar-width: thin; }
   .signal-badge {
     display: inline-block; padding: 2px 8px; border-radius: 2px;
     font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
@@ -5326,7 +5330,7 @@ function renderNbCard() {
     const arrow = active ? (nbSortDir === 'asc' ? ' \u2191' : ' \u2193') : '';
     return '<th class="' + (r ? 'r ' : '') + 'sortable' + (active ? ' sort-active' : '') + '" onclick="setNbSort(\'' + key + '\')">' + label + arrow + '</th>';
   };
-  html += '<div class="rebal-table-wrap">'
+  html += '<div class="rebal-table-wrap nb-tight">'
     + '<table class="rebal-table"><thead><tr>'
     + nbHdr('ticker', 'Position', false) + nbHdr('sleeve', 'Strategy', false) + nbHdr('theme', 'Industry', false) + nbHdr('value', 'Value', true) + nbHdr('account', 'Account', false)
     + nbHdr('glPct', 'G/L%', true) + nbHdr('glDollar', 'G/L $', true) + nbHdr('themeAlphaPct', 'Theme \u03b1', true) + nbHdr('vsSpx', 'SPX \u03b1', true)
@@ -33691,6 +33695,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ej</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ek</div>
 </body>
 </html>
