@@ -14757,6 +14757,12 @@ function _pmCloseAtOrBefore(bars, iso) {
 }
 // Sibling: the ms-timestamp of the last bar at/before `iso` \u2014 i.e. the EFFECTIVE trading date used for
 // that endpoint, so the card can show the real date its closes came from, not the date the user typed.
+function _pmFirstBarMs(bars) {
+  if (!bars || !bars.length) return null;
+  var m = null;
+  for (var i = 0; i < bars.length; i++) { if (m == null || bars[i].t < m) m = bars[i].t; }
+  return m;
+}
 function _pmBarMsAtOrBefore(bars, iso) {
   if (!bars) return null;
   const ms = new Date(iso + 'T23:59:59Z').getTime();
@@ -14818,7 +14824,13 @@ async function pmLookup(raw) {
     _pmLookupBusy = false;
   }
   const cA = _pmCloseAtOrBefore(bars, base), cB = _pmCloseAtOrBefore(bars, end);
-  if (cA == null || cB == null) { _pmLookupResult = { ticker: t, base, end, error: 'No usable close for ' + t + ' across this window.' }; renderPriceMoves(); return; }
+  if (cA == null) {
+    const _fMs = _pmFirstBarMs(bars);
+    const _fISO = _fMs ? new Date(_fMs).toISOString().slice(0, 10) : null;
+    _pmLookupResult = { ticker: t, base, end, error: t + ' has no price as far back as ' + base + (_fISO ? ' \u2014 it first traded ' + _fISO : ' (started trading after your baseline)') + ', so there is no move to show over this window.' };
+    renderPriceMoves(); return;
+  }
+  if (cB == null) { _pmLookupResult = { ticker: t, base, end, error: 'No usable close for ' + t + ' at the ' + end + ' end of this window.' }; renderPriceMoves(); return; }
   _pmLookupResult = { ticker: t, base, end, cA, cB, pct: cA > 0 ? (cB - cA) / cA * 100 : null, held: false };
   renderPriceMoves();
 }
@@ -14882,7 +14894,14 @@ function _pmComputeFromCache(bookTk, base, end) {
     const bars = _pmHist[t]; const sh = bookTk[t];
     const cA = bars ? _pmCloseAtOrBefore(bars, base) : null;
     const cB = bars ? _pmCloseAtOrBefore(bars, end) : null;
-    if (cA == null || cB == null) { excluded.push(t); return; }
+    if (cA == null || cB == null) {
+      if (!bars || !bars.length) { excluded.push({ ticker: t, reason: 'nodata' }); return; }
+      var _fMs = _pmFirstBarMs(bars);
+      var _fISO = _fMs ? new Date(_fMs).toISOString().slice(0, 10) : null;
+      if (cA == null) excluded.push({ ticker: t, reason: 'young', firstDate: _fISO });
+      else excluded.push({ ticker: t, reason: 'endgap', firstDate: _fISO });
+      return;
+    }
     const moveOnPos = sh * (cB - cA);
     rows.push({ ticker: t, shares: sh, cA, cB, pct: cA > 0 ? (cB - cA) / cA * 100 : null, moveOnPos, valA: sh * cA, valB: sh * cB });
   });
@@ -14959,7 +14978,14 @@ function renderPriceMoves() {
       pmFresh = _baseLine + '<div style="font-size:9px;color:var(--color-text-tertiary);margin-bottom:8px" title="' + esc(_flE.title) + '">Closes through <b style="color:var(--color-text-secondary);font-weight:600">' + esc(_flE.full) + '</b>' + _mismatch + '</div>';
     }
     const notes = [];
-    if (D.excluded.length) notes.push('No usable history back to ' + esc(D.base) + ' for ' + D.excluded.map(esc).join(', ') + ' — too young or not returned this pull, excluded from the book figure.');
+    if (D.excluded.length) {
+      const exYoung = D.excluded.filter(x => x.reason === 'young');
+      const exNo = D.excluded.filter(x => x.reason === 'nodata');
+      const exOther = D.excluded.filter(x => x.reason !== 'young' && x.reason !== 'nodata');
+      exYoung.forEach(x => notes.push(esc(x.ticker) + ' has no price history as far back as ' + esc(D.base) + (x.firstDate ? ' \u2014 it first traded ' + esc(x.firstDate) : ' (it started trading after your baseline)') + ', so it is excluded from the book figure.'));
+      if (exNo.length) notes.push('No data returned this pull for ' + exNo.map(x => esc(x.ticker)).join(', ') + ' \u2014 hit Go again to retry just those.');
+      exOther.forEach(x => notes.push(esc(x.ticker) + ' is missing a usable close across this window, excluded from the book figure.'));
+    }
     if (D.anyRate) notes.push('Some names hit the worker rate limit (free tier ~50/hr); click Go again to backfill just the missing ones.');
     if (D.anyNet) notes.push('A network/worker error skipped some names.');
     const noteHtml = notes.length ? '<div style="font-size:9px;color:var(--color-text-tertiary);font-style:italic;margin-bottom:8px">' + notes.map(esc).join(' · ') + '</div>' : '';
@@ -33711,6 +33737,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09er</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09es</div>
 </body>
 </html>
