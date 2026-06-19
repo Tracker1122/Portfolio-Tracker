@@ -21371,95 +21371,92 @@ async function fetchHistoricalNearby(ticker, targetDate) {
 // returns every benchmark in the universe. Owned-theme rows show benchmark window returns
 // for side-by-side comparison (clearly labeled as benchmark-level, not entry-timed alpha).
 // (See also fetchOwnedThemeReturns() for a scoped version that fetches only owned benchmarks.)
-// Polygon free tier: 5 calls/min, 12s pause stays safely under the limit. Walks back from
-// the target date if a non-trading day is hit.
+// Source: the Tiingo daily-bars worker (same one Price Moves + Risk Lens use). One pull per
+// benchmark returns the full series; each window's anchor comes from _pmCloseAtOrBefore().
 async function backfillThemeUniverse() {
   const status = document.getElementById('theme-universe-backfill-status');
-  if (!polygonKey) {
-    if (status) { status.textContent = 'Need Polygon API key first'; status.style.color = '#fbbf24'; }
+  if (!barsWorkerUrl && typeof loadBarsWorkerUrl === 'function') loadBarsWorkerUrl();
+  if (!barsWorkerUrl) {
+    if (status) { status.textContent = 'No bars-worker URL set (add it in Settings \u2014 same one Price Moves uses)'; status.style.color = '#fbbf24'; }
     return;
   }
 
-  // Backfill historical anchors for ALL universe tickers — owned AND unowned. Owned themes were
-  // previously skipped (their rows showed muted dots by design), but for the side-by-side
-  // performance/diversification view we now show benchmark window returns on owned rows too,
-  // clearly labeled as benchmark-level (not your entry-timed alpha). themeUniverseTickers() dedupes,
-  // so a benchmark shared by two themes (e.g. SMH for Semiconductors AND AI Infrastructure) is
-  // fetched once. Today's price for these already comes via getBenchmarkPrices(), so once the
-  // historical anchor lands, computeThemeReturns() produces the % with no further plumbing.
+  // One daily-bars pull per benchmark (Tiingo via the bars worker) covers every window, so YTD and
+  // 1Y both come from a single fetch instead of two paced Polygon calls. Cache rules unchanged:
+  // YTD anchor is a fixed calendar point (long cache); 1Y drifts daily (short cache).
   const tickers = themeUniverseTickers();
   const dates = getThemeUniverseTargetDates();
-  // Polygon free tier returns 403 for dates older than ~2 years. Only fetch YTD and 1Y windows.
-  // 5Y and 10Y stay defined in target dates and display columns but are never fetched on free tier.
-  // To enable 5Y/10Y, upgrade to Polygon Stocks Starter ($30/mo) and add them back here.
   const windows = ['ytd', '1y'];
-
-  // Pre-flight: count how many fetches are actually needed (skip cached recent fetches).
-  // Cache validity is WINDOW-SPECIFIC, because the two windows go stale differently:
-  //   - YTD anchor is a FIXED calendar point (Jan 2). It never drifts, so re-fetching it is pure
-  //     waste — cache it long (30 days; the historical close won't change).
-  //   - 1Y anchor is "today minus one year", which drifts one day per calendar day. A stale 1Y
-  //     anchor means the window is no longer a true trailing 365 days — cache it short (4 days)
-  //     so the 1Y figure stays close to an actual trailing year without burning calls on YTD.
   const cacheMaxAgeMs = { ytd: 30 * 86400000, '1y': 4 * 86400000 };
-  const needed = [];
+
+  // A benchmark needs a fetch if ANY of its windows is missing/stale.
+  const needTickers = [];
   tickers.forEach(ticker => {
     if (!themeUniverseHistory[ticker]) themeUniverseHistory[ticker] = {};
-    windows.forEach(win => {
+    const anyStale = windows.some(win => {
       const cached = themeUniverseHistory[ticker][win];
       const maxAge = cacheMaxAgeMs[win] || (7 * 86400000);
-      const cacheAgeOk = cached && cached.fetched && (Date.now() - new Date(cached.fetched).getTime() < maxAge);
-      if (!cacheAgeOk) needed.push({ ticker, win });
+      return !(cached && cached.fetched && (Date.now() - new Date(cached.fetched).getTime() < maxAge));
     });
+    if (anyStale) needTickers.push(ticker);
   });
 
-  if (needed.length === 0) {
-    if (status) { status.textContent = `All ${tickers.length * windows.length} windows cached — no fetch needed`; status.style.color = 'var(--color-text-success)'; }
+  if (needTickers.length === 0) {
+    if (status) { status.textContent = `All ${tickers.length} benchmarks cached \u2014 no fetch needed`; status.style.color = 'var(--color-text-success)'; }
     renderThemeUniverse();
     renderThemeUniverseDashTile();
     return;
   }
 
-  const startTime = Date.now();
-  let attempted = 0;
-  let succeeded = 0;
-  const failures = []; // { ticker, win, error }
+  const today = _pmToday();
+  const fromISO = _pmMinusDays(today, 760); // ~2y back: covers 1Y plus a buffer for walk-back to a trading day
+  const toISO = today;
+  let done = 0, ok = 0;
+  const failures = [];
 
-  for (const { ticker, win } of needed) {
-    const elapsedMin = (Date.now() - startTime) / 60000;
-    const remaining = needed.length - attempted;
-    const etaMin = attempted > 0 ? Math.round((elapsedMin / attempted) * remaining) : Math.round(remaining * 12 / 60);
+  for (const ticker of needTickers) {
     if (status) {
-      status.textContent = `Fetching ${ticker} ${win.toUpperCase()}... (${succeeded}/${needed.length} ok${failures.length > 0 ? `, ${failures.length} failed` : ''}) · ~${etaMin}m remaining`;
+      status.textContent = `Fetching ${ticker}\u2026 (${ok}/${needTickers.length} ok${failures.length ? `, ${failures.length} failed` : ''}) \u00b7 ${needTickers.length - done} left`;
       status.style.color = 'var(--color-text-tertiary)';
     }
-
-    const result = await fetchHistoricalNearby(ticker, dates[win]);
-    attempted++;
-    if (result.price !== null) {
-      themeUniverseHistory[ticker][win] = {
-        price: result.price,
-        dateUsed: result.dateUsed,
-        fetched: new Date().toISOString()
-      };
-      succeeded++;
-    } else {
-      failures.push({ ticker, win, error: result.error || 'unknown' });
+    let bars = null;
+    try {
+      bars = await _pmFetchBars(ticker, fromISO, toISO);
+    } catch (err) {
+      const m = err && err.message;
+      failures.push({ ticker, error: m === 'noworker' ? 'no worker URL' : m === 'rate' ? 'rate limit' : m === 'nodata' ? 'no data' : (m || 'error') });
+      done++;
+      if (m === 'noworker') break;
+      if (m === 'rate') await new Promise(r => setTimeout(r, 2000));
+      continue;
     }
-    // Rate limit: Polygon free tier 5/min; 12s between calls is safe (~5 calls/min).
-    await new Promise(r => setTimeout(r, 12000));
+    let any = false;
+    windows.forEach(win => {
+      const px = _pmCloseAtOrBefore(bars, dates[win]);
+      if (px != null) {
+        const ms = _pmBarMsAtOrBefore(bars, dates[win]);
+        themeUniverseHistory[ticker][win] = {
+          price: px,
+          dateUsed: ms ? new Date(ms).toISOString().slice(0, 10) : dates[win],
+          fetched: new Date().toISOString()
+        };
+        any = true;
+      }
+    });
+    if (any) ok++; else failures.push({ ticker, error: 'no close in window' });
+    done++;
+    await new Promise(r => setTimeout(r, 150)); // polite pacing; the worker edge-caches a day
   }
 
   await savePositions();
-  // Final status — honest about what worked vs what didn't
   if (status) {
     if (failures.length === 0) {
-      status.textContent = `Done — ${succeeded}/${needed.length} fetched successfully`;
+      status.textContent = `Done \u2014 ${ok}/${needTickers.length} benchmarks updated via bars worker`;
       status.style.color = 'var(--color-text-success)';
     } else {
-      const failureSummary = failures.slice(0, 3).map(f => `${f.ticker} ${f.win.toUpperCase()}`).join(', ');
+      const fs = failures.slice(0, 3).map(f => `${f.ticker} (${f.error})`).join(', ');
       const more = failures.length > 3 ? ` (+${failures.length - 3} more)` : '';
-      status.textContent = `Done — ${succeeded}/${needed.length} ok, ${failures.length} failed: ${failureSummary}${more}. Re-click to retry.`;
+      status.textContent = `Done \u2014 ${ok}/${needTickers.length} ok, ${failures.length} failed: ${fs}${more}. Re-click to retry.`;
       status.style.color = '#fbbf24';
     }
   }
@@ -21470,17 +21467,18 @@ async function backfillThemeUniverse() {
 // Scoped backfill: fetch YTD/1Y historical anchors for ONLY the benchmarks of themes the
 // user currently owns. Self-contained alternative to the full backfillThemeUniverse() —
 // useful because owned-theme rows are the ones the user most wants comparable, and this is a
-// shorter, watchable run. Reuses fetchHistoricalNearby() (same walk-back + rate-limit handling).
-// Respects the 7-day cache like the main backfill. Writes to themeUniverseHistory[ticker][win],
+// shorter, watchable run. Uses the same bars-worker pull as backfillThemeUniverse() (one fetch
+// per benchmark). Respects the 7-day cache. Writes to themeUniverseHistory[ticker][win],
 // exactly where computeThemeReturns() reads.
 async function fetchOwnedThemeReturns() {
   const status = document.getElementById('owned-theme-returns-status');
-  if (!polygonKey) {
-    if (status) { status.textContent = 'Need Polygon API key first'; status.style.color = '#fbbf24'; }
+  if (!barsWorkerUrl && typeof loadBarsWorkerUrl === 'function') loadBarsWorkerUrl();
+  if (!barsWorkerUrl) {
+    if (status) { status.textContent = 'No bars-worker URL set (add it in Settings \u2014 same one Price Moves uses)'; status.style.color = '#fbbf24'; }
     return;
   }
 
-  // Benchmarks of currently-owned themes, deduped (e.g. SMH serves two themes → fetched once).
+  // Benchmarks of currently-owned themes, deduped (e.g. SMH serves two themes -> fetched once).
   const ownedThemes = [...new Set(positions.filter(p => !p.closed && p.theme).map(p => p.theme))];
   const ownedBenchTickers = [...new Set(
     ownedThemes
@@ -21496,60 +21494,73 @@ async function fetchOwnedThemeReturns() {
   const dates = getThemeUniverseTargetDates();
   const windows = ['ytd', '1y'];
 
-  // Pre-flight: only fetch what's missing or stale (>7 days old), same rule as main backfill.
-  const needed = [];
+  // One bars pull per benchmark covers both windows. Flat 7-day staleness (matches the original scoped run).
+  const needTickers = [];
   ownedBenchTickers.forEach(ticker => {
     if (!themeUniverseHistory[ticker]) themeUniverseHistory[ticker] = {};
-    windows.forEach(win => {
+    const anyStale = windows.some(win => {
       const cached = themeUniverseHistory[ticker][win];
-      const cacheAgeOk = cached && cached.fetched && (Date.now() - new Date(cached.fetched).getTime() < 7 * 86400000);
-      if (!cacheAgeOk) needed.push({ ticker, win });
+      return !(cached && cached.fetched && (Date.now() - new Date(cached.fetched).getTime() < 7 * 86400000));
     });
+    if (anyStale) needTickers.push(ticker);
   });
 
-  if (needed.length === 0) {
-    if (status) { status.textContent = `All owned-theme windows cached (${ownedBenchTickers.length} benchmarks) — no fetch needed`; status.style.color = 'var(--color-text-success)'; }
+  if (needTickers.length === 0) {
+    if (status) { status.textContent = `All owned-theme windows cached (${ownedBenchTickers.length} benchmarks) \u2014 no fetch needed`; status.style.color = 'var(--color-text-success)'; }
     renderThemeUniverse();
     renderThemeUniverseDashTile();
     return;
   }
 
-  const startTime = Date.now();
-  let attempted = 0, succeeded = 0;
+  const today = _pmToday();
+  const fromISO = _pmMinusDays(today, 760);
+  const toISO = today;
+  let done = 0, ok = 0;
   const failures = [];
 
-  for (const { ticker, win } of needed) {
-    const elapsedMin = (Date.now() - startTime) / 60000;
-    const remaining = needed.length - attempted;
-    const etaMin = attempted > 0 ? Math.round((elapsedMin / attempted) * remaining) : Math.round(remaining * 12 / 60);
+  for (const ticker of needTickers) {
     if (status) {
-      status.textContent = `Fetching ${ticker} ${win.toUpperCase()}... (${succeeded}/${needed.length} ok${failures.length > 0 ? `, ${failures.length} failed` : ''}) · ~${etaMin}m remaining`;
+      status.textContent = `Fetching ${ticker}\u2026 (${ok}/${needTickers.length} ok${failures.length ? `, ${failures.length} failed` : ''}) \u00b7 ${needTickers.length - done} left`;
       status.style.color = 'var(--color-text-tertiary)';
     }
-    const result = await fetchHistoricalNearby(ticker, dates[win]);
-    attempted++;
-    if (result.price !== null) {
-      themeUniverseHistory[ticker][win] = {
-        price: result.price,
-        dateUsed: result.dateUsed,
-        fetched: new Date().toISOString()
-      };
-      succeeded++;
-    } else {
-      failures.push({ ticker, win, error: result.error || 'unknown' });
+    let bars = null;
+    try {
+      bars = await _pmFetchBars(ticker, fromISO, toISO);
+    } catch (err) {
+      const m = err && err.message;
+      failures.push({ ticker, error: m === 'noworker' ? 'no worker URL' : m === 'rate' ? 'rate limit' : m === 'nodata' ? 'no data' : (m || 'error') });
+      done++;
+      if (m === 'noworker') break;
+      if (m === 'rate') await new Promise(r => setTimeout(r, 2000));
+      continue;
     }
-    await new Promise(r => setTimeout(r, 12000));
+    let any = false;
+    windows.forEach(win => {
+      const px = _pmCloseAtOrBefore(bars, dates[win]);
+      if (px != null) {
+        const ms = _pmBarMsAtOrBefore(bars, dates[win]);
+        themeUniverseHistory[ticker][win] = {
+          price: px,
+          dateUsed: ms ? new Date(ms).toISOString().slice(0, 10) : dates[win],
+          fetched: new Date().toISOString()
+        };
+        any = true;
+      }
+    });
+    if (any) ok++; else failures.push({ ticker, error: 'no close in window' });
+    done++;
+    await new Promise(r => setTimeout(r, 150));
   }
 
   await savePositions();
   if (status) {
     if (failures.length === 0) {
-      status.textContent = `Done — ${succeeded}/${needed.length} owned-theme anchors fetched`;
+      status.textContent = `Done \u2014 ${ok}/${needTickers.length} owned-theme anchors via bars worker`;
       status.style.color = 'var(--color-text-success)';
     } else {
-      const fs = failures.slice(0, 3).map(f => `${f.ticker} ${f.win.toUpperCase()}`).join(', ');
+      const fs = failures.slice(0, 3).map(f => `${f.ticker} (${f.error})`).join(', ');
       const more = failures.length > 3 ? ` (+${failures.length - 3} more)` : '';
-      status.textContent = `Done — ${succeeded}/${needed.length} ok, ${failures.length} failed: ${fs}${more}. Re-click to retry.`;
+      status.textContent = `Done \u2014 ${ok}/${needTickers.length} ok, ${failures.length} failed: ${fs}${more}. Re-click to retry.`;
       status.style.color = '#fbbf24';
     }
   }
@@ -33737,6 +33748,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09es</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09et</div>
 </body>
 </html>
