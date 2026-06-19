@@ -14723,6 +14723,9 @@ let _pmRangeWin = '1M';   // active quick window, or 'custom'
 let _pmRangeBusy = false;
 let _pmRangeData = null;  // computed result for the current window
 let _pmShowAll = false;   // table: false = 5 gainers + 5 laggards, true = full ranked list
+let _pmLookupTicker = '';
+let _pmLookupResult = null;
+let _pmLookupBusy = false;
 const _pmBarsCache = {};  // 'TICKER|from|to' -> [{t,c}] (success) or {nodata:true}
 // Wide-range history cache: fetch ~2y of daily closes ONCE per name, then compute every
 // window (and any custom date in range) locally by slicing — no re-fetch on window switch,
@@ -14792,6 +14795,34 @@ function pmSetDate(which, val) {
 }
 function pmGo() { _pmRunRange(); }
 function pmToggleAll() { _pmShowAll = !_pmShowAll; renderPriceMoves(); }
+
+async function pmLookup(raw) {
+  const t = (raw || '').toUpperCase().trim();
+  _pmLookupTicker = t;
+  if (!t) { _pmLookupResult = null; renderPriceMoves(); return; }
+  if (!_pmRangeData || _pmRangeData.error) { _pmLookupResult = { ticker: t, error: 'Run a window first (set dates, then Go).' }; renderPriceMoves(); return; }
+  const base = _pmRangeData.base, end = _pmRangeData.end;
+  const heldRow = _pmRangeData.rows.find(r => r.ticker === t);
+  if (heldRow) { _pmLookupResult = { ticker: t, base, end, cA: heldRow.cA, cB: heldRow.cB, pct: heldRow.pct, held: true, moveOnPos: heldRow.moveOnPos }; renderPriceMoves(); return; }
+  let bars = _pmHist[t];
+  if (!bars) {
+    if (!_pmHistRange || !_pmHistRange.from) { _pmLookupResult = { ticker: t, error: 'Run a window first (set dates, then Go).' }; renderPriceMoves(); return; }
+    _pmLookupBusy = true; renderPriceMoves();
+    try { bars = await _pmFetchBars(t, _pmHistRange.from, _pmHistRange.to); _pmHist[t] = bars; }
+    catch (err) {
+      _pmLookupBusy = false;
+      const m = err && err.message;
+      _pmLookupResult = { ticker: t, base, end, error: m === 'noworker' ? 'No bars-worker URL set (Settings).' : m === 'rate' ? 'Rate limited \u2014 try again shortly.' : m === 'nodata' ? ('No price history for ' + t + '.') : ('Lookup failed for ' + t + '.') };
+      renderPriceMoves(); return;
+    }
+    _pmLookupBusy = false;
+  }
+  const cA = _pmCloseAtOrBefore(bars, base), cB = _pmCloseAtOrBefore(bars, end);
+  if (cA == null || cB == null) { _pmLookupResult = { ticker: t, base, end, error: 'No usable close for ' + t + ' across this window.' }; renderPriceMoves(); return; }
+  _pmLookupResult = { ticker: t, base, end, cA, cB, pct: cA > 0 ? (cB - cA) / cA * 100 : null, held: false };
+  renderPriceMoves();
+}
+
 
 // Pull ~2y of daily closes once per name, cache, then compute the requested window locally.
 // Switching windows / picking in-range custom dates = zero extra fetches. A second click
@@ -14868,6 +14899,7 @@ function _pmComputeFromCache(bookTk, base, end) {
   const endBarMs = _calBars ? _pmBarMsAtOrBefore(_calBars, end) : null;
   const baseBarMs = _calBars ? _pmBarMsAtOrBefore(_calBars, base) : null;
   _pmRangeData = { base, end, rows, excluded, bookMove, bookPct, vooPct, vsVoo, endBarMs, baseBarMs, anyRate: fl.anyRate, anyNet: fl.anyNet, at: Date.now() };
+  if (_pmLookupResult && (_pmLookupResult.base !== base || _pmLookupResult.end !== end)) _pmLookupResult = null;
 }
 
 function renderPriceMoves() {
@@ -14953,7 +14985,21 @@ function renderPriceMoves() {
         (laggards.length ? grpHdr('Top laggards — biggest $ lost', 'var(--color-text-danger)') + tableOf(laggards) : '');
       if (hidden > 0) toggle = '<span onclick="pmToggleAll()" style="cursor:pointer;color:var(--color-accent-blue);font-size:10px">Show all ' + D.rows.length + ' names (' + hidden + ' more) →</span>';
     }
-    body = headline + pmFresh + noteHtml + tableBlock + (toggle ? '<div style="margin-top:7px">' + toggle + '</div>' : '');
+    let lookupResultHtml = '';
+    if (_pmLookupBusy) lookupResultHtml = '<span style="font-size:10px;color:var(--color-text-tertiary);font-style:italic">pulling\u2026</span>';
+    else if (_pmLookupResult) {
+      const L = _pmLookupResult;
+      if (L.error) lookupResultHtml = '<span style="font-size:10px;color:#fbbf24">' + esc(L.error) + '</span>';
+      else lookupResultHtml = '<span style="font-size:11px"><b>' + esc(L.ticker) + '</b> ' + _pmPct(L.pct) + ' <span style="color:var(--color-text-tertiary)">$' + L.cA.toFixed(2) + ' \u2192 $' + L.cB.toFixed(2) + '</span>' + (L.held && L.moveOnPos != null ? ' \u00b7 ' + _pmUsd(L.moveOnPos) + ' on your position' : (L.held ? '' : ' \u00b7 <span style="color:var(--color-text-tertiary)">not held</span>')) + '</span>';
+    }
+    const lookup = '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--color-border-tertiary)">' +
+      '<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--color-text-tertiary);margin-bottom:4px">Look up one ticker over this window</div>' +
+      '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+      '<input id="pm-lookup-input" value="' + esc(_pmLookupTicker) + '" placeholder="e.g. AAPL" onkeydown="if(event.key===\'Enter\')pmLookup(this.value)" style="background:var(--color-background-tertiary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-sm);color:var(--color-text-primary);font-family:inherit;font-size:11px;padding:3px 8px;width:96px;text-transform:uppercase">' +
+      '<button onclick="pmLookup(document.getElementById(\'pm-lookup-input\').value)"' + (_pmLookupBusy ? ' disabled' : '') + ' style="background:var(--color-accent-blue);border:none;color:#fff;padding:3px 12px;font-size:11px;border-radius:var(--border-radius-sm);cursor:pointer;font-weight:600">Look up</button>' +
+      lookupResultHtml +
+      '</div></div>';
+    body = pmFresh + noteHtml + tableBlock + lookup + (toggle ? '<div style="margin-top:7px">' + toggle + '</div>' : '');
   }
 
   el.innerHTML = '<div style="padding:8px 11px;border-left:3px solid var(--color-accent-blue);background:var(--color-background-tertiary);border-radius:var(--border-radius-md)">' + controls + body + '</div>';
@@ -33665,6 +33711,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09eq</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09er</div>
 </body>
 </html>
