@@ -1393,41 +1393,6 @@
     <div id="add-candidates-tier1-wrap"></div>
     <div id="add-candidates-tier2-wrap" style="margin-top:12px"></div>
 
-    <div id="trim-watch-block" style="margin-top:24px;margin-bottom:18px"></div>
-
-    <div class="section-heading" style="margin-top:28px">Holdings — Signals &amp; Tax</div>
-    <div class="rebal-controls">
-      <span class="rebal-control-label">Short-term rate</span>
-      <input class="rebal-rate-input" id="rate-st" type="number" value="36" min="0" max="100" step="1" oninput="renderRebalance()">
-      <span style="font-size:10px;color:var(--color-text-tertiary)">%</span>
-      <span style="width:1px;height:20px;background:var(--color-border-secondary);margin:0 4px"></span>
-      <span class="rebal-control-label">Long-term rate</span>
-      <input class="rebal-rate-input" id="rate-lt" type="number" value="27" min="0" max="100" step="1" oninput="renderRebalance()">
-      <span style="font-size:10px;color:var(--color-text-tertiary)">%</span>
-      <span style="font-size:10px;color:var(--color-text-tertiary);margin-left:8px">Defaults: Oregon resident (24% fed + 9.9% OR + NIIT). Adjust to match your bracket.</span>
-    </div>
-    <div class="rebal-table-wrap" id="rebal-table-wrap">
-      <table class="rebal-table">
-        <thead>
-          <tr>
-            <th onclick="sortRebal('ticker')" class="sortable">Position <span id="sort-ticker"></span></th>
-            <th onclick="sortRebal('value')" class="sortable r" title="Current market value of this position (all tranches at current price).">Value <span id="sort-value"></span><div style="font-size:8px;font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0">at current price</div></th>
-            <th onclick="sortRebal('daysHeld')" class="sortable r">Held <span id="sort-daysHeld"></span></th>
-            <th onclick="sortRebal('soak')" class="sortable r" title="Soak status — whether this position has been held long enough that its alpha numbers are meaningful signal vs noise. Per-sleeve thresholds: Thesis Plays 180d, Quality 365d, PBP 1095d. Informational only — does not change signal logic. Sort: by days held (same underlying number as Held).">Soak <span id="sort-soak"></span></th>
-            <th onclick="sortRebal('dollarAlpha')" class="sortable r">Dollar Alpha <span id="sort-dollarAlpha"></span></th>
-            <th onclick="sortRebal('themeAlpha')" class="sortable r" title="Theme-relative alpha — your dollar gain vs theme benchmark over the same period. More honest comparison for sleeves with assigned theme benchmarks.">Theme α <span id="sort-themeAlpha"></span></th>
-            <th onclick="sortRebal('gl')" class="sortable r">Unreal. G/L <span id="sort-gl"></span></th>
-            <th>Term</th>
-          </tr>
-        </thead>
-        <tbody id="rebal-tbody"></tbody>
-      </table>
-    </div>
-    <div class="scroll-slider-wrap">
-      <input type="range" class="scroll-slider" id="rebal-slider" min="0" value="0" step="1"
-        oninput="sliderScroll('rebal-table-wrap', this)">
-    </div>
-
   </div><!-- end tab-tradeideas -->
 
   <!-- Theme Dissection Tab -->
@@ -8006,7 +7971,7 @@ function switchTab(name) {
   document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`).classList.add('active');
   // Per-tab renders isolated so a broken tab can't blank the whole panel.
   if (name === 'analysis') { safeRender('renderSleeveValueAdd', renderSleeveValueAdd); safeRender('renderThemeIntel', renderThemeIntel); }
-  if (name === 'tradeideas') { safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderNbCard', renderNbCard); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); safeRender('renderRebalance', renderRebalance); }
+  if (name === 'tradeideas') { safeRender('renderPriceMoves', renderPriceMoves); safeRender('renderNbCard', renderNbCard); safeRender('renderAddCandidatesTable', renderAddCandidatesTable); }
   if (name === 'pricetheme') { if (typeof runTickerLookup === 'function') runTickerLookup(); safeRender('renderEtfCompare', renderEtfCompare); safeRender('renderManualAnalyze', renderManualAnalyze); safeRender('renderThemeDiscovery', renderThemeDiscovery); }
   if (name === 'postsell') safeRender('renderPostSell', renderPostSell);
   if (name === 'evaltrade') { safeRender('renderQualityTab', renderQualityTab); safeRender('renderCandidatePanel', renderCandidatePanel); safeRender('renderEvaltradeRiskMirror', renderEvaltradeRiskMirror); safeRender('renderThemeAiReview', renderThemeAiReview); }
@@ -33700,6 +33665,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ep</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09eq</div>
 </body>
 </html>
