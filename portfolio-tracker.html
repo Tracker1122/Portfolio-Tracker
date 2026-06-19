@@ -894,7 +894,7 @@
   .rebal-table th.sortable { cursor: pointer; user-select: none; }
   .rebal-table th.sortable:hover { color: var(--color-text-info); }
   .rebal-table th.sort-active { color: var(--color-text-info); }
-  .nb-tight .rebal-table { font-size: 10px; min-width: 0; }
+  .nb-tight .rebal-table { font-size: 10px; min-width: 0; width: 100%; }
   .nb-tight .rebal-table th { padding: 5px 5px 4px; font-size: 8px; letter-spacing: 0.04em; }
   .nb-tight .rebal-table td { padding: 3px 5px; }
   .nb-tight .rebal-table-wrap, .nb-tight.rebal-table-wrap { scrollbar-width: thin; }
@@ -5251,6 +5251,11 @@ function taxToSellInfo(gainLoss, daysHeld, account) {
   if (tax > 0) return { amount: tax, text: '\u2212' + fmtDollarWhole(tax), color: 'var(--color-text-danger)', title: 'Selling realizes a ' + rl + ' gain \u2014 est. tax cost ' + fmtDollarWhole(tax) + ' at ' + (rate * 100).toFixed(0) + '%.' };
   return { amount: tax, text: '+' + fmtDollarWhole(Math.abs(tax)), color: 'var(--color-text-success)', title: 'Selling harvests a ' + rl + ' loss \u2014 est. tax benefit ' + fmtDollarWhole(Math.abs(tax)) + ' at ' + (rate * 100).toFixed(0) + '%.' };
 }
+function nbSleeveShort(sl) {
+  if (sl === 'Portfolio Balance Plays') return 'Balance';
+  if (sl === 'Thesis Plays') return 'Thesis';
+  return sl || '\u2014';
+}
 function renderNbCard() {
   const el = document.getElementById('nb-card-wrap');
   if (!el) return;
@@ -5312,8 +5317,8 @@ function renderNbCard() {
     }
     return '<tr>'
       + '<td><strong>' + esc(r.ticker) + '</strong>' + (r.isETF ? ' <span style="font-size:8px;background:#3a3a5a;color:#a0a0c0;padding:1px 4px;border-radius:3px;font-weight:700">ETF</span>' : '') + '</td>'
-      + '<td><span style="font-size:9px;color:' + sleeveColor + ';background:' + sleeveColor + '22;padding:1px 5px;border-radius:3px;font-weight:700">' + esc(r.sleeve || '\u2014') + '</span></td>'
-      + '<td><span style="font-size:10px;color:var(--color-text-tertiary)">' + esc(r.theme || '\u2014') + '</span></td>'
+      + '<td><span title="' + escq(r.sleeve || '') + '" style="font-size:9px;color:' + sleeveColor + ';background:' + sleeveColor + '22;padding:1px 5px;border-radius:3px;font-weight:700">' + esc(nbSleeveShort(r.sleeve)) + '</span></td>'
+      + '<td style="white-space:normal;max-width:120px"><span style="font-size:10px;color:var(--color-text-tertiary)">' + esc(r.theme || '\u2014') + '</span></td>'
       + '<td class="r">' + fmtDollarWhole(r.value) + '</td>'
       + '<td><span style="font-size:10px;color:var(--color-text-secondary)">' + esc(r.account || '\u2014') + '</span></td>'
       + '<td class="r"><span style="color:' + glColor + '">' + (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%</span></td>'
@@ -33694,6 +33699,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09em</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09en</div>
 </body>
 </html>
