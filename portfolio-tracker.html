@@ -1093,7 +1093,7 @@
     <button class="tab-btn" onclick="switchTab('evaltrade')">Evaluate a Trade</button>
     <span aria-hidden="true" style="align-self:center;width:1px;height:16px;background:var(--color-border-tertiary);margin:0 12px;flex-shrink:0"></span>
     <button class="tab-btn" onclick="switchTab('postsell')">Post-Sell Analysis</button>
-    <button class="tab-btn" onclick="switchTab('trends')">Book Trends</button>
+    <button class="tab-btn" onclick="switchTab('report')">📄 Portfolio Report</button>
   </div>
 
   <!-- Dashboard Tab -->
@@ -1540,15 +1540,24 @@
   </div><!-- end tab-evaltrade -->
 
   <!-- Trends Tab -->
-  <div class="tab-panel" id="tab-trends">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <button class="btn btn-sm btn-primary" onclick="openTakeSnapshotModal()" style="font-size:11px;padding:6px 14px">📸 Take Snapshot</button>
-      <span style="font-size:10px;color:var(--color-text-tertiary)">Refresh Prices &amp; Get Benchmarks live on the Home tab.</span>
+  <div class="tab-panel" id="tab-report">
+    <div class="section-heading">Portfolio Report — PDF Export</div>
+    <div style="font-size:11px;color:var(--color-text-secondary);line-height:1.6;max-width:640px;margin:6px 0 16px">
+      Tick the pieces you want, then generate one print-ready PDF of your book. It opens a clean, letterheaded report in a new tab — use your browser’s <b>Save as PDF</b>. (Allow pop-ups for this site.) Sections you haven’t opened or run yet will say so in the PDF rather than appear blank.
     </div>
-    <div id="trends-summary" style="margin-bottom:14px"></div>
-    <div class="section-heading">Snapshot History</div>
-    <div id="trends-list"></div>
-  </div><!-- end tab-trends -->
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px;max-width:560px">
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-holdings" checked style="margin-top:2px"> <span><b>Holdings</b> — every position with value, theme, sleeve, gain/loss</span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-summary" checked style="margin-top:2px"> <span><b>Portfolio summary</b> — the top-line totals tiles</span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-exposure" checked style="margin-top:2px"> <span><b>True exposure</b> — direct + fund look-through by theme</span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-sleeve" checked style="margin-top:2px"> <span><b>Sleeve performance &amp; value-add</b></span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-factor" checked style="margin-top:2px"> <span><b>Factor unity</b> — the six-risk loadings</span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-industry" style="margin-top:2px"> <span><b>Industry intelligence</b></span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-risk" checked style="margin-top:2px"> <span><b>Risk review</b> — historical stress test (needs a window open in Risk Review)</span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-pricemoves" style="margin-top:2px"> <span><b>Price moves</b> — the last window you ran</span></label>
+      <label style="display:flex;align-items:flex-start;gap:9px;font-size:12px;color:var(--color-text-primary);cursor:pointer"><input type="checkbox" id="prep-sec-ai" checked style="margin-top:2px"> <span><b>AI analysis</b> — if you’ve run it</span></label>
+    </div>
+    <button class="btn btn-primary" onclick="portfolioReportPdf()" style="font-size:12px;padding:8px 18px">⤓ Generate PDF</button>
+  </div><!-- end tab-report -->
 
   <!-- Themes Tab -->
   <div class="tab-panel" id="tab-ask"></div>
@@ -18305,6 +18314,112 @@ function candExportPdf() {
   setTimeout(function () { try { w.focus(); w.print(); } catch (e) { } }, 400);
 }
 
+function portfolioHoldingsTableHtml() {
+  try {
+    var open = positions.filter(function (p) { return !p.closed && p.ticker; });
+    if (!open.length) return '<p class="note">No open positions.</p>';
+    var money = function (v) { return (v < 0 ? '\u2212$' : '$') + Math.round(Math.abs(v)).toLocaleString(); };
+    var rows = open.map(function (p) {
+      var c = calcPos(p);
+      return { ticker: p.ticker, theme: p.theme || '', sleeve: p.sleeve || '', account: p.account || '', value: c.exitValue || 0, gl: c.gainLoss || 0, glPct: c.yourReturn };
+    }).sort(function (a, b) { return b.value - a.value; });
+    var totalVal = rows.reduce(function (s, r) { return s + r.value; }, 0);
+    var totalGl = rows.reduce(function (s, r) { return s + r.gl; }, 0);
+    var h = '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="text-align:left;border-bottom:1px solid #ccc;color:#555">' +
+      '<th style="padding:3px 6px">Ticker</th><th style="padding:3px 6px">Theme</th><th style="padding:3px 6px">Sleeve</th><th style="padding:3px 6px">Account</th>' +
+      '<th style="padding:3px 6px;text-align:right">Value</th><th style="padding:3px 6px;text-align:right">G/L $</th><th style="padding:3px 6px;text-align:right">G/L %</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var glc = r.gl >= 0 ? '#15803d' : '#b91c1c';
+      h += '<tr style="border-bottom:1px solid #eee">' +
+        '<td style="padding:3px 6px;font-weight:600">' + esc(r.ticker) + '</td>' +
+        '<td style="padding:3px 6px">' + esc(r.theme) + '</td>' +
+        '<td style="padding:3px 6px">' + esc(r.sleeve) + '</td>' +
+        '<td style="padding:3px 6px">' + esc(r.account) + '</td>' +
+        '<td style="padding:3px 6px;text-align:right">' + money(r.value) + '</td>' +
+        '<td style="padding:3px 6px;text-align:right;color:' + glc + '">' + (r.gl >= 0 ? '+' : '') + money(r.gl) + '</td>' +
+        '<td style="padding:3px 6px;text-align:right;color:' + glc + '">' + (r.glPct != null ? (r.glPct >= 0 ? '+' : '') + r.glPct.toFixed(1) + '%' : '\u2014') + '</td></tr>';
+    });
+    var glcT = totalGl >= 0 ? '#15803d' : '#b91c1c';
+    h += '</tbody><tfoot><tr style="border-top:2px solid #ccc;font-weight:700">' +
+      '<td style="padding:3px 6px" colspan="4">Total (' + rows.length + ' positions)</td>' +
+      '<td style="padding:3px 6px;text-align:right">' + money(totalVal) + '</td>' +
+      '<td style="padding:3px 6px;text-align:right;color:' + glcT + '">' + (totalGl >= 0 ? '+' : '') + money(totalGl) + '</td><td></td></tr></tfoot></table>';
+    return h;
+  } catch (e) { return '<p class="note">Holdings table could not be built.</p>'; }
+}
+
+function portfolioReportPdf() {
+  var esc2 = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var cleanFrag = function (html) {
+    var t = document.createElement('div');
+    t.innerHTML = html || '';
+    t.querySelectorAll('[onclick]').forEach(function (el) { el.remove(); });
+    t.querySelectorAll('input,button,select').forEach(function (el) { el.remove(); });
+    t.querySelectorAll('details').forEach(function (d) { d.setAttribute('open', ''); });
+    t.querySelectorAll('summary').forEach(function (s) { var hh = document.createElement('div'); hh.textContent = s.textContent; hh.style.cssText = 'font-weight:700;margin:4px 0 2px'; s.replaceWith(hh); });
+    return t.innerHTML.replace(/#fbbf24/g, '#b45309').replace(/#34d399/g, '#15803d').replace(/#f87171/g, '#dc2626');
+  };
+  var pick = function (id) { var el = document.getElementById(id); return !!(el && el.checked); };
+  var grab = function (mountId, renderFn) {
+    var el0 = document.getElementById(mountId);
+    var html = el0 ? (el0.innerHTML || '') : '';
+    if (!html.trim() && typeof renderFn === 'function') { try { renderFn(); } catch (e) {} var el = document.getElementById(mountId); html = el ? (el.innerHTML || '') : ''; }
+    return html.trim() ? cleanFrag(html) : '';
+  };
+
+  var sections = [];
+  if (pick('prep-sec-holdings')) sections.push(['Holdings', portfolioHoldingsTableHtml()]);
+  if (pick('prep-sec-summary')) sections.push(['Portfolio summary', grab('open-summary', null) || '<p class="note">No summary available.</p>']);
+  if (pick('prep-sec-exposure')) sections.push(['True exposure', grab('distribution-content', typeof renderDistribution === 'function' ? renderDistribution : null) || '<p class="note">Open the True Exposure tab once, then re-export.</p>']);
+  if (pick('prep-sec-sleeve')) sections.push(['Sleeve performance & value-add', grab('sleeve-valueadd-wrap', typeof renderSleeveValueAdd === 'function' ? renderSleeveValueAdd : null) || '<p class="note">Not available.</p>']);
+  if (pick('prep-sec-factor')) sections.push(['Factor unity', grab('factor-unity-mount', typeof renderFactorUnity === 'function' ? renderFactorUnity : null) || '<p class="note">Not available.</p>']);
+  if (pick('prep-sec-industry')) sections.push(['Industry intelligence', grab('theme-intel-wrap', typeof renderThemeIntel === 'function' ? renderThemeIntel : null) || '<p class="note">Not available.</p>']);
+  if (pick('prep-sec-risk')) { var hR = ''; try { hR = riskReviewPdfSection(cleanFrag, esc2); } catch (e) {} sections.push(['Risk review \u2014 historical stress test', hR || '<p class="note">No stress window was open in Risk Review. Open one there, then re-export.</p>']); }
+  if (pick('prep-sec-pricemoves')) sections.push(['Price moves', grab('price-moves-wrap', null) || '<p class="note">Run a window on the Price Moves card first, then re-export.</p>']);
+  if (pick('prep-sec-ai')) {
+    var aiHtml = '<p class="note">No AI analysis has been run yet.</p>';
+    if (typeof bookAiReview !== 'undefined' && bookAiReview && bookAiReview.text) {
+      var blocks = ['<div class="ai">' + esc2(bookAiReview.text) + '</div>'];
+      (bookAiReview.thread || []).slice(1).forEach(function (t) {
+        if (!t || !t.text || t.error) return;
+        if (t.role === 'user') blocks.push('<p class="aiq">Follow-up: ' + esc2(t.text) + '</p>');
+        else blocks.push('<div class="ai">' + esc2(t.text) + '</div>');
+      });
+      blocks.push('<p class="note" style="margin-top:10px">Generated ' + esc2(new Date(bookAiReview.at).toLocaleString()) + '. Observations for discussion, not advice.</p>');
+      aiHtml = blocks.join('');
+    }
+    sections.push(['AI analysis', aiHtml]);
+  }
+
+  if (!sections.length) { alert('Pick at least one section to include.'); return; }
+
+  var now = new Date();
+  var sectionsHtml = sections.map(function (sx) { return '<h2>' + esc2(sx[0]) + '</h2><div class="section">' + sx[1] + '</div>'; }).join('');
+  var doc =
+    '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Portfolio Report</title><style>' +
+    ':root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}' +
+    '*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+    '.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}' +
+    'h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px}' +
+    '.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}' +
+    '.ai{white-space:pre-wrap;font-size:12px;line-height:1.55;color:#111;margin:2px 0}.aiq{font-weight:600;font-size:12px;margin:14px 0 2px}' +
+    'table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}' +
+    '</style></head><body><div class="doc"><div class="letterhead"><img src="' + HS_LOGO + '" alt="Harlan Shelby"></div>' +
+    '<h1>Portfolio Report</h1>' +
+    '<div class="sub">Prepared ' + esc2(now.toLocaleDateString()) + '.</div>' +
+    '<div class="note">Figures are estimates from my own tracker \u2014 true-exposure look-through using fund weights I maintain. Not tax or investment advice.</div>' +
+    sectionsHtml +
+    '<div class="note" style="margin-top:26px">Generated from my portfolio tracker.</div>' +
+    '</div></body></html>';
+
+  var w = window.open('', '_blank');
+  if (!w) { alert('Allow pop-ups for this site to export the PDF, then try again.'); return; }
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+  setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 400);
+}
+
 // Export ONE New Position Evaluation candidate — its checklist inputs, the on-screen portfolio-context
 // flags (exposure / overlap / look-through, plus recent performance if fetched), and the AI
 // for/against/gaps review with any argue-back follow-ups — as a clean, light-themed printable document
@@ -33756,6 +33871,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ey</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09ez</div>
 </body>
 </html>
