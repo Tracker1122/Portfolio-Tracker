@@ -4539,7 +4539,7 @@ function renderSummary(containerId, posArr, isOpen, suppressTrackRecord) {
   const sleeveSub = isOpen ? '<span style="text-transform:none;letter-spacing:0;font-size:9px;display:block;color:var(--color-text-tertiary);font-weight:400">active sleeve only</span>' : '';
 
   el.innerHTML = `
-    ${isOpen && typeof aumCardHtml === 'function' ? aumCardHtml() : ''}
+    ${isOpen && typeof aumCardHtml === 'function' ? aumCardHtml(posArr) : ''}
     <div class="summary-card">
       <div class="summary-card-label">Total Invested${sleeveSub}</div>
       <div class="summary-card-value">${fmtDollar(s.totalInvested)}</div>
@@ -16406,10 +16406,10 @@ function importSpCsv(input) {
 // drift from the numbers the user sees. Components: managed open positions (calcPos market value,
 // split by account), VOO passive core (getSpTotals), and direct private deals (calcPeDeal, AT COST).
 // Cash was removed from the tracker, so it is not a component.
-function aumTotals() {
+function aumTotals(optPosArr) {
   // Managed open positions — current market value, split by account so the liquid (taxable) book
   // can be separated from the tax-sheltered IRA holdings (IRA money is not liquid public book).
-  const openManaged = positions.filter(p => !p.closed && p.ticker);
+  const openManaged = (optPosArr || positions).filter(p => !p.closed && p.ticker);
   const managed = openManaged.reduce((s, p) => s + (calcPos(p).exitValue || 0), 0);
   const managedIra = openManaged
     .filter(p => (p.account || '').toUpperCase().includes('IRA'))
@@ -16445,10 +16445,10 @@ function aumTotals() {
 
 // AUM card — renders aumTotals() broken out by component. Shows two subtotals the user asked for,
 // broken out rather than conflated: a LIQUID public total (managed + VOO) and an ALL-IN total (+ private).
-function aumCardHtml() {
+function aumCardHtml(optPosArr) {
   // All figures come from aumTotals() — the shared source of truth (see above), so this card and
   // the AI prompt can never drift apart.
-  const { managed, voo, pe, peCount, allIn, liquidTaxable, iraSheltered } = aumTotals();
+  const { managed, voo, pe, peCount, allIn, liquidTaxable, iraSheltered } = aumTotals(optPosArr);
 
   const fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : (n) => '$' + Math.round(n).toLocaleString();
   const pct = (v) => allIn > 0 ? ((v / allIn) * 100).toFixed(0) + '%' : '—';
@@ -33971,6 +33971,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fi</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fj</div>
 </body>
 </html>
