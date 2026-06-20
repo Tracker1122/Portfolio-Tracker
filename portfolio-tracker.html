@@ -18455,7 +18455,7 @@ function portfolioReportPdf() {
     if (exRaw) { try { var tmpE = document.createElement('div'); tmpE.innerHTML = exRaw; var det = tmpE.querySelector('details'); var tbl = det ? det.querySelector('table') : tmpE.querySelector('table'); if (tbl) exHtml = '<p class="note" style="margin-bottom:6px">Look-through \u2014 every direct holding plus what you hold inside VOO and decomposed ETFs, rolled up to one line per company.</p>' + tbl.outerHTML; } catch (e) {} }
     sections.push(['True exposure', exHtml || '<p class="note">Open the True Exposure tab once, then re-export.</p>']);
   }
-  if (pick('prep-sec-sleeve')) sections.push(['Sleeve performance & value-add', grab('sleeve-valueadd-wrap', typeof renderSleeveValueAdd === 'function' ? renderSleeveValueAdd : null) || '<p class="note">Not available.</p>']);
+  if (pick('prep-sec-sleeve')) { var slv = grab('sleeve-valueadd-wrap', typeof renderSleeveValueAdd === 'function' ? renderSleeveValueAdd : null); sections.push(['Sleeve performance & value-add', slv ? '<div class="sleeve-stack">' + slv + '</div>' : '<p class="note">Not available.</p>']); }
   if (pick('prep-sec-factor')) sections.push(['Factor unity', grab('factor-unity-mount', typeof renderFactorUnity === 'function' ? renderFactorUnity : null) || '<p class="note">Not available.</p>']);
   if (pick('prep-sec-industry')) sections.push(['Industry intelligence', grab('theme-intel-wrap', typeof renderThemeIntel === 'function' ? renderThemeIntel : null) || '<p class="note">Not available.</p>']);
   if (pick('prep-sec-risk')) { var hR = ''; try { hR = riskReviewPdfSection(cleanFrag, esc2); } catch (e) {} sections.push(['Risk review \u2014 historical stress test', hR || '<p class="note">No stress window was open in Risk Review. Open one there, then re-export.</p>']); }
@@ -18489,14 +18489,17 @@ function portfolioReportPdf() {
   if (!sections.length) { alert('Pick at least one section to include.'); return; }
 
   var now = new Date();
-  var sectionsHtml = sections.map(function (sx) { return '<h2>' + esc2(sx[0]) + '</h2><div class="section">' + sx[1] + '</div>'; }).join('');
+  var flowTitles = /^(Holdings|Industry|Price moves|AI analysis)/i;
+  var sectionsHtml = sections.map(function (sx) { var cls = 'report-block' + (flowTitles.test(sx[0]) ? ' flow' : ''); return '<div class="' + cls + '"><h2>' + esc2(sx[0]) + '</h2><div class="section">' + sx[1] + '</div></div>'; }).join('');
   var doc =
     '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Portfolio Report</title><style>' +
     ':root,body{--color-text-primary:#111;--color-text-secondary:#444;--color-text-tertiary:#777;--color-text-danger:#b91c1c;--color-text-success:#15803d;--color-text-info:#1d4ed8;--color-background-secondary:#f5f5f5;--color-background-tertiary:#ededf0;--color-border-tertiary:#d4d4d8;--color-accent:#2563eb;--border-radius-md:6px;--border-radius-sm:3px;}' +
     '*{box-sizing:border-box}body{background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;padding:26px 30px;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
     '.doc{max-width:760px;margin:0 auto;zoom:1.15}h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin:0 0 2px}.letterhead{text-align:center;margin:0 0 16px;padding:0 0 13px;border-bottom:1.5px solid #1f2937}.letterhead img{height:92px;width:auto;display:inline-block;vertical-align:middle}' +
     'h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:22px 0 10px;break-after:avoid;page-break-after:avoid}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:6px 0 16px}.summary-card{background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:6px;padding:10px 12px;break-inside:avoid}.summary-card-label{font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px}.summary-card-value{font-size:14px;font-weight:700;color:var(--color-text-primary)}.summary-card-value.success{color:var(--color-text-success)}.summary-card-value.danger{color:var(--color-text-danger)}.summary-card-value.info{color:var(--color-text-info)}' +
-    '.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}.section{page-break-inside:avoid}' +
+    '.note{color:#777;font-size:11px;font-style:italic;line-height:1.5}' +
+    '.report-block{break-inside:avoid;page-break-inside:avoid}.report-block.flow{break-inside:auto;page-break-inside:auto}' +
+    '.sleeve-stack{font-size:10px}.sleeve-stack > div[style*="repeat(3,1fr)"] > div{min-width:0;overflow-wrap:break-word}.sleeve-stack [style*="nowrap"]{white-space:normal}' +
     '.ai{white-space:pre-wrap;font-size:12px;line-height:1.55;color:#111;margin:2px 0}.aiq{font-weight:600;font-size:12px;margin:14px 0 2px}' +
     'table{border-collapse:collapse}@media print{body{padding:0}.doc{zoom:1}@page{margin:14mm}}' +
     '</style></head><body><div class="doc"><div class="letterhead"><img src="' + HS_LOGO + '" alt="Harlan Shelby"></div>' +
@@ -33966,6 +33969,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fd</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fe</div>
 </body>
 </html>
