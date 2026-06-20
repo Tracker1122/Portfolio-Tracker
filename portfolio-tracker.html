@@ -5405,7 +5405,6 @@ function renderTrimWatch() {
       <span style="font-size:9px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">Held</span>
       <span style="font-size:9px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">Mgd%</span>
       <span style="font-size:9px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">Ind%</span>
-      <span style="font-size:9px;color:var(--color-text-tertiary);width:58px;text-align:right;flex-shrink:0">Soak</span>
       <span style="font-size:9px;color:var(--color-text-tertiary);width:64px;text-align:right;flex-shrink:0">Tax</span>
     </div>`;
 
@@ -5430,7 +5429,6 @@ function renderTrimWatch() {
     const industryPct = industryTotal > 0 ? ((r.totalExit / industryTotal) * 100).toFixed(1) + '%' : '—';
     const strategyPct = strategyTotal > 0 ? ((r.totalExit / strategyTotal) * 100).toFixed(1) + '%' : '—';
     const strategyColor = SLEEVE_COLORS[strategyName] || 'var(--color-text-tertiary)';
-    const sk = soakCellInfo(strategyName, r.daysHeldMax);
     const tx = taxToSellInfo(r.totalGl, r.daysHeldMax, r.account);
 
     return `<div class="bw-row" style="justify-content:space-between;align-items:center">
@@ -5442,7 +5440,6 @@ function renderTrimWatch() {
       <span style="font-size:11px;color:${heldColor};width:44px;text-align:right;font-weight:600;flex-shrink:0">${heldLabel}</span>
       <span style="font-size:10px;color:var(--color-text-secondary);width:44px;text-align:right;flex-shrink:0">${portPct}</span>
       <span style="font-size:10px;color:var(--color-text-tertiary);width:44px;text-align:right;flex-shrink:0">${industryPct}</span>
-      <span title="${sk.title}" style="font-size:10px;color:${sk.color};width:58px;text-align:right;flex-shrink:0">${sk.text}</span>
       <span title="${tx.title}" style="font-size:11px;color:${tx.color};width:64px;text-align:right;flex-shrink:0">${tx.text}</span>
     </div>`;
   }).join('');
@@ -33969,6 +33966,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fg</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fh</div>
 </body>
 </html>
