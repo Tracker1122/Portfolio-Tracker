@@ -4171,6 +4171,11 @@ function togglePeValueAtCost() {
   // so its look-through exposure column would otherwise show a stale value from the prior mute state.
   // Refresh it explicitly here so muting/unmuting updates it in lockstep with everything else.
   if (typeof renderThemeUniverse === 'function') renderThemeUniverse();
+  // Same story for the Sleeve Value-Add / Performance cards (Book Performance tab): they render on
+  // tab-switch, not in renderAll, so without this their G/L would keep showing market value after a
+  // mute toggle. Each guards on its own mount and no-ops if not present.
+  if (typeof renderSleeveValueAdd === 'function') renderSleeveValueAdd();
+  if (typeof renderSleevePerformance === 'function') renderSleevePerformance();
 }
 function updatePeAtCostUI() {
   const btn = document.getElementById('pe-at-cost-btn');
@@ -33966,6 +33971,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fh</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fi</div>
 </body>
 </html>
