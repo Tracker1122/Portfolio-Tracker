@@ -18320,31 +18320,54 @@ function portfolioHoldingsTableHtml() {
     var open = positions.filter(function (p) { return !p.closed && p.ticker; });
     var money = function (v) { return (v < 0 ? '\u2212$' : '$') + Math.round(Math.abs(v)).toLocaleString(); };
     var pct = function (v) { return v == null ? '\u2014' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; };
+    function norm(t) { return (typeof qrNormTicker === 'function') ? qrNormTicker(t) : String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+    // ETF detection mirrors the rest of the app: a held ticker is a fund/ETF if it's in the
+    // look-through library (_ltNorms). A small fallback set catches common ETFs the user holds
+    // but has not pasted decomposition for (e.g. commodity/sector funds), so they still group right.
+    var ltNorms = {};
+    try { if (typeof getIndexLookthrough === 'function') { Object.keys(getIndexLookthrough()).forEach(function (k) { ltNorms[norm(k)] = 1; }); } } catch (e) {}
+    var ETF_FALLBACK = { GLD:1, GLDM:1, IAU:1, SLV:1, TLT:1, IEF:1, SHV:1, BIL:1, SGOV:1, VDE:1, XLE:1, XLU:1, XLV:1, XLF:1, XLK:1, XLY:1, XLP:1, XLI:1, XLB:1, XLRE:1, XLC:1, VNQ:1, QQQ:1, SPY:1, DIA:1, IWM:1, SMH:1, SOXX:1, GRID:1, DRAM:1, NASA:1, LOHA:1, VWO:1, VEA:1, EEM:1 };
+    function isEtf(t) { var n = norm(t); return !!ltNorms[n] || !!ETF_FALLBACK[n]; }
+
     var rows = open.map(function (p) {
       var c = calcPos(p);
-      return { ticker: p.ticker, theme: p.theme || '', sleeve: p.sleeve || '', account: p.account || '', cost: c.invested || 0, value: c.exitValue || 0, gl: c.gainLoss || 0, glPct: c.yourReturn };
+      return { ticker: p.ticker, theme: p.theme || '', sleeve: p.sleeve || '', account: p.account || '', cost: c.invested || 0, value: c.exitValue || 0, gl: c.gainLoss || 0, glPct: c.yourReturn, etf: isEtf(p.ticker) };
     });
-    // VOO passive core lives outside `positions` (tracked as spLots) — fold it in so the report shows the
-    // whole liquid public book, not just the active sleeve.
+
+    // VOO passive core lives outside `positions` (tracked as spLots).
     var sp = (typeof getSpTotals === 'function') ? getSpTotals() : null;
     var hasVoo = !!(sp && sp.totalShares > 0);
+    var vooRow = null;
     if (hasVoo) {
       var acct = (sp.taxableShares > 0 && sp.iraShares > 0) ? 'Taxable + IRA' : (sp.iraShares > 0 ? 'IRA' : 'Taxable');
-      rows.push({ ticker: 'VOO', theme: 'Broad market (S&P 500)', sleeve: 'Passive core', account: acct, cost: sp.totalInvested || 0, value: (sp.price > 0 ? sp.currentValue : sp.totalInvested) || 0, gl: sp.gl || 0, glPct: (sp.totalInvested > 0 ? sp.gl / sp.totalInvested * 100 : null) });
+      vooRow = { ticker: 'VOO', theme: 'Broad market (S&P 500)', sleeve: 'Passive core', account: acct, cost: sp.totalInvested || 0, value: (sp.price > 0 ? sp.currentValue : sp.totalInvested) || 0, gl: sp.gl || 0, glPct: (sp.totalInvested > 0 ? sp.gl / sp.totalInvested * 100 : null) };
     }
-    if (!rows.length) return '<p class="note">No open positions.</p>';
-    rows.sort(function (a, b) { return b.value - a.value; });
-    var totalCost = rows.reduce(function (s, r) { return s + r.cost; }, 0);
-    var totalVal = rows.reduce(function (s, r) { return s + r.value; }, 0);
-    var totalGl = rows.reduce(function (s, r) { return s + r.gl; }, 0);
+
+    var byValue = function (a, b) { return b.value - a.value; };
+    var etfs = rows.filter(function (r) { return r.etf; }).sort(byValue);
+    var singles = rows.filter(function (r) { return !r.etf; }).sort(byValue);
+    var allRows = (vooRow ? [vooRow] : []).concat(etfs, singles);
+    if (!allRows.length) return '<p class="note">No open positions.</p>';
+
+    var totalCost = allRows.reduce(function (s, r) { return s + r.cost; }, 0);
+    var totalVal = allRows.reduce(function (s, r) { return s + r.value; }, 0);
+    var totalGl = allRows.reduce(function (s, r) { return s + r.gl; }, 0);
     var totalPct = totalCost > 0 ? totalGl / totalCost * 100 : null;
+
     var th = function (label, right) { return '<th style="padding:3px 6px' + (right ? ';text-align:right' : '') + '">' + label + '</th>'; };
     var h = '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="text-align:left;border-bottom:1px solid #ccc;color:#555">' +
       th('Ticker') + th('Theme') + th('Sleeve') + th('Account') + th('Cost basis', true) + th('G/L %', true) + th('G/L $', true) + th('Value', true) +
       '</tr></thead><tbody>';
-    rows.forEach(function (r) {
+
+    function groupHeader(label, list) {
+      var gv = list.reduce(function (s, r) { return s + r.value; }, 0);
+      return '<tr><td colspan="5" style="padding:9px 6px 3px;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:#555">' +
+        esc(label) + ' <span style="font-weight:400;color:#999">(' + list.length + ')</span></td>' +
+        '<td colspan="3" style="padding:9px 6px 3px;text-align:right;font-size:10px;color:#999">' + money(gv) + '</td></tr>';
+    }
+    function rowHtml(r) {
       var glc = r.gl >= 0 ? '#15803d' : '#b91c1c';
-      h += '<tr style="border-bottom:1px solid #eee">' +
+      return '<tr style="border-bottom:1px solid #eee">' +
         '<td style="padding:3px 6px;font-weight:600">' + esc(r.ticker) + '</td>' +
         '<td style="padding:3px 6px">' + esc(r.theme) + '</td>' +
         '<td style="padding:3px 6px">' + esc(r.sleeve) + '</td>' +
@@ -18353,17 +18376,45 @@ function portfolioHoldingsTableHtml() {
         '<td style="padding:3px 6px;text-align:right;color:' + glc + '">' + pct(r.glPct) + '</td>' +
         '<td style="padding:3px 6px;text-align:right;color:' + glc + '">' + (r.gl >= 0 ? '+' : '') + money(r.gl) + '</td>' +
         '<td style="padding:3px 6px;text-align:right">' + money(r.value) + '</td></tr>';
-    });
+    }
+
+    if (vooRow) { h += groupHeader('Passive core', [vooRow]) + rowHtml(vooRow); }
+    if (etfs.length) { h += groupHeader('ETFs', etfs); etfs.forEach(function (r) { h += rowHtml(r); }); }
+    if (singles.length) { h += groupHeader('Single tickers', singles); singles.forEach(function (r) { h += rowHtml(r); }); }
+
     var glcT = totalGl >= 0 ? '#15803d' : '#b91c1c';
-    var label = 'Total \u2014 ' + rows.length + ' holdings' + (hasVoo ? ' (incl. VOO core)' : '');
     h += '</tbody><tfoot><tr style="border-top:2px solid #ccc;font-weight:700">' +
-      '<td style="padding:3px 6px" colspan="4">' + label + '</td>' +
-      '<td style="padding:3px 6px;text-align:right">' + money(totalCost) + '</td>' +
-      '<td style="padding:3px 6px;text-align:right;color:' + glcT + '">' + pct(totalPct) + '</td>' +
-      '<td style="padding:3px 6px;text-align:right;color:' + glcT + '">' + (totalGl >= 0 ? '+' : '') + money(totalGl) + '</td>' +
-      '<td style="padding:3px 6px;text-align:right">' + money(totalVal) + '</td></tr></tfoot></table>';
+      '<td style="padding:5px 6px" colspan="4">Total \u2014 ' + allRows.length + ' holdings' + (hasVoo ? ' (incl. VOO core)' : '') + '</td>' +
+      '<td style="padding:5px 6px;text-align:right">' + money(totalCost) + '</td>' +
+      '<td style="padding:5px 6px;text-align:right;color:' + glcT + '">' + pct(totalPct) + '</td>' +
+      '<td style="padding:5px 6px;text-align:right;color:' + glcT + '">' + (totalGl >= 0 ? '+' : '') + money(totalGl) + '</td>' +
+      '<td style="padding:5px 6px;text-align:right">' + money(totalVal) + '</td></tr></tfoot></table>';
     return h;
   } catch (e) { return '<p class="note">Holdings table could not be built.</p>'; }
+}
+
+function aumListHtml() {
+  try {
+    var a = (typeof aumTotals === 'function') ? aumTotals() : null;
+    if (!a) return '';
+    var fmt = (typeof fmtDollarWhole === 'function') ? fmtDollarWhole : function (n) { return '$' + Math.round(n).toLocaleString(); };
+    var pc = function (v) { return a.allIn > 0 ? Math.round(v / a.allIn * 100) + '%' : '\u2014'; };
+    function li(label, val, withPct, sub) {
+      return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px solid #eee;font-size:12px">' +
+        '<span>' + label + (sub ? ' <span style="color:#888;font-size:10px">' + sub + '</span>' : '') + '</span>' +
+        '<span style="white-space:nowrap;font-weight:600">' + fmt(val) + (withPct ? ' <span style="color:#888;font-weight:400;font-size:10px">' + pc(val) + '</span>' : '') + '</span></div>';
+    }
+    var h = '<div style="max-width:440px">';
+    h += '<div style="display:flex;justify-content:space-between;gap:12px;padding:4px 0;font-weight:700;font-size:13px;border-bottom:2px solid #ccc"><span>All-in total</span><span>' + fmt(a.allIn) + '</span></div>';
+    h += li('Managed positions', a.managed, true);
+    h += li('Passive core \u2014 VOO', a.voo, true);
+    if (a.peCount) h += li('Private deals', a.pe, true, a.peCount + ' deal' + (a.peCount > 1 ? 's' : '') + ' \u00b7 at cost');
+    h += '<div style="height:8px"></div>';
+    h += li('Liquid \u00b7 taxable', a.liquidTaxable, false, 'managed + VOO');
+    h += li('IRA \u00b7 tax-sheltered', a.iraSheltered, false, 'managed + VOO');
+    h += '</div>';
+    return h;
+  } catch (e) { return ''; }
 }
 
 function portfolioReportPdf() {
@@ -18391,8 +18442,19 @@ function portfolioReportPdf() {
 
   var sections = [];
   if (pick('prep-sec-holdings')) sections.push(['Holdings', portfolioHoldingsTableHtml()]);
-  if (pick('prep-sec-summary')) sections.push(['Portfolio summary', grab('open-summary', null) || '<p class="note">No summary available.</p>']);
-  if (pick('prep-sec-exposure')) sections.push(['True exposure', grab('distribution-content', typeof renderDistributionTab === 'function' ? renderDistributionTab : null) || '<p class="note">Open the True Exposure tab once, then re-export.</p>']);
+  if (pick('prep-sec-summary')) {
+    var aumL = (typeof aumListHtml === 'function') ? aumListHtml() : '';
+    var rest = grab('open-summary', null) || '';
+    if (rest) { try { var tmpS = document.createElement('div'); tmpS.innerHTML = rest; Array.prototype.slice.call(tmpS.querySelectorAll('.summary-card')).forEach(function (c) { if (/assets under management/i.test(c.textContent || '') && c.parentNode) c.parentNode.removeChild(c); }); rest = tmpS.innerHTML; } catch (e) {} }
+    var sumHtml = aumL + (rest ? '<div style="margin-top:12px">' + rest + '</div>' : '');
+    sections.push(['Portfolio summary', sumHtml || '<p class="note">No summary available.</p>']);
+  }
+  if (pick('prep-sec-exposure')) {
+    var exRaw = grab('distribution-content', typeof renderDistributionTab === 'function' ? renderDistributionTab : null) || '';
+    var exHtml = '';
+    if (exRaw) { try { var tmpE = document.createElement('div'); tmpE.innerHTML = exRaw; var det = tmpE.querySelector('details'); var tbl = det ? det.querySelector('table') : tmpE.querySelector('table'); if (tbl) exHtml = '<p class="note" style="margin-bottom:6px">Look-through \u2014 every direct holding plus what you hold inside VOO and decomposed ETFs, rolled up to one line per company.</p>' + tbl.outerHTML; } catch (e) {} }
+    sections.push(['True exposure', exHtml || '<p class="note">Open the True Exposure tab once, then re-export.</p>']);
+  }
   if (pick('prep-sec-sleeve')) sections.push(['Sleeve performance & value-add', grab('sleeve-valueadd-wrap', typeof renderSleeveValueAdd === 'function' ? renderSleeveValueAdd : null) || '<p class="note">Not available.</p>']);
   if (pick('prep-sec-factor')) sections.push(['Factor unity', grab('factor-unity-mount', typeof renderFactorUnity === 'function' ? renderFactorUnity : null) || '<p class="note">Not available.</p>']);
   if (pick('prep-sec-industry')) sections.push(['Industry intelligence', grab('theme-intel-wrap', typeof renderThemeIntel === 'function' ? renderThemeIntel : null) || '<p class="note">Not available.</p>']);
@@ -33904,6 +33966,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fc</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fd</div>
 </body>
 </html>
