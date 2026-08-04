@@ -1134,7 +1134,10 @@
     <!-- TOP ROW: summary cards (Passive Core · Unrealised Gain by Account · Private Investments · Tax Year) -->
     <div class="analytics-grid-4">
       <div class="analytics-card" id="sp-summary-card" onclick="showCardOverlay('voo')" style="cursor:pointer">
-        <div class="analytics-card-title">Passive Core — VOO</div>
+        <div class="analytics-card-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>Passive Core — VOO</span>
+          <div onclick="event.stopPropagation();clearSpLots()" title="Deletes every VOO lot on this device (asks first). Use this if lots that aren't yours appear here." style="font-size:8px;color:var(--color-text-tertiary);cursor:pointer;border:1px solid var(--color-border-tertiary);border-radius:3px;padding:2px 6px;text-transform:uppercase;letter-spacing:0.08em">Clear lots</div>
+        </div>
         <div id="sp-summary-content"><div style="color:var(--color-text-tertiary);font-size:11px">No lots imported yet</div></div>
       </div>
       <div class="analytics-card" id="account-card" onclick="showCardOverlay('account')" style="cursor:pointer">
@@ -31286,8 +31289,19 @@ function driveShowModalToast(msg, kind = 'info') {
 // ─── Setup / Connect handlers ───
 function saveDriveClientId() {
   const input = document.getElementById('drive-client-id-input');
-  const id = (input.value || '').trim();
+  let id = (input.value || '').trim();
   if (!id) { driveShowModalToast('Paste a Client ID first', 'error'); return; }
+  // Pastes arrive polluted: browsers/autofill prepend https://, docs prepend labels
+  // ("Client ID: ..."), trailing slashes ride along. Google then reports the very
+  // misleading "OAuth client was not found" — cost us a full morning once. If the
+  // real ID is anywhere in the paste, extract it; the old endsWith check passed
+  // "https://<id>" (bad head, good tail) and warned only on bad tails.
+  const m = id.match(/\d{6,}-[a-z0-9]+\.apps\.googleusercontent\.com/i);
+  if (m && m[0] !== id) {
+    id = m[0];
+    input.value = id;
+    driveShowModalToast('Cleaned up the paste \u2014 removed extra text around the Client ID.', 'success');
+  }
   if (!id.endsWith('.apps.googleusercontent.com')) {
     if (!confirm("That doesn't look like a Google OAuth Client ID (should end in .apps.googleusercontent.com). Save anyway?")) return;
   }
@@ -31911,26 +31925,11 @@ async function init() {
       changed = true;
     }
   });
-  if (spLots.length === 0) {
-    spLots = [
-      { date: '2026-04-20', shares: 1,   pricePaid: 651.30, account: 'Taxable' },
-      { date: '2026-03-24', shares: 16,  pricePaid: 602.27, account: 'Taxable' },
-      { date: '2025-02-07', shares: 1,   pricePaid: 553.98, account: 'Taxable' },
-      { date: '2025-02-06', shares: 1,   pricePaid: 556.80, account: 'Taxable' },
-      { date: '2024-11-15', shares: 135, pricePaid: 537.49, account: 'Taxable' },
-      { date: '2026-01-02', shares: 11,  pricePaid: 627.88, account: 'IRA' },
-      { date: '2025-03-17', shares: 13,  pricePaid: 518.85, account: 'IRA' },
-      { date: '2024-11-15', shares: 13,  pricePaid: 536.98, account: 'IRA' },
-      { date: '2026-04-15', shares: 1,   pricePaid: 641.08, account: 'Taxable' },
-      { date: '2025-08-01', shares: 50,  pricePaid: 574.02, account: 'Taxable' },
-      { date: '2025-07-18', shares: 50,  pricePaid: 576.69, account: 'Taxable' },
-      { date: '2025-07-01', shares: 50,  pricePaid: 568.31, account: 'Taxable' },
-      { date: '2025-06-30', shares: 50,  pricePaid: 566.32, account: 'Taxable' },
-      { date: '2026-04-21', shares: 16,  pricePaid: 649.59, account: 'IRA' },
-      { date: '2026-04-16', shares: 550, pricePaid: 645.09, account: 'IRA' },
-    ];
-    changed = true;
-  }
+  // (Removed) A one-time migration used to seed MY personal VOO lots here whenever
+  // spLots was empty. On any fresh browser that "migration" installed my real
+  // purchase history as the user's own passive core — discovered when Ari's brand-new
+  // tracker booted up already owning 958 shares of VOO. Real lot data never belongs
+  // in code; it lives in localStorage and Drive. Do not reintroduce.
   if (changed) {
     spxLive = spxLive || 7165.08;
     // Normalise all open positions to current spxLive — one source of truth
@@ -34003,6 +34002,6 @@ init();
 
 </script>
 <!-- BUILD STAMP — bump the trailing letter on every ship so stale loads are obvious -->
-<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fn</div>
+<div id="build-stamp" style="position:fixed;bottom:6px;right:9px;font-size:9px;font-family:monospace;color:var(--color-text-tertiary);opacity:0.4;pointer-events:none;z-index:9999;letter-spacing:0.04em;user-select:none">build 2026-06-09fp</div>
 </body>
 </html>
